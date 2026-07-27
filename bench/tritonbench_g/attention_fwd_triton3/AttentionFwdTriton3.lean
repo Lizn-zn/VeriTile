@@ -8300,6 +8300,1879 @@ specification attention_fwd_triton3_case3_io_correctness (R : RoundingModel)
         have h := h1 (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) trivial hr
         simpa [Lane2D.encode_div, Lane2D.encode_mod] using h
 
+/-! # ══════════ The `⊨[R]` io headlines — cases 1 and 2 (sliding window) ══════════
+
+The `StreamMasked3DKernelIO₃ₓ₂` faces of the **case-1**
+(`(END,INIT,SLIDING_WINDOW,COMPLEMENT) = (1,1,1,0)`, keep `dist < size`) and
+**case-2** (`(1,1,1,1)`, complement keep `size ≤ dist`) surfaces. The io
+skeleton (reads/writes/masks/streams) is *identical* to the case-3 face
+above — the window is data, not addressing: it enters the SPEC `f` as the
+key filter (verbatim the exact headlines' `natSlidingWindowKeepG` /
+`natComplementSlidingWindowKeepG`), while the kernel field is the
+sliding-window constexpr instantiation. All state-shaped case-3 machinery
+(`aft3SafeInv`, `aft3PreLoop_evalW`, `aft3_postSafeW`, `aft3PostLoop_frameW`,
+the stream tiles `aft3IOqT/kT/vT` and their pin bridges, the preLoop/postLoop
+cast-free collapses) is reused as-is; only the loop-body-shaped pieces
+(cast-free walk, weak step, body safety) are re-instantiated on
+`aft3LoopBodyG`/`aft3LoopBodyG2`, whose two sliding-window `ifThen`s are
+constexpr-live here. -/
+
+/-- `stepStmtR` mirror of `aft3_ifThen_true`. -/
+private theorem aft3_ifThen_trueR (R : RoundingModel) {cond : Op .bool []}
+    {body : List Stmt} {s : BlockState}
+    (hc : evalOpR R cond s = some (Tile.scalar Bool.true)) :
+    stepStmtR R (.ifThen cond body) s = stepStmtsR R body s := by
+  simp only [stepStmtR, hc, Option.bind, Tile.scalar]
+  rfl
+
+/-- `stepStmtR` mirror of `aft3_ifThenElse_false`. -/
+private theorem aft3_ifThenElse_falseR (R : RoundingModel) {cond : Op .bool []}
+    {t e : List Stmt} {s : BlockState}
+    (hc : evalOpR R cond s = some (Tile.scalar Bool.false)) :
+    stepStmtR R (.ifThenElse cond t e) s = stepStmtsR R e s := by
+  simp only [stepStmtR, hc, Option.bind, Tile.scalar]
+  rfl
+
+set_option maxHeartbeats 4000000 in
+/-- Every case-1 loop-body statement is cast-free, statement-by-statement: the
+two live sliding-window `ifThen`s are collapsed onto their branches through
+the constexpr mirrors (the inner `COMPLEMENT` `ifThenElse` onto its live
+`boolAnd` else-branch); every leaf op is `.real`/`.nat`/`.bool` arithmetic
+with no `.to(...)` casts. -/
+private theorem aft3LoopBodyG_stmt_castFree (R : RoundingModel) (sc : ℝ)
+    (off size BM ND BN : Nat) :
+    ∀ st ∈ aft3LoopBodyG sc off size BM ND BN, ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [aft3LoopBodyG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- the sliding-window `ifThen` (constexpr-true): collapse onto the live block
+    rw [aft3_ifThen_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true u),
+      aft3_ifThen_true (aft3_ne_one_zero_true u)]
+    refine aft3_stepStmtsR_castFree_of_stmts R _ ?_ u
+    intro st' hst' u'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hst'
+    rcases hst' with rfl | rfl | rfl
+    · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    · -- the inner `COMPLEMENT` `ifThenElse` (constexpr-false): live boolAnd branch
+      rw [aft3_ifThenElse_falseR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_zero_zero_false u'),
+        aft3_ifThenElse_false (aft3_ne_zero_zero_false u')]
+      refine aft3_stepStmtsR_castFree_of_stmts R _ ?_ u'
+      intro st'' hst'' u''
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hst''
+      rcases hst'' with rfl
+      simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- the p-mask `ifThen` (constexpr-true): single live `where` assign
+    rw [aft3_ifThen_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true u),
+      aft3_ifThen_true (aft3_ne_one_zero_true u)]
+    refine aft3_stepStmtsR_castFree_of_stmts R _ ?_ u
+    intro st' hst' u'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hst'
+    rcases hst' with rfl
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The case-1 loop body is cast-free. -/
+private theorem aft3LoopBodyG_castFree (R : RoundingModel) (sc : ℝ)
+    (off size BM ND BN : Nat) (t : BlockState) :
+    stepStmtsR R (aft3LoopBodyG sc off size BM ND BN) t
+      = stepStmts (aft3LoopBodyG sc off size BM ND BN) t :=
+  aft3_stepStmtsR_castFree_of_stmts R _
+    (aft3LoopBodyG_stmt_castFree R sc off size BM ND BN) t
+
+set_option maxHeartbeats 4000000 in
+/-- Every case-2 loop-body statement is cast-free (as `aft3LoopBodyG_stmt_castFree`;
+the inner `COMPLEMENT` `ifThenElse` is constexpr-true here, collapsing onto the
+live `≥ size` then-branch). -/
+private theorem aft3LoopBodyG2_stmt_castFree (R : RoundingModel) (sc : ℝ)
+    (off size BM ND BN : Nat) :
+    ∀ st ∈ aft3LoopBodyG2 sc off size BM ND BN, ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [aft3LoopBodyG2, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- the sliding-window `ifThen` (constexpr-true)
+    rw [aft3_ifThen_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true u),
+      aft3_ifThen_true (aft3_ne_one_zero_true u)]
+    refine aft3_stepStmtsR_castFree_of_stmts R _ ?_ u
+    intro st' hst' u'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hst'
+    rcases hst' with rfl | rfl | rfl
+    · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    · -- the inner `COMPLEMENT` `ifThenElse` (constexpr-true): live `≥ size` branch
+      rw [aft3_ifThenElse_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true u'),
+        aft3_ifThenElse_true (aft3_ne_one_zero_true u')]
+      refine aft3_stepStmtsR_castFree_of_stmts R _ ?_ u'
+      intro st'' hst'' u''
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hst''
+      rcases hst'' with rfl
+      simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- the p-mask `ifThen` (constexpr-true)
+    rw [aft3_ifThen_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true u),
+      aft3_ifThen_true (aft3_ne_one_zero_true u)]
+    refine aft3_stepStmtsR_castFree_of_stmts R _ ?_ u
+    intro st' hst' u'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hst'
+    rcases hst' with rfl
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The case-2 loop body is cast-free. -/
+private theorem aft3LoopBodyG2_castFree (R : RoundingModel) (sc : ℝ)
+    (off size BM ND BN : Nat) (t : BlockState) :
+    stepStmtsR R (aft3LoopBodyG2 sc off size BM ND BN) t
+      = stepStmts (aft3LoopBodyG2 sc off size BM ND BN) t :=
+  aft3_stepStmtsR_castFree_of_stmts R _
+    (aft3LoopBodyG2_stmt_castFree R sc off size BM ND BN) t
+
+set_option maxHeartbeats 4000000 in
+/-- The case-1 surface sits inside the flat-memory bridge's covered fragment
+(no `ptrSub`; the block-pointer ops are structurally covered). -/
+theorem aft3_flattenOkG1 (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) :
+    ((attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [aft3_body_splitG]
+  simp [aft3PreLoopG, aft3LoopBodyG, aft3PostLoopG, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+set_option maxHeartbeats 4000000 in
+/-- The case-2 surface sits inside the flat-memory bridge's covered fragment. -/
+theorem aft3_flattenOkG2 (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) :
+    ((attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [aft3_body_splitG2]
+  simp [aft3PreLoopG, aft3LoopBodyG2, aft3PostLoopG, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-- **Streaming IO signature** of the case-1
+(`(END,INIT,SLIDING_WINDOW,COMPLEMENT) = (1,1,1,0)`) `_attn_fwd` surface —
+identical reads/writes/masks to the case-3 face (the window is a spec-side
+key filter, not an addressing change). -/
+def attentionFwdTriton3Case1IO (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) :
+    StreamMasked3DKernelIO₃ₓ₂ where
+  kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+    sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+    Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  out1 := Out
+  out2 := M
+  T := NKV_CTX / BN
+  B1 := BM * ND
+  B2 := ND * BN
+  B3 := BN * ND
+  C1 := BM * ND
+  C2 := BM
+  read1 := fun p₀ p₁ _ _ j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + j.val / ND) * sqm + (j.val % ND) * sqk
+  read2 := fun _ p₁ _ t j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (j.val / BN) * skk + (t.val * BN + j.val % BN) * skn
+  read3 := fun _ p₁ _ t j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (t.val * BN + j.val / ND) * svk + (j.val % ND) * svn
+  write1 := fun p₀ p₁ _ j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + j.val / ND) * som + (j.val % ND) * son
+  write2 := fun p₀ p₁ _ j => p₁ * ROUND_CTX + (p₀ * BM + j.val)
+  mask1 := fun _ _ _ _ _ => True
+  mask2 := fun _ _ _ _ _ => True
+  mask3 := fun _ _ _ _ _ => True
+  writeMask1 := fun _ _ _ _ => True
+  writeMask2 := fun _ _ _ _ => True
+
+/-- **Streaming IO signature** of the case-2 (`(1,1,1,1)`, complement window)
+surface — same io skeleton, complement constexpr instantiation. -/
+def attentionFwdTriton3Case2IO (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) :
+    StreamMasked3DKernelIO₃ₓ₂ where
+  kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+    sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+    Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  out1 := Out
+  out2 := M
+  T := NKV_CTX / BN
+  B1 := BM * ND
+  B2 := ND * BN
+  B3 := BN * ND
+  C1 := BM * ND
+  C2 := BM
+  read1 := fun p₀ p₁ _ _ j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + j.val / ND) * sqm + (j.val % ND) * sqk
+  read2 := fun _ p₁ _ t j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (j.val / BN) * skk + (t.val * BN + j.val % BN) * skn
+  read3 := fun _ p₁ _ t j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (t.val * BN + j.val / ND) * svk + (j.val % ND) * svn
+  write1 := fun p₀ p₁ _ j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + j.val / ND) * som + (j.val % ND) * son
+  write2 := fun p₀ p₁ _ j => p₁ * ROUND_CTX + (p₀ * BM + j.val)
+  mask1 := fun _ _ _ _ _ => True
+  mask2 := fun _ _ _ _ _ => True
+  mask3 := fun _ _ _ _ _ => True
+  writeMask1 := fun _ _ _ _ => True
+  writeMask2 := fun _ _ _ _ => True
+
+/-- **Case-1 `Out` closed form on the streams**: the sliding-window base-2
+per-key-scale softmax (exactly the exact headline's
+`attentionFwdTriton3Case1OutSpecG`, keep `natSlidingWindowKeepG`) restated
+over the three streamed tiles, at output lane `j = (i, d)` row-major over
+`[BM, ND]`. The window filter eats `p₀` (the `start_m` program id). -/
+noncomputable def attentionFwdTriton3Case1IOOutSpec (p₀ BM ND BN NC T : Nat)
+    (hT : 0 < T) (hTB : T * BN = NC) (hBN : 0 < BN) (sc : ℝ) (off size : Nat)
+    (xs : Fin T → Fin (BM * ND) → ℝ) (ys : Fin T → Fin (ND * BN) → ℝ)
+    (zs : Fin T → Fin (BN * ND) → ℝ) (j : Fin (BM * ND)) : ℝ :=
+  attentionRealBase2PerKeyScalePred (aft3IOqT BM ND T hT xs)
+    (aft3IOkT ND BN NC T hTB hBN ys) (aft3IOvT ND BN NC T hTB hBN zs)
+    (keyScale3G sc NC) (fun i j => natSlidingWindowKeepG p₀ BM BN off size i j)
+    (Lane2D.decode j)
+
+/-- **Case-1 `M` closed form on the streams**: the raw
+`(m ⊔ … + log2 l).unbotD 0` finalize (exactly the exact headline's
+`attentionFwdTriton3KMSpecG` at the sliding-window keep) restated over the
+three streamed tiles, at output row `i`. -/
+noncomputable def attentionFwdTriton3Case1IOMSpec (p₀ BM ND BN NC T : Nat)
+    (hND : 0 < ND) (hT : 0 < T) (hTB : T * BN = NC) (hBN : 0 < BN) (sc : ℝ)
+    (off size : Nat)
+    (xs : Fin T → Fin (BM * ND) → ℝ) (ys : Fin T → Fin (ND * BN) → ℝ)
+    (zs : Fin T → Fin (BN * ND) → ℝ) (i : Fin BM) : ℝ :=
+  (WithBot.realAdd
+      (aft3RunningMaxG (aft3IOqT BM ND T hT xs) (aft3IOkT ND BN NC T hTB hBN ys)
+        (aft3IOvT ND BN NC T hTB hBN zs) (keyScale3G sc NC)
+        (fun i j => natSlidingWindowKeepG p₀ BM BN off size i j) NC i ⟨0, hND⟩)
+      (WithBot.realLog2
+        (((aft3StateBotKG (aft3IOqT BM ND T hT xs) (aft3IOkT ND BN NC T hTB hBN ys)
+            (aft3IOvT ND BN NC T hTB hBN zs) (keyScale3G sc NC)
+            (fun i j => natSlidingWindowKeepG p₀ BM BN off size i j) NC i ⟨0, hND⟩).2.1 : ℝ)
+          : WithBot ℝ))).unbotD 0
+
+/-- **Case-2 `Out` closed form on the streams** (complement keep
+`natComplementSlidingWindowKeepG`; otherwise as case 1). -/
+noncomputable def attentionFwdTriton3Case2IOOutSpec (p₀ BM ND BN NC T : Nat)
+    (hT : 0 < T) (hTB : T * BN = NC) (hBN : 0 < BN) (sc : ℝ) (off size : Nat)
+    (xs : Fin T → Fin (BM * ND) → ℝ) (ys : Fin T → Fin (ND * BN) → ℝ)
+    (zs : Fin T → Fin (BN * ND) → ℝ) (j : Fin (BM * ND)) : ℝ :=
+  attentionRealBase2PerKeyScalePred (aft3IOqT BM ND T hT xs)
+    (aft3IOkT ND BN NC T hTB hBN ys) (aft3IOvT ND BN NC T hTB hBN zs)
+    (keyScale3G sc NC) (fun i j => natComplementSlidingWindowKeepG p₀ BM BN off size i j)
+    (Lane2D.decode j)
+
+/-- **Case-2 `M` closed form on the streams** (complement keep). -/
+noncomputable def attentionFwdTriton3Case2IOMSpec (p₀ BM ND BN NC T : Nat)
+    (hND : 0 < ND) (hT : 0 < T) (hTB : T * BN = NC) (hBN : 0 < BN) (sc : ℝ)
+    (off size : Nat)
+    (xs : Fin T → Fin (BM * ND) → ℝ) (ys : Fin T → Fin (ND * BN) → ℝ)
+    (zs : Fin T → Fin (BN * ND) → ℝ) (i : Fin BM) : ℝ :=
+  (WithBot.realAdd
+      (aft3RunningMaxG (aft3IOqT BM ND T hT xs) (aft3IOkT ND BN NC T hTB hBN ys)
+        (aft3IOvT ND BN NC T hTB hBN zs) (keyScale3G sc NC)
+        (fun i j => natComplementSlidingWindowKeepG p₀ BM BN off size i j) NC i ⟨0, hND⟩)
+      (WithBot.realLog2
+        (((aft3StateBotKG (aft3IOqT BM ND T hT xs) (aft3IOkT ND BN NC T hTB hBN ys)
+            (aft3IOvT ND BN NC T hTB hBN zs) (keyScale3G sc NC)
+            (fun i j => natComplementSlidingWindowKeepG p₀ BM BN off size i j) NC i ⟨0, hND⟩).2.1 : ℝ)
+          : WithBot ℝ))).unbotD 0
+
+/-- The `aft3StateBotKG` writeback ratio at the full window IS the masked
+closed form `attentionRealBase2PerKeyScalePred` — the per-lane composition of
+the two `_eq_streaming` bridges with `aft3KeysUptoG_full`, packaged once for
+the io headlines (works for any keep predicate over any tiles). -/
+private theorem aft3_botKG_ratio_eq_pred {BM ND NC : Nat}
+    (qT : TileIndex [BM, ND] → ℝ) (kT vT : TileIndex [NC, ND] → ℝ)
+    (ks : Fin NC → ℝ) (kp : Fin BM → Fin NC → Prop) [∀ i j, Decidable (kp i j)]
+    (hNC : 0 < NC) (hND : 0 < ND) (idx : TileIndex [BM, ND]) :
+    ((aft3StateBotKG qT kT vT ks kp NC idx.1 idx.2.1).2.2)
+        / ((aft3StateBotKG qT kT vT ks kp NC idx.1 ⟨0, hND⟩).2.1)
+      = attentionRealBase2PerKeyScalePred qT kT vT ks kp idx := by
+  obtain ⟨ir, dd, ⟨⟩⟩ := idx
+  rw [aft3StateBotKG_full_eq_streaming qT kT vT ks kp hNC ir dd ⟨0, hND⟩]
+  rw [VeriTile.Triton.attentionRealBase2PerKeyScalePred_eq_streaming qT kT vT ks kp ir dd]
+  rw [aft3KeysUptoG_full qT kT vT ks kp ir dd]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak loop-body step (case 1)**: `aft3LoopBodyG_steps` minus the
+clean-`undef` hypothesis (whose only use was the dropped `undef`-preservation
+conclusion) — usable from arbitrary launch states in the safety walk. The
+`smsc` body argument is phantom (the lowered body reads `qk_scale` from the
+register file). -/
+private theorem aft3LoopBodyG_stepsW1 (sin : BlockState) (SM SN off size : Nat) (smsc : ℝ)
+    (Kreg Vreg : RegionName) (kbase vbase kcol vrow : Nat)
+    (skk skn svk svn ND NKV_CTX BM BN : Nat) (hBN : 0 < BN)
+    (qtile : Tile .real [BM, ND]) (mtile ltile : Tile .real [BM]) (acctile : Tile .real [BM, ND])
+    (ktile : Tile .real [ND, BN]) (vtile : Tile .real [BN, ND]) (sc : ℝ)
+    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar SM))
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hq : sin.regs .real [BM, ND] "q" = some qtile)
+    (hqs : sin.regs .real [] "qk_scale" = some (Tile.scalar (some sc)))
+    (hmi : sin.regs .real [BM] "m_i" = some mtile)
+    (hli : sin.regs .real [BM] "l_i" = some ltile)
+    (hacc : sin.regs .real [BM, ND] "acc" = some acctile)
+    (hKp : sin.regs .blockPtr [ND, BN] "K_block_ptr" = some
+      (⟨fun _ : TileIndex [ND, BN] =>
+        { region := Kreg, baseOffset := kbase, parentShape := [ND, NKV_CTX],
+          blockShape := [ND, BN], strides := [skk, skn], offsets := [0, kcol] }⟩))
+    (hVp : sin.regs .blockPtr [BN, ND] "V_block_ptr" = some
+      (⟨fun _ : TileIndex [BN, ND] =>
+        { region := Vreg, baseOffset := vbase, parentShape := [NKV_CTX, ND],
+          blockShape := [BN, ND], strides := [svk, svn], offsets := [vrow, 0] }⟩))
+    (hkload : ∀ idx : TileIndex [ND, BN],
+      ktile.data idx = some (sin.readMem Kreg (kbase + idx.1.val * skk + (kcol + idx.2.1.val) * skn)))
+    (hvload : ∀ idx : TileIndex [BN, ND],
+      vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * svk + idx.2.1.val * svn))) :
+    ∃ sF, stepStmts (aft3LoopBodyG smsc off size BM ND BN) sin = some sF
+      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem
+      ∧ sF.regs .real [BM, ND] "q" = some qtile
+      ∧ sF.regs .real [] "qk_scale" = some (Tile.scalar (some sc))
+      ∧ sF.regs .nat [] "start_m" = some (Tile.scalar SM)
+      ∧ sF.regs .blockPtr [ND, BN] "K_block_ptr" = some
+          (⟨fun _ : TileIndex [ND, BN] =>
+            { region := Kreg, baseOffset := kbase, parentShape := [ND, NKV_CTX],
+              blockShape := [ND, BN], strides := [skk, skn], offsets := [0, kcol + BN] }⟩)
+      ∧ sF.regs .blockPtr [BN, ND] "V_block_ptr" = some
+          (⟨fun _ : TileIndex [BN, ND] =>
+            { region := Vreg, baseOffset := vbase, parentShape := [NKV_CTX, ND],
+              blockShape := [BN, ND], strides := [svk, svn], offsets := [vrow + BN, 0] }⟩)
+      ∧ sF.regs .nat [] "off_hz" = sin.regs .nat [] "off_hz"
+      ∧ sF.regs .ptr [BM] "m_ptrs" = sin.regs .ptr [BM] "m_ptrs"
+      ∧ sF.regs .ptr [BM] "l_ptrs" = sin.regs .ptr [BM] "l_ptrs"
+      ∧ sF.regs .blockPtr [BM, ND] "O_block_ptr" = sin.regs .blockPtr [BM, ND] "O_block_ptr"
+      ∧ ∃ (qkT : Tile .real [BM, BN]) (rmaxT mijT alphaT lijT : Tile .real [BM])
+            (pT pmT : Tile .real [BM, BN]) (acc1T : Tile .real [BM, ND]),
+          (qkT = ⟨fun idx : TileIndex [BM, BN] =>
+            if aft3MaskCell1G SM SN off size BM BN idx
+            then (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                    (Tile.bop NumericDType.real.add
+                      (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                      (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+                    (Tile.scalar (some sc))).data idx
+            else (⊥ : WithBot ℝ)⟩)
+          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qkT = some rmaxT
+          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
+          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
+          ∧ pmT = ⟨fun idx : TileIndex [BM, BN] =>
+              if aft3MaskCell1G SM SN off size BM BN idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩
+          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) pmT
+          ∧ acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT)
+          ∧ sF.regs .real [BM] "m_i" = some mijT
+          ∧ sF.regs .real [BM] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT) lijT)
+          ∧ sF.regs .real [BM, ND] "acc" = some (Tile.bop NumericDType.real.add
+              (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acc1T (Tile.dot [] pmT vtile)) := by
+  set qkSeedT : Tile .real [BM, BN] :=
+    Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+      (Tile.scalar (some sc)) with hqkSeed
+  set maskT : Tile .bool [BM, BN] := ⟨fun idx : TileIndex [BM, BN] => aft3MaskCell1G SM SN off size BM BN idx⟩ with hmaskT
+  set qkT : Tile .real [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] =>
+      if maskT.data idx then qkSeedT.data idx else (⊥ : WithBot ℝ)⟩ with hqkT
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qkT = some t :=
+    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [BM, BN] (⟨1, by simp⟩ : Fin [BM, BN].length) from by simpa [TileShape.axisDim] using hBN)]⟩
+  set mijT : Tile .real [BM] := Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT with hmij
+  set alphaT : Tile .real [BM] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT) with halpha
+  set pT : Tile .real [BM, BN] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)) with hpT
+  set pmT : Tile .real [BM, BN] := ⟨fun idx : TileIndex [BM, BN] => if maskT.data idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ with hpmT
+  set lijT : Tile .real [BM] := Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) pmT with hlij
+  set acc1T : Tile .real [BM, ND] := Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT) with hacc1
+  unfold aft3LoopBodyG
+  -- L1: k = load K_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr") []) MaskOpt.none) sin
+        = some ktile from by
+      rw [aft3_load_k_eval Kreg kbase ND NKV_CTX ND BN skk skn kcol (Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr") sin
+        (by rw [evalOp_ref]; exact hKp)]
+      refine congrArg some ?_; refine Tile.ext (fun idx => ?_); rw [hkload idx]))]
+  -- L2: qk = zeros
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_qkzeros_eval _ BM BN))]
+  -- L3: qk += dot q k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_dot_eval _ BM BN ND (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) qtile ktile
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same]; exact hq)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same])))]
+  -- L4: qk *= qk_scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_scale_ref_eval _ BM BN sc
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hqs)))]
+  -- L5: window ifThen (SLIDING_WINDOW true)
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from
+      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
+        (aft3_window1_stepsG _ SM SN off size BM BN (by simp) (by simp) qkSeedT
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsm)
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsn)
+          (by rw [BlockState.setReg_same])))]
+  -- L6: m_ij = maximum(m_i, max(qk,1))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_mij_evalG _ BM BN mtile qkT rmaxT (by simp)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
+      (by rw [BlockState.setReg_same])
+      hrm))]
+  -- L7: qk -= m_ij[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_sub_evalG _ BM BN (by simp) qkT mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by rw [BlockState.setReg_same])))]
+  -- L8: p = exp2 qk
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_p_evalG _ BM BN (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
+      (by rw [BlockState.setReg_same])))]
+  -- L9: pmask ifThen (SLIDING_WINDOW true)
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from
+      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
+        (aft3_pmask1_stepsG _ BM BN maskT pT
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+                BlockState.setReg_same] <;> try rfl)
+          (by rw [BlockState.setReg_same])))]
+  -- L10: l_ij = sum p 1
+  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [BM] "l_ij"
+    (Op.reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false (Op.ref .real [BM, BN] "p")) _ lijT
+    (aft3_lij_evalG _ BM BN pmT (by simp) (by rw [BlockState.setReg_same])))]
+  -- L11: tmp = m_i - m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_tmp_evalG _ BM mtile mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L12: alpha = exp2 tmp
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_alpha_evalG _ BM (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+      (by rw [BlockState.setReg_same])))]
+  -- L13: l_i = l_i * alpha + l_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_li_evalG _ BM ltile alphaT lijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hli)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L14: acc = acc * alpha[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_acc_rescale_evalG _ BM ND (by simp) acctile alphaT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hacc)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L15: v = load V_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") []) MaskOpt.none) _
+        = some vtile from by
+      rw [aft3_load_v_eval Vreg vbase NKV_CTX ND BN ND svk svn vrow (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") _
+        (by rw [evalOp_ref]
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hVp)]
+      refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+      simp only [BlockState.setReg_readMem]; rw [hvload idx]))]
+  -- L16: acc += dot p v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_acc_eval _ BM BN ND acc1T pmT vtile
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by rw [BlockState.setReg_same])))]
+  -- L17: m_i = m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_mi_carry_evalG _ BM mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L18: V_block_ptr = advance [BN, 0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_advance_v_eval _ Vreg vbase NKV_CTX ND BN ND svk svn vrow BN "V_block_ptr"
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hVp)))]
+  -- L19: K_block_ptr = advance [0, BN]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_advance_k_eval _ Kreg kbase ND NKV_CTX ND BN skk skn kcol BN "K_block_ptr"
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hKp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
+    rfl, hrm, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hq
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hqs
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hsm
+  · simp only [BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak loop-body step (case 2, complement)** — `aft3LoopBodyG2_steps`
+minus the clean-`undef` hypothesis. -/
+private theorem aft3LoopBodyG2_stepsW2 (sin : BlockState) (SM SN off size : Nat) (smsc : ℝ)
+    (Kreg Vreg : RegionName) (kbase vbase kcol vrow : Nat)
+    (skk skn svk svn ND NKV_CTX BM BN : Nat) (hBN : 0 < BN)
+    (qtile : Tile .real [BM, ND]) (mtile ltile : Tile .real [BM]) (acctile : Tile .real [BM, ND])
+    (ktile : Tile .real [ND, BN]) (vtile : Tile .real [BN, ND]) (sc : ℝ)
+    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar SM))
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hq : sin.regs .real [BM, ND] "q" = some qtile)
+    (hqs : sin.regs .real [] "qk_scale" = some (Tile.scalar (some sc)))
+    (hmi : sin.regs .real [BM] "m_i" = some mtile)
+    (hli : sin.regs .real [BM] "l_i" = some ltile)
+    (hacc : sin.regs .real [BM, ND] "acc" = some acctile)
+    (hKp : sin.regs .blockPtr [ND, BN] "K_block_ptr" = some
+      (⟨fun _ : TileIndex [ND, BN] =>
+        { region := Kreg, baseOffset := kbase, parentShape := [ND, NKV_CTX],
+          blockShape := [ND, BN], strides := [skk, skn], offsets := [0, kcol] }⟩))
+    (hVp : sin.regs .blockPtr [BN, ND] "V_block_ptr" = some
+      (⟨fun _ : TileIndex [BN, ND] =>
+        { region := Vreg, baseOffset := vbase, parentShape := [NKV_CTX, ND],
+          blockShape := [BN, ND], strides := [svk, svn], offsets := [vrow, 0] }⟩))
+    (hkload : ∀ idx : TileIndex [ND, BN],
+      ktile.data idx = some (sin.readMem Kreg (kbase + idx.1.val * skk + (kcol + idx.2.1.val) * skn)))
+    (hvload : ∀ idx : TileIndex [BN, ND],
+      vtile.data idx = some (sin.readMem Vreg (vbase + (vrow + idx.1.val) * svk + idx.2.1.val * svn))) :
+    ∃ sF, stepStmts (aft3LoopBodyG2 smsc off size BM ND BN) sin = some sF
+      ∧ sF.pids = sin.pids ∧ sF.mem = sin.mem
+      ∧ sF.regs .real [BM, ND] "q" = some qtile
+      ∧ sF.regs .real [] "qk_scale" = some (Tile.scalar (some sc))
+      ∧ sF.regs .nat [] "start_m" = some (Tile.scalar SM)
+      ∧ sF.regs .blockPtr [ND, BN] "K_block_ptr" = some
+          (⟨fun _ : TileIndex [ND, BN] =>
+            { region := Kreg, baseOffset := kbase, parentShape := [ND, NKV_CTX],
+              blockShape := [ND, BN], strides := [skk, skn], offsets := [0, kcol + BN] }⟩)
+      ∧ sF.regs .blockPtr [BN, ND] "V_block_ptr" = some
+          (⟨fun _ : TileIndex [BN, ND] =>
+            { region := Vreg, baseOffset := vbase, parentShape := [NKV_CTX, ND],
+              blockShape := [BN, ND], strides := [svk, svn], offsets := [vrow + BN, 0] }⟩)
+      ∧ sF.regs .nat [] "off_hz" = sin.regs .nat [] "off_hz"
+      ∧ sF.regs .ptr [BM] "m_ptrs" = sin.regs .ptr [BM] "m_ptrs"
+      ∧ sF.regs .ptr [BM] "l_ptrs" = sin.regs .ptr [BM] "l_ptrs"
+      ∧ sF.regs .blockPtr [BM, ND] "O_block_ptr" = sin.regs .blockPtr [BM, ND] "O_block_ptr"
+      ∧ ∃ (qkT : Tile .real [BM, BN]) (rmaxT mijT alphaT lijT : Tile .real [BM])
+            (pT pmT : Tile .real [BM, BN]) (acc1T : Tile .real [BM, ND]),
+          (qkT = ⟨fun idx : TileIndex [BM, BN] =>
+            if aft3MaskCell2G SM SN off size BM BN idx
+            then (Tile.bop NumericDType.real.mul Broadcast.scalarR
+                    (Tile.bop NumericDType.real.add
+                      (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+                      (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+                    (Tile.scalar (some sc))).data idx
+            else (⊥ : WithBot ℝ)⟩)
+          ∧ Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qkT = some rmaxT
+          ∧ mijT = Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT
+          ∧ alphaT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+          ∧ pT = Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
+          ∧ pmT = ⟨fun idx : TileIndex [BM, BN] =>
+              if aft3MaskCell2G SM SN off size BM BN idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩
+          ∧ lijT = Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) pmT
+          ∧ acc1T = Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT)
+          ∧ sF.regs .real [BM] "m_i" = some mijT
+          ∧ sF.regs .real [BM] "l_i" = some (Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil)
+              (Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil) ltile alphaT) lijT)
+          ∧ sF.regs .real [BM, ND] "acc" = some (Tile.bop NumericDType.real.add
+              (Broadcast.consSame (Broadcast.consSame Broadcast.nil)) acc1T (Tile.dot [] pmT vtile)) := by
+  set qkSeedT : Tile .real [BM, BN] :=
+    Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+      (Tile.scalar (some sc)) with hqkSeed
+  set maskT : Tile .bool [BM, BN] := ⟨fun idx : TileIndex [BM, BN] => aft3MaskCell2G SM SN off size BM BN idx⟩ with hmaskT
+  set qkT : Tile .real [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] =>
+      if maskT.data idx then qkSeedT.data idx else (⊥ : WithBot ℝ)⟩ with hqkT
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop (⟨1, by simp⟩ : Fin [BM, BN].length) qkT = some t :=
+    ⟨_, by unfold Tile.reduceMaxDrop; rw [dif_pos (show 0 < TileShape.axisDim [BM, BN] (⟨1, by simp⟩ : Fin [BM, BN].length) from by simpa [TileShape.axisDim] using hBN)]⟩
+  set mijT : Tile .real [BM] := Tile.select (Tile.cop ComparableDType.real.gt (Broadcast.consSame Broadcast.nil) mtile rmaxT) mtile rmaxT with hmij
+  set alphaT : Tile .real [BM] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT) with halpha
+  set pT : Tile .real [BM, BN] := Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT)) with hpT
+  set pmT : Tile .real [BM, BN] := ⟨fun idx : TileIndex [BM, BN] => if maskT.data idx then pT.data idx else (some (0.0 : ℝ) : WithBot ℝ)⟩ with hpmT
+  set lijT : Tile .real [BM] := Tile.reduceSumDrop (⟨1, by simp⟩ : Fin [BM, BN].length) pmT with hlij
+  set acc1T : Tile .real [BM, ND] := Tile.bop NumericDType.real.mul (Broadcast.consSame (Broadcast.consR Broadcast.nil)) acctile (Tile.expandDim ⟨1, by simp⟩ alphaT) with hacc1
+  unfold aft3LoopBodyG2
+  -- L1: k = load K_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr") []) MaskOpt.none) sin
+        = some ktile from by
+      rw [aft3_load_k_eval Kreg kbase ND NKV_CTX ND BN skk skn kcol (Op.ref TileDType.blockPtr [ND, BN] "K_block_ptr") sin
+        (by rw [evalOp_ref]; exact hKp)]
+      refine congrArg some ?_; refine Tile.ext (fun idx => ?_); rw [hkload idx]))]
+  -- L2: qk = zeros
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (aft3_qkzeros_eval _ BM BN))]
+  -- L3: qk += dot q k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_dot_eval _ BM BN ND (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) qtile ktile
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same]; exact hq)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same])))]
+  -- L4: qk *= qk_scale
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_scale_ref_eval _ BM BN sc
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BM, BN]) (Tile.dot [] qtile ktile))
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hqs)))]
+  -- L5: window ifThen (SLIDING_WINDOW true)
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from
+      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
+        (aft3_window2_stepsG _ SM SN off size BM BN (by simp) (by simp) qkSeedT
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsm)
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hsn)
+          (by rw [BlockState.setReg_same])))]
+  -- L6: m_ij = maximum(m_i, max(qk,1))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_mij_evalG _ BM BN mtile qkT rmaxT (by simp)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
+      (by rw [BlockState.setReg_same])
+      hrm))]
+  -- L7: qk -= m_ij[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_qk_sub_evalG _ BM BN (by simp) qkT mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by rw [BlockState.setReg_same])))]
+  -- L8: p = exp2 qk
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_p_evalG _ BM BN (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil)) qkT (Tile.expandDim ⟨1, by simp⟩ mijT))
+      (by rw [BlockState.setReg_same])))]
+  -- L9: pmask ifThen (SLIDING_WINDOW true)
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from
+      (aft3_ifThen_true (aft3_ne_one_zero_true _)).trans
+        (aft3_pmask1_stepsG _ BM BN maskT pT
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+                BlockState.setReg_same] <;> try rfl)
+          (by rw [BlockState.setReg_same])))]
+  -- L10: l_ij = sum p 1
+  rw [stepStmts.cons_some (@stepStmt_assign_eq_some .real [BM] "l_ij"
+    (Op.reduceSum (⟨1, by simp⟩ : Fin [BM, BN].length) Bool.false (Op.ref .real [BM, BN] "p")) _ lijT
+    (aft3_lij_evalG _ BM BN pmT (by simp) (by rw [BlockState.setReg_same])))]
+  -- L11: tmp = m_i - m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_tmp_evalG _ BM mtile mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hmi)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L12: alpha = exp2 tmp
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_alpha_evalG _ BM (Tile.bop NumericDType.real.sub (Broadcast.consSame Broadcast.nil) mtile mijT)
+      (by rw [BlockState.setReg_same])))]
+  -- L13: l_i = l_i * alpha + l_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_li_evalG _ BM ltile alphaT lijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hli)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L14: acc = acc * alpha[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_acc_rescale_evalG _ BM ND (by simp) acctile alphaT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hacc)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L15: v = load V_block_ptr
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") []) MaskOpt.none) _
+        = some vtile from by
+      rw [aft3_load_v_eval Vreg vbase NKV_CTX ND BN ND svk svn vrow (Op.ref TileDType.blockPtr [BN, ND] "V_block_ptr") _
+        (by rw [evalOp_ref]
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hVp)]
+      refine congrArg some ?_; refine Tile.ext (fun idx => ?_)
+      simp only [BlockState.setReg_readMem]; rw [hvload idx]))]
+  -- L16: acc += dot p v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_acc_eval _ BM BN ND acc1T pmT vtile
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)
+      (by rw [BlockState.setReg_same])))]
+  -- L17: m_i = m_ij
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_mi_carry_evalG _ BM mijT
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            BlockState.setReg_same] <;> try rfl)))]
+  -- L18: V_block_ptr = advance [BN, 0]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_advance_v_eval _ Vreg vbase NKV_CTX ND BN ND svk svn vrow BN "V_block_ptr"
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hVp)))]
+  -- L19: K_block_ptr = advance [0, BN]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aft3_advance_k_eval _ Kreg kbase ND NKV_CTX ND BN skk skn kcol BN "K_block_ptr"
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]; exact hKp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, qkT, rmaxT, mijT, alphaT, lijT, pT, pmT, acc1T,
+    rfl, hrm, rfl, rfl, rfl, rfl, rfl, rfl, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hq
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hqs
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]; exact hsm
+  · simp only [BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+
+set_option maxHeartbeats 2000000 in
+/-- **Weak invariant step (case 1)**: one case-1 body iteration from
+`aft3SafeInv c` steps successfully (exact stepper) and re-establishes
+`aft3SafeInv (c + BN)` — the window statements only touch the value
+registers (`dist`/`mask`/`qk`/`p`), never the pinned pointer shapes. -/
+private theorem aft3_attn_stepW1 (K V M Out L : RegionName) (s0 : BlockState) (smsc : ℝ)
+    (base BM ND NC BN skk skn svk svn som son ROUND_CTX off size : Nat)
+    (hBN : 0 < BN) (hBNdvd : BN ∣ NC)
+    (c : Nat) (s : BlockState) (hlt : c < NC)
+    (hP : aft3SafeInv K V M Out L s0 base BM ND NC BN skk skn svk svn som son ROUND_CTX c s) :
+    ∃ s', stepStmts (aft3LoopBodyG smsc off size BM ND BN)
+        (s.setReg "start_n" .nat [] (Tile.scalar c)) = some s'
+      ∧ aft3SafeInv K V M Out L s0 base BM ND NC BN skk skn svk svn som son ROUND_CTX (c + BN) s' := by
+  obtain ⟨hmod, hle, hsm, hoff, ⟨qT, hq⟩, ⟨sc, hqs⟩, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩,
+    hKp, hVp, hMptr, hLptr, hOp⟩ := hP
+  set sin := s.setReg "start_n" .nat [] (Tile.scalar c) with hsin
+  obtain ⟨sF, hstep, -, -, hq', hqs', hsm', hKp', hVp', hoff', hMptr', hLptr', hOp',
+    qkTx, rmaxTx, mijTx, alphaTx, lijTx, pTx, pmTx, acc1Tx,
+    -, -, -, -, -, -, -, -, hmiF, hliF, haccF⟩ :=
+    aft3LoopBodyG_stepsW1 sin (s0.pids 0) c off size smsc K V base base c c
+      skk skn svk svn ND NC BM BN hBN qT mT lT aT
+      (⟨fun idx : TileIndex [ND, BN] =>
+        some (sin.readMem K (base + idx.1.val * skk + (c + idx.2.1.val) * skn))⟩)
+      (⟨fun idx : TileIndex [BN, ND] =>
+        some (sin.readMem V (base + (c + idx.1.val) * svk + idx.2.1.val * svn))⟩)
+      sc
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hsm)
+      (by rw [hsin, BlockState.setReg_same])
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hq)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hqs)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hmi)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hli)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hacc)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hKp)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hVp)
+      (fun idx => rfl) (fun idx => rfl)
+  have hmod' : (c + BN) % BN = 0 := by rw [Nat.add_mod_right]; exact hmod
+  have hle' : c + BN ≤ NC := by
+    obtain ⟨k, hk⟩ := hBNdvd
+    obtain ⟨m, hm⟩ := Nat.dvd_of_mod_eq_zero hmod
+    subst hk hm
+    have hmk : m < k := by
+      by_contra hmk
+      exact Nat.not_le_of_lt hlt (Nat.mul_le_mul_left BN (Nat.le_of_not_lt hmk))
+    calc BN * m + BN = BN * (m + 1) := by ring
+      _ ≤ BN * k := Nat.mul_le_mul_left BN hmk
+  refine ⟨sF, hstep, hmod', hle', hsm', ?_, ⟨qT, hq'⟩, ⟨sc, hqs'⟩,
+    ⟨mijTx, hmiF⟩, ⟨_, hliF⟩, ⟨_, haccF⟩, hKp', hVp', ?_, ?_, ?_⟩
+  · rw [hoff', hsin]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hoff
+  · rw [hMptr', hsin]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hMptr
+  · rw [hLptr', hsin]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hLptr
+  · rw [hOp', hsin]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hOp
+
+set_option maxHeartbeats 2000000 in
+/-- **Weak invariant step (case 2, complement)** — as `aft3_attn_stepW1` on
+`aft3LoopBodyG2`. -/
+private theorem aft3_attn_stepW2 (K V M Out L : RegionName) (s0 : BlockState) (smsc : ℝ)
+    (base BM ND NC BN skk skn svk svn som son ROUND_CTX off size : Nat)
+    (hBN : 0 < BN) (hBNdvd : BN ∣ NC)
+    (c : Nat) (s : BlockState) (hlt : c < NC)
+    (hP : aft3SafeInv K V M Out L s0 base BM ND NC BN skk skn svk svn som son ROUND_CTX c s) :
+    ∃ s', stepStmts (aft3LoopBodyG2 smsc off size BM ND BN)
+        (s.setReg "start_n" .nat [] (Tile.scalar c)) = some s'
+      ∧ aft3SafeInv K V M Out L s0 base BM ND NC BN skk skn svk svn som son ROUND_CTX (c + BN) s' := by
+  obtain ⟨hmod, hle, hsm, hoff, ⟨qT, hq⟩, ⟨sc, hqs⟩, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩,
+    hKp, hVp, hMptr, hLptr, hOp⟩ := hP
+  set sin := s.setReg "start_n" .nat [] (Tile.scalar c) with hsin
+  obtain ⟨sF, hstep, -, -, hq', hqs', hsm', hKp', hVp', hoff', hMptr', hLptr', hOp',
+    qkTx, rmaxTx, mijTx, alphaTx, lijTx, pTx, pmTx, acc1Tx,
+    -, -, -, -, -, -, -, -, hmiF, hliF, haccF⟩ :=
+    aft3LoopBodyG2_stepsW2 sin (s0.pids 0) c off size smsc K V base base c c
+      skk skn svk svn ND NC BM BN hBN qT mT lT aT
+      (⟨fun idx : TileIndex [ND, BN] =>
+        some (sin.readMem K (base + idx.1.val * skk + (c + idx.2.1.val) * skn))⟩)
+      (⟨fun idx : TileIndex [BN, ND] =>
+        some (sin.readMem V (base + (c + idx.1.val) * svk + idx.2.1.val * svn))⟩)
+      sc
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hsm)
+      (by rw [hsin, BlockState.setReg_same])
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hq)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hqs)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hmi)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hli)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hacc)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hKp)
+      (by rw [hsin]
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hVp)
+      (fun idx => rfl) (fun idx => rfl)
+  have hmod' : (c + BN) % BN = 0 := by rw [Nat.add_mod_right]; exact hmod
+  have hle' : c + BN ≤ NC := by
+    obtain ⟨k, hk⟩ := hBNdvd
+    obtain ⟨m, hm⟩ := Nat.dvd_of_mod_eq_zero hmod
+    subst hk hm
+    have hmk : m < k := by
+      by_contra hmk
+      exact Nat.not_le_of_lt hlt (Nat.mul_le_mul_left BN (Nat.le_of_not_lt hmk))
+    calc BN * m + BN = BN * (m + 1) := by ring
+      _ ≤ BN * k := Nat.mul_le_mul_left BN hmk
+  refine ⟨sF, hstep, hmod', hle', hsm', ?_, ⟨qT, hq'⟩, ⟨sc, hqs'⟩,
+    ⟨mijTx, hmiF⟩, ⟨_, hliF⟩, ⟨_, haccF⟩, hKp', hVp', ?_, ?_, ?_⟩
+  · rw [hoff', hsin]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hoff
+  · rw [hMptr', hsin]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hMptr
+  · rw [hLptr', hsin]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hLptr
+  · rw [hOp', hsin]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hOp
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Per-iteration `TraceSafeListR` for the case-1 body**: as the case-3 walk
+(`aft3_bodySafeW`), plus the two live sliding-window `ifThen`s — whose bodies
+(`dist`/`mask`/`qk`-`where`, and the `p`-`where`) are register-only, so they
+impose no bounds; their successors are inverted through the constexpr `R`
+mirrors. -/
+private theorem aft3_bodySafeW1 (R : RoundingModel) (bounds : RegionBounds)
+    (K V M Out L : RegionName) (s0 : BlockState) (smsc : ℝ)
+    (base BM ND NC BN skk skn svk svn som son ROUND_CTX off size : Nat)
+    (hBN : 0 < BN) (hBNdvd : BN ∣ NC)
+    (c : Nat) (s : BlockState) (hc : c < NC)
+    (hP : aft3SafeInv K V M Out L s0 base BM ND NC BN skk skn svk svn som son ROUND_CTX c s)
+    (hbK : ∀ (t : Fin (NC / BN)) (j : Fin (ND * BN)),
+      base + (j.val / BN) * skk + (t.val * BN + j.val % BN) * skn < bounds K)
+    (hbV : ∀ (t : Fin (NC / BN)) (j : Fin (BN * ND)),
+      base + (t.val * BN + j.val / ND) * svk + (j.val % ND) * svn < bounds V) :
+    Stmt.TraceSafeListR R bounds (aft3LoopBodyG smsc off size BM ND BN)
+      (s.setReg "start_n" .nat [] (Tile.scalar c)) := by
+  obtain ⟨hmod, hle, hsm, hoff, ⟨qT, hq⟩, ⟨sc, hqs⟩, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩,
+    hKp, hVp, hMptr, hLptr, hOp⟩ := hP
+  have hcBN : c / BN * BN = c := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hmod)
+  have hcdivlt : c / BN < NC / BN := by
+    have h1 : c / BN * BN < NC / BN * BN := by
+      rw [hcBN, Nat.div_mul_cancel hBNdvd]
+      exact hc
+    exact lt_of_mul_lt_mul_right h1 (Nat.zero_le BN)
+  set t0 := s.setReg "start_n" .nat [] (Tile.scalar c) with ht0
+  have hKp0 : t0.regs .blockPtr [ND, BN] "K_block_ptr" = some
+      (⟨fun _ : TileIndex [ND, BN] =>
+        { region := K, baseOffset := base, parentShape := [ND, NC], blockShape := [ND, BN],
+          strides := [skk, skn], offsets := [0, c] }⟩) := by
+    rw [ht0]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hKp
+  have hVp0 : t0.regs .blockPtr [BN, ND] "V_block_ptr" = some
+      (⟨fun _ : TileIndex [BN, ND] =>
+        { region := V, baseOffset := base, parentShape := [NC, ND], blockShape := [BN, ND],
+          strides := [svk, svn], offsets := [c, 0] }⟩) := by
+    rw [ht0]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hVp
+  unfold aft3LoopBodyG
+  -- (1) k = load K_block_ptr: the per-lane K bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s1 h1 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref, hKp0] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hbound := hbK ⟨c / BN, hcdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+    rw [hcBN] at hbound
+    simpa using hbound
+  obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+  -- (2) qk = zeros
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s2 h2 => ?_)
+  obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv h2
+  -- (3) qk += dot q k
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s3 h3 => ?_)
+  obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv h3
+  -- (4) qk *= qk_scale
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s4 h4 => ?_)
+  obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv h4
+  -- (5) live sliding-window ifThen: register-only dist/mask/where block
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s5 h5 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+    show Stmt.TraceSafeListR R bounds
+      [Stmt.assign TileDType.nat [BM, BN] "dist" (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.scalarR (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.nil.consL.consR (Op.expandDim ⟨1, by simp⟩ (Op.arange BM)) (Op.expandDim ⟨0, by simp⟩ (Op.arange BN))) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM))) (Op.ref TileDType.nat [] "start_n")) (Op.constNat off)),
+       Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size))] [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size)))],
+       Stmt.assign TileDType.real [BM, BN] "qk" ((Op.ref TileDType.bool [BM, BN] "mask").where (Op.ref TileDType.real [BM, BN] "qk") (Op.negInf.broadcast [BM, BN]))] _
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro st hst u
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl
+    · simp [Stmt.TraceSafeR, Op.SafeAtR]
+      exact ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩
+    · simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+      rw [aft3_evalOpR_ne_const, aft3_ne_zero_zero_false]
+      show Stmt.TraceSafeListR R bounds
+        [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size)))] u
+      exact Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR])
+        (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    · simp [Stmt.TraceSafeR, Op.SafeAtR]
+  rw [aft3_ifThen_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true _)] at h5
+  obtain ⟨w1, hw1, h5⟩ := aft3_stepStmtsR_cons_inv h5
+  obtain ⟨vd, -, rfl⟩ := stepStmtR_assign_inv hw1
+  obtain ⟨w2, hw2, h5⟩ := aft3_stepStmtsR_cons_inv h5
+  rw [aft3_ifThenElse_falseR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_zero_zero_false _)] at hw2
+  obtain ⟨w2a, hw2a, hw2⟩ := aft3_stepStmtsR_cons_inv hw2
+  obtain ⟨vm, -, rfl⟩ := stepStmtR_assign_inv hw2a
+  rw [stepStmtsR_nil] at hw2
+  obtain rfl := Option.some.inj hw2
+  obtain ⟨w3, hw3, h5⟩ := aft3_stepStmtsR_cons_inv h5
+  obtain ⟨vqk, -, rfl⟩ := stepStmtR_assign_inv hw3
+  rw [stepStmtsR_nil] at h5
+  obtain rfl := Option.some.inj h5
+  -- (6) m_ij
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s6 h6 => ?_)
+  obtain ⟨v6, -, rfl⟩ := stepStmtR_assign_inv h6
+  -- (7) qk -= m_ij[:, None]
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s7 h7 => ?_)
+  obtain ⟨v7, -, rfl⟩ := stepStmtR_assign_inv h7
+  -- (8) p = exp2 qk
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s8 h8 => ?_)
+  obtain ⟨v8, -, rfl⟩ := stepStmtR_assign_inv h8
+  -- (9) live p-mask ifThen: single register-only where
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s9 h9 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+    show Stmt.TraceSafeListR R bounds
+      [Stmt.assign TileDType.real [BM, BN] "p" ((Op.ref TileDType.bool [BM, BN] "mask").where (Op.ref TileDType.real [BM, BN] "p") ((Op.const 0.0).broadcast [BM, BN]))] _
+    exact Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR])
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  rw [aft3_ifThen_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true _)] at h9
+  obtain ⟨w9, hw9, h9⟩ := aft3_stepStmtsR_cons_inv h9
+  obtain ⟨vp, -, rfl⟩ := stepStmtR_assign_inv hw9
+  rw [stepStmtsR_nil] at h9
+  obtain rfl := Option.some.inj h9
+  -- (10) l_ij
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s10 h10 => ?_)
+  obtain ⟨v10, -, rfl⟩ := stepStmtR_assign_inv h10
+  -- (11) tmp
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s11 h11 => ?_)
+  obtain ⟨v11, -, rfl⟩ := stepStmtR_assign_inv h11
+  -- (12) alpha
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s12 h12 => ?_)
+  obtain ⟨v12, -, rfl⟩ := stepStmtR_assign_inv h12
+  -- (13) l_i
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s13 h13 => ?_)
+  obtain ⟨v13, -, rfl⟩ := stepStmtR_assign_inv h13
+  -- (14) acc = acc * alpha[:, None]
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s14 h14 => ?_)
+  obtain ⟨v14, -, rfl⟩ := stepStmtR_assign_inv h14
+  -- (15) v = load V_block_ptr: the per-lane V bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s15 h15 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+    rw [hVp0] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hbound := hbV ⟨c / BN, hcdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+    rw [hcBN] at hbound
+    simpa using hbound
+  obtain ⟨v15, -, rfl⟩ := stepStmtR_assign_inv h15
+  -- (16) acc += dot p v
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s16 h16 => ?_)
+  obtain ⟨v16, -, rfl⟩ := stepStmtR_assign_inv h16
+  -- (17) m_i = m_ij
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s17 h17 => ?_)
+  obtain ⟨v17, -, rfl⟩ := stepStmtR_assign_inv h17
+  -- (18) V_block_ptr advance (register-only)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s18 h18 => ?_)
+  obtain ⟨v18, -, rfl⟩ := stepStmtR_assign_inv h18
+  -- (19) K_block_ptr advance (register-only)
+  exact Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Per-iteration `TraceSafeListR` for the case-2 body** — as
+`aft3_bodySafeW1` with the inner `COMPLEMENT` `ifThenElse` constexpr-true
+(live `≥ size` mask branch). -/
+private theorem aft3_bodySafeW2 (R : RoundingModel) (bounds : RegionBounds)
+    (K V M Out L : RegionName) (s0 : BlockState) (smsc : ℝ)
+    (base BM ND NC BN skk skn svk svn som son ROUND_CTX off size : Nat)
+    (hBN : 0 < BN) (hBNdvd : BN ∣ NC)
+    (c : Nat) (s : BlockState) (hc : c < NC)
+    (hP : aft3SafeInv K V M Out L s0 base BM ND NC BN skk skn svk svn som son ROUND_CTX c s)
+    (hbK : ∀ (t : Fin (NC / BN)) (j : Fin (ND * BN)),
+      base + (j.val / BN) * skk + (t.val * BN + j.val % BN) * skn < bounds K)
+    (hbV : ∀ (t : Fin (NC / BN)) (j : Fin (BN * ND)),
+      base + (t.val * BN + j.val / ND) * svk + (j.val % ND) * svn < bounds V) :
+    Stmt.TraceSafeListR R bounds (aft3LoopBodyG2 smsc off size BM ND BN)
+      (s.setReg "start_n" .nat [] (Tile.scalar c)) := by
+  obtain ⟨hmod, hle, hsm, hoff, ⟨qT, hq⟩, ⟨sc, hqs⟩, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩,
+    hKp, hVp, hMptr, hLptr, hOp⟩ := hP
+  have hcBN : c / BN * BN = c := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hmod)
+  have hcdivlt : c / BN < NC / BN := by
+    have h1 : c / BN * BN < NC / BN * BN := by
+      rw [hcBN, Nat.div_mul_cancel hBNdvd]
+      exact hc
+    exact lt_of_mul_lt_mul_right h1 (Nat.zero_le BN)
+  set t0 := s.setReg "start_n" .nat [] (Tile.scalar c) with ht0
+  have hKp0 : t0.regs .blockPtr [ND, BN] "K_block_ptr" = some
+      (⟨fun _ : TileIndex [ND, BN] =>
+        { region := K, baseOffset := base, parentShape := [ND, NC], blockShape := [ND, BN],
+          strides := [skk, skn], offsets := [0, c] }⟩) := by
+    rw [ht0]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hKp
+  have hVp0 : t0.regs .blockPtr [BN, ND] "V_block_ptr" = some
+      (⟨fun _ : TileIndex [BN, ND] =>
+        { region := V, baseOffset := base, parentShape := [NC, ND], blockShape := [BN, ND],
+          strides := [svk, svn], offsets := [c, 0] }⟩) := by
+    rw [ht0]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hVp
+  unfold aft3LoopBodyG2
+  -- (1) k = load K_block_ptr: the per-lane K bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s1 h1 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref, hKp0] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hbound := hbK ⟨c / BN, hcdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+    rw [hcBN] at hbound
+    simpa using hbound
+  obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+  -- (2) qk = zeros
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s2 h2 => ?_)
+  obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv h2
+  -- (3) qk += dot q k
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s3 h3 => ?_)
+  obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv h3
+  -- (4) qk *= qk_scale
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s4 h4 => ?_)
+  obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv h4
+  -- (5) live sliding-window ifThen: register-only dist/mask/where block
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s5 h5 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+    show Stmt.TraceSafeListR R bounds
+      [Stmt.assign TileDType.nat [BM, BN] "dist" (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.scalarR (Op.add NumericDType.nat Broadcast.scalarR (Op.sub NumericDType.nat Broadcast.nil.consL.consR (Op.expandDim ⟨1, by simp⟩ (Op.arange BM)) (Op.expandDim ⟨0, by simp⟩ (Op.arange BN))) (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM))) (Op.ref TileDType.nat [] "start_n")) (Op.constNat off)),
+       Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size))] [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.boolAnd Broadcast.nil.consSame.consSame (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat 0)) (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size)))],
+       Stmt.assign TileDType.real [BM, BN] "qk" ((Op.ref TileDType.bool [BM, BN] "mask").where (Op.ref TileDType.real [BM, BN] "qk") (Op.negInf.broadcast [BM, BN]))] _
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro st hst u
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl
+    · simp [Stmt.TraceSafeR, Op.SafeAtR]
+      exact ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩
+    · simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+      rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+      show Stmt.TraceSafeListR R bounds
+        [Stmt.assign TileDType.bool [BM, BN] "mask" (Op.ge ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BM, BN] "dist") (Op.constNat size))] u
+      exact Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR])
+        (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    · simp [Stmt.TraceSafeR, Op.SafeAtR]
+  rw [aft3_ifThen_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true _)] at h5
+  obtain ⟨w1, hw1, h5⟩ := aft3_stepStmtsR_cons_inv h5
+  obtain ⟨vd, -, rfl⟩ := stepStmtR_assign_inv hw1
+  obtain ⟨w2, hw2, h5⟩ := aft3_stepStmtsR_cons_inv h5
+  rw [aft3_ifThenElse_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true _)] at hw2
+  obtain ⟨w2a, hw2a, hw2⟩ := aft3_stepStmtsR_cons_inv hw2
+  obtain ⟨vm, -, rfl⟩ := stepStmtR_assign_inv hw2a
+  rw [stepStmtsR_nil] at hw2
+  obtain rfl := Option.some.inj hw2
+  obtain ⟨w3, hw3, h5⟩ := aft3_stepStmtsR_cons_inv h5
+  obtain ⟨vqk, -, rfl⟩ := stepStmtR_assign_inv hw3
+  rw [stepStmtsR_nil] at h5
+  obtain rfl := Option.some.inj h5
+  -- (6) m_ij
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s6 h6 => ?_)
+  obtain ⟨v6, -, rfl⟩ := stepStmtR_assign_inv h6
+  -- (7) qk -= m_ij[:, None]
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s7 h7 => ?_)
+  obtain ⟨v7, -, rfl⟩ := stepStmtR_assign_inv h7
+  -- (8) p = exp2 qk
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s8 h8 => ?_)
+  obtain ⟨v8, -, rfl⟩ := stepStmtR_assign_inv h8
+  -- (9) live p-mask ifThen: single register-only where
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s9 h9 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+    show Stmt.TraceSafeListR R bounds
+      [Stmt.assign TileDType.real [BM, BN] "p" ((Op.ref TileDType.bool [BM, BN] "mask").where (Op.ref TileDType.real [BM, BN] "p") ((Op.const 0.0).broadcast [BM, BN]))] _
+    exact Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR])
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  rw [aft3_ifThen_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true _)] at h9
+  obtain ⟨w9, hw9, h9⟩ := aft3_stepStmtsR_cons_inv h9
+  obtain ⟨vp, -, rfl⟩ := stepStmtR_assign_inv hw9
+  rw [stepStmtsR_nil] at h9
+  obtain rfl := Option.some.inj h9
+  -- (10) l_ij
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s10 h10 => ?_)
+  obtain ⟨v10, -, rfl⟩ := stepStmtR_assign_inv h10
+  -- (11) tmp
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s11 h11 => ?_)
+  obtain ⟨v11, -, rfl⟩ := stepStmtR_assign_inv h11
+  -- (12) alpha
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s12 h12 => ?_)
+  obtain ⟨v12, -, rfl⟩ := stepStmtR_assign_inv h12
+  -- (13) l_i
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s13 h13 => ?_)
+  obtain ⟨v13, -, rfl⟩ := stepStmtR_assign_inv h13
+  -- (14) acc = acc * alpha[:, None]
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s14 h14 => ?_)
+  obtain ⟨v14, -, rfl⟩ := stepStmtR_assign_inv h14
+  -- (15) v = load V_block_ptr: the per-lane V bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s15 h15 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+    rw [hVp0] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hbound := hbV ⟨c / BN, hcdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+    rw [hcBN] at hbound
+    simpa using hbound
+  obtain ⟨v15, -, rfl⟩ := stepStmtR_assign_inv h15
+  -- (16) acc += dot p v
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s16 h16 => ?_)
+  obtain ⟨v16, -, rfl⟩ := stepStmtR_assign_inv h16
+  -- (17) m_i = m_ij
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s17 h17 => ?_)
+  obtain ⟨v17, -, rfl⟩ := stepStmtR_assign_inv h17
+  -- (18) V_block_ptr advance (register-only)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s18 h18 => ?_)
+  obtain ⟨v18, -, rfl⟩ := stepStmtR_assign_inv h18
+  -- (19) K_block_ptr advance (register-only)
+  exact Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `TraceSafeR` walk for the whole case-1 kernel** — the case-3 walk
+(`aft3_traceSafeR_case3`) re-run over the sliding-window loop body
+(`aft3_bodySafeW1` / `aft3_attn_stepW1`); the preLoop and postLoop segments
+are shared verbatim. -/
+private theorem aft3_traceSafeR_case1 (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hbQ : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (BM * ND)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + j.val / ND) * sqm + (j.val % ND) * sqk < bounds Q)
+    (hbK : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (ND * BN)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (j.val / BN) * skk + (t.val * BN + j.val % BN) * skn < bounds K)
+    (hbV : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (BN * ND)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (t.val * BN + j.val / ND) * svk + (j.val % ND) * svn < bounds V)
+    (hbO : ∀ j : Fin (BM * ND),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + j.val / ND) * som + (j.val % ND) * son < bounds Out)
+    (hbM : ∀ j : Fin BM, s.pids 1 * ROUND_CTX + (s.pids 0 * BM + j.val) < bounds M) :
+    ((attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0).toAlgKernel).TraceSafeR R bounds s := by
+  have hT : 0 < NKV_CTX / BN := Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN
+  unfold Kernel.TraceSafeR
+  rw [aft3_body_splitG]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- the preLoop
+    obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp, hOp, hMptr, hLptr⟩ :=
+      aft3PreLoopScalarsG_eval Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+    rw [show aft3PreLoopG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+        = aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ++ (aft3PreLoopG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16 from by
+      rw [aft3PreLoopScalarsG]; rw [List.take_append_drop]]
+    refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+    · -- statements 0–15: register-only assigns, safe at every state
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
+      intro st hst u
+      simp only [aft3PreLoopScalarsG, aft3PreLoopG, List.take_succ_cons, List.take_zero,
+        List.mem_cons, List.not_mem_nil, or_false] at hst
+      rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+        rfl | rfl | rfl | rfl <;>
+        simp [Stmt.TraceSafeR, Op.SafeAtR]
+    · intro s1 hs1
+      rw [aft3PreLoopScalarsG_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s, h11] at hs1
+      obtain rfl := Option.some.inj hs1
+      rw [show (aft3PreLoopG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16
+          = [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)],
+              Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)),
+              Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+              Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") [0, 1]) MaskOpt.none)] ] from by rfl]
+      -- the INIT ifThenElse: register-only live branch
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun u1 hu1 => ?_)
+      · simp only [Stmt.TraceSafeR]
+        refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+        rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+        show Stmt.TraceSafeListR R bounds
+          [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)),
+           Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))),
+           Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] s11
+        refine Stmt.TraceSafeListR.of_forall _ _ ?_
+        intro st hst u
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+        rcases hst with rfl | rfl | rfl <;> simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+      rw [aft3_ifThenElse_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true _)] at hu1
+      obtain ⟨w1, hw1, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨va, -, rfl⟩ := stepStmtR_assign_inv hw1
+      obtain ⟨w2, hw2, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨vb, -, rfl⟩ := stepStmtR_assign_inv hw2
+      obtain ⟨w3, hw3, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨vc, -, rfl⟩ := stepStmtR_assign_inv hw3
+      rw [stepStmtsR_nil] at hu1
+      obtain rfl := Option.some.inj hu1
+      -- qk_scale ×2 (register-only)
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u2 hu2 => ?_)
+      obtain ⟨vd, -, rfl⟩ := stepStmtR_assign_inv hu2
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u3 hu3 => ?_)
+      obtain ⟨ve, -, rfl⟩ := stepStmtR_assign_inv hu3
+      -- the IS_EVEN_M ifThenElse: the live `Q_block_ptr` load (`read1` bound)
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+      rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+      show Stmt.TraceSafeListR R bounds
+        [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] _
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+      refine ⟨trivial, trivial, ?_⟩
+      intro ptrs hptrs idx _
+      rw [evalOpR_ref] at hptrs
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+      rw [hQp] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      intro _
+      have hbound := hbQ ⟨0, hT⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+      simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+      simpa using hbound
+
+  · -- after the preLoop: the KV loop, then the postLoop
+    intro s2 hs2
+    obtain ⟨spW, hpreW, hinv0⟩ :=
+      aft3PreLoop_evalW Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+    rw [aft3PreLoopG_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s, hpreW] at hs2
+    obtain rfl := Option.some.inj hs2
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 hs3 => ?_)
+    · -- the KV loop is trace-safe (invariant principle over `aft3SafeInv`)
+      simp only [Stmt.TraceSafeR]
+      refine Stmt.forRangeTraceSafeR_inv R bounds "start_n" NKV_CTX BN
+        (aft3LoopBodyG sm_scale off size BM ND BN)
+        (aft3SafeInv K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX) ?_ 0 spW hinv0
+      intro c st hc hP
+      refine ⟨aft3_bodySafeW1 R bounds K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP hbK hbV, ?_⟩
+      obtain ⟨st', hstep, hP'⟩ :=
+        aft3_attn_stepW1 K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP
+      exact ⟨st', by rw [aft3LoopBodyG_castFree]; exact hstep, hP'⟩
+    · -- identify the post-loop state and finish on the postLoop stores
+      obtain ⟨final, sfin, hLoop, hfinal, hPfin⟩ :=
+        forRange_inv (idx := "start_n") (start := 0) (stop := NKV_CTX) (step := BN)
+          (body := aft3LoopBodyG sm_scale off size BM ND BN)
+          (P := aft3SafeInv K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX)
+          (s_init := spW) hBN.ne' hinv0
+          (fun c st hc hP =>
+            aft3_attn_stepW1 K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP)
+      rw [show stepStmtR R (Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG sm_scale off size BM ND BN)) spW = some sfin from by
+        rw [stepStmtR_forRange,
+          stepForRangeAuxR_castFree R _ (aft3LoopBodyG_castFree R sm_scale off size BM ND BN) "start_n",
+          ← stepForRangeAux.forRange_unfold]
+        exact hLoop] at hs3
+      obtain rfl := Option.some.inj hs3
+      exact aft3_postSafeW R bounds K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX final sfin hPfin hbO hbM
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `TraceSafeR` walk for the whole case-2 kernel** (complement window;
+`aft3_bodySafeW2` / `aft3_attn_stepW2`). -/
+private theorem aft3_traceSafeR_case2 (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hbQ : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (BM * ND)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + j.val / ND) * sqm + (j.val % ND) * sqk < bounds Q)
+    (hbK : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (ND * BN)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (j.val / BN) * skk + (t.val * BN + j.val % BN) * skn < bounds K)
+    (hbV : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (BN * ND)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (t.val * BN + j.val / ND) * svk + (j.val % ND) * svn < bounds V)
+    (hbO : ∀ j : Fin (BM * ND),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + j.val / ND) * som + (j.val % ND) * son < bounds Out)
+    (hbM : ∀ j : Fin BM, s.pids 1 * ROUND_CTX + (s.pids 0 * BM + j.val) < bounds M) :
+    ((attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1).toAlgKernel).TraceSafeR R bounds s := by
+  have hT : 0 < NKV_CTX / BN := Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN
+  unfold Kernel.TraceSafeR
+  rw [aft3_body_splitG2]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- the preLoop
+    obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp, hOp, hMptr, hLptr⟩ :=
+      aft3PreLoopScalarsG_eval Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+    rw [show aft3PreLoopG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+        = aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ++ (aft3PreLoopG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16 from by
+      rw [aft3PreLoopScalarsG]; rw [List.take_append_drop]]
+    refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+    · -- statements 0–15: register-only assigns, safe at every state
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
+      intro st hst u
+      simp only [aft3PreLoopScalarsG, aft3PreLoopG, List.take_succ_cons, List.take_zero,
+        List.mem_cons, List.not_mem_nil, or_false] at hst
+      rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+        rfl | rfl | rfl | rfl <;>
+        simp [Stmt.TraceSafeR, Op.SafeAtR]
+    · intro s1 hs1
+      rw [aft3PreLoopScalarsG_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s, h11] at hs1
+      obtain rfl := Option.some.inj hs1
+      rw [show (aft3PreLoopG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16
+          = [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)],
+              Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)),
+              Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+              Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") [0, 1]) MaskOpt.none)] ] from by rfl]
+      -- the INIT ifThenElse: register-only live branch
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun u1 hu1 => ?_)
+      · simp only [Stmt.TraceSafeR]
+        refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+        rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+        show Stmt.TraceSafeListR R bounds
+          [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)),
+           Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))),
+           Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] s11
+        refine Stmt.TraceSafeListR.of_forall _ _ ?_
+        intro st hst u
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+        rcases hst with rfl | rfl | rfl <;> simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+      rw [aft3_ifThenElse_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true _)] at hu1
+      obtain ⟨w1, hw1, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨va, -, rfl⟩ := stepStmtR_assign_inv hw1
+      obtain ⟨w2, hw2, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨vb, -, rfl⟩ := stepStmtR_assign_inv hw2
+      obtain ⟨w3, hw3, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨vc, -, rfl⟩ := stepStmtR_assign_inv hw3
+      rw [stepStmtsR_nil] at hu1
+      obtain rfl := Option.some.inj hu1
+      -- qk_scale ×2 (register-only)
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u2 hu2 => ?_)
+      obtain ⟨vd, -, rfl⟩ := stepStmtR_assign_inv hu2
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u3 hu3 => ?_)
+      obtain ⟨ve, -, rfl⟩ := stepStmtR_assign_inv hu3
+      -- the IS_EVEN_M ifThenElse: the live `Q_block_ptr` load (`read1` bound)
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+      rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+      show Stmt.TraceSafeListR R bounds
+        [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] _
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+      refine ⟨trivial, trivial, ?_⟩
+      intro ptrs hptrs idx _
+      rw [evalOpR_ref] at hptrs
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+      rw [hQp] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      intro _
+      have hbound := hbQ ⟨0, hT⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+      simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+      simpa using hbound
+
+  · -- after the preLoop: the KV loop, then the postLoop
+    intro s2 hs2
+    obtain ⟨spW, hpreW, hinv0⟩ :=
+      aft3PreLoop_evalW Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+    rw [aft3PreLoopG_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s, hpreW] at hs2
+    obtain rfl := Option.some.inj hs2
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 hs3 => ?_)
+    · -- the KV loop is trace-safe (invariant principle over `aft3SafeInv`)
+      simp only [Stmt.TraceSafeR]
+      refine Stmt.forRangeTraceSafeR_inv R bounds "start_n" NKV_CTX BN
+        (aft3LoopBodyG2 sm_scale off size BM ND BN)
+        (aft3SafeInv K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX) ?_ 0 spW hinv0
+      intro c st hc hP
+      refine ⟨aft3_bodySafeW2 R bounds K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP hbK hbV, ?_⟩
+      obtain ⟨st', hstep, hP'⟩ :=
+        aft3_attn_stepW2 K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP
+      exact ⟨st', by rw [aft3LoopBodyG2_castFree]; exact hstep, hP'⟩
+    · -- identify the post-loop state and finish on the postLoop stores
+      obtain ⟨final, sfin, hLoop, hfinal, hPfin⟩ :=
+        forRange_inv (idx := "start_n") (start := 0) (stop := NKV_CTX) (step := BN)
+          (body := aft3LoopBodyG2 sm_scale off size BM ND BN)
+          (P := aft3SafeInv K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX)
+          (s_init := spW) hBN.ne' hinv0
+          (fun c st hc hP =>
+            aft3_attn_stepW2 K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP)
+      rw [show stepStmtR R (Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG2 sm_scale off size BM ND BN)) spW = some sfin from by
+        rw [stepStmtR_forRange,
+          stepForRangeAuxR_castFree R _ (aft3LoopBodyG2_castFree R sm_scale off size BM ND BN) "start_n",
+          ← stepForRangeAux.forRange_unfold]
+        exact hLoop] at hs3
+      obtain rfl := Option.some.inj hs3
+      exact aft3_postSafeW R bounds K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX final sfin hPfin hbO hbM
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The case-1 `⊨[R]` io headline (sliding window).** For every rounding
+model `R`, the case-1 (`(END,INIT,SLIDING_WINDOW,COMPLEMENT) = (1,1,1,0)`)
+`_attn_fwd` surface implements, on its `StreamMasked3DKernelIO₃ₓ₂` signature,
+the **ideal-ℝ sliding-window online-softmax attention fold** over the three
+streamed tiles: output lane `j = (i, d)` of `Out` holds the window-filtered
+base-2 per-key-scale softmax (`attentionFwdTriton3Case1IOOutSpec` = the
+existing `attentionFwdTriton3Case1OutSpecG` closed form restated on the
+streams — the `tl.where` window mask `0 ≤ dist ∧ dist < size` enters as the
+`natSlidingWindowKeepG p₀` key filter), and row `i` of `M` holds the raw
+`(m ⊔ … + log2 l).unbotD 0` finalize (`attentionFwdTriton3Case1IOMSpec` =
+`attentionFwdTriton3KMSpecG` on the streams). Both output grids are the
+`.real` default, so at every `R` the terminal cells carry the exact fold
+values.
+
+**Hypothesis provenance** (inherited verbatim from the exact case-1 headline
+`attention_fwd_triton3_python_case1_output_summary_general`, all
+truth-forced): `0 < ND/BM/BN/NKV_CTX` and `BN ∣ NKV_CTX` shape the KV walk;
+`0 < H`, `H_KV = H` and the six stride equalities collapse the four plane
+offsets onto the shared base `pid₁/H·sqz + pid₁%H·sqh`; `M ≠ Out` keeps the
+`O` store off the `M` row; `hinjO`/`hinjM` (∀-pids forms of the exact
+stack's per-program injectivity) make the scatter readbacks well-defined.
+The exact headline's `hundef` is not a hypothesis — the skin's Hoare triple
+carries the `undef` pin itself.
+
+**Scope disclosed**: with this and the case-2 headline below, three of the
+four constexpr cases carry io faces. Case 4 (`INIT=0` seeded resume) is
+**not** converted: its surface reads six input regions (`Q`/`K`/`V` plus the
+`M`/`L`/`Out` resume rows, `M` and `Out` simultaneously input and output) of
+non-uniform per-step widths (`BM·ND`/`ND·BN`/`BN·ND`/`BM`/`BM`/`BM·ND`) —
+neither the 3-input `StreamMasked3DKernelIO₃ₓ₂` skin nor the uniform-`B`
+`StreamGroupedEmitMasked3DKernelIO` vector skin can state that honestly; it
+needs a named-field `₆ₓ₂` (or per-channel-`B` grouped) variant and stays on
+its exact headline `attention_fwd_triton3_python_case4_output_summary_general`
+(deferred). The port's known fidelity gaps (`IS_EVEN_N = 1` hardwired, casts
+erased to identity, `@triton.heuristics` not modeled) are inherited as-is. -/
+specification attention_fwd_triton3_case1_io_correctness (R : RoundingModel)
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out)
+    (hinjO : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BM, ND] =>
+        (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun r : TileIndex [BM] => p₁ * ROUND_CTX + (p₀ * BM + r.1.val))) :
+    attentionFwdTriton3Case1IO Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ⊨[R]
+      fun p₀ _ _ xs ys zs =>
+        (fun j => attentionFwdTriton3Case1IOOutSpec p₀ BM ND BN NKV_CTX (NKV_CTX / BN)
+            (Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN) (Nat.div_mul_cancel hBNdvd) hBN
+            (sm_scale * 1.4426950408889634) off size xs ys zs j,
+         fun i => attentionFwdTriton3Case1IOMSpec p₀ BM ND BN NKV_CTX (NKV_CTX / BN) hND
+            (Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN) (Nat.div_mul_cancel hBNdvd) hBN
+            (sm_scale * 1.4426950408889634) off size xs ys zs i) := by
+  have hT : 0 < NKV_CTX / BN := Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN
+  have hTB : NKV_CTX / BN * BN = NKV_CTX := Nat.div_mul_cancel hBNdvd
+  refine StreamMasked3DKernelIO₃ₓ₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact aft3_flattenOkG1 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+  · -- the safety walk
+    intro bounds s xs ys zs _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
+    simp only [attentionFwdTriton3Case1IO] at hbr1 hbr2 hbr3 hbw1 hbw2 ⊢
+    exact aft3_traceSafeR_case1 R bounds Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+      hBN hNC hBNdvd
+      (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial)
+      (fun t j => hbr3 t j trivial) (fun j => hbw1 j trivial) (fun j => hbw2 j trivial)
+  · -- the rounded Hoare triple: exact KG invariant stack + cast-free collapses
+    intro s₀ xs ys zs hu hx hy hz
+    simp only [attentionFwdTriton3Case1IO] at hx hy hz ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
+    set base := s₀.pids 1 / H * sqz + s₀.pids 1 % H * sqh with hbase
+    set sc := sm_scale * 1.4426950408889634 with hsc
+    obtain ⟨sp, hpre, hinv0⟩ :=
+      aft3PreLoop_evalG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s₀ hND hH hHKV hskz hskh hsvz hsvh hsoz hsoh (fun i j => natSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) hundef'
+    obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+      forRange_inv (idx := "start_n") (start := 0) (stop := NKV_CTX) (step := BN)
+        (body := aft3LoopBodyG sm_scale off size BM ND BN)
+        (P := fun i st => attnInvariantKG Q K V M Out L s₀ base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc (fun i j => natSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) i st)
+        (s_init := sp)
+        hBN.ne'
+        (attnInvariant_zero_to_KG Q K V M Out L s₀ base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc (fun i j => natSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) sp hinv0)
+        (fun i st hi hP => aft3_attn_step1G Q K V M Out L s₀ base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX off size hND hBM hBN hBNdvd sc i st hi
+          (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
+    have hfinal : final = NKV_CTX := by
+      obtain ⟨_, hmod, hle, _⟩ := hinvL
+      rcases Nat.lt_or_ge final NKV_CTX with h | h
+      · exact absurd h (by simpa using hfin)
+      · exact Nat.le_antisymm hle h
+    subst final
+    obtain ⟨sF, hpost, hO, hM⟩ :=
+      aft3PostLoop_eval_KG Q K V M Out L s₀ sL base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc hMO
+        (fun i j => natSlidingWindowKeepG (s₀.pids 0) BM BN off size i j)
+        (hinjO (s₀.pids 0) (s₀.pids 1)) (hinjM (s₀.pids 0) (s₀.pids 1)) hinvL
+    obtain ⟨hpidsL, _, _, _, _, _, _, _, _, _, _, _, hMptrL, _, hOpL, _, hmemL⟩ := hinvL
+    have hframe := aft3PostLoop_frameW M Out L s₀ base BM ND som son ROUND_CTX sL sF hMptrL hOpL hpost
+    refine ⟨sF, ?_, ?_, ?_, ?_⟩
+    · -- termination under `execR R` (everything cast-free)
+      show execR R (attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 0).toAlgKernel s₀ = some sF
+      unfold execR
+      rw [aft3_body_splitG, stepStmtsR_append,
+        aft3PreLoopG_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s₀,
+        hpre, Option.bind_some,
+        stepStmtsR_cons_some (show stepStmtR R (Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG sm_scale off size BM ND BN)) sp = some sL from by
+          rw [stepStmtR_forRange,
+            stepForRangeAuxR_castFree R _ (aft3LoopBodyG_castFree R sm_scale off size BM ND BN) "start_n",
+            ← stepForRangeAux.forRange_unfold]
+          exact hloop),
+        aft3PostLoopG_castFree R M Out L BM ND sL]
+      exact hpost
+    · -- Out readback = the streamed sliding-window closed form
+      intro j _
+      have hOj := hO (Lane2D.decode j)
+      rw [show base + (s₀.pids 0 * BM + (Lane2D.decode j).1.val) * som + (Lane2D.decode j).2.1.val * son
+          = base + (s₀.pids 0 * BM + j.val / ND) * som + (j.val % ND) * son from by
+        simp only [Lane2D.decode_row, Lane2D.decode_col]] at hOj
+      rw [BlockState.readMemAs_real, hOj]
+      rw [aft3IOqT_eq s₀ Q base sqm sqk BM ND (NKV_CTX / BN) hT xs (fun t j' => hx t j' trivial),
+        aft3IOkT_eq s₀ K base skn skk ND BN NKV_CTX (NKV_CTX / BN) hTB hBN ys (fun t j' => hy t j' trivial),
+        aft3IOvT_eq s₀ V base svk svn ND BN NKV_CTX (NKV_CTX / BN) hTB hBN zs (fun t j' => hz t j' trivial)]
+      rw [aft3_botKG_ratio_eq_pred (aft3IOqT BM ND (NKV_CTX / BN) hT xs)
+        (aft3IOkT ND BN NKV_CTX (NKV_CTX / BN) hTB hBN ys)
+        (aft3IOvT ND BN NKV_CTX (NKV_CTX / BN) hTB hBN zs)
+        (keyScale3G sc NKV_CTX) (fun i j => natSlidingWindowKeepG (s₀.pids 0) BM BN off size i j)
+        hNC hND (Lane2D.decode j)]
+      unfold attentionFwdTriton3Case1IOOutSpec
+      simp [FloatDType.ofReal]
+    · -- M readback = the streamed raw finalize
+      intro i _
+      rw [BlockState.readMemAs_real, hM i]
+      unfold attentionFwdTriton3Case1IOMSpec
+      rw [aft3IOqT_eq s₀ Q base sqm sqk BM ND (NKV_CTX / BN) hT xs (fun t j' => hx t j' trivial),
+        aft3IOkT_eq s₀ K base skn skk ND BN NKV_CTX (NKV_CTX / BN) hTB hBN ys (fun t j' => hy t j' trivial),
+        aft3IOvT_eq s₀ V base svk svn ND BN NKV_CTX (NKV_CTX / BN) hTB hBN zs (fun t j' => hz t j' trivial)]
+      simp [FloatDType.ofReal]
+    · -- the frame: cells outside the two write windows are untouched
+      intro r oo hcond
+      obtain ⟨h1, h2⟩ := hcond
+      rw [hframe r oo ?_ ?_, hmemL]
+      · intro hr i
+        exact fun hoo => h2 i trivial hr hoo
+      · intro hr idx
+        have h := h1 (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) trivial hr
+        simpa [Lane2D.encode_div, Lane2D.encode_mod] using h
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The case-2 `⊨[R]` io headline (complement sliding window).** As the
+case-1 io headline with the complementary key filter: the constexpr
+`COMPLEMENT=1` mask `dist ≥ size` enters the spec as
+`natComplementSlidingWindowKeepG p₀`, so `Out` holds
+`attentionFwdTriton3Case2IOOutSpec` (= `attentionFwdTriton3Case2OutSpecG` on
+the streams) and `M` the matching raw finalize
+`attentionFwdTriton3Case2IOMSpec`. Hypotheses inherited verbatim from
+`attention_fwd_triton3_python_case2_output_summary_general` minus `hundef`
+(carried by the skin's triple). See the case-1 headline's scope note for why
+case 4 (`INIT=0` seeded resume, six non-uniform input channels) has no
+honest io face on the existing skins and stays on its exact headline. -/
+specification attention_fwd_triton3_case2_io_correctness (R : RoundingModel)
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out)
+    (hinjO : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BM, ND] =>
+        (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun r : TileIndex [BM] => p₁ * ROUND_CTX + (p₀ * BM + r.1.val))) :
+    attentionFwdTriton3Case2IO Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ⊨[R]
+      fun p₀ _ _ xs ys zs =>
+        (fun j => attentionFwdTriton3Case2IOOutSpec p₀ BM ND BN NKV_CTX (NKV_CTX / BN)
+            (Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN) (Nat.div_mul_cancel hBNdvd) hBN
+            (sm_scale * 1.4426950408889634) off size xs ys zs j,
+         fun i => attentionFwdTriton3Case2IOMSpec p₀ BM ND BN NKV_CTX (NKV_CTX / BN) hND
+            (Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN) (Nat.div_mul_cancel hBNdvd) hBN
+            (sm_scale * 1.4426950408889634) off size xs ys zs i) := by
+  have hT : 0 < NKV_CTX / BN := Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN
+  have hTB : NKV_CTX / BN * BN = NKV_CTX := Nat.div_mul_cancel hBNdvd
+  refine StreamMasked3DKernelIO₃ₓ₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact aft3_flattenOkG2 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+  · -- the safety walk
+    intro bounds s xs ys zs _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
+    simp only [attentionFwdTriton3Case2IO] at hbr1 hbr2 hbr3 hbw1 hbw2 ⊢
+    exact aft3_traceSafeR_case2 R bounds Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+      hBN hNC hBNdvd
+      (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial)
+      (fun t j => hbr3 t j trivial) (fun j => hbw1 j trivial) (fun j => hbw2 j trivial)
+  · -- the rounded Hoare triple: exact KG invariant stack + cast-free collapses
+    intro s₀ xs ys zs hu hx hy hz
+    simp only [attentionFwdTriton3Case2IO] at hx hy hz ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
+    set base := s₀.pids 1 / H * sqz + s₀.pids 1 % H * sqh with hbase
+    set sc := sm_scale * 1.4426950408889634 with hsc
+    obtain ⟨sp, hpre, hinv0⟩ :=
+      aft3PreLoop_evalG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s₀ hND hH hHKV hskz hskh hsvz hsvh hsoz hsoh (fun i j => natComplementSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) hundef'
+    obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+      forRange_inv (idx := "start_n") (start := 0) (stop := NKV_CTX) (step := BN)
+        (body := aft3LoopBodyG2 sm_scale off size BM ND BN)
+        (P := fun i st => attnInvariantKG Q K V M Out L s₀ base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc (fun i j => natComplementSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) i st)
+        (s_init := sp)
+        hBN.ne'
+        (attnInvariant_zero_to_KG Q K V M Out L s₀ base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc (fun i j => natComplementSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) sp hinv0)
+        (fun i st hi hP => aft3_attn_step2G Q K V M Out L s₀ base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX off size hND hBM hBN hBNdvd sc i st hi
+          (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
+    have hfinal : final = NKV_CTX := by
+      obtain ⟨_, hmod, hle, _⟩ := hinvL
+      rcases Nat.lt_or_ge final NKV_CTX with h | h
+      · exact absurd h (by simpa using hfin)
+      · exact Nat.le_antisymm hle h
+    subst final
+    obtain ⟨sF, hpost, hO, hM⟩ :=
+      aft3PostLoop_eval_KG Q K V M Out L s₀ sL base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc hMO
+        (fun i j => natComplementSlidingWindowKeepG (s₀.pids 0) BM BN off size i j)
+        (hinjO (s₀.pids 0) (s₀.pids 1)) (hinjM (s₀.pids 0) (s₀.pids 1)) hinvL
+    obtain ⟨hpidsL, _, _, _, _, _, _, _, _, _, _, _, hMptrL, _, hOpL, _, hmemL⟩ := hinvL
+    have hframe := aft3PostLoop_frameW M Out L s₀ base BM ND som son ROUND_CTX sL sF hMptrL hOpL hpost
+    refine ⟨sF, ?_, ?_, ?_, ?_⟩
+    · -- termination under `execR R` (everything cast-free)
+      show execR R (attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 1 1 1).toAlgKernel s₀ = some sF
+      unfold execR
+      rw [aft3_body_splitG2, stepStmtsR_append,
+        aft3PreLoopG_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s₀,
+        hpre, Option.bind_some,
+        stepStmtsR_cons_some (show stepStmtR R (Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG2 sm_scale off size BM ND BN)) sp = some sL from by
+          rw [stepStmtR_forRange,
+            stepForRangeAuxR_castFree R _ (aft3LoopBodyG2_castFree R sm_scale off size BM ND BN) "start_n",
+            ← stepForRangeAux.forRange_unfold]
+          exact hloop),
+        aft3PostLoopG_castFree R M Out L BM ND sL]
+      exact hpost
+    · -- Out readback = the streamed complement-window closed form
+      intro j _
+      have hOj := hO (Lane2D.decode j)
+      rw [show base + (s₀.pids 0 * BM + (Lane2D.decode j).1.val) * som + (Lane2D.decode j).2.1.val * son
+          = base + (s₀.pids 0 * BM + j.val / ND) * som + (j.val % ND) * son from by
+        simp only [Lane2D.decode_row, Lane2D.decode_col]] at hOj
+      rw [BlockState.readMemAs_real, hOj]
+      rw [aft3IOqT_eq s₀ Q base sqm sqk BM ND (NKV_CTX / BN) hT xs (fun t j' => hx t j' trivial),
+        aft3IOkT_eq s₀ K base skn skk ND BN NKV_CTX (NKV_CTX / BN) hTB hBN ys (fun t j' => hy t j' trivial),
+        aft3IOvT_eq s₀ V base svk svn ND BN NKV_CTX (NKV_CTX / BN) hTB hBN zs (fun t j' => hz t j' trivial)]
+      rw [aft3_botKG_ratio_eq_pred (aft3IOqT BM ND (NKV_CTX / BN) hT xs)
+        (aft3IOkT ND BN NKV_CTX (NKV_CTX / BN) hTB hBN ys)
+        (aft3IOvT ND BN NKV_CTX (NKV_CTX / BN) hTB hBN zs)
+        (keyScale3G sc NKV_CTX) (fun i j => natComplementSlidingWindowKeepG (s₀.pids 0) BM BN off size i j)
+        hNC hND (Lane2D.decode j)]
+      unfold attentionFwdTriton3Case2IOOutSpec
+      simp [FloatDType.ofReal]
+    · -- M readback = the streamed raw finalize
+      intro i _
+      rw [BlockState.readMemAs_real, hM i]
+      unfold attentionFwdTriton3Case2IOMSpec
+      rw [aft3IOqT_eq s₀ Q base sqm sqk BM ND (NKV_CTX / BN) hT xs (fun t j' => hx t j' trivial),
+        aft3IOkT_eq s₀ K base skn skk ND BN NKV_CTX (NKV_CTX / BN) hTB hBN ys (fun t j' => hy t j' trivial),
+        aft3IOvT_eq s₀ V base svk svn ND BN NKV_CTX (NKV_CTX / BN) hTB hBN zs (fun t j' => hz t j' trivial)]
+      simp [FloatDType.ofReal]
+    · -- the frame: cells outside the two write windows are untouched
+      intro r oo hcond
+      obtain ⟨h1, h2⟩ := hcond
+      rw [hframe r oo ?_ ?_, hmemL]
+      · intro hr i
+        exact fun hoo => h2 i trivial hr hoo
+      · intro hr idx
+        have h := h1 (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) trivial hr
+        simpa [Lane2D.encode_div, Lane2D.encode_mod] using h
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3
