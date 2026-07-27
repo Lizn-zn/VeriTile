@@ -2543,8 +2543,9 @@ private theorem akIO_b0_addr_eval (s : BlockState)
 
 The library's `Stmt.forRangeTraceSafeR_inv` demands per-iteration success,
 which would drag the `undef`-clean full invariant into the safety walk. These
-local principles (copies of the triton_attention recipe — bench files never
-import each other) take the success-conditional obligation instead. -/
+local principles (copies of the triton_attention recipe — bench files
+never import each other) take the success-conditional obligation
+instead. -/
 
 /-- Invariant principle for `forRangeTraceSafeR` with success-conditional
 transport. -/
