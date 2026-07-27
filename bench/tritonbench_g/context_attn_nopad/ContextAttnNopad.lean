@@ -3139,5 +3139,2113 @@ specification context_attn_nopad_output_summary_general
 
 end General
 
+/-! # ══════════ IO FACE — the `⊨[R]` streaming-metadata headline ══════════ -/
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamMetaMasked3DKernelIO₃
+
+/-! ## Slot table and IO signature
+
+`context_attn_nopad` is the exemplar consumer of
+`StreamMetaMasked3DKernelIO₃` (metadata + three streamed float inputs +
+launch-legality `pre`): two `.nat` metadata slots loaded at cell
+`cur_batch = pid₀` of their own regions (slot `0` = `B_Seqlen[pid₀]`, the
+per-batch sequence length; slot `1` = `B_Start_Loc[pid₀]`, the packed-row
+offset), plus the `Q`/`K`/`V` streams whose windows and masks eat the
+loaded slot vector. -/
+
+/-- Slot-region table of the two per-batch metadata slots, in the kernel's
+own load order: slot `0` = `B_Seqlen` (`cur_batch_seq_len`), slot `1` =
+`B_Start_Loc` (`cur_batch_in_all_start_index`). A shared def, never an
+inline `match` in a window/spec position. -/
+def ctxNopadMetaBuf (B_Start_Loc B_Seqlen : Region .nat) : Fin 2 → RegionName
+  | ⟨0, _⟩ => B_Seqlen.cast
+  | ⟨_ + 1, _⟩ => B_Start_Loc.cast
+
+/-- **Streaming metadata IO signature** of `context_attn_nopad` on the
+metadata-parametrized three-stream fold skin (S1: online-softmax fold +
+terminal masked store, 3-D pid grid `(cur_batch, cur_head, start_m)`).
+
+The kernel's `forRangeDyn` trip count `block_mask·(start_m+1)·BLOCK_M/BLOCK_N`
+grows with `pid₂`, so the walk has **no pid-free step bound**: `T := NT`, a
+new `Nat` parameter (the host grid's third dimension
+`cdiv(max_input_len, BLOCK_M)`), and the skin's launch-legality field is
+
+`pre := pid₂ < NT ∧ B_Seqlen[pid₀] ≤ NT·BLOCK_M`
+
+— exactly the port's documented **trusted boundary** (see the file
+docstring's Scope section): the host launches
+`grid = (batch, head, cdiv(max_input_len, BLOCK_M))`, so every real program
+has `start_m < NT`, and every `B_Seqlen[b] ≤ max_input_len ≤ NT·BLOCK_M`.
+The `⊨[R]` triple says nothing about launches outside this boundary.
+
+Windows transcribe the kernel's pointer arithmetic exactly, with the loaded
+slot vector `m` in place of the in-state metadata reads
+(`m 0 = cur_batch_seq_len`, `m 1 = cur_batch_in_all_start_index`), at the
+contiguous strides `(rs, hs, 1)` and `BLOCK_M = BLOCK_N = BLK`,
+`BLOCK_DMODEL = DM`:
+
+* `read1` (`Q`, the **static** stream — the window ignores `t`): lane
+  `j = (i, e)` row-major over `[BLK, DM]` reads
+  `(m 1 + (pid₂·BLK + i))·rs + pid₁·hs + e` (the `off_q` cell);
+  `mask1` is the row guard `pid₂·BLK + i < m 0` (`offs_m < seq_len`).
+* `read2` (`K`, slot-shifted by `t·BLK` **columns** per step): lane
+  `j = (e, jL)` over `[DM, BLK]` reads `(m 1 + (t·BLK + jL))·rs + pid₁·hs + e`;
+  `mask2` is `t·BLK + jL < m 0` — the **slot-eating step mask** that keeps
+  the dead tail steps (`t·BLK ≥` the live window) unpinned.
+* `read3` (`V`, mirror at `[BLK, DM]`): lane `j = (jL, e)` reads
+  `(m 1 + (t·BLK + jL))·rs + pid₁·hs + e`; `mask3` is `t·BLK + jL < m 0`.
+* `write` (`Out`, the terminal store): lane `j = (i, e)` writes
+  `(m 1 + (pid₂·BLK + i))·rs + pid₁·hs + e`; `writeMask` is the row guard
+  (the kernel's `offs_m < cur_batch_seq_len` store mask).
+
+`outDType` is the `.real` default: the loop normalizes in place and the
+terminal `tl.store` is untyped, so there is no quantization event. -/
+def contextAttnNopadIO (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (sm_scale : ℝ) (rs hs BLK DM NT : Nat) :
+    StreamMetaMasked3DKernelIO₃ where
+  kernel := context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
+    rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  out := Out
+  nMeta := 2
+  sty := fun _ => ChanTy.nat
+  mbuf := ctxNopadMetaBuf B_Start_Loc B_Seqlen
+  mwin := fun _ pid₀ _ _ => pid₀
+  T := NT
+  B1 := BLK * DM
+  B2 := DM * BLK
+  B3 := BLK * DM
+  C := BLK * DM
+  pre := fun _ _ pid₂ m => pid₂ < NT ∧ m (⟨0, by omega⟩ : Fin 2) ≤ NT * BLK
+  read1 := fun _ pid₁ pid₂ m _ j =>
+    (m (⟨1, by omega⟩ : Fin 2) + (pid₂ * BLK + j.val / DM)) * rs + pid₁ * hs + j.val % DM
+  read2 := fun _ pid₁ _ m t j =>
+    (m (⟨1, by omega⟩ : Fin 2) + (t.val * BLK + j.val % BLK)) * rs + pid₁ * hs + j.val / BLK
+  read3 := fun _ pid₁ _ m t j =>
+    (m (⟨1, by omega⟩ : Fin 2) + (t.val * BLK + j.val / DM)) * rs + pid₁ * hs + j.val % DM
+  write := fun _ pid₁ pid₂ m j =>
+    (m (⟨1, by omega⟩ : Fin 2) + (pid₂ * BLK + j.val / DM)) * rs + pid₁ * hs + j.val % DM
+  mask1 := fun _ _ pid₂ m _ j => pid₂ * BLK + j.val / DM < m (⟨0, by omega⟩ : Fin 2)
+  mask2 := fun _ _ _ m t j => t.val * BLK + j.val % BLK < m (⟨0, by omega⟩ : Fin 2)
+  mask3 := fun _ _ _ m t j => t.val * BLK + j.val / DM < m (⟨0, by omega⟩ : Fin 2)
+  writeMask := fun _ _ pid₂ m j => pid₂ * BLK + j.val / DM < m (⟨0, by omega⟩ : Fin 2)
+
+/-! ## Stream-indexed tiles and the streamed closed form -/
+
+/-- The `Q` tile read off the (static) first stream: the window ignores `t`,
+so the step-`0` slice carries the whole `[BLK, DM]` tile. -/
+noncomputable def ctxNopadIOqT (BLK DM NT : Nat) (hNT : 0 < NT)
+    (xs : Fin NT → Fin (BLK * DM) → ℝ) : TileIndex [BLK, DM] → ℝ :=
+  fun idx => xs ⟨0, hNT⟩ (Lane2D.encode idx)
+
+/-- The boundary-masked global `K` tile read off the second stream: global
+key `jg` lives in step `jg / BLK`, block-local column `jg % BLK`, at stream
+lane `(e, jg % BLK)`; keys at or beyond the sequence boundary `m0` are `0`
+(the kernel's `other=0.0` load mask). -/
+noncomputable def ctxNopadIOkT (BLK DM NT m0 : Nat) (hBLK : 0 < BLK)
+    (ys : Fin NT → Fin (DM * BLK) → ℝ) : TileIndex [NT * BLK, DM] → ℝ :=
+  fun idx =>
+    if idx.1.val < m0 then
+      ys ⟨idx.1.val / BLK, (Nat.div_lt_iff_lt_mul hBLK).mpr idx.1.isLt⟩
+        (Lane2D.encode (idx.2.1, ⟨idx.1.val % BLK, Nat.mod_lt _ hBLK⟩, PUnit.unit))
+    else 0
+
+/-- The boundary-masked global `V` tile read off the third stream: global
+key `jg` at stream lane `(jg % BLK, e)`. -/
+noncomputable def ctxNopadIOvT (BLK DM NT m0 : Nat) (hBLK : 0 < BLK)
+    (zs : Fin NT → Fin (BLK * DM) → ℝ) : TileIndex [NT * BLK, DM] → ℝ :=
+  fun idx =>
+    if idx.1.val < m0 then
+      zs ⟨idx.1.val / BLK, (Nat.div_lt_iff_lt_mul hBLK).mpr idx.1.isLt⟩
+        (Lane2D.encode (⟨idx.1.val % BLK, Nat.mod_lt _ hBLK⟩, idx.2.1, PUnit.unit))
+    else 0
+
+/-- **The streamed closed form**: `contextAttnNopadExactFoldMG` — the honest
+causal softmax `Σ_{jg ≤ gi} exp(sm_scale·raw)·v / Σ_{jg ≤ gi} exp(sm_scale·raw)`
+with boundary-masked `K`/`V` — restated over the three streamed tiles on the
+`pre`-legal global-key window `[0, NT·BLK)` (which covers the kernel's live
+window `(pid₂+1)·BLK` for every legal launch; causality `jg ≤ gi` cuts the
+extension to the same keys). Output lane `j = (i, e)` row-major over
+`[BLK, DM]`. -/
+noncomputable def contextAttnNopadIOSpec (BLK DM NT m0 : Nat) (hBLK : 0 < BLK)
+    (hNT : 0 < NT) (sm_scale : ℝ) (pid₂ : Nat)
+    (xs : Fin NT → Fin (BLK * DM) → ℝ) (ys : Fin NT → Fin (DM * BLK) → ℝ)
+    (zs : Fin NT → Fin (BLK * DM) → ℝ) (j : Fin (BLK * DM)) : ℝ :=
+  let i := (Lane2D.decode j).1
+  let d := (Lane2D.decode j).2.1
+  let gi := pid₂ * BLK + i.val
+  let raw := fun jg : Fin (NT * BLK) =>
+    Finset.univ.sum (fun e : Fin DM =>
+      ctxNopadIOqT BLK DM NT hNT xs (i, e, PUnit.unit)
+        * ctxNopadIOkT BLK DM NT m0 hBLK ys (jg, e, PUnit.unit))
+  let weight := fun jg : Fin (NT * BLK) =>
+    if jg.val ≤ gi then Real.exp (sm_scale * raw jg) else 0
+  let denom := Finset.univ.sum (fun jg : Fin (NT * BLK) => weight jg)
+  let numer := Finset.univ.sum (fun jg : Fin (NT * BLK) =>
+    weight jg * ctxNopadIOvT BLK DM NT m0 hBLK zs (jg, d, PUnit.unit))
+  numer / denom
+
+/-- Causal-sum window extension: a `Fin`-indexed real sum whose integrand
+vanishes above `gi` is invariant under enlarging the window past `gi`. -/
+private theorem ctxNopadIO_sum_extend (S S' gi : Nat) (hSS : S ≤ S') (hgi : gi < S)
+    (F : Nat → ℝ) (h0 : ∀ n, gi < n → F n = 0) :
+    (∑ jf : Fin S, F jf.val) = ∑ jf : Fin S', F jf.val := by
+  rw [Fin.sum_univ_eq_sum_range, Fin.sum_univ_eq_sum_range]
+  refine Finset.sum_subset
+    (fun x hx => Finset.mem_range.mpr (lt_of_lt_of_le (Finset.mem_range.mp hx) hSS)) ?_
+  intro x _ hxn
+  exact h0 x (by have := Finset.mem_range.not.mp hxn; omega)
+
+/-- The `Nat`-indexed denominator integrand shared by both spellings of the
+causal softmax (memory-side over the live window `Fin ((pid₂+1)·BLK)`,
+stream-side over the legal window `Fin (NT·BLK)`): key `n`'s weight
+`exp(sm_scale·Σ_e Q[row gi, e]·K_masked[n, e])`, causal-guarded. -/
+private noncomputable def ctxNopadIOFden (s : BlockState) (Q K : RegionName)
+    (sm_scale : ℝ) (rs hs DM m0 m1 gi p1 : Nat) : Nat → ℝ :=
+  fun n =>
+    if n ≤ gi then
+      Real.exp (sm_scale * ∑ e : Fin DM,
+        s.readMem Q ((m1 + gi) * rs + p1 * hs + e.val)
+          * (if n < m0 then s.readMem K ((m1 + n) * rs + p1 * hs + e.val) else 0))
+    else 0
+
+/-- The `Nat`-indexed numerator integrand: the weight times the
+boundary-masked `V` cell of channel `dv`. -/
+private noncomputable def ctxNopadIOFnum (s : BlockState) (Q K V : RegionName)
+    (sm_scale : ℝ) (rs hs DM m0 m1 gi p1 dv : Nat) : Nat → ℝ :=
+  fun n =>
+    ctxNopadIOFden s Q K sm_scale rs hs DM m0 m1 gi p1 n
+      * (if n < m0 then s.readMem V ((m1 + n) * rs + p1 * hs + dv) else 0)
+
+set_option maxHeartbeats 3200000 in
+/-- **Stream-spec bridge**: at a legal launch (`pid₂ < NT`) and an active
+output row, the port's genuine closed form `ctxNopadGenuineOutValueG` *is*
+the streamed closed form `contextAttnNopadIOSpec`, under the skin's input
+pins. Both sides collapse onto the shared `Nat`-indexed integrands
+(`ctxNopadIOFden`/`ctxNopadIOFnum`); causality (`jg ≤ gi < (pid₂+1)·BLK ≤
+NT·BLK`) makes the window extension inert (`ctxNopadIO_sum_extend`). -/
+private theorem ctxNopadIOSpec_eq_genuine
+    (s : BlockState) (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (sm_scale : ℝ) (rs hs BLK DM NT m0 m1 : Nat) (hBLK : 0 < BLK) (hNT : 0 < NT)
+    (hpid : s.pids 2 < NT)
+    (hm0 : seqLen s B_Seqlen.cast = m0) (hm1 : startLoc s B_Start_Loc.cast = m1)
+    (xs : Fin NT → Fin (BLK * DM) → ℝ) (ys : Fin NT → Fin (DM * BLK) → ℝ)
+    (zs : Fin NT → Fin (BLK * DM) → ℝ)
+    (hx : ∀ (t : Fin NT) (l : Fin (BLK * DM)), s.pids 2 * BLK + l.val / DM < m0 →
+      s.readMem Q ((m1 + (s.pids 2 * BLK + l.val / DM)) * rs + s.pids 1 * hs + l.val % DM)
+        = xs t l)
+    (hy : ∀ (t : Fin NT) (l : Fin (DM * BLK)), t.val * BLK + l.val % BLK < m0 →
+      s.readMem K ((m1 + (t.val * BLK + l.val % BLK)) * rs + s.pids 1 * hs + l.val / BLK)
+        = ys t l)
+    (hz : ∀ (t : Fin NT) (l : Fin (BLK * DM)), t.val * BLK + l.val / DM < m0 →
+      s.readMem V ((m1 + (t.val * BLK + l.val / DM)) * rs + s.pids 1 * hs + l.val % DM)
+        = zs t l)
+    (j : Fin (BLK * DM)) (hact : s.pids 2 * BLK + j.val / DM < m0) :
+    ctxNopadGenuineOutValueG s Q K V B_Start_Loc.cast B_Seqlen.cast sm_scale rs hs BLK DM
+        (Lane2D.decode j)
+      = contextAttnNopadIOSpec BLK DM NT m0 hBLK hNT sm_scale (s.pids 2) xs ys zs j := by
+  have hiv : (Lane2D.decode j).1.val = j.val / DM := Lane2D.decode_row j
+  have hdv : (Lane2D.decode j).2.1.val = j.val % DM := Lane2D.decode_col j
+  have hact' : s.pids 2 * BLK + (Lane2D.decode j).1.val < m0 := by rw [hiv]; exact hact
+  have hbm : BLK * s.pids 2 < seqLen s B_Seqlen.cast := by
+    rw [hm0]
+    calc BLK * s.pids 2 = s.pids 2 * BLK := Nat.mul_comm _ _
+      _ ≤ s.pids 2 * BLK + (Lane2D.decode j).1.val := Nat.le_add_right _ _
+      _ < m0 := hact'
+  have hS : ctxNopadWindowG s B_Seqlen.cast BLK = (s.pids 2 + 1) * BLK := by
+    rw [ctxNopadWindowG]
+    show (if BLK * s.pids 2 < seqLen s B_Seqlen.cast then 1 else 0) * (s.pids 2 + 1) * BLK
+      = (s.pids 2 + 1) * BLK
+    rw [if_pos hbm, one_mul]
+  have hgiS : s.pids 2 * BLK + (Lane2D.decode j).1.val < (s.pids 2 + 1) * BLK := by
+    have h := (Lane2D.decode j).1.isLt
+    calc s.pids 2 * BLK + (Lane2D.decode j).1.val
+        < s.pids 2 * BLK + BLK := Nat.add_lt_add_left h _
+      _ = (s.pids 2 + 1) * BLK := (Nat.succ_mul _ _).symm
+  have hSle : (s.pids 2 + 1) * BLK ≤ NT * BLK := Nat.mul_le_mul_right _ hpid
+  have hden0 : ∀ n, s.pids 2 * BLK + (Lane2D.decode j).1.val < n →
+      ctxNopadIOFden s Q K sm_scale rs hs DM m0 m1
+        (s.pids 2 * BLK + (Lane2D.decode j).1.val) (s.pids 1) n = 0 := by
+    intro n hn
+    rw [ctxNopadIOFden]
+    exact if_neg (by omega)
+  have hnum0 : ∀ n, s.pids 2 * BLK + (Lane2D.decode j).1.val < n →
+      ctxNopadIOFnum s Q K V sm_scale rs hs DM m0 m1
+        (s.pids 2 * BLK + (Lane2D.decode j).1.val) (s.pids 1) (j.val % DM) n = 0 := by
+    intro n hn
+    rw [ctxNopadIOFnum, hden0 n hn, zero_mul]
+  rw [ctxNopadGenuineOutValueG, hS, ctxNopadBel, hm0]
+  refine Eq.trans (b :=
+    (∑ jg : Fin (NT * BLK), ctxNopadIOFnum s Q K V sm_scale rs hs DM m0 m1
+        (s.pids 2 * BLK + (Lane2D.decode j).1.val) (s.pids 1) (j.val % DM) jg.val)
+      / (∑ jg : Fin (NT * BLK), ctxNopadIOFden s Q K sm_scale rs hs DM m0 m1
+          (s.pids 2 * BLK + (Lane2D.decode j).1.val) (s.pids 1) jg.val)) ?_ ?_
+  · -- memory side = the shared integrand over the live window, then extend
+    rw [contextAttnNopadExactFoldMG]
+    have hnum : (∑ jS : Fin ((s.pids 2 + 1) * BLK),
+          (if jS.val ≤ s.pids 2 * BLK + (Lane2D.decode j).1.val then
+            Real.exp (sm_scale * ∑ e : Fin DM,
+              ctxQTileG s Q B_Start_Loc.cast rs hs BLK DM ((Lane2D.decode j).1, e, PUnit.unit)
+                * ctxKTileMG s K B_Start_Loc.cast rs hs ((s.pids 2 + 1) * BLK) DM m0
+                    (jS, e, PUnit.unit))
+          else 0)
+            * ctxVTileMG s V B_Start_Loc.cast rs hs ((s.pids 2 + 1) * BLK) DM m0
+                (jS, (Lane2D.decode j).2.1, PUnit.unit))
+        = ∑ jg : Fin (NT * BLK), ctxNopadIOFnum s Q K V sm_scale rs hs DM m0 m1
+            (s.pids 2 * BLK + (Lane2D.decode j).1.val) (s.pids 1) (j.val % DM) jg.val := by
+      rw [show (∑ jS : Fin ((s.pids 2 + 1) * BLK),
+            (if jS.val ≤ s.pids 2 * BLK + (Lane2D.decode j).1.val then
+              Real.exp (sm_scale * ∑ e : Fin DM,
+                ctxQTileG s Q B_Start_Loc.cast rs hs BLK DM ((Lane2D.decode j).1, e, PUnit.unit)
+                  * ctxKTileMG s K B_Start_Loc.cast rs hs ((s.pids 2 + 1) * BLK) DM m0
+                      (jS, e, PUnit.unit))
+            else 0)
+              * ctxVTileMG s V B_Start_Loc.cast rs hs ((s.pids 2 + 1) * BLK) DM m0
+                  (jS, (Lane2D.decode j).2.1, PUnit.unit))
+          = ∑ jS : Fin ((s.pids 2 + 1) * BLK), ctxNopadIOFnum s Q K V sm_scale rs hs DM m0 m1
+              (s.pids 2 * BLK + (Lane2D.decode j).1.val) (s.pids 1) (j.val % DM) jS.val from by
+        refine Finset.sum_congr rfl (fun jS _ => ?_)
+        rw [ctxNopadIOFnum, ctxNopadIOFden]
+        simp only [ctxQTileG, ctxKTileMG, ctxKTileG, ctxVTileMG, ctxVTileG, hm1, hdv]]
+      exact ctxNopadIO_sum_extend _ _ _ hSle hgiS _ hnum0
+    have hden : (∑ jS : Fin ((s.pids 2 + 1) * BLK),
+          if jS.val ≤ s.pids 2 * BLK + (Lane2D.decode j).1.val then
+            Real.exp (sm_scale * ∑ e : Fin DM,
+              ctxQTileG s Q B_Start_Loc.cast rs hs BLK DM ((Lane2D.decode j).1, e, PUnit.unit)
+                * ctxKTileMG s K B_Start_Loc.cast rs hs ((s.pids 2 + 1) * BLK) DM m0
+                    (jS, e, PUnit.unit))
+          else 0)
+        = ∑ jg : Fin (NT * BLK), ctxNopadIOFden s Q K sm_scale rs hs DM m0 m1
+            (s.pids 2 * BLK + (Lane2D.decode j).1.val) (s.pids 1) jg.val := by
+      rw [show (∑ jS : Fin ((s.pids 2 + 1) * BLK),
+            if jS.val ≤ s.pids 2 * BLK + (Lane2D.decode j).1.val then
+              Real.exp (sm_scale * ∑ e : Fin DM,
+                ctxQTileG s Q B_Start_Loc.cast rs hs BLK DM ((Lane2D.decode j).1, e, PUnit.unit)
+                  * ctxKTileMG s K B_Start_Loc.cast rs hs ((s.pids 2 + 1) * BLK) DM m0
+                      (jS, e, PUnit.unit))
+            else 0)
+          = ∑ jS : Fin ((s.pids 2 + 1) * BLK), ctxNopadIOFden s Q K sm_scale rs hs DM m0 m1
+              (s.pids 2 * BLK + (Lane2D.decode j).1.val) (s.pids 1) jS.val from by
+        refine Finset.sum_congr rfl (fun jS _ => ?_)
+        rw [ctxNopadIOFden]
+        simp only [ctxQTileG, ctxKTileMG, ctxKTileG, hm1]]
+      exact ctxNopadIO_sum_extend _ _ _ hSle hgiS _ hden0
+    rw [← hnum, ← hden]
+  · -- shared integrand = the streamed closed form
+    rw [contextAttnNopadIOSpec]
+    beta_reduce
+    congr 1
+    · refine Finset.sum_congr rfl (fun jg _ => ?_)
+      rw [ctxNopadIOFnum, ctxNopadIOFden]
+      by_cases hc : jg.val ≤ s.pids 2 * BLK + (Lane2D.decode j).1.val
+      · rw [if_pos hc, if_pos hc]
+        refine congrArg₂ (· * ·) (congrArg Real.exp (congrArg (sm_scale * ·)
+          (Finset.sum_congr rfl (fun e _ => ?_)))) ?_
+        · refine congrArg₂ (· * ·) ?_ ?_
+          · -- Q cell = the static stream cell
+            rw [ctxNopadIOqT,
+              ← hx ⟨0, hNT⟩ (Lane2D.encode ((Lane2D.decode j).1, e, PUnit.unit))
+                (by rw [Lane2D.encode_div]; exact hact')]
+            rw [Lane2D.encode_div, Lane2D.encode_mod]
+          · -- K cell = the streamed K cell
+            rw [ctxNopadIOkT]
+            by_cases hb : jg.val < m0
+            · rw [if_pos hb, if_pos hb,
+                ← hy ⟨jg.val / BLK, (Nat.div_lt_iff_lt_mul hBLK).mpr jg.isLt⟩
+                  (Lane2D.encode (e, ⟨jg.val % BLK, Nat.mod_lt _ hBLK⟩, PUnit.unit))
+                  (by rw [Lane2D.encode_mod]
+                      show jg.val / BLK * BLK + jg.val % BLK < m0
+                      rw [Nat.div_add_mod']; exact hb)]
+              rw [Lane2D.encode_div, Lane2D.encode_mod]
+              show s.readMem K ((m1 + jg.val) * rs + s.pids 1 * hs + e.val)
+                = s.readMem K ((m1 + (jg.val / BLK * BLK + jg.val % BLK)) * rs
+                    + s.pids 1 * hs + e.val)
+              rw [Nat.div_add_mod']
+            · rw [if_neg hb, if_neg hb]
+        · -- V cell = the streamed V cell
+          rw [ctxNopadIOvT]
+          by_cases hb : jg.val < m0
+          · rw [if_pos hb, if_pos hb,
+              ← hz ⟨jg.val / BLK, (Nat.div_lt_iff_lt_mul hBLK).mpr jg.isLt⟩
+                (Lane2D.encode (⟨jg.val % BLK, Nat.mod_lt _ hBLK⟩, (Lane2D.decode j).2.1,
+                  PUnit.unit))
+                (by rw [Lane2D.encode_div]
+                    show jg.val / BLK * BLK + jg.val % BLK < m0
+                    rw [Nat.div_add_mod']; exact hb)]
+            rw [Lane2D.encode_div, Lane2D.encode_mod, hdv]
+            show s.readMem V ((m1 + jg.val) * rs + s.pids 1 * hs + j.val % DM)
+              = s.readMem V ((m1 + (jg.val / BLK * BLK + jg.val % BLK)) * rs
+                  + s.pids 1 * hs + j.val % DM)
+            rw [Nat.div_add_mod']
+          · rw [if_neg hb, if_neg hb]
+      · rw [if_neg hc, if_neg hc, zero_mul, zero_mul]
+    · refine Finset.sum_congr rfl (fun jg _ => ?_)
+      rw [ctxNopadIOFden]
+      by_cases hc : jg.val ≤ s.pids 2 * BLK + (Lane2D.decode j).1.val
+      · rw [if_pos hc, if_pos hc]
+        refine congrArg Real.exp (congrArg (sm_scale * ·)
+          (Finset.sum_congr rfl (fun e _ => ?_)))
+        refine congrArg₂ (· * ·) ?_ ?_
+        · rw [ctxNopadIOqT,
+            ← hx ⟨0, hNT⟩ (Lane2D.encode ((Lane2D.decode j).1, e, PUnit.unit))
+              (by rw [Lane2D.encode_div]; exact hact')]
+          rw [Lane2D.encode_div, Lane2D.encode_mod]
+        · rw [ctxNopadIOkT]
+          by_cases hb : jg.val < m0
+          · rw [if_pos hb, if_pos hb,
+              ← hy ⟨jg.val / BLK, (Nat.div_lt_iff_lt_mul hBLK).mpr jg.isLt⟩
+                (Lane2D.encode (e, ⟨jg.val % BLK, Nat.mod_lt _ hBLK⟩, PUnit.unit))
+                (by rw [Lane2D.encode_mod]
+                    show jg.val / BLK * BLK + jg.val % BLK < m0
+                    rw [Nat.div_add_mod']; exact hb)]
+            rw [Lane2D.encode_div, Lane2D.encode_mod]
+            show s.readMem K ((m1 + jg.val) * rs + s.pids 1 * hs + e.val)
+              = s.readMem K ((m1 + (jg.val / BLK * BLK + jg.val % BLK)) * rs
+                  + s.pids 1 * hs + e.val)
+            rw [Nat.div_add_mod']
+          · rw [if_neg hb, if_neg hb]
+      · rw [if_neg hc, if_neg hc]
+
+/-! ## Flat-bridge coverage and cast-freedom
+
+The LightLLM port is cast-free post-erasure (`p.to(v.dtype)` lowered to a
+self-assign; all loads/stores at `.real`/`.nat`), so `stepStmtsR R` collapses
+verbatim onto the exact stepper on every segment. -/
+
+set_option maxHeartbeats 4000000 in
+/-- The surface sits inside the flat-memory bridge's covered fragment (plain
+pointers throughout — no `ptrSub`, no block pointers). -/
+theorem ctxNopad_flattenOk (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (Out : RegionName) (sm_scale : ℝ) (rs hs BLK DM : Nat) :
+    ((context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
+      rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [nopad_body_splitG]
+  simp [nopadPreLoopG, nopadLoopBodyG, nopadPostLoopG, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-- Per-statement cast-free collapse lifts to statement lists (walks the
+actual successor chain; a failing step collapses on both sides). Private
+copy of the aft3 helper (bench files never import each other). -/
+private theorem ctxNopadIO_stepStmtsR_castFree_of_stmts (R : RoundingModel) :
+    ∀ (l : List Stmt), (∀ st ∈ l, ∀ u, stepStmtR R st u = stepStmt st u) →
+      ∀ s, stepStmtsR R l s = stepStmts l s
+  | [], _, s => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, s => by
+      simp only [stepStmtsR, stepStmts, h st List.mem_cons_self s]
+      cases stepStmt st s with
+      | none => rfl
+      | some s' =>
+          exact ctxNopadIO_stepStmtsR_castFree_of_stmts R rest
+            (fun st' h' u => h st' (List.mem_cons_of_mem _ h') u) s'
+
+set_option maxHeartbeats 4000000 in
+/-- Every preLoop statement is cast-free. -/
+private theorem ctxNopadIO_preLoop_stmt_castFree (R : RoundingModel)
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (rs hs BLK DM : Nat) :
+    ∀ st ∈ nopadPreLoopG Q K V B_Start_Loc B_Seqlen rs hs BLK DM,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [nopadPreLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl
+  all_goals simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The preLoop is cast-free as a list. -/
+private theorem ctxNopadIO_preLoop_castFree (R : RoundingModel)
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (rs hs BLK DM : Nat)
+    (t : BlockState) :
+    stepStmtsR R (nopadPreLoopG Q K V B_Start_Loc B_Seqlen rs hs BLK DM) t
+      = stepStmts (nopadPreLoopG Q K V B_Start_Loc B_Seqlen rs hs BLK DM) t :=
+  ctxNopadIO_stepStmtsR_castFree_of_stmts R _
+    (ctxNopadIO_preLoop_stmt_castFree R Q K V B_Start_Loc B_Seqlen rs hs BLK DM) t
+
+set_option maxHeartbeats 4000000 in
+/-- Every loop-body statement is cast-free (the erased `p.to(v.dtype)` is a
+self-assign; both masked loads carry `other=0.0` at `.real`). -/
+private theorem ctxNopadIO_body_stmt_castFree (R : RoundingModel)
+    (sc : ℝ) (rs hs BLK DM : Nat) :
+    ∀ st ∈ nopadLoopBodyG sc rs hs BLK DM,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [nopadLoopBodyG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  all_goals simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The loop body is cast-free as a list. -/
+private theorem ctxNopadIO_body_castFree (R : RoundingModel)
+    (sc : ℝ) (rs hs BLK DM : Nat) (t : BlockState) :
+    stepStmtsR R (nopadLoopBodyG sc rs hs BLK DM) t
+      = stepStmts (nopadLoopBodyG sc rs hs BLK DM) t :=
+  ctxNopadIO_stepStmtsR_castFree_of_stmts R _
+    (ctxNopadIO_body_stmt_castFree R sc rs hs BLK DM) t
+
+set_option maxHeartbeats 4000000 in
+/-- Every postLoop statement is cast-free (`writeMemTypedR R .real` *is*
+`writeMemTyped .real`). -/
+private theorem ctxNopadIO_postLoop_stmt_castFree (R : RoundingModel)
+    (Out : RegionName) (rs hs BLK DM : Nat) :
+    ∀ st ∈ nopadPostLoopG Out rs hs BLK DM,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [nopadPostLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl
+  all_goals
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      BlockState.writeMemTypedR]
+
+/-- The postLoop is cast-free as a list. -/
+private theorem ctxNopadIO_postLoop_castFree (R : RoundingModel)
+    (Out : RegionName) (rs hs BLK DM : Nat) (t : BlockState) :
+    stepStmtsR R (nopadPostLoopG Out rs hs BLK DM) t
+      = stepStmts (nopadPostLoopG Out rs hs BLK DM) t :=
+  ctxNopadIO_stepStmtsR_castFree_of_stmts R _
+    (ctxNopadIO_postLoop_stmt_castFree R Out rs hs BLK DM) t
+
+/-- `evalOpR` of a `constNat` (R-independent). -/
+private theorem ctxNopadIO_evalOpR_constNat (R : RoundingModel) (n : Nat) (u : BlockState) :
+    evalOpR R (Op.constNat n) u = some (Tile.scalar n) := by
+  simp [evalOpR]
+
+/-- `evalOpR` of the `forRangeDyn` stop expression
+`block_mask * (start_m + 1) * BLK` is the exact evaluation (register-only
+`.nat` arithmetic — R-independent). -/
+private theorem ctxNopadIO_stopOpR_castFree (R : RoundingModel) (BLK : Nat) (u : BlockState) :
+    evalOpR R (Op.mul .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+        (Op.constNat BLK)) u
+      = evalOp (Op.mul .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+          (Op.constNat BLK)) u := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+set_option maxHeartbeats 1600000 in
+/-- The streaming `forRangeDyn` statement is cast-free per-state: its bound
+expressions are register-only `.nat` arithmetic and its body is cast-free,
+so `stepStmtR R` on the whole loop *is* `stepStmt`. -/
+private theorem ctxNopadIO_dyn_castFree (R : RoundingModel) (sc : ℝ) (rs hs BLK DM : Nat) :
+    ∀ u, stepStmtR R (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+        (Op.mul .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+          (Op.constNat BLK))
+        (Op.constNat BLK) (nopadLoopBodyG sc rs hs BLK DM)) u
+      = stepStmt (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+          (Op.mul .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+            (Op.constNat BLK))
+          (Op.constNat BLK) (nopadLoopBodyG sc rs hs BLK DM)) u := by
+  intro u
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  simp only [stepStmtR, ctxNopadIO_evalOpR_constNat, ctxNopadIO_stopOpR_castFree,
+    evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  cases hstop : evalOp (Op.mul .nat Broadcast.nil
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+      (Op.constNat BLK)) u with
+  | none => rfl
+  | some t =>
+      simp only [Option.bind_some]
+      exact stepForRangeAuxR_castFree R _ (ctxNopadIO_body_castFree R sc rs hs BLK DM)
+        "start_n" _ _ _ u
+
+/-- The whole lowered body is cast-free, statement by statement: `execR R`
+on the surface *is* the exact `stepStmts` run. -/
+private theorem ctxNopadIO_execR_collapse (R : RoundingModel)
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (sm_scale : ℝ) (rs hs BLK DM : Nat) (s : BlockState) :
+    execR R ((context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
+        rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK).toAlgKernel) s
+      = stepStmts ((context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
+          rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK).toAlgKernel.body) s := by
+  unfold execR
+  rw [nopad_body_splitG]
+  refine ctxNopadIO_stepStmtsR_castFree_of_stmts R _ ?_ s
+  intro st hst
+  rcases List.mem_append.mp hst with hpre | hrest
+  · exact ctxNopadIO_preLoop_stmt_castFree R Q K V B_Start_Loc B_Seqlen rs hs BLK DM st hpre
+  · rcases List.mem_cons.mp hrest with rfl | hpost
+    · exact ctxNopadIO_dyn_castFree R sm_scale rs hs BLK DM
+    · exact ctxNopadIO_postLoop_stmt_castFree R Out rs hs BLK DM st hpost
+
+/-! ## The weak safety stack (`hts`)
+
+The skin's `hts` obligation quantifies over **arbitrary** launch states (no
+clean-`undef` pin), so the exact stack's `nopadInvariantG` is unavailable
+there. Since every load in this kernel is `other=0.0`-masked or unmasked
+(never `other=None`), the whole walk is `undef`-independent: the weak stack
+re-runs the register chain with exact pins for the address-bearing registers
+and **existential** pins for the value registers (`q`/`m_i`/`l_i`/`acc`) —
+the aft3 `aft3SafeInv` pattern. The `pre` hypothesis (`pid₂ < NT`) is what
+makes the per-step `Fin NT` window bounds citable at all. -/
+
+/-- Weak (safety-walk) invariant: address-register pins + value-register
+existence, anchored to the launch state `s`. Counter-free: `k_ptrs`/`v_ptrs`
+never advance in this kernel (the per-step shift is added inside the loads). -/
+private def nopadSafeInvW (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName)
+    (rs hs BLK DM : Nat) (s s' : BlockState) : Prop :=
+  s'.mem = s.mem
+  ∧ s'.pids = s.pids
+  ∧ s'.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar (seqLen s B_Seqlen))
+  ∧ s'.regs .nat [] "cur_batch_in_all_start_index"
+      = some (Tile.scalar (startLoc s B_Start_Loc))
+  ∧ s'.regs .nat [] "start_m" = some (Tile.scalar (s.pids 2))
+  ∧ s'.regs .nat [] "cur_head" = some (Tile.scalar (s.pids 1))
+  ∧ s'.regs .nat [] "block_mask"
+      = some (Tile.scalar (if BLK * s.pids 2 < seqLen s B_Seqlen then 1 else 0))
+  ∧ s'.regs .nat [BLK] "offs_n" = some (Tile.vec (fun jn : Fin BLK => jn.val))
+  ∧ s'.regs .nat [DM] "offs_d" = some (Tile.vec (fun e : Fin DM => e.val))
+  ∧ s'.regs .nat [BLK] "offs_m" = some (Tile.vec (fun i : Fin BLK => s.pids 2 * BLK + i.val))
+  ∧ s'.regs .ptr [DM, BLK] "k_ptrs" = some (⟨fun idx : TileIndex [DM, BLK] =>
+      (K, idx.2.1.val * rs + s.pids 1 * hs + idx.1.val)⟩ : Tile .ptr [DM, BLK])
+  ∧ s'.regs .ptr [BLK, DM] "v_ptrs" = some (⟨fun idx : TileIndex [BLK, DM] =>
+      (V, idx.1.val * rs + s.pids 1 * hs + idx.2.1.val)⟩ : Tile .ptr [BLK, DM])
+  ∧ (∃ qT : Tile .real [BLK, DM], s'.regs .real [BLK, DM] "q" = some qT)
+  ∧ (∃ mT : Tile .real [BLK], s'.regs .real [BLK] "m_i" = some mT)
+  ∧ (∃ lT : Tile .real [BLK], s'.regs .real [BLK] "l_i" = some lT)
+  ∧ (∃ aT : Tile .real [BLK, DM], s'.regs .real [BLK, DM] "acc" = some aT)
+
+/-- Combined walk cons: safety of the head at the current state, the
+R-step it actually takes, and the pair (safety, run) of the tail from the
+successor give the pair for the whole list. The single-pass combinator the
+weak preLoop/body walks chain through. -/
+private theorem nopadIO_walkCons {R : RoundingModel} {bounds : RegionBounds}
+    {P : BlockState → Prop} {st : Stmt} {rest : List Stmt} {s s' : BlockState}
+    (h1 : Stmt.TraceSafeR R bounds st s)
+    (hstep : stepStmtR R st s = some s')
+    (h2 : Stmt.TraceSafeListR R bounds rest s'
+      ∧ ∃ sF, stepStmtsR R rest s' = some sF ∧ P sF) :
+    Stmt.TraceSafeListR R bounds (st :: rest) s
+      ∧ ∃ sF, stepStmtsR R (st :: rest) s = some sF ∧ P sF :=
+  ⟨Stmt.TraceSafeListR.cons_intro h1 (fun u hu => by
+      rw [hstep] at hu
+      exact (Option.some.inj hu) ▸ h2.1),
+    by rw [stepStmtsR_cons_some hstep]; exact h2.2⟩
+
+set_option maxHeartbeats 1600000 in
+/-- `evalOpR` of the K-load pointer tree at pinned registers. -/
+private theorem ctxNopadIO_kptrR_eval (R : RoundingModel) (u : BlockState)
+    (K : RegionName) (m1v SN P1 rs hs BLK DM : Nat)
+    (hkp : u.regs .ptr [DM, BLK] "k_ptrs" = some (⟨fun idx : TileIndex [DM, BLK] =>
+      (K, idx.2.1.val * rs + P1 * hs + idx.1.val)⟩ : Tile .ptr [DM, BLK]))
+    (hsl : u.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar m1v))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOpR R (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [DM, BLK] "k_ptrs")
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+            (Op.ref .nat [] "start_n"))
+          (Op.constNat rs))) u
+      = some (⟨fun idx : TileIndex [DM, BLK] =>
+          (K, idx.2.1.val * rs + P1 * hs + idx.1.val + (m1v + SN) * rs)⟩
+          : Tile .ptr [DM, BLK]) := by
+  rw [show evalOpR R (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [DM, BLK] "k_ptrs")
+      (Op.mul .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+          (Op.ref .nat [] "start_n"))
+        (Op.constNat rs))) u
+      = evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [DM, BLK] "k_ptrs")
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+            (Op.ref .nat [] "start_n"))
+          (Op.constNat rs))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  simp only [evalOp, hkp, hsl, hsn, Option.bind]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨e, jL, pu⟩ := idx
+  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar, NumericDType.add,
+    NumericDType.mul, Broadcast.leftIndex, Broadcast.rightIndex, Prod.mk.injEq, true_and]
+
+set_option maxHeartbeats 1600000 in
+/-- `evalOpR` of the V-load pointer tree at pinned registers. -/
+private theorem ctxNopadIO_vptrR_eval (R : RoundingModel) (u : BlockState)
+    (V : RegionName) (m1v SN P1 rs hs BLK DM : Nat)
+    (hvp : u.regs .ptr [BLK, DM] "v_ptrs" = some (⟨fun idx : TileIndex [BLK, DM] =>
+      (V, idx.1.val * rs + P1 * hs + idx.2.1.val)⟩ : Tile .ptr [BLK, DM]))
+    (hsl : u.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar m1v))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN)) :
+    evalOpR R (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLK, DM] "v_ptrs")
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+            (Op.ref .nat [] "start_n"))
+          (Op.constNat rs))) u
+      = some (⟨fun idx : TileIndex [BLK, DM] =>
+          (V, idx.1.val * rs + P1 * hs + idx.2.1.val + (m1v + SN) * rs)⟩
+          : Tile .ptr [BLK, DM]) := by
+  rw [show evalOpR R (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLK, DM] "v_ptrs")
+      (Op.mul .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+          (Op.ref .nat [] "start_n"))
+        (Op.constNat rs))) u
+      = evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLK, DM] "v_ptrs")
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+            (Op.ref .nat [] "start_n"))
+          (Op.constNat rs))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  simp only [evalOp, hvp, hsl, hsn, Option.bind]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨jL, e, pu⟩ := idx
+  simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.bop, Tile.scalar, NumericDType.add,
+    NumericDType.mul, Broadcast.leftIndex, Broadcast.rightIndex, Prod.mk.injEq, true_and]
+
+set_option maxHeartbeats 1600000 in
+/-- `evalOpR` of the K-load column mask `(start_n + offs_n[None,:]) < seq_len`
+at pinned registers. -/
+private theorem ctxNopadIO_kmaskR_eval (R : RoundingModel) (u : BlockState)
+    (slv SN BLK DM : Nat)
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BLK] "offs_n" = some (Tile.vec (fun jn : Fin BLK => jn.val)))
+    (hseq : u.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar slv)) :
+    evalOpR R (Op.remap [DM, BLK] Broadcast.nil.consSame.consL.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLK] "offs_n")))
+          (Op.ref .nat [] "cur_batch_seq_len"))) u
+      = some (⟨fun idx : TileIndex [DM, BLK] => decide (SN + idx.2.1.val < slv)⟩
+          : Tile .bool [DM, BLK]) := by
+  rw [show evalOpR R (Op.remap [DM, BLK] Broadcast.nil.consSame.consL.leftIndex
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLK] "offs_n")))
+        (Op.ref .nat [] "cur_batch_seq_len"))) u
+      = evalOp (Op.remap [DM, BLK] Broadcast.nil.consSame.consL.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLK] "offs_n")))
+          (Op.ref .nat [] "cur_batch_seq_len"))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  have hexp : @evalOp .nat [1, BLK] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLK] "offs_n")) u
+      = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun jn : Fin BLK => jn.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BLK] ⟨0, by simp⟩ "offs_n" u _ hn
+  simp only [evalOp, hsn, hexp, hseq, Option.bind]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨e, jL, pu⟩ := idx
+  simp only [Tile.remap, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.expandDim, Tile.vec,
+    Tile.scalar, ComparableDType.lt, NumericDType.add, Broadcast.leftIndex,
+    Broadcast.rightIndex, TileShape.dropInsertedIndex]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- `evalOpR` of the V-load row mask `(start_n + offs_n[:,None]) < seq_len`
+at pinned registers. -/
+private theorem ctxNopadIO_vmaskR_eval (R : RoundingModel) (u : BlockState)
+    (slv SN BLK DM : Nat)
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BLK] "offs_n" = some (Tile.vec (fun jn : Fin BLK => jn.val)))
+    (hseq : u.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar slv)) :
+    evalOpR R (Op.remap [BLK, DM] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_n")))
+          (Op.ref .nat [] "cur_batch_seq_len"))) u
+      = some (⟨fun idx : TileIndex [BLK, DM] => decide (SN + idx.1.val < slv)⟩
+          : Tile .bool [BLK, DM]) := by
+  rw [show evalOpR R (Op.remap [BLK, DM] Broadcast.nil.consL.consSame.leftIndex
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_n")))
+        (Op.ref .nat [] "cur_batch_seq_len"))) u
+      = evalOp (Op.remap [BLK, DM] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_n")))
+          (Op.ref .nat [] "cur_batch_seq_len"))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  have hexp : @evalOp .nat [BLK, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_n")) u
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun jn : Fin BLK => jn.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BLK] ⟨1, by simp⟩ "offs_n" u _ hn
+  simp only [evalOp, hsn, hexp, hseq, Option.bind]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨jL, e, pu⟩ := idx
+  simp only [Tile.remap, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.expandDim, Tile.vec,
+    Tile.scalar, ComparableDType.lt, NumericDType.add, Broadcast.leftIndex,
+    Broadcast.rightIndex, TileShape.dropInsertedIndex]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- `evalOpR` of the shared row mask `offs_m[:,None] < seq_len` (the `q`
+load's and the terminal store's mask) at pinned registers. -/
+private theorem ctxNopadIO_rowmaskR_eval (R : RoundingModel) (u : BlockState)
+    (slv P2v BLK DM : Nat)
+    (hm : u.regs .nat [BLK] "offs_m" = some (Tile.vec (fun i : Fin BLK => P2v * BLK + i.val)))
+    (hseq : u.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar slv)) :
+    evalOpR R (Op.remap [BLK, DM] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))) u
+      = some (⟨fun idx : TileIndex [BLK, DM] => decide (P2v * BLK + idx.1.val < slv)⟩
+          : Tile .bool [BLK, DM]) := by
+  rw [show evalOpR R (Op.remap [BLK, DM] Broadcast.nil.consL.consSame.leftIndex
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m"))
+        (Op.ref .nat [] "cur_batch_seq_len"))) u
+      = evalOp (Op.remap [BLK, DM] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  have hexp : @evalOp .nat [BLK, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m")) u
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun i : Fin BLK => P2v * BLK + i.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BLK] ⟨1, by simp⟩ "offs_m" u _ hm
+  simp only [evalOp, hexp, hseq, Option.bind]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨i, e, pu⟩ := idx
+  simp only [Tile.remap, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.expandDim, Tile.vec,
+    Tile.scalar, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex]
+  rfl
+
+/-- R-step of an assign whose op is cast-free: the two collapse into one
+walk-ready equation. -/
+private theorem nopadIO_stepR_of_assign {R : RoundingModel} {dt : TileDType}
+    {sh : TileShape} {nm : RegName} {e : Op dt sh} {s : BlockState} {v : Tile dt sh}
+    (hcf : evalOpR R e s = evalOp e s) (h : evalOp e s = some v) :
+    stepStmtR R (.assign dt sh nm e) s = some (s.setReg nm dt sh v) :=
+  stepStmtR_assign_eq_some (hcf.trans h)
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak preLoop walk** (single pass): from an **arbitrary** launch state
+the 19 preLoop statements are trace-safe (the two `.nat` metadata loads
+bounded by the slot windows, the masked `q` load by the `read1` window) and
+step to a state satisfying `nopadSafeInvW`. -/
+private theorem nopadIO_preLoopW (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat)
+    (rs hs BLK DM : Nat) (s : BlockState)
+    (hbSeq : s.pids 0 < bounds (Region.cast B_Seqlen))
+    (hbLoc : s.pids 0 < bounds (Region.cast B_Start_Loc))
+    (hbQ : ∀ (i : Fin BLK) (e : Fin DM), s.pids 2 * BLK + i.val < seqLen s ↑B_Seqlen →
+      (startLoc s ↑B_Start_Loc + (s.pids 2 * BLK + i.val)) * rs + s.pids 1 * hs + e.val
+        < bounds Q) :
+    Stmt.TraceSafeListR R bounds (nopadPreLoopG Q K V B_Start_Loc B_Seqlen rs hs BLK DM) s
+      ∧ ∃ s0, stepStmtsR R (nopadPreLoopG Q K V B_Start_Loc B_Seqlen rs hs BLK DM) s = some s0
+          ∧ nopadSafeInvW Q K V ↑B_Start_Loc ↑B_Seqlen rs hs BLK DM s s0 := by
+  unfold nopadPreLoopG
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar (s.pids 0)) from evalOp_programId 0 s)) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar (s.pids 1)) from evalOp_programId 1 _)) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar (s.pids 2)) from evalOp_programId 2 _)) ?_
+  -- the `cur_batch_seq_len` slot load
+  refine nopadIO_walkCons ?_
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar (seqLen s B_Seqlen)) from by
+        simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+          BlockState.setReg_ne_name, Option.bind, Option.pure_def, seqLen,
+          BlockState.readMemValue]
+        rfl)) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR], ?_⟩
+    intro offsets hoff idx _
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    exact hbSeq
+  -- the `cur_batch_in_all_start_index` slot load
+  refine nopadIO_walkCons ?_
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar (startLoc s B_Start_Loc)) from by
+        simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+          BlockState.setReg_ne_name, Option.bind, Option.pure_def, startLoc,
+          BlockState.readMemValue]
+        rfl)) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR], ?_⟩
+    intro offsets hoff idx _
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    exact hbLoc
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar (BLK * s.pids 2)) from by
+        rw [evalOp_mul, evalOp_constNat, evalOp_ref]
+        simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids,
+          ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+        rfl)) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.vec (fun jn : Fin BLK => jn.val)) from
+        evalOp_arange BLK _)) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.vec (fun e : Fin DM => e.val)) from
+        evalOp_arange DM _)) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _
+          = some (Tile.vec (fun i : Fin BLK => s.pids 2 * BLK + i.val)) from by
+        rw [evalOp_add, evalOp_mul, evalOp_ref, evalOp_constNat, evalOp_arange]
+        simp only [BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_pids,
+          ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_; ext idx
+        simp only [Tile.bop_data, Tile.bop, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add, NumericDType.mul])) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (⟨fun idx : TileIndex [BLK, DM] =>
+            (startLoc s B_Start_Loc + (s.pids 2 * BLK + idx.1.val)) * rs
+              + s.pids 1 * hs + idx.2.1.val⟩ : Tile .nat [BLK, DM]) from
+        nopad_offq_evalG _ (startLoc s B_Start_Loc) (s.pids 1) (s.pids 2) rs hs BLK DM
+          (by simp) (by simp) (by simp) (by simp [Tile.vec]))) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (⟨fun idx : TileIndex [DM, BLK] =>
+            idx.2.1.val * rs + s.pids 1 * hs + idx.1.val⟩ : Tile .nat [DM, BLK]) from
+        nopad_offk_evalG _ (s.pids 1) rs hs BLK DM
+          (by simp) (by simp [Tile.vec]) (by simp [Tile.vec]))) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (⟨fun idx : TileIndex [BLK, DM] =>
+            idx.1.val * rs + s.pids 1 * hs + idx.2.1.val⟩ : Tile .nat [BLK, DM]) from
+        nopad_offv_evalG _ (s.pids 1) rs hs BLK DM
+          (by simp) (by simp [Tile.vec]) (by simp [Tile.vec]))) ?_
+  -- the masked `q` load
+  refine nopadIO_walkCons ?_
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (nopad_q_load_evalG _ Q B_Start_Loc B_Seqlen rs hs BLK DM
+        (by simp [startLoc, BlockState.readMemValue, BlockState.readMemTyped])
+        (by simp)
+        (by simp [seqLen, BlockState.readMemValue, BlockState.readMemTyped]))) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ⟨by simp [Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro offsets hoff idx hactive
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    obtain ⟨masks, hmask, hmi⟩ := hactive
+    rw [ctxNopadIO_rowmaskR_eval R _ (seqLen s ↑B_Seqlen) (s.pids 2) BLK DM
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same])] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨i, e, pu⟩ := idx
+    have hrow : s.pids 2 * BLK + i.val < seqLen s ↑B_Seqlen := by simpa using hmi
+    have hb := hbQ i e hrow
+    simpa [Region.cast_id] using hb
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (⟨fun idx : TileIndex [DM, BLK] =>
+            (K, idx.2.1.val * rs + s.pids 1 * hs + idx.1.val)⟩ : Tile .ptr [DM, BLK]) from by
+        simp only [evalOp, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+          BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, Option.bind]
+        refine congrArg some (Tile.ext (fun idx => ?_))
+        obtain ⟨e, jL, pu⟩ := idx
+        simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex,
+          Broadcast.rightIndex, Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and])) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (⟨fun idx : TileIndex [BLK, DM] =>
+            (V, idx.1.val * rs + s.pids 1 * hs + idx.2.1.val)⟩ : Tile .ptr [BLK, DM]) from by
+        simp only [evalOp, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+          BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, Option.bind]
+        refine congrArg some (Tile.ext (fun idx => ?_))
+        obtain ⟨jL, e, pu⟩ := idx
+        simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex,
+          Broadcast.rightIndex, Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and])) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (⟨fun _ : TileIndex [BLK] => (⊥ : WithBot ℝ)⟩
+          : Tile .real [BLK]) from by
+        rw [evalOp_add, evalOp_full, evalOp_const, evalOp_negInf]
+        simp only [Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_; ext idx
+        simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add]
+        rfl)) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (⟨fun _ : TileIndex [BLK] => some (0 : ℝ)⟩
+          : Tile .real [BLK]) from by
+        simp [evalOp_full, evalOp_const])) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (⟨fun _ : TileIndex [BLK, DM] => some (0 : ℝ)⟩
+          : Tile .real [BLK, DM]) from by
+        simp [evalOp_full, evalOp_const])) ?_
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _
+          = some (Tile.scalar (if BLK * s.pids 2 < seqLen s B_Seqlen then 1 else 0)) from by
+        rw [evalOp_where, evalOp_lt, evalOp_constNat, evalOp_constNat]
+        simp only [evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+          BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true,
+          Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_; ext idx
+        simp only [Tile.select_data, Tile.cop_data, Tile.bop, Tile.scalar,
+          Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt]
+        by_cases hlt : BLK * s.pids 2 < seqLen s B_Seqlen
+        · rw [if_pos (by simpa [seqLen, BlockState.readMemValue] using hlt), if_pos hlt]
+        · rw [if_neg (by simpa [seqLen, BlockState.readMemValue] using hlt), if_neg hlt])) ?_
+  refine ⟨Stmt.TraceSafeListR.nil_intro, _, stepStmtsR_nil R _, ?_⟩
+  -- the weak-invariant pins of the final state
+  refine ⟨?_, ?_, by simp, by simp, by simp, by simp, by simp, by simp [Tile.vec],
+    by simp [Tile.vec], by simp [Tile.vec], by simp, by simp,
+    ⟨⟨fun idx : TileIndex [BLK, DM] =>
+        some (ctxQTileMRowG s Q ↑B_Start_Loc rs hs BLK DM (seqLen s ↑B_Seqlen)
+          (idx.1, idx.2.1, PUnit.unit))⟩, ?_⟩,
+    ⟨⟨fun _ : TileIndex [BLK] => (⊥ : WithBot ℝ)⟩, by simp⟩,
+    ⟨⟨fun _ : TileIndex [BLK] => some (0 : ℝ)⟩, by simp⟩,
+    ⟨⟨fun _ : TileIndex [BLK, DM] => some (0 : ℝ)⟩, by simp⟩⟩
+  · funext rg o; simp
+  · simp
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    refine congrArg some (Tile.ext (fun idx => ?_))
+    simp only [ctxQTileMRowG, ctxQTileG, seqLen, startLoc, BlockState.readMem,
+      BlockState.readMemValue, BlockState.readMemTyped, BlockState.setReg_mem,
+      BlockState.setReg_pids]
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-value K-load eval (the in-loop slot-shifted masked load), pinned
+by plain scalar values — the `nopad_k_load_evalG` recipe freed from its
+state-anchored pin spellings, for the weak walk. -/
+private theorem ctxNopadIO_kload_eval (u : BlockState) (K : RegionName)
+    (m1v slv SN P1 rs hs BLK DM : Nat)
+    (hkp : u.regs .ptr [DM, BLK] "k_ptrs" = some (⟨fun idx : TileIndex [DM, BLK] =>
+      (K, idx.2.1.val * rs + P1 * hs + idx.1.val)⟩ : Tile .ptr [DM, BLK]))
+    (hsl : u.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar m1v))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BLK] "offs_n" = some (Tile.vec (fun jn : Fin BLK => jn.val)))
+    (hseq : u.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar slv)) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [DM, BLK] "k_ptrs")
+            (Op.mul .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.ref .nat [] "start_n"))
+              (Op.constNat rs))))
+        (MaskOpt.maskOther
+          (Op.remap [DM, BLK] Broadcast.nil.consSame.consL.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLK] "offs_n")))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const 0.0).broadcast [DM, BLK]))) u
+      = some (⟨fun idx : TileIndex [DM, BLK] =>
+          if SN + idx.2.1.val < slv then
+            some (u.readMem K ((m1v + (SN + idx.2.1.val)) * rs + P1 * hs + idx.1.val))
+          else some (0.0 : ℝ)⟩ : Tile .real [DM, BLK]) := by
+  have hexp : @evalOp .nat [1, BLK] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLK] "offs_n")) u
+      = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun jn : Fin BLK => jn.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BLK] ⟨0, by simp⟩ "offs_n" u _ hn
+  simp only [evalOp, hkp, hsl, hsn, hexp, hseq, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨e, jL, pu⟩ := idx
+  simp only [Tile.ptrAdd_data, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap,
+    Tile.expandDim, Tile.vec, Tile.scalar, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+    BlockState.readMemValue_real, Region.cast_id, BlockState.readMem,
+    TileShape.dropInsertedIndex]
+  by_cases hlt : SN + jL.val < slv
+  · simp only [hlt, decide_true, if_true, if_pos hlt, BlockState.readMem]
+    rw [show jL.val * rs + P1 * hs + e.val + (m1v + SN) * rs
+        = (m1v + (SN + jL.val)) * rs + P1 * hs + e.val from by ring]
+  · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-value V-load eval (mirror of `ctxNopadIO_kload_eval` at the
+`[BLK, DM]` value tile). -/
+private theorem ctxNopadIO_vload_eval (u : BlockState) (V : RegionName)
+    (m1v slv SN P1 rs hs BLK DM : Nat)
+    (hvp : u.regs .ptr [BLK, DM] "v_ptrs" = some (⟨fun idx : TileIndex [BLK, DM] =>
+      (V, idx.1.val * rs + P1 * hs + idx.2.1.val)⟩ : Tile .ptr [BLK, DM]))
+    (hsl : u.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar m1v))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BLK] "offs_n" = some (Tile.vec (fun jn : Fin BLK => jn.val)))
+    (hseq : u.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar slv)) :
+    evalOp (Op.load .real
+        (MemAccess.ptr
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BLK, DM] "v_ptrs")
+            (Op.mul .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.ref .nat [] "start_n"))
+              (Op.constNat rs))))
+        (MaskOpt.maskOther
+          (Op.remap [BLK, DM] Broadcast.nil.consL.consSame.leftIndex
+            (Op.lt ComparableDType.nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_n")))
+              (Op.ref .nat [] "cur_batch_seq_len")))
+          ((Op.const 0.0).broadcast [BLK, DM]))) u
+      = some (⟨fun idx : TileIndex [BLK, DM] =>
+          if SN + idx.1.val < slv then
+            some (u.readMem V ((m1v + (SN + idx.1.val)) * rs + P1 * hs + idx.2.1.val))
+          else some (0.0 : ℝ)⟩ : Tile .real [BLK, DM]) := by
+  have hexp : @evalOp .nat [BLK, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_n")) u
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun jn : Fin BLK => jn.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BLK] ⟨1, by simp⟩ "offs_n" u _ hn
+  simp only [evalOp, hvp, hsl, hsn, hexp, hseq, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨jL, e, pu⟩ := idx
+  simp only [Tile.ptrAdd_data, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap,
+    Tile.expandDim, Tile.vec, Tile.scalar, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+    BlockState.readMemValue_real, Region.cast_id, BlockState.readMem,
+    TileShape.dropInsertedIndex]
+  by_cases hlt : SN + jL.val < slv
+  · simp only [hlt, decide_true, if_true, if_pos hlt, BlockState.readMem]
+    rw [show jL.val * rs + P1 * hs + e.val + (m1v + SN) * rs
+        = (m1v + (SN + jL.val)) * rs + P1 * hs + e.val from by ring]
+  · simp only [hlt, decide_false, if_false, if_neg hlt, Bool.false_eq_true]
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-tile `qk += dot(q, k)` eval for the weak walk. -/
+private theorem ctxNopadIO_qkdot_eval (u : BlockState) (BLK DM : Nat)
+    (qk0T : Tile .real [BLK, BLK]) (qt : Tile .real [BLK, DM]) (kt : Tile .real [DM, BLK])
+    (hqk0 : u.regs .real [BLK, BLK] "qk" = some qk0T)
+    (hqr : u.regs .real [BLK, DM] "q" = some qt)
+    (hkr : u.regs .real [DM, BLK] "k" = some kt) :
+    evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [BLK, BLK] "qk")
+        (Op.dot (batch := []) (Op.ref .real [BLK, DM] "q") (Op.ref .real [DM, BLK] "k"))) u
+      = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame qk0T
+          (Tile.dot [] qt kt)) := by
+  have hdot : evalOp (Op.dot (batch := [])
+      (Op.ref .real [BLK, DM] "q") (Op.ref .real [DM, BLK] "k")) u
+      = some (Tile.dot [] qt kt) := by
+    rw [evalOp_dot]; erw [evalOp_ref, hqr, evalOp_ref, hkr]; rfl
+  rw [evalOp_add, evalOp_ref, hqk0]
+  show Option.bind (evalOp (Op.dot (batch := [])
+    (Op.ref .real [BLK, DM] "q") (Op.ref .real [DM, BLK] "k")) u) _ = _
+  rw [hdot]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-tile `acc += dot(p, v)` eval for the weak walk. -/
+private theorem ctxNopadIO_accdot_eval (u : BlockState) (BLK DM : Nat)
+    (accT : Tile .real [BLK, DM]) (pt : Tile .real [BLK, BLK]) (vt : Tile .real [BLK, DM])
+    (haccr : u.regs .real [BLK, DM] "acc" = some accT)
+    (hpr : u.regs .real [BLK, BLK] "p" = some pt)
+    (hvr : u.regs .real [BLK, DM] "v" = some vt) :
+    evalOp (Op.add .real Broadcast.nil.consSame.consSame (Op.ref .real [BLK, DM] "acc")
+        (Op.dot (batch := []) (Op.ref .real [BLK, BLK] "p") (Op.ref .real [BLK, DM] "v"))) u
+      = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame accT
+          (Tile.dot [] pt vt)) := by
+  have hdot : evalOp (Op.dot (batch := [])
+      (Op.ref .real [BLK, BLK] "p") (Op.ref .real [BLK, DM] "v")) u
+      = some (Tile.dot [] pt vt) := by
+    rw [evalOp_dot]; erw [evalOp_ref, hpr, evalOp_ref, hvr]; rfl
+  rw [evalOp_add, evalOp_ref, haccr]
+  show Option.bind (evalOp (Op.dot (batch := [])
+    (Op.ref .real [BLK, BLK] "p") (Op.ref .real [BLK, DM] "v")) u) _ = _
+  rw [hdot]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-tile causal-`where` eval for the weak walk. -/
+private theorem ctxNopadIO_qkwhere_eval (u : BlockState) (BLK : Nat) (SN : Nat)
+    (qkT : Tile .real [BLK, BLK]) (offsM : Fin BLK → Nat)
+    (hqk : u.regs .real [BLK, BLK] "qk" = some qkT)
+    (hm : u.regs .nat [BLK] "offs_m" = some (Tile.vec offsM))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BLK] "offs_n" = some (Tile.vec (fun jn : Fin BLK => jn.val))) :
+    evalOp ((Op.ge ComparableDType.nat Broadcast.nil.consL.consR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m"))
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLK] "offs_n")))).where
+        (Op.ref .real [BLK, BLK] "qk") (Op.negInf.broadcast [BLK, BLK])) u
+      = some (⟨fun idx : TileIndex [BLK, BLK] =>
+          if SN + idx.2.1.val ≤ offsM idx.1 then qkT.data idx else (⊥ : WithBot ℝ)⟩
+          : Tile .real [BLK, BLK]) := by
+  have hexpM : @evalOp .nat [BLK, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m")) u
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec offsM)) :=
+    evalOp_expandDim_ref_of_regs .nat [BLK] ⟨1, by simp⟩ "offs_m" u _ hm
+  have hexpN : @evalOp .nat [1, BLK] (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLK] "offs_n")) u
+      = some (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun jn : Fin BLK => jn.val))) :=
+    evalOp_expandDim_ref_of_regs .nat [BLK] ⟨0, by simp⟩ "offs_n" u _ hn
+  simp only [evalOp, hexpM, hsn, hexpN, hqk, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, jL, pu⟩ := idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Tile.bop, Tile.expandDim, Tile.vec,
+    Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.ge, NumericDType.add,
+    TileShape.dropInsertedIndex]
+  by_cases hle : SN + jL.val ≤ offsM i
+  · rw [if_pos (by simp only [decide_eq_true_eq]; omega), if_pos hle]
+  · rw [if_neg (by simp only [decide_eq_true_eq]; omega), if_neg hle]; rfl
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-tile `m_ij = tl.max(qk, 1)` eval for the weak walk. -/
+private theorem ctxNopadIO_mij_eval (u : BlockState) (BLK : Nat) (hBLK : 0 < BLK)
+    (qkT : Tile .real [BLK, BLK])
+    (hqk : u.regs .real [BLK, BLK] "qk" = some qkT) :
+    evalOp (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [BLK, BLK] "qk")) u
+      = some (⟨fun idx : TileIndex [BLK] =>
+          Finset.univ.sup' (⟨⟨0, hBLK⟩, Finset.mem_univ _⟩ : (Finset.univ : Finset (Fin BLK)).Nonempty)
+            (fun jL : Fin BLK => qkT.data (idx.1, jL, PUnit.unit))⟩ : Tile .real [BLK]) := by
+  rw [evalOp_reduceMax, evalOp_ref, hqk]
+  simp only [Option.bind_eq_bind, Option.bind_some, Tile.reduceMax_false]
+  unfold Tile.reduceMaxDrop
+  rw [dif_pos (show 0 < TileShape.axisDim [BLK, BLK]
+    (⟨1, by simp⟩ : Fin ([BLK, BLK] : TileShape).length) from hBLK)]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, pu⟩ := idx
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-tile `p = exp(qk - m_ij[:, None])` eval for the weak walk. -/
+private theorem ctxNopadIO_pexp_eval (u : BlockState) (BLK : Nat)
+    (qkT : Tile .real [BLK, BLK]) (mijT : Tile .real [BLK])
+    (hqk : u.regs .real [BLK, BLK] "qk" = some qkT)
+    (hmij : u.regs .real [BLK] "m_ij" = some mijT) :
+    evalOp (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [BLK, BLK] "qk")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLK] "m_ij"))).exp u
+      = some (⟨fun idx : TileIndex [BLK, BLK] =>
+          WithBot.realExp (WithBot.realSub (qkT.data idx) (mijT.data (idx.1, PUnit.unit)))⟩
+          : Tile .real [BLK, BLK]) := by
+  have hexp : @evalOp .real [BLK, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLK] "m_ij")) u
+      = some (Tile.expandDim ⟨1, by simp⟩ mijT) :=
+    evalOp_expandDim_ref_of_regs .real [BLK] ⟨1, by simp⟩ "m_ij" u _ hmij
+  rw [evalOp_exp, evalOp_sub, evalOp_ref, hqk, hexp]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, jL, pu⟩ := idx
+  simp only [Tile.uop_data, Tile.bop_data, Tile.bop, Tile.expandDim, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.sub, TileShape.dropInsertedIndex]
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-tile `l_ij = tl.sum(p, 1)` eval for the weak walk. -/
+private theorem ctxNopadIO_lij_eval (u : BlockState) (BLK : Nat)
+    (pT : Tile .real [BLK, BLK])
+    (hp : u.regs .real [BLK, BLK] "p" = some pT) :
+    evalOp (Op.reduceSum ⟨1, by simp⟩ Bool.false (Op.ref .real [BLK, BLK] "p")) u
+      = some (⟨fun idx : TileIndex [BLK] =>
+          Finset.univ.sum (fun jL : Fin BLK => pT.data (idx.1, jL, PUnit.unit))⟩
+          : Tile .real [BLK]) := by
+  rw [evalOp_reduceSum, evalOp_ref, hp]
+  simp only [Option.bind_eq_bind, Option.bind_some, Tile.reduceSum_false]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, pu⟩ := idx
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-tile `p = p * p_scale[:, None]` eval for the weak walk. -/
+private theorem ctxNopadIO_pmul_eval (u : BlockState) (BLK : Nat)
+    (pT : Tile .real [BLK, BLK]) (psT : Tile .real [BLK])
+    (hp : u.regs .real [BLK, BLK] "p" = some pT)
+    (hps : u.regs .real [BLK] "p_scale" = some psT) :
+    evalOp (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [BLK, BLK] "p")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLK] "p_scale"))) u
+      = some (⟨fun idx : TileIndex [BLK, BLK] =>
+          WithBot.realMul (pT.data idx) (psT.data (idx.1, PUnit.unit))⟩
+          : Tile .real [BLK, BLK]) := by
+  have hexp : @evalOp .real [BLK, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLK] "p_scale")) u
+      = some (Tile.expandDim ⟨1, by simp⟩ psT) :=
+    evalOp_expandDim_ref_of_regs .real [BLK] ⟨1, by simp⟩ "p_scale" u _ hps
+  rw [evalOp_mul, evalOp_ref, hp, hexp]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, jL, pu⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.expandDim, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, TileShape.dropInsertedIndex]
+
+set_option maxHeartbeats 1600000 in
+/-- Generic-tile `acc = acc * acc_scale[:, None]` eval for the weak walk. -/
+private theorem ctxNopadIO_accmul_eval (u : BlockState) (BLK DM : Nat)
+    (accT : Tile .real [BLK, DM]) (asT : Tile .real [BLK])
+    (hacc : u.regs .real [BLK, DM] "acc" = some accT)
+    (has : u.regs .real [BLK] "acc_scale" = some asT) :
+    evalOp (Op.mul .real Broadcast.nil.consR.consSame (Op.ref .real [BLK, DM] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLK] "acc_scale"))) u
+      = some (⟨fun idx : TileIndex [BLK, DM] =>
+          WithBot.realMul (accT.data idx) (asT.data (idx.1, PUnit.unit))⟩
+          : Tile .real [BLK, DM]) := by
+  have hexp : @evalOp .real [BLK, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLK] "acc_scale")) u
+      = some (Tile.expandDim ⟨1, by simp⟩ asT) :=
+    evalOp_expandDim_ref_of_regs .real [BLK] ⟨1, by simp⟩ "acc_scale" u _ has
+  rw [evalOp_mul, evalOp_ref, hacc, hexp]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, dd, pu⟩ := idx
+  simp only [Tile.bop_data, Tile.bop, Tile.expandDim, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.mul, TileShape.dropInsertedIndex]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak loop-body walk** (single pass): from any `nopadSafeInvW` state
+with the counter register set, the 22 body statements are trace-safe (the
+two masked loads bounded by the skin's `read2`/`read3` windows at the
+current step) and step to a state satisfying `nopadSafeInvW` again — the
+value registers advance existentially, the address registers are untouched
+(`k_ptrs`/`v_ptrs` never advance in this kernel). -/
+private theorem nopadIO_bodyW (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName) (sc : ℝ)
+    (rs hs BLK DM : Nat) (hBLK : 0 < BLK)
+    (s stt : BlockState) (c : Nat)
+    (hP : nopadSafeInvW Q K V B_Start_Loc B_Seqlen rs hs BLK DM s stt)
+    (hbK : ∀ (e : Fin DM) (jL : Fin BLK), c + jL.val < seqLen s B_Seqlen →
+      (startLoc s B_Start_Loc + (c + jL.val)) * rs + s.pids 1 * hs + e.val < bounds K)
+    (hbV : ∀ (jL : Fin BLK) (e : Fin DM), c + jL.val < seqLen s B_Seqlen →
+      (startLoc s B_Start_Loc + (c + jL.val)) * rs + s.pids 1 * hs + e.val < bounds V) :
+    Stmt.TraceSafeListR R bounds (nopadLoopBodyG sc rs hs BLK DM)
+        (stt.setReg "start_n" .nat [] (Tile.scalar c))
+      ∧ ∃ s', stepStmtsR R (nopadLoopBodyG sc rs hs BLK DM)
+            (stt.setReg "start_n" .nat [] (Tile.scalar c)) = some s'
+          ∧ nopadSafeInvW Q K V B_Start_Loc B_Seqlen rs hs BLK DM s s' := by
+  obtain ⟨hmem, hpids, hseq, hsl, hsm, hch, hbm, hn, hd, hom, hkp, hvp,
+    ⟨qT, hq⟩, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩⟩ := hP
+  unfold nopadLoopBodyG
+  -- (1) `start_n` self-assign
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar c) from by
+        rw [evalOp_ref, BlockState.setReg_same])) ?_
+  -- (2) the masked `k` load
+  refine nopadIO_walkCons ?_
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_kload_eval _ K (startLoc s B_Start_Loc) (seqLen s B_Seqlen) c
+        (s.pids 1) rs hs BLK DM
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true]
+            exact hkp)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true]
+            exact hsl)
+        (by simp only [BlockState.setReg_same])
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true]
+            exact hn)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true]
+            exact hseq))) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def],
+      ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro ptrs hptrs idx hactive
+    rw [ctxNopadIO_kptrR_eval R _ K (startLoc s B_Start_Loc) c (s.pids 1) rs hs BLK DM
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hkp)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hsl)
+      (by simp only [BlockState.setReg_same])] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [ctxNopadIO_kmaskR_eval R _ (seqLen s B_Seqlen) c BLK DM
+      (by simp only [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hn)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hseq)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨e, jL, pu⟩ := idx
+    have hcol : c + jL.val < seqLen s B_Seqlen := by simpa using hactl
+    have hb := hbK e jL hcol
+    show jL.val * rs + s.pids 1 * hs + e.val + (startLoc s B_Start_Loc + c) * rs < bounds K
+    calc jL.val * rs + s.pids 1 * hs + e.val + (startLoc s B_Start_Loc + c) * rs
+        = (startLoc s B_Start_Loc + (c + jL.val)) * rs + s.pids 1 * hs + e.val := by ring
+      _ < bounds K := hb
+  -- (3) `qk = zeros`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp [evalOp_full, evalOp_const]
+          try rfl)) ?_
+  -- (4) `qk += dot(q, k)`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_qkdot_eval _ BLK DM _ _ _
+        (by rw [BlockState.setReg_same])
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hq)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          BlockState.setReg_same]
+            rfl))) ?_
+  -- (5) `qk *= sm_scale`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (6) the causal `where`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_qkwhere_eval _ BLK c _ _
+        (by rw [BlockState.setReg_same])
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hom)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          BlockState.setReg_same])
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hn))) ?_
+  -- (7) `m_ij = tl.max(qk, 1)`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_mij_eval _ BLK hBLK _
+        (by rw [BlockState.setReg_same]))) ?_
+  -- (8) `p = exp(qk - m_ij[:, None])`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_pexp_eval _ BLK _ _
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          BlockState.setReg_same]
+            rfl)
+        (by rw [BlockState.setReg_same]))) ?_
+  -- (9) `l_ij = tl.sum(p, 1)`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_lij_eval _ BLK _
+        (by rw [BlockState.setReg_same]))) ?_
+  -- (10) `m_i_new = maximum(m_i, m_ij)`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, hmi, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (11) `alpha = exp(m_i - m_i_new)`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, hmi, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (12) `beta = exp(m_ij - m_i_new)`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (13) `l_i_new = alpha*l_i + beta*l_ij`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, hli, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (14) `p_scale = beta / l_i_new`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (15) `p = p * p_scale[:, None]`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_pmul_eval _ BLK _ _
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          BlockState.setReg_same]
+            rfl)
+        (by rw [BlockState.setReg_same]))) ?_
+  -- (16) `acc_scale = l_i / l_i_new * alpha`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, hli, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (17) `acc = acc * acc_scale[:, None]`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_accmul_eval _ BLK DM _ _
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hacc)
+        (by rw [BlockState.setReg_same]))) ?_
+  -- (18) the masked `v` load
+  refine nopadIO_walkCons ?_
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_vload_eval _ V (startLoc s B_Start_Loc) (seqLen s B_Seqlen) c
+        (s.pids 1) rs hs BLK DM
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true]
+            exact hvp)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true]
+            exact hsl)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true, BlockState.setReg_same])
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true]
+            exact hn)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+              not_false_eq_true]
+            exact hseq))) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def],
+      ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro ptrs hptrs idx hactive
+    rw [ctxNopadIO_vptrR_eval R _ V (startLoc s B_Start_Loc) c (s.pids 1) rs hs BLK DM
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hvp)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hsl)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same])] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [ctxNopadIO_vmaskR_eval R _ (seqLen s B_Seqlen) c BLK DM
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hn)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hseq)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨jL, e, pu⟩ := idx
+    have hrow : c + jL.val < seqLen s B_Seqlen := by simpa using hactl
+    have hb := hbV jL e hrow
+    show jL.val * rs + s.pids 1 * hs + e.val + (startLoc s B_Start_Loc + c) * rs < bounds V
+    calc jL.val * rs + s.pids 1 * hs + e.val + (startLoc s B_Start_Loc + c) * rs
+        = (startLoc s B_Start_Loc + (c + jL.val)) * rs + s.pids 1 * hs + e.val := by ring
+      _ < bounds V := hb
+  -- (19) `p` self-assign (the erased `.to(v.dtype)` cast)
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (20) `acc += dot(p, v)`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctxNopadIO_accdot_eval _ BLK DM _ _ _
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          BlockState.setReg_same]
+            rfl)
+        (by rw [BlockState.setReg_same])
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          BlockState.setReg_same]
+            rfl))) ?_
+  -- (21) `l_i = l_i_new`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  -- (22) `m_i = m_i_new`
+  refine nopadIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (nopadIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (by simp only [evalOp, evalOp_expandDim_ref_of_regs, evalOp_expandDim_ref, BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, Option.bind]
+          try rfl)) ?_
+  refine ⟨Stmt.TraceSafeListR.nil_intro, _, stepStmtsR_nil R _, ?_⟩
+  refine ⟨?_, ?_,
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hseq),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hsl),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hsm),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hch),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hbm),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hn),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hd),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hom),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hkp),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hvp),
+    ⟨qT, by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+      exact hq⟩,
+    ⟨_, by rw [BlockState.setReg_same]⟩,
+    ⟨_, by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same]
+      rfl⟩,
+    ⟨_, by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same]
+      rfl⟩⟩
+  · funext rg o
+    simp only [BlockState.setReg_mem]
+    rw [hmem]
+  · simp only [BlockState.setReg_pids]
+    exact hpids
+
+/-- `evalOpR` of the `off_o` offset tree is the exact evaluation
+(register-only `.nat` arithmetic — R-independent, ∀-state). -/
+private theorem ctxNopadIO_offoR_castFree (R : RoundingModel) (rs hs BLK DM : Nat)
+    (u : BlockState) :
+    evalOpR R (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m")))
+            (Op.constNat rs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat hs)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [DM] "offs_d"))
+          (Op.constNat 1))) u
+      = evalOp (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarR
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m")))
+              (Op.constNat rs))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat hs)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [DM] "offs_d"))
+            (Op.constNat 1))) u := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- `evalOpR` of the `out_ptrs` pointer tree is the exact evaluation. -/
+private theorem ctxNopadIO_outptrR_castFree (R : RoundingModel) (Out : RegionName)
+    (BLK DM : Nat) (u : BlockState) :
+    evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLK, DM] "off_o")) u
+      = evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLK, DM] "off_o")) u := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `TraceSafeR` walk for the whole kernel** from an arbitrary launch
+state under the `pre`-legal window bounds (`pid₂ < NT`): weak preLoop walk,
+the streaming `forRangeDyn` driven by `Stmt.forRangeTraceSafeR_inv` over
+`nopadSafeInvW`, and the terminal masked store bounded by the `write`
+window. -/
+private theorem nopadIO_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (sm_scale : ℝ) (rs hs BLK DM NT : Nat) (hBLK : 0 < BLK)
+    (s : BlockState) (hpid2 : s.pids 2 < NT)
+    (hbSeq : s.pids 0 < bounds (Region.cast B_Seqlen))
+    (hbLoc : s.pids 0 < bounds (Region.cast B_Start_Loc))
+    (hbQ : ∀ (i : Fin BLK) (e : Fin DM), s.pids 2 * BLK + i.val < seqLen s ↑B_Seqlen →
+      (startLoc s ↑B_Start_Loc + (s.pids 2 * BLK + i.val)) * rs + s.pids 1 * hs + e.val
+        < bounds Q)
+    (hbK : ∀ (t : Fin NT) (e : Fin DM) (jL : Fin BLK),
+      t.val * BLK + jL.val < seqLen s ↑B_Seqlen →
+      (startLoc s ↑B_Start_Loc + (t.val * BLK + jL.val)) * rs + s.pids 1 * hs + e.val
+        < bounds K)
+    (hbV : ∀ (t : Fin NT) (jL : Fin BLK) (e : Fin DM),
+      t.val * BLK + jL.val < seqLen s ↑B_Seqlen →
+      (startLoc s ↑B_Start_Loc + (t.val * BLK + jL.val)) * rs + s.pids 1 * hs + e.val
+        < bounds V)
+    (hbO : ∀ (i : Fin BLK) (e : Fin DM), s.pids 2 * BLK + i.val < seqLen s ↑B_Seqlen →
+      (startLoc s ↑B_Start_Loc + (s.pids 2 * BLK + i.val)) * rs + s.pids 1 * hs + e.val
+        < bounds Out) :
+    ((context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
+      rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK).toAlgKernel).TraceSafeR R bounds s := by
+  -- shared per-iteration body facts
+  have hSTOPle : (if BLK * s.pids 2 < seqLen s ↑B_Seqlen then 1 else 0) * (s.pids 2 + 1) * BLK
+      ≤ (s.pids 2 + 1) * BLK := by
+    by_cases h : BLK * s.pids 2 < seqLen s ↑B_Seqlen
+    · simp [h]
+    · simp [h]
+  have hbody : ∀ (cc : Nat) (st : BlockState),
+      cc < (if BLK * s.pids 2 < seqLen s ↑B_Seqlen then 1 else 0) * (s.pids 2 + 1) * BLK →
+      nopadSafeInvW Q K V ↑B_Start_Loc ↑B_Seqlen rs hs BLK DM s st ∧ cc % BLK = 0 →
+      Stmt.TraceSafeListR R bounds (nopadLoopBodyG sm_scale rs hs BLK DM)
+          (st.setReg "start_n" .nat [] (Tile.scalar cc))
+        ∧ ∃ s', stepStmtsR R (nopadLoopBodyG sm_scale rs hs BLK DM)
+              (st.setReg "start_n" .nat [] (Tile.scalar cc)) = some s'
+            ∧ (nopadSafeInvW Q K V ↑B_Start_Loc ↑B_Seqlen rs hs BLK DM s s'
+                ∧ (cc + BLK) % BLK = 0) := by
+    intro cc st hcc hPP
+    obtain ⟨hPinv, hPmod⟩ := hPP
+    have hceq : cc / BLK * BLK = cc := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hPmod)
+    have hcNT : cc / BLK < NT := by
+      have h1 : cc < (s.pids 2 + 1) * BLK := lt_of_lt_of_le hcc hSTOPle
+      have h2 : cc / BLK < s.pids 2 + 1 := (Nat.div_lt_iff_lt_mul hBLK).mpr h1
+      omega
+    obtain ⟨hsafeB, s', hrunB, hInvB⟩ :=
+      nopadIO_bodyW R bounds Q K V ↑B_Start_Loc ↑B_Seqlen sm_scale rs hs BLK DM hBLK s st cc
+        hPinv
+        (fun e jL hc => by
+          have hb := hbK ⟨cc / BLK, hcNT⟩ e jL (by rw [hceq]; exact hc)
+          rwa [hceq] at hb)
+        (fun jL e hc => by
+          have hb := hbV ⟨cc / BLK, hcNT⟩ jL e (by rw [hceq]; exact hc)
+          rwa [hceq] at hb)
+    exact ⟨hsafeB, s', hrunB, hInvB, by rw [Nat.add_mod_right]; exact hPmod⟩
+  unfold Kernel.TraceSafeR
+  rw [nopad_body_splitG]
+  obtain ⟨hsafePre, s0, hrun0, hInv0⟩ :=
+    nopadIO_preLoopW R bounds Q K V B_Start_Loc B_Seqlen rs hs BLK DM s hbSeq hbLoc hbQ
+  have hInv0' := hInv0
+  obtain ⟨hmem0, hpids0, hseq0, hsl0, hsm0, hch0, hbm0, hn0, hd0, hom0, hkp0, hvp0,
+    hqE, hmiE, hliE, haccE⟩ := hInv0
+  have hstopExact : evalOp (Op.mul .nat Broadcast.nil
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+        (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+      (Op.constNat BLK)) s0
+      = some (Tile.scalar ((if BLK * s.pids 2 < seqLen s ↑B_Seqlen then 1 else 0)
+          * (s.pids 2 + 1) * BLK)) := by
+    rw [evalOp_mul, evalOp_mul, evalOp_ref, hbm0, evalOp_add, evalOp_ref, hsm0,
+      evalOp_constNat, evalOp_constNat]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_
+    refine Tile.ext (fun idx => ?_)
+    simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex,
+      Broadcast.rightIndex, NumericDType.mul, NumericDType.add]
+  refine Stmt.TraceSafeListR.append_intro _ _ hsafePre ?_
+  intro s1 hs1
+  rw [hrun0] at hs1
+  obtain rfl := Option.some.inj hs1
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s2 hs2 => ?_)
+  · -- TraceSafeR of the forRangeDyn itself
+    simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [ctxNopadIO_evalOpR_constNat, ctxNopadIO_evalOpR_constNat,
+      ctxNopadIO_stopOpR_castFree, hstopExact]
+    refine Stmt.forRangeTraceSafeR_inv R bounds "start_n" _ _
+      (nopadLoopBodyG sm_scale rs hs BLK DM)
+      (fun i st => nopadSafeInvW Q K V ↑B_Start_Loc ↑B_Seqlen rs hs BLK DM s st
+        ∧ i % BLK = 0) ?_ _ s0 ⟨hInv0', Nat.zero_mod BLK⟩
+    intro cc st hcc hPP
+    obtain ⟨hsafeB, s', hrunB, hInvB⟩ := hbody cc st hcc hPP
+    exact ⟨hsafeB, s', hrunB, hInvB⟩
+  · -- the loop's actual successor, then the postLoop
+    obtain ⟨finalC, sL, hLoopExact, hfin, hPL⟩ :=
+      forRangeDyn_inv (idx := "start_n")
+        (startOp := Op.constNat 0)
+        (stopOp := Op.mul .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+          (Op.constNat BLK))
+        (stepOp := Op.constNat BLK)
+        (P := fun i st => nopadSafeInvW Q K V ↑B_Start_Loc ↑B_Seqlen rs hs BLK DM s st
+          ∧ i % BLK = 0)
+        (s_init := s0)
+        (evalOp_constNat 0 s0) hstopExact (evalOp_constNat BLK s0)
+        hBLK.ne'
+        ⟨hInv0', Nat.zero_mod BLK⟩
+        (fun i st hi hP => by
+          obtain ⟨hsafeB, s', hrunB, hInvB⟩ := hbody i st hi hP
+          exact ⟨s', by
+            rw [← ctxNopadIO_body_castFree R sm_scale rs hs BLK DM]
+            exact hrunB, hInvB⟩)
+    rw [ctxNopadIO_dyn_castFree R sm_scale rs hs BLK DM s0, hLoopExact] at hs2
+    obtain rfl := Option.some.inj hs2
+    obtain ⟨⟨hmemL, hpidsL, hseqL, hslL, hsmL, hchL, hbmL, hnL, hdL, homL, hkpL, hvpL,
+      hqEL, hmiEL, hliEL, haccEL⟩, hmodL⟩ := hPL
+    -- postLoop: `off_o` assign, `out_ptrs` assign, the masked terminal store
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s3 hs3 => ?_)
+    obtain ⟨v3, hv3, rfl⟩ := stepStmtR_assign_inv hs3
+    rw [ctxNopadIO_offoR_castFree R rs hs BLK DM,
+      nopad_offq_evalG sL (startLoc s ↑B_Start_Loc) (s.pids 1) (s.pids 2) rs hs BLK DM
+        hslL hchL homL hdL] at hv3
+    obtain rfl := Option.some.inj hv3
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s4 hs4 => ?_)
+    obtain ⟨v4, hv4, rfl⟩ := stepStmtR_assign_inv hs4
+    rw [ctxNopadIO_outptrR_castFree R Out BLK DM] at hv4
+    simp only [evalOp, evalOp_ref, BlockState.setReg_same, Option.bind] at hv4
+    obtain rfl := Option.some.inj hv4
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [MemAccess.SafeAtR, Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR, Op.SafeAtR.eq_def], ?_⟩
+    intro ptrs hptrs idx hactive
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [ctxNopadIO_rowmaskR_eval R _ (seqLen s ↑B_Seqlen) (s.pids 2) BLK DM
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact homL)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hseqL)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨i2, e2, pu⟩ := idx
+    have hrow : s.pids 2 * BLK + i2.val < seqLen s ↑B_Seqlen := by simpa using hactl
+    have hb := hbO i2 e2 hrow
+    simpa [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Region.cast_id] using hb
+
+/-! ## The rounded Hoare triple (`hrun`): framed exact run
+
+`hrun` rides the exact `nopadPreLoop_evalG` → `forRangeDyn_inv` →
+`nopadPostLoop_evalG` stack unchanged (everything is cast-free, so `execR R`
+collapses onto it verbatim); the only new obligation the skin adds over the
+existing headline is the **memory frame**, recovered by replaying the
+deterministic 3-statement postLoop and framing its masked scatter. -/
+
+/-- A masked `writeMem` scatter `foldl` leaves every cell not hit by an
+active lane untouched. -/
+private theorem nopadIO_foldl_writeMem_frame_masked {α : Type} (region : RegionName)
+    (offFn : α → Nat) (valFn : α → ℝ) (P : α → Prop) [DecidablePred P] :
+    ∀ (l : List α) (st : BlockState) (r : RegionName) (o : Nat),
+      (r = region → ∀ k ∈ l, P k → offFn k ≠ o) →
+      ((l.foldl (fun acc k =>
+          if P k then acc.writeMem region (offFn k) (valFn k) else acc) st).mem r o
+        = st.mem r o)
+  | [], _, _, _, _ => rfl
+  | k :: rest, st, r, o, h => by
+      rw [List.foldl_cons]
+      by_cases hPk : P k
+      · rw [if_pos hPk,
+          nopadIO_foldl_writeMem_frame_masked region offFn valFn P rest _ r o
+            (fun hr k' hk' hPk' => h hr k' (List.mem_cons_of_mem _ hk') hPk'),
+          BlockState.writeMem_mem]
+        rw [if_neg (fun hro => h hro.1 k List.mem_cons_self hPk hro.2.symm)]
+      · rw [if_neg hPk]
+        exact nopadIO_foldl_writeMem_frame_masked region offFn valFn P rest _ r o
+          (fun hr k' hk' hPk' => h hr k' (List.mem_cons_of_mem _ hk') hPk')
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop frame**: every cell outside the terminal store's active
+window is untouched by the postLoop (replay of `nopadPostLoop_evalG`'s
+deterministic chain, framed). -/
+private theorem nopadIO_postLoop_frame
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : RegionName) (Out : RegionName)
+    (sm_scale : ℝ) (rs hs BLK DM : Nat) (hDM : 0 < DM)
+    (s0 : BlockState) (cF : Nat) (sL sP : BlockState)
+    (hinv : nopadInvariantG Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM hDM s0 cF sL)
+    (hpost : stepStmts (nopadPostLoopG Out rs hs BLK DM) sL = some sP) :
+    ∀ r o,
+      (r = Out → ∀ idx : TileIndex [BLK, DM],
+        s0.pids 2 * BLK + idx.1.val < seqLen s0 B_Seqlen →
+        o ≠ outOffsetG s0 B_Start_Loc rs hs BLK DM idx) →
+      sP.mem r o = sL.mem r o := by
+  obtain ⟨hpids, hmem, hundef, hcb, hch, hsm, hseq, hsl, hn, hd, hoffm, hq, hkp, hvp,
+    hbmask, hmi, hli, hacc⟩ := hinv
+  unfold nopadPostLoopG at hpost
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (nopad_offq_evalG sL (startLoc s0 B_Start_Loc) (s0.pids 1) (s0.pids 2) rs hs BLK DM
+      hsl hch hoffm hd))] at hpost
+  set s1 := sL.setReg "off_o" .nat [BLK, DM]
+    (⟨fun idx : TileIndex [BLK, DM] =>
+      (startLoc s0 B_Start_Loc + (s0.pids 2 * BLK + idx.1.val)) * rs
+        + s0.pids 1 * hs + idx.2.1.val⟩ : Tile .nat [BLK, DM]) with hs1d
+  have hs1offo : s1.regs .nat [BLK, DM] "off_o" = some
+      (⟨fun idx : TileIndex [BLK, DM] =>
+        (startLoc s0 B_Start_Loc + (s0.pids 2 * BLK + idx.1.val)) * rs
+          + s0.pids 1 * hs + idx.2.1.val⟩ : Tile .nat [BLK, DM]) := by
+    rw [hs1d, BlockState.setReg_same]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLK, DM] "off_o")) s1
+        = some (⟨fun idx : TileIndex [BLK, DM] =>
+            (Out, (startLoc s0 B_Start_Loc + (s0.pids 2 * BLK + idx.1.val)) * rs
+              + s0.pids 1 * hs + idx.2.1.val)⟩ : Tile .ptr [BLK, DM]) from by
+      simp only [evalOp, evalOp_ref, hs1offo, Option.bind]
+      refine congrArg some (Tile.ext (fun idx => ?_))
+      obtain ⟨ir, dd, pu⟩ := idx
+      simp only [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        Region.cast_id, Nat.zero_add, Prod.mk.injEq, true_and]))] at hpost
+  set s2 := s1.setReg "out_ptrs" .ptr [BLK, DM]
+    (⟨fun idx : TileIndex [BLK, DM] =>
+      (Out, (startLoc s0 B_Start_Loc + (s0.pids 2 * BLK + idx.1.val)) * rs
+        + s0.pids 1 * hs + idx.2.1.val)⟩ : Tile .ptr [BLK, DM]) with hs2d
+  have hs2ptr : s2.regs .ptr [BLK, DM] "out_ptrs" = some
+      (⟨fun idx : TileIndex [BLK, DM] =>
+        (Out, (startLoc s0 B_Start_Loc + (s0.pids 2 * BLK + idx.1.val)) * rs
+          + s0.pids 1 * hs + idx.2.1.val)⟩ : Tile .ptr [BLK, DM]) := by
+    rw [hs2d, BlockState.setReg_same]
+  have hs2acc : s2.regs .real [BLK, DM] "acc" = some
+      (⟨fun idx : TileIndex [BLK, DM] =>
+        ((nopadFoldUptoG s0 Q K V B_Start_Loc sm_scale rs hs BLK DM
+          (ctxNopadWindowG s0 B_Seqlen BLK) (seqLen s0 B_Seqlen) (cF * BLK)
+          idx.1 idx.2.1).2.2 : WithBot ℝ)⟩ : Tile .real [BLK, DM]) := by
+    rw [hs2d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hacc
+  have hs2m : s2.regs .nat [BLK] "offs_m"
+      = some (Tile.vec (fun i : Fin BLK => s0.pids 2 * BLK + i.val)) := by
+    rw [hs2d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hoffm
+  have hs2seq : s2.regs .nat [] "cur_batch_seq_len"
+      = some (Tile.scalar (seqLen s0 B_Seqlen)) := by
+    rw [hs2d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hs1d, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hseq
+  have hstore : stepStmt (Stmt.store .real [BLK, DM] (MemAccess.ptr (Op.ref .ptr [BLK, DM] "out_ptrs"))
+      (Op.ref .real [BLK, DM] "acc")
+      (MaskOpt.mask (Op.remap [BLK, DM] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))))) s2
+      = some ((TileShape.allIndices [BLK, DM]).foldl
+          (fun acc idx =>
+            if s0.pids 2 * BLK + idx.1.val < seqLen s0 B_Seqlen then
+              acc.writeMem Out ((startLoc s0 B_Start_Loc + (s0.pids 2 * BLK + idx.1.val)) * rs + s0.pids 1 * hs + idx.2.1.val)
+                ((nopadFoldUptoG s0 Q K V B_Start_Loc sm_scale rs hs BLK DM (ctxNopadWindowG s0 B_Seqlen BLK) (seqLen s0 B_Seqlen) (cF * BLK) idx.1 idx.2.1).2.2 : ℝ)
+            else acc) s2) := by
+    have hexpM : @evalOp .nat [BLK, 1] (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLK] "offs_m")) s2
+        = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun i : Fin BLK => s0.pids 2 * BLK + i.val))) :=
+      evalOp_expandDim_ref_of_regs .nat [BLK] ⟨1, by simp⟩ "offs_m" s2 _ hs2m
+    unfold stepStmt
+    simp only [evalOp_ref, hs2acc, hs2ptr, hs2seq, evalOp, hexpM, Option.bind, Option.map]
+    refine congrArg some ?_
+    congr 1
+    funext acc idx
+    obtain ⟨ir, dd, pu⟩ := idx
+    simp only [Tile.cop_data, Tile.bop_data, Tile.bop, Tile.remap, Tile.expandDim, Tile.vec,
+      Tile.scalar, ComparableDType.lt, Broadcast.leftIndex, Broadcast.rightIndex,
+      TileShape.dropInsertedIndex, BlockState.writeMemTyped_real, FloatDType.real_storeValue,
+      decide_eq_true_eq, WithBot.unbotD_coe]
+  rw [stepStmts.cons_some hstore, stepStmts.nil] at hpost
+  obtain rfl := Option.some.inj hpost
+  intro r o hno
+  refine (nopadIO_foldl_writeMem_frame_masked Out _ _ _ _ s2 r o ?_).trans ?_
+  · intro hr k _ hPk
+    exact Ne.symm (hno hr k hPk)
+  · rw [hs2d, hs1d]
+    simp only [BlockState.setReg_mem]
+
+set_option maxHeartbeats 1600000 in
+set_option maxRecDepth 8000 in
+/-- **Framed general execution**: `nopad_exec_general` extended with the
+per-cell memory frame (this is the exact run `hrun` rides). -/
+private theorem nopadIO_exec_framed
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (sm_scale : ℝ) (rs hs BLK DM : Nat) (hBLK : 0 < BLK) (hDM : 0 < DM) (hDMrs : DM ≤ rs)
+    (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, stepStmts ((context_attn_nopad_fwd_kernel_surface Q K V sm_scale B_Start_Loc B_Seqlen Out
+        rs hs 1 rs hs 1 rs hs 1 rs hs 1 BLK DM BLK).toAlgKernel.body) s = some sF
+      ∧ (∀ idx : TileIndex [BLK, DM],
+          s.pids 2 * BLK + idx.1.val < seqLen s B_Seqlen →
+            sF.readMem Out (outOffsetG s B_Start_Loc rs hs BLK DM idx)
+              = ctxNopadGenuineOutValueG s Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM idx)
+      ∧ (∀ r o, (r ≠ Out ∨ ∀ idx : TileIndex [BLK, DM],
+            s.pids 2 * BLK + idx.1.val < seqLen s B_Seqlen →
+              o ≠ outOffsetG s B_Start_Loc rs hs BLK DM idx) →
+          sF.mem r o = s.mem r o) := by
+  rw [nopad_body_splitG]
+  obtain ⟨s0, hpre, hinv0⟩ := nopadPreLoop_evalG s Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM hBLK hDM hundef
+  rw [stepStmts.append_some hpre]
+  obtain ⟨hpids0, hmem0, hundef0, hcb0, hch0, hsm0, hseq0, hsl0, hn0, hd0, hoffm0, hq0, hkp0, hvp0, hbmask0, hmi0, hli0, hacc0⟩ := hinv0
+  have hs0seq : seqLen s0 B_Seqlen = seqLen s B_Seqlen := seqLen_eq_of_mem_pids s0 s B_Seqlen hmem0 hpids0
+  set S := ctxNopadWindowG s0 B_Seqlen BLK with hSdef
+  have hSmulBLK : S % BLK = 0 := by
+    rw [hSdef, ctxNopadWindowG]
+    by_cases h : BLK * s0.pids 2 < seqLen s0 B_Seqlen
+    · simp only [h, if_true, one_mul]; exact Nat.mul_mod_left _ _
+    · simp only [h, if_false, Nat.zero_mul]; exact Nat.zero_mod BLK
+  have hinv0' : nopadInvariantG Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM hDM s0 0 s0 :=
+    nopadInvariantG_zero_reanchor Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM hDM s s0 ⟨hpids0, hmem0, hundef0, hcb0, hch0, hsm0, hseq0, hsl0, hn0, hd0, hoffm0, hq0, hkp0, hvp0, hbmask0, hmi0, hli0, hacc0⟩
+  obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+    VeriTile.Triton.forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.constNat 0)
+      (stopOp := Op.mul .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)))
+        (Op.constNat BLK))
+      (stepOp := Op.constNat BLK)
+      (P := fun i st => nopadInvariantG Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM hDM s0 (i / BLK) st ∧ i % BLK = 0 ∧ i ≤ S)
+      (s_init := s0) (start := 0) (stop := S) (step := BLK)
+      (by rw [evalOp_constNat])
+      (by
+        rw [evalOp_mul, evalOp_mul, evalOp_ref, hbmask0, evalOp_add, evalOp_ref, hsm0, evalOp_constNat, evalOp_constNat]
+        simp only [Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_
+        refine Tile.ext (fun idx => ?_)
+        simp only [Tile.bop_data, Tile.bop, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.mul, NumericDType.add]
+        show (if BLK * s.pids 2 < seqLen s B_Seqlen.cast then 1 else 0) * (s.pids 2 + 1) * BLK = S
+        rw [hSdef, ctxNopadWindowG, hpids0, hs0seq])
+      (by rw [evalOp_constNat])
+      (by omega)
+      ⟨by rw [Nat.zero_div]; exact hinv0', Nat.zero_mod BLK, Nat.zero_le _⟩
+      (fun i st hi hP => by
+        obtain ⟨hPinv, hPmod, hPle⟩ := hP
+        have hdvd : i = (i / BLK) * BLK := (Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hPmod)).symm
+        obtain ⟨s', hstep, hinv'⟩ := nopad_attn_stepG Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM hBLK hDM s0 i st hi hPinv hdvd
+        have hmod' : (i + BLK) % BLK = 0 := by rw [Nat.add_mod_right]; exact hPmod
+        have hle' : i + BLK ≤ S := by
+          have hlt : i < S := hi
+          obtain ⟨a, ha⟩ : BLK ∣ i := Nat.dvd_of_mod_eq_zero hPmod
+          obtain ⟨b, hb⟩ : BLK ∣ S := Nat.dvd_of_mod_eq_zero hSmulBLK
+          have hab : a < b := by
+            rw [ha, hb] at hlt
+            by_contra hc
+            have : BLK * b ≤ BLK * a := Nat.mul_le_mul_left BLK (Nat.le_of_not_lt hc)
+            omega
+          rw [ha, hb]
+          calc BLK * a + BLK = BLK * (a + 1) := by ring
+            _ ≤ BLK * b := Nat.mul_le_mul_left BLK (by omega)
+        refine ⟨s', hstep, ?_, hmod', hle'⟩
+        rw [show (i + BLK) / BLK = i / BLK + 1 from by
+          rw [Nat.add_div_right i hBLK]]
+        exact hinv')
+  rw [stepStmts.cons_some hloop]
+  obtain ⟨hinvLinv, hinvLmod, hinvLle⟩ := hinvL
+  have hfinS : final = S := Nat.le_antisymm hinvLle hfin
+  rw [hfinS] at hinvLinv
+  have hfull : (S / BLK) * BLK = S := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hSmulBLK)
+  obtain ⟨sP, hpost, hOut⟩ := nopadPostLoop_evalG Q K V B_Start_Loc B_Seqlen Out sm_scale rs hs BLK DM hDM hDMrs s0 (S / BLK) sL
+    (by rw [hfull]) hinvLinv
+  have hframeP := nopadIO_postLoop_frame Q K V ↑B_Start_Loc ↑B_Seqlen Out sm_scale rs hs BLK DM hDM
+    s0 (S / BLK) sL sP hinvLinv hpost
+  have hmemL : sL.mem = s0.mem := hinvLinv.2.1
+  rw [hpost]
+  refine ⟨sP, rfl, ?_, ?_⟩
+  · intro idx hact
+    have hslEq0 : startLoc s B_Start_Loc = startLoc s0 B_Start_Loc :=
+      startLoc_eq_of_mem_pids s s0 B_Start_Loc hmem0.symm hpids0.symm
+    have hoeq : outOffsetG s B_Start_Loc rs hs BLK DM idx = outOffsetG s0 B_Start_Loc rs hs BLK DM idx := by
+      simp only [outOffsetG, ← hpids0, hslEq0]
+    have hactS0 : s0.pids 2 * BLK + idx.1.val < seqLen s0 B_Seqlen := by
+      rw [hs0seq, hpids0]; exact hact
+    rw [hoeq, hOut idx, if_pos hactS0]
+    exact ctxNopadGenuineOutValueG_eq_of_mem_pids s0 s Q K V B_Start_Loc.cast B_Seqlen.cast sm_scale rs hs BLK DM hmem0 hpids0 idx
+  · intro r o hcond
+    have hslEq0 : startLoc s B_Start_Loc = startLoc s0 B_Start_Loc :=
+      startLoc_eq_of_mem_pids s s0 B_Start_Loc hmem0.symm hpids0.symm
+    have hcond0 : r = Out → ∀ idx : TileIndex [BLK, DM],
+        s0.pids 2 * BLK + idx.1.val < seqLen s0 B_Seqlen →
+        o ≠ outOffsetG s0 B_Start_Loc rs hs BLK DM idx := by
+      intro hr idx hact0
+      rcases hcond with hne | hno
+      · exact absurd hr hne
+      · have hacts : s.pids 2 * BLK + idx.1.val < seqLen s B_Seqlen := by
+          rw [← hs0seq, ← hpids0]; exact hact0
+        have h := hno idx hacts
+        rw [show outOffsetG s B_Start_Loc rs hs BLK DM idx
+            = outOffsetG s0 B_Start_Loc rs hs BLK DM idx from by
+          simp only [outOffsetG, ← hpids0, hslEq0]] at h
+        exact h
+    rw [hframeP r o hcond0, hmemL]
+    rw [show s0.mem = s.mem from hmem0]
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `⊨[R]` streaming-metadata headline (wave-5) — the exemplar
+consumer of `StreamMetaMasked3DKernelIO₃`, the context-attention trio's
+skin.** For every rounding model `R`, the faithful `context_attn_nopad`
+surface implements, on its metadata three-stream signature, the **honest
+causal softmax** over the streamed `Q`/`K`/`V` tiles: every write-active
+output lane `j = (i, e)` holds
+
+`Σ_{jg ≤ pid₂·BLK+i} exp(sm_scale·raw jg)·V[jg,e] / Σ_{jg ≤ pid₂·BLK+i} exp(sm_scale·raw jg)`
+
+(`contextAttnNopadIOSpec` — exactly the port's genuine closed form
+`contextAttnNopadExactFoldMG` restated on the streams: the `float("-inf")`
+causal mask genuinely drops future keys, the `K`/`V` boundary masks zero
+out-of-sequence keys, and the in-loop-normalized `acc` needs no
+post-divide). The two `.nat` slots enter only through the windows/masks
+(`m 0 = B_Seqlen[pid₀]` the boundary, `m 1 = B_Start_Loc[pid₀]` the packed
+row offset). The kernel has **zero rounding events** (`.nat` slot loads,
+`other=0.0`-masked `.real` loads, `.real` in-loop arithmetic, untyped
+terminal store), so the skin's boundary quantization degenerates: the
+readback's `R.round .real` is the identity by the model's defining
+`round_real`.
+
+**Launch legality (the skin's genre novelty).** The triple is guarded by
+
+`io.pre pid₂ m = (pid₂ < NT ∧ m 0 ≤ NT·BLK)`
+
+— the port's documented **trusted boundary** (see the file docstring's
+Scope section): the host launches
+`grid = (batch, head, cdiv(max_input_len, BLOCK_M))` with `NT` the third
+dimension and every `B_Seqlen[b] ≤ max_input_len ≤ NT·BLOCK_M`. The live
+trip count `block_mask·(pid₂+1)` has no pid-free bound, so `pid₂ < NT` is
+what makes the `T = NT`-step window citable at all — it is threaded into
+both the safety walk (every live step `c ≤ pid₂ < NT` indexes `Fin NT`)
+and the value bridge (`gi < (pid₂+1)·BLK ≤ NT·BLK` makes the causal window
+extension inert).
+
+**Hypothesis provenance** (all truth-forced, inherited from the exact
+headline `context_attn_nopad_output_summary_general`): `0 < BLK`, `0 < DM`
+(nonempty tiles); `DM ≤ rs` (output-offset injectivity — the contiguous
+layout has `rs = H·DM ≥ DM`, so no open `hInj` side condition); `0 < NT`
+(the host grid's third dimension is `cdiv(max_input_len, BLOCK_M) ≥ 1`;
+also forced by the static `Q` stream's step-`0` read). The exact headline's
+`hundef` is **not** a hypothesis here — the skin's Hoare triple carries the
+`undef` pin itself.
+
+Relation to the exact surface: the `Realizes_without_Rounding` headline
+above is retained unchanged; this `⊨[R]` face restates the same causal
+softmax on the streaming metadata skin, for every `R` at once. -/
+specification context_attn_nopad_io_correctness (R : RoundingModel)
+    (Q K V : RegionName) (B_Start_Loc B_Seqlen : Region .nat) (Out : RegionName)
+    (sm_scale : ℝ) (rs hs BLK DM NT : Nat)
+    (hBLK : 0 < BLK) (hDM : 0 < DM) (hDMrs : DM ≤ rs) (hNT : 0 < NT) :
+    contextAttnNopadIO Q K V B_Start_Loc B_Seqlen Out sm_scale rs hs BLK DM NT ⊨[R]
+      fun _ _ pid₂ m xs ys zs j =>
+        contextAttnNopadIOSpec BLK DM NT (m (⟨0, by omega⟩ : Fin 2)) hBLK hNT sm_scale
+          pid₂ xs ys zs j := by
+  refine StreamMetaMasked3DKernelIO₃.ImplementsR.intro _ ?_ ?_ ?_
+  · exact ctxNopad_flattenOk Q K V B_Start_Loc B_Seqlen Out sm_scale rs hs BLK DM
+  · -- the safety walk
+    intro bounds s m xs ys zs hpre hm _hx _hy _hz hbm hbr1 hbr2 hbr3 hbw
+    simp only [contextAttnNopadIO] at hpre hm hbm hbr1 hbr2 hbr3 hbw ⊢
+    obtain ⟨hpid2, _hm0NT⟩ := hpre
+    have hm0 : seqLen s ↑B_Seqlen = m (⟨0, by omega⟩ : Fin 2) := hm (⟨0, by omega⟩ : Fin 2)
+    have hm1 : startLoc s ↑B_Start_Loc = m (⟨1, by omega⟩ : Fin 2) :=
+      hm (⟨1, by omega⟩ : Fin 2)
+    refine nopadIO_traceSafeR R bounds Q K V B_Start_Loc B_Seqlen Out sm_scale
+      rs hs BLK DM NT hBLK s hpid2 (hbm (⟨0, by omega⟩ : Fin 2))
+      (hbm (⟨1, by omega⟩ : Fin 2)) ?_ ?_ ?_ ?_
+    · intro i e hrow
+      have h := hbr1 ⟨0, hNT⟩ (Lane2D.encode (i, e, PUnit.unit))
+        (by rw [Lane2D.encode_div, ← hm0]; exact hrow)
+      rw [Lane2D.encode_div, Lane2D.encode_mod, ← hm1] at h
+      exact h
+    · intro t e jL hcol
+      have h := hbr2 t (Lane2D.encode (e, jL, PUnit.unit))
+        (by rw [Lane2D.encode_mod, ← hm0]; exact hcol)
+      rw [Lane2D.encode_div, Lane2D.encode_mod, ← hm1] at h
+      exact h
+    · intro t jL e hcol
+      have h := hbr3 t (Lane2D.encode (jL, e, PUnit.unit))
+        (by rw [Lane2D.encode_div, ← hm0]; exact hcol)
+      rw [Lane2D.encode_div, Lane2D.encode_mod, ← hm1] at h
+      exact h
+    · intro i e hrow
+      have h := hbw (Lane2D.encode (i, e, PUnit.unit))
+        (by rw [Lane2D.encode_div, ← hm0]; exact hrow)
+      rw [Lane2D.encode_div, Lane2D.encode_mod, ← hm1] at h
+      exact h
+  · -- the rounded Hoare triple: framed exact stack + cast-free collapse
+    intro s₀ m xs ys zs hpre hu hm hx hy hz
+    simp only [contextAttnNopadIO] at hpre hm hx hy hz ⊢
+    obtain ⟨hpid2, _hm0NT⟩ := hpre
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
+    have hm0 : seqLen s₀ ↑B_Seqlen = m (⟨0, by omega⟩ : Fin 2) :=
+      hm (⟨0, by omega⟩ : Fin 2)
+    have hm1 : startLoc s₀ ↑B_Start_Loc = m (⟨1, by omega⟩ : Fin 2) :=
+      hm (⟨1, by omega⟩ : Fin 2)
+    obtain ⟨sF, hstep, hOut, hframe⟩ :=
+      nopadIO_exec_framed Q K V B_Start_Loc B_Seqlen Out sm_scale rs hs BLK DM
+        hBLK hDM hDMrs s₀ hundef'
+    refine ⟨sF, ?_, ?_, ?_⟩
+    · rw [ctxNopadIO_execR_collapse]
+      exact hstep
+    · -- readback: the genuine closed form = the streamed closed form
+      intro j hj
+      have hactIdx : s₀.pids 2 * BLK + (Lane2D.decode j).1.val < seqLen s₀ B_Seqlen := by
+        rw [Lane2D.decode_row, hm0]
+        exact hj
+      have hOutj := hOut (Lane2D.decode j) hactIdx
+      have haddr : (startLoc s₀ ↑B_Start_Loc + (s₀.pids 2 * BLK + j.val / DM)) * rs
+            + s₀.pids 1 * hs + j.val % DM
+          = outOffsetG s₀ ↑B_Start_Loc rs hs BLK DM (Lane2D.decode j) := by
+        simp only [outOffsetG, Lane2D.decode_row, Lane2D.decode_col]
+      rw [BlockState.readMemAs_real, ← hm1, haddr, hOutj, R.round_real_apply]
+      refine congrArg some ?_
+      exact ctxNopadIOSpec_eq_genuine s₀ Q K V B_Start_Loc B_Seqlen sm_scale rs hs BLK DM
+        NT (m (⟨0, by omega⟩ : Fin 2)) (m (⟨1, by omega⟩ : Fin 2)) hBLK hNT hpid2 hm0 hm1
+        xs ys zs hx hy hz j hj
+    · -- the frame
+      intro r o hcond
+      refine hframe r o ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · refine Or.inr (fun idx hact hoeq => ?_)
+        exact hno (Lane2D.encode idx)
+          (by rw [Lane2D.encode_div, ← hm0]; exact hact)
+          (hoeq.trans (by simp only [outOffsetG, Lane2D.encode_div, Lane2D.encode_mod, hm1]))
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.ContextAttnNopad

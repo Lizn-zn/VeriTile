@@ -14,6 +14,7 @@ bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd
 bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_genuine_output_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_python_case1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_case1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
@@ -37,9 +38,12 @@ bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_
 bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/context_attn_bloom/ContextAttnBloom.lean	context_attn_bloom_surface_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/context_attn_fwd/ContextAttnFwd.lean	context_attn_fwd_surface_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/context_attn_fwd/ContextAttnFwd.lean	context_attn_fwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/context_attn_llama/ContextAttnLlama.lean	context_attn_llama_surface_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/context_attn_mistral/ContextAttnMistral.lean	context_attn_mistral_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/context_attn_mistral/ContextAttnMistral.lean	context_attn_mistral_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/context_attn_nopad/ContextAttnNopad.lean	context_attn_nopad_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/context_attn_nopad/ContextAttnNopad.lean	context_attn_nopad_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cosine_compute/CosineCompute.lean	cos_func_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cross_entropy1/CrossEntropy1.lean	cross_entropy_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cross_entropy2/CrossEntropy2.lean	cross_entropy_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
