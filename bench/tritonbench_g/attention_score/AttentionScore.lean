@@ -2800,5 +2800,1664 @@ specification attention_score_python_case1_output_summary_general
 
 end Correct_without_Rounding
 
+/-! # ══════════ CORRECT — `⊨[R]` streaming io headline (case 1) ══════════ -/
+
+section IOFaceCase1
+
+open scoped VeriTile.Triton.StreamMasked3DKernelIO₃
+
+/-! ## `R`-side constexpr mirrors and cast-free collapses
+
+The whole case-1 surface is cast-free post-erasure (zero `castFloat` ops: the
+store-side `.to(Out.type.element_ty)` erases to the identity at translation
+and every load/store is `.real`-typed), so `stepStmtsR R` collapses verbatim
+onto the exact stepper on all three body segments and the exact
+`score_preLoop_evalG` / `score_loop_evalG` / `score_post_evalG` stack is
+reused unchanged under `execR R`. -/
+
+private theorem score_evalOpR_constBool (R : RoundingModel) (b : Bool) (s : BlockState) :
+    evalOpR R (Op.constBool b) s = some (Tile.scalar b) := by
+  simp only [evalOpR]
+
+private theorem score_evalOpR_constNat (R : RoundingModel) (n : Nat) (s : BlockState) :
+    evalOpR R (Op.constNat n) s = some (Tile.scalar n) := by
+  simp only [evalOpR]
+
+private theorem score_evalOpR_boolNot_true (R : RoundingModel) (s : BlockState) :
+    evalOpR R (Op.boolNot (Op.constBool Bool.true)) s = some (Tile.scalar Bool.false) := by
+  simp only [evalOpR, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- `stepStmtR` collapse of a constexpr-`true` `ifThenElse` onto its live
+then-branch. -/
+private theorem score_ifThenElse_trueR (R : RoundingModel) {t e : List Stmt}
+    {s : BlockState} :
+    stepStmtR R (.ifThenElse (Op.constBool Bool.true) t e) s = stepStmtsR R t s := by
+  simp only [stepStmtR, score_evalOpR_constBool, Option.bind, Tile.scalar]
+  rfl
+
+/-- `stepStmtR` collapse of a constexpr-`false` `ifThenElse` onto its live
+else-branch. -/
+private theorem score_ifThenElse_falseR (R : RoundingModel) {t e : List Stmt}
+    {s : BlockState} :
+    stepStmtR R (.ifThenElse (Op.constBool Bool.false) t e) s = stepStmtsR R e s := by
+  simp only [stepStmtR, score_evalOpR_constBool, Option.bind, Tile.scalar]
+  rfl
+
+/-- `stepStmtR` collapse of a constexpr-`true` `ifThen` onto its body. -/
+private theorem score_ifThen_trueR (R : RoundingModel) {body : List Stmt}
+    {s : BlockState} :
+    stepStmtR R (.ifThen (Op.constBool Bool.true) body) s = stepStmtsR R body s := by
+  simp only [stepStmtR, score_evalOpR_constBool, Option.bind, Tile.scalar]
+  rfl
+
+/-- `stepStmtR` skip of a false-condition `ifThen`. -/
+private theorem score_ifThen_falseR (R : RoundingModel) {cond : Op .bool []}
+    {body : List Stmt} {s : BlockState}
+    (hc : evalOpR R cond s = some (Tile.scalar Bool.false)) :
+    stepStmtR R (.ifThen cond body) s = some s := by
+  simp only [stepStmtR, hc, Option.bind, Tile.scalar]
+  rfl
+
+/-- `mapM` congruence for cast-free dynamic block-pointer offset lists. -/
+private theorem score_evalOpR_castFree_offsets (R : RoundingModel) :
+    ∀ (offsets : List (Op .nat [])) (s : BlockState),
+      (∀ o ∈ offsets, evalOpR R o s = evalOp o s) →
+      offsets.mapM (fun off => do
+          let v ← evalOpR R off s
+          some (v.data PUnit.unit))
+        = offsets.mapM (fun off => do
+            let v ← evalOp off s
+            some (v.data PUnit.unit))
+  | [], _, _ => rfl
+  | off :: rest, s, h => by
+      simp only [List.mapM_cons, h off List.mem_cons_self,
+        score_evalOpR_castFree_offsets R rest s
+          (fun o ho => h o (List.mem_cons_of_mem _ ho))]
+
+/-- `evalOpR` mirror of `Op.makeBlockPtrDynOffsets` for cast-free base/offset
+ops (the `.nat` channels never round). -/
+private theorem score_evalOpR_mbpdo_castFree (R : RoundingModel) (region : RegionName)
+    (base : Op .nat []) (ps : List Nat) (bs : TileShape) (strides : List Nat)
+    (offs : List (Op .nat [])) (s : BlockState)
+    (hb : evalOpR R base s = evalOp base s)
+    (ho : ∀ o ∈ offs, evalOpR R o s = evalOp o s) :
+    evalOpR R (.makeBlockPtrDynOffsets region base ps bs strides offs) s
+      = evalOp (.makeBlockPtrDynOffsets region base ps bs strides offs) s := by
+  simp only [evalOpR, evalOp, hb, score_evalOpR_castFree_offsets R offs s ho]
+
+/-- `evalOpR` mirror of `Op.makeBlockPtrDyn` (static offsets, cast-free base). -/
+private theorem score_evalOpR_mbpd_castFree (R : RoundingModel) (region : RegionName)
+    (base : Op .nat []) (ps : List Nat) (bs : TileShape) (strides offs : List Nat)
+    (s : BlockState) (hb : evalOpR R base s = evalOp base s) :
+    evalOpR R (.makeBlockPtrDyn region base ps bs strides offs) s
+      = evalOp (.makeBlockPtrDyn region base ps bs strides offs) s := by
+  simp only [evalOpR, evalOp, hb]
+
+/-- Per-statement cast-free collapse lifts to statement lists (walks the
+actual successor chain; a failing step collapses on both sides). -/
+private theorem score_stepStmtsR_castFree_of_stmts (R : RoundingModel) :
+    ∀ (l : List Stmt), (∀ st ∈ l, ∀ u, stepStmtR R st u = stepStmt st u) →
+      ∀ s, stepStmtsR R l s = stepStmts l s
+  | [], _, s => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, s => by
+      simp only [stepStmtsR, stepStmts, h st List.mem_cons_self s]
+      cases stepStmt st s with
+      | none => rfl
+      | some s' =>
+          exact score_stepStmtsR_castFree_of_stmts R rest
+            (fun st' h' u => h st' (List.mem_cons_of_mem _ h') u) s'
+
+/-- Cons-level inversion for `stepStmtsR` (walks a successful list run one
+statement at a time). -/
+private theorem score_stepStmtsR_cons_inv {R : RoundingModel} {st : Stmt}
+    {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmtsR R (st :: rest) s = some s') :
+    ∃ u, stepStmtR R st s = some u ∧ stepStmtsR R rest u = some s' := by
+  rw [stepStmtsR] at h
+  cases hu : stepStmtR R st s with
+  | none => rw [hu] at h; exact absurd h (by simp)
+  | some u => rw [hu] at h; exact ⟨u, rfl, h⟩
+
+/-- `stepStmtR` on `forRangeDyn` unfolds to the `R` loop auxiliary after
+evaluating the dynamic bounds under `evalOpR R` (the R-mirror of
+`stepForRangeAux.forRangeDyn_unfold`). -/
+private theorem score_stepStmtR_forRangeDyn (R : RoundingModel) (idx : RegName)
+    (startOp stopOp stepOp : Op .nat []) (body : List Stmt) (s : BlockState) :
+    stepStmtR R (.forRangeDyn idx startOp stopOp stepOp body) s
+      = (evalOpR R startOp s).bind (fun a =>
+          (evalOpR R stopOp s).bind (fun b =>
+            (evalOpR R stepOp s).bind (fun c =>
+              stepForRangeAuxR R idx (a.data PUnit.unit) (b.data PUnit.unit)
+                (c.data PUnit.unit) body s))) := by
+  unfold stepStmtR
+  rfl
+
+set_option maxHeartbeats 4000000 in
+/-- Every case-1 preLoop statement is cast-free, statement-by-statement (the
+constexpr `IS_EVEN_N` `ifThenElse` is reduced to its live k-load branch first;
+the two block-pointer assigns go through the dedicated mirrors). -/
+private theorem score_preLoopG_stmt_castFree (R : RoundingModel)
+    (Q K M : RegionName) (sm_scale : ℝ)
+    (H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk : Nat) :
+    ∀ st ∈ attentionScoreCase1PreLoopG Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [attentionScoreCase1PreLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- Q_block_ptr (`makeBlockPtrDyn`): dedicated mirror
+    simp only [stepStmtR, stepStmt,
+      score_evalOpR_mbpd_castFree R Q (Op.ref TileDType.nat [] "q_offset") [N_CTX, BD] [BN, BD]
+        [stride_qm, stride_qk] [0, 0] u (by simp only [evalOpR, evalOp])]
+  · -- K_block_ptr (`makeBlockPtrDynOffsets`): dedicated `mapM` mirror
+    simp only [stepStmtR, stepStmt,
+      score_evalOpR_mbpdo_castFree R K (Op.ref TileDType.nat [] "k_offset") [BD, NKV_CTX] [BD, BN]
+        [stride_kk, stride_kn]
+        [Op.constNat 0,
+          Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_n") (Op.constNat BN)] u
+        (by simp only [evalOpR, evalOp])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · -- IS_EVEN_N `ifThenElse` (constexpr-true): collapse on the live k-load only
+    rw [score_ifThenElse_trueR, stepStmt_ifThenElse_true]
+    simp only [stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The case-1 preLoop is cast-free: it steps identically under `stepStmtsR R`. -/
+private theorem score_preLoopG_castFree (R : RoundingModel)
+    (Q K M : RegionName) (sm_scale : ℝ)
+    (H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk : Nat)
+    (t : BlockState) :
+    stepStmtsR R (attentionScoreCase1PreLoopG Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk) t
+      = stepStmts (attentionScoreCase1PreLoopG Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk) t :=
+  score_stepStmtsR_castFree_of_stmts R _
+    (score_preLoopG_stmt_castFree R Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk) t
+
+set_option maxHeartbeats 4000000 in
+/-- Every case-1 loop-body statement is cast-free (the three constexpr guards
+are reduced to their live branches first; the dead `not IS_EVEN_N` `where` is
+skipped on both sides). -/
+private theorem score_loopBodyG_stmt_castFree (R : RoundingModel)
+    (BN BD swo sws N_CTX : Nat) :
+    ∀ st ∈ attentionScoreCase1LoopBodyG BN BD swo sws N_CTX,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [attentionScoreCase1LoopBodyG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- IS_EVEN_M `ifThenElse` (constexpr-true): collapse on the live q-load only
+    rw [score_ifThenElse_trueR, stepStmt_ifThenElse_true]
+    simp only [stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- SLIDING_WINDOW `ifThen` (constexpr-true): dist + the COMPLEMENT branch
+    rw [score_ifThen_trueR, stepStmt_ifThen_true]
+    refine score_stepStmtsR_castFree_of_stmts R _ ?_ u
+    intro st' hst' u'
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hst'
+    rcases hst' with rfl | rfl
+    · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    · rw [score_ifThenElse_falseR, stepStmt_ifThenElse_false]
+      simp only [stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+      rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- SLIDING_WINDOW `where` `ifThen` (constexpr-true)
+    rw [score_ifThen_trueR, stepStmt_ifThen_true]
+    simp only [stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    rfl
+  · -- `not IS_EVEN_N` `ifThen`: skipped on both sides
+    rw [score_ifThen_falseR R (score_evalOpR_boolNot_true R u), stepStmt_ifThen_boolNot_true]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The case-1 loop body is cast-free. -/
+private theorem score_loopBodyG_castFree (R : RoundingModel)
+    (BN BD swo sws N_CTX : Nat) (t : BlockState) :
+    stepStmtsR R (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX) t
+      = stepStmts (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX) t :=
+  score_stepStmtsR_castFree_of_stmts R _
+    (score_loopBodyG_stmt_castFree R BN BD swo sws N_CTX) t
+
+set_option maxHeartbeats 2000000 in
+/-- The case-1 postLoop (three scalar/pointer assigns + the masked `.real`
+store) is cast-free: `writeMemTypedR R .real` *is* `writeMemTyped .real`. -/
+private theorem score_postG_castFree (R : RoundingModel)
+    (Out : RegionName) (BN NKV_CTX stride_oz stride_oh : Nat) (t : BlockState) :
+    stepStmtsR R (attentionScoreCase1PostG Out BN NKV_CTX stride_oz stride_oh) t
+      = stepStmts (attentionScoreCase1PostG Out BN NKV_CTX stride_oz stride_oh) t := by
+  simp only [attentionScoreCase1PostG, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- The case-1 elaborated body splits as
+`preLoopG ++ (forRangeDyn loopBodyG :: postG)`. -/
+private theorem score_case1_body_splitG
+    (Q K M Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+     stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+     BN BD : Nat) (sm_scale : ℝ) :
+    (attention_score_kernel Q K M Out
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+      BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body
+      = attentionScoreCase1PreLoopG Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+        ++ (Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+              (Op.constNat BN) (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX)
+            :: attentionScoreCase1PostG Out BN NKV_CTX stride_oz stride_oh) := by
+  conv_lhs =>
+    rw [← List.take_append_drop 16 (attention_score_kernel Q K M Out
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+      BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel.body]
+  rw [attentionScoreCase1PreLoopG_check Q K M Out
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale,
+    attentionScoreCase1LoopBodyG_check Q K M Out
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale]
+
+set_option maxHeartbeats 4000000 in
+/-- The case-1 surface sits inside the flat-memory bridge's covered fragment
+(no `ptrSub`; the block-pointer ops are structurally covered). -/
+private theorem score_case1_flattenOkG
+    (Q K M Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+     stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+     BN BD : Nat) (sm_scale : ℝ) :
+    ((attention_score_kernel Q K M Out
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+      BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [score_case1_body_splitG Q K M Out
+    stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+    stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale]
+  simp [attentionScoreCase1PreLoopG, attentionScoreCase1LoopBodyG, attentionScoreCase1PostG,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-! ## IO signature, stream-indexed tiles, and the spec `f`
+
+Window transcription (case-1 flag instantiation, `BLOCK_M = BLOCK_N = BN`
+via the port's `hBlockMN = rfl`):
+
+* `read1` (`Q`, streamed one `BN`-row block per step via the advanced
+  `Q_block_ptr`): step `t`, lane `j = (i, e)` row-major over `[BN, BD]`
+  reads `pid₁/H·sqz + pid₁%H·sqh + (t·BN + i)·sqm + e·sqk`.
+* `read2` (`K`, the **static** stream — loaded once pre-loop, the window
+  ignores `t`): lane `j = (d, n)` over `[BD, BN]` reads
+  `pid₁/H·skz + (pid₁%H)/(H/H_KV)·skh + d·skk + (pid₀·BN + n)·skn`.
+* `read3` (`M`, streamed one `BN`-row block per step via the plain
+  `m_ptrs`): step `t`, lane `i` reads `pid₁·ROUND_CTX + (t·BN + i)`.
+* `write` (`Out`, the single terminal masked store): lane `i` writes
+  `pid₁/H·soz + pid₁%H·soh + (pid₀·BN + i)`, active iff
+  `pid₀·BN + i < NKV_CTX` (the kernel's `o_range < NKV_CTX` store mask).
+
+All read masks are `True` (`IS_EVEN_M = IS_EVEN_N = 1` in case 1). `pid₂`
+is unused (2-D grid). `outDType` is the `.real` default — the store-side
+`.to(Out.type.element_ty)` cast is erased to the identity at translation
+(see the file's Modeling boundary). -/
+
+/-- **Streaming IO signature** of the case-1
+(`(SLIDING_WINDOW, COMPLEMENT, IS_EVEN_M, IS_EVEN_N) = (1,0,1,1)`)
+`_score_kernel` surface on the three-stream single-output fold skin. -/
+def attentionScoreCase1IO (Q K M Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+     stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+     BN BD : Nat) (sm_scale : ℝ) : StreamMasked3DKernelIO₃ where
+  kernel := attention_score_kernel Q K M Out
+    stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+    stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+    BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl
+  inp1 := Q
+  inp2 := K
+  inp3 := M
+  out := Out
+  T := ROUND_CTX / BN
+  B1 := BN * BD
+  B2 := BD * BN
+  B3 := BN
+  C := BN
+  read1 := fun _ p₁ _ t j =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh
+      + (t.val * BN + j.val / BD) * stride_qm + (j.val % BD) * stride_qk
+  read2 := fun p₀ p₁ _ _ j =>
+    p₁ / H * stride_kz + p₁ % H / (H / H_KV) * stride_kh
+      + (j.val / BN) * stride_kk + (p₀ * BN + j.val % BN) * stride_kn
+  read3 := fun _ p₁ _ t j => p₁ * ROUND_CTX + (t.val * BN + j.val)
+  write := fun p₀ p₁ _ j => p₁ / H * stride_oz + p₁ % H * stride_oh + (p₀ * BN + j.val)
+  mask1 := fun _ _ _ _ _ => True
+  mask2 := fun _ _ _ _ _ => True
+  mask3 := fun _ _ _ _ _ => True
+  writeMask := fun p₀ _ _ j => p₀ * BN + j.val < NKV_CTX
+
+/-- Nat-truncated sliding-window distance on the streams — the **verbatim**
+`case1DistG` arithmetic (`ℕ`-truncated subtraction, `start_m = c·BN`,
+`start_n = p₀`), with the block index `c` in stream-step position. -/
+def attentionScoreCase1IODist (p₀ BN swo : Nat) (c i j : Nat) : Nat :=
+  (((i - j) + c * BN) - p₀ * BN) + swo
+
+/-- Sliding-window mask on the streams (case 1, non-complement):
+`0 ≤ dist ∧ dist < sws`, both over `ℕ` (the `0 ≤` conjunct is vacuous —
+kept verbatim from the elaborated `boolAnd (ge dist 0) (lt dist sws)`). -/
+def attentionScoreCase1IOMask (p₀ BN swo sws : Nat) (c i j : Nat) : Prop :=
+  0 ≤ attentionScoreCase1IODist p₀ BN swo c i j
+    ∧ attentionScoreCase1IODist p₀ BN swo c i j < sws
+
+instance (p₀ BN swo sws c i j : Nat) :
+    Decidable (attentionScoreCase1IOMask p₀ BN swo sws c i j) := by
+  unfold attentionScoreCase1IOMask; infer_instance
+
+/-- **Case-1 closed form on the streams**: the masked-`exp2` query-row column
+sum (`case1OutClosedFormG` restated over the three streamed tiles) at output
+key column `j` —
+`Σ_{c<T} Σ_{i<BN} [mask(c,i,j)] · exp2(sm_scale·log2e·⟨Q-row, K-col⟩ − M[c·BN+i])`,
+where the `Q` row is step `c`'s lane row `i`, the `K` column is the static
+stream's column `j` (step-`0` slice — the window ignores `t`), and the `M`
+value is step `c`'s lane `i`. -/
+noncomputable def attentionScoreCase1IOSpec (BN BD T swo sws : Nat) (hT : 0 < T)
+    (sm_scale : ℝ) (p₀ : Nat)
+    (xs : Fin T → Fin (BN * BD) → ℝ) (ys : Fin T → Fin (BD * BN) → ℝ)
+    (zs : Fin T → Fin BN → ℝ) (j : Fin BN) : ℝ :=
+  Finset.univ.sum (fun c : Fin T =>
+    Finset.univ.sum (fun i : Fin BN =>
+      if attentionScoreCase1IOMask p₀ BN swo sws c.val i.val j.val then
+        pow2 (sm_scale * 1.4426950408889634 *
+            Finset.univ.sum (fun d : Fin BD =>
+              xs c (Lane2D.encode (i, d, PUnit.unit))
+                * ys ⟨0, hT⟩ (Lane2D.encode (d, j, PUnit.unit)))
+          - zs c i)
+      else 0))
+
+/-- **Stream-pin bridge**: under the skin's input pins the exact stack's
+`case1OutClosedFormG` *is* the stream-level spec, pointwise. -/
+private theorem score_case1_closedFormG_eq_ioSpec
+    (s₀ : BlockState) (Q K M : RegionName) (sm_scale : ℝ)
+    (H H_KV ROUND_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn
+      swo sws : Nat)
+    (hT : 0 < ROUND_CTX / BN)
+    (xs : Fin (ROUND_CTX / BN) → Fin (BN * BD) → ℝ)
+    (ys : Fin (ROUND_CTX / BN) → Fin (BD * BN) → ℝ)
+    (zs : Fin (ROUND_CTX / BN) → Fin BN → ℝ)
+    (hx : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin (BN * BD)),
+      s₀.readMem Q (s₀.pids 1 / H * stride_qz + s₀.pids 1 % H * stride_qh
+          + (t.val * BN + j.val / BD) * stride_qm + (j.val % BD) * stride_qk) = xs t j)
+    (hy : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin (BD * BN)),
+      s₀.readMem K (s₀.pids 1 / H * stride_kz + s₀.pids 1 % H / (H / H_KV) * stride_kh
+          + (j.val / BN) * stride_kk + (s₀.pids 0 * BN + j.val % BN) * stride_kn) = ys t j)
+    (hz : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin BN),
+      s₀.readMem M (s₀.pids 1 * ROUND_CTX + (t.val * BN + j.val)) = zs t j)
+    (j : Fin BN) :
+    case1OutClosedFormG s₀ Q K M sm_scale H H_KV ROUND_CTX BN BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn
+        swo sws j
+      = attentionScoreCase1IOSpec BN BD (ROUND_CTX / BN) swo sws hT sm_scale (s₀.pids 0)
+          xs ys zs j := by
+  unfold case1OutClosedFormG attentionScoreCase1IOSpec case1ColSumG
+  refine Finset.sum_congr rfl (fun c _ => Finset.sum_congr rfl (fun i _ => ?_))
+  by_cases hm : case1MaskG s₀ BN BN swo sws c.val i.val j.val
+  · rw [if_pos hm, if_pos (show attentionScoreCase1IOMask (s₀.pids 0) BN swo sws
+        c.val i.val j.val from hm)]
+    have hraw : case1RawScoreG s₀ Q K BD stride_qm stride_qk stride_kk stride_kn
+        (case1QKOffsetQG s₀ H stride_qz stride_qh)
+        (case1QKOffsetKG s₀ H H_KV stride_kz stride_kh)
+        (c.val * BN + i.val) (s₀.pids 0 * BN + j.val)
+        = Finset.univ.sum (fun d : Fin BD =>
+            xs c (Lane2D.encode (i, d, PUnit.unit))
+              * ys ⟨0, hT⟩ (Lane2D.encode (d, j, PUnit.unit))) := by
+      unfold case1RawScoreG case1QElemG case1KElemG case1QKOffsetQG case1QKOffsetKG
+      refine Finset.sum_congr rfl (fun d _ => ?_)
+      rw [← hx c (Lane2D.encode (i, d, PUnit.unit)),
+        ← hy ⟨0, hT⟩ (Lane2D.encode (d, j, PUnit.unit))]
+      simp only [Lane2D.encode_div, Lane2D.encode_mod]
+    have hmv : s₀.readMem M (case1MOffsetG s₀ ROUND_CTX (c.val * BN + i.val)) = zs c i :=
+      hz c i
+    unfold case1WeightG
+    rw [hraw, hmv]
+  · rw [if_neg hm, if_neg (show ¬ attentionScoreCase1IOMask (s₀.pids 0) BN swo sws
+        c.val i.val j.val from hm)]
+
+/-! ## The safety walk (weak invariant)
+
+The skin's `hts` obligation quantifies over **arbitrary** launch states, so
+the clean-`undef` exact stack (`score_preLoop_evalG` needs `hundef`) is
+unavailable there. The safety walk instead runs on the *shape* half: exact
+pins for the loop-carried `Q_block_ptr`/`m_ptrs` (whose addresses are the
+bound obligations) plus bare existence for the value registers, mirroring
+the `attention_fwd_triton3` `aft3SafeInv` precedent. -/
+
+/-- The 11 leading scalar/pointer/index preLoop statements (no memory
+reads) — the prefix of `attentionScoreCase1PreLoopG` before the k-load. -/
+private def scoreCase1PreScalarsG (Q K M : RegionName)
+    (H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk : Nat) :
+    List Stmt :=
+  [Stmt.assign TileDType.nat [] "start_n" (Op.programId 0),
+    Stmt.assign TileDType.nat [] "off_hz" (Op.programId 1),
+    Stmt.assign TileDType.nat [] "off_z"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign TileDType.nat [] "off_h"
+      (Op.mod IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat H)),
+    Stmt.assign TileDType.nat [] "off_hkv"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h")
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat H) (Op.constNat H_KV))),
+    Stmt.assign TileDType.nat [] "q_offset"
+      (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat stride_qz))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat stride_qh))),
+    Stmt.assign TileDType.nat [] "k_offset"
+      (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat stride_kz))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hkv") (Op.constNat stride_kh))),
+    Stmt.assign TileDType.ptr [BN] "m_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_hz") (Op.constNat ROUND_CTX))
+          (Op.arange BN))),
+    Stmt.assign TileDType.real [BN] "o" (Op.full [BN] (Op.const 0)),
+    Stmt.assign TileDType.blockPtr [BN, BD] "Q_block_ptr"
+      (Op.makeBlockPtrDyn Q (Op.ref TileDType.nat [] "q_offset") [N_CTX, BD] [BN, BD]
+        [stride_qm, stride_qk] [0, 0]),
+    Stmt.assign TileDType.blockPtr [BD, BN] "K_block_ptr"
+      (Op.makeBlockPtrDynOffsets K (Op.ref TileDType.nat [] "k_offset") [BD, NKV_CTX] [BD, BN]
+        [stride_kk, stride_kn]
+        [Op.constNat 0,
+          Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_n") (Op.constNat BN)])]
+
+/-- The 5 trailing preLoop statements (the constexpr k-load `ifThenElse` and
+the `lo`/`hi`/`qk_scale` scalars). -/
+private def scoreCase1PreTailG (sm_scale : ℝ) (ROUND_CTX BN BD : Nat) : List Stmt :=
+  [Stmt.ifThenElse (Op.constBool Bool.true)
+      [Stmt.assign TileDType.real [BD, BN] "k"
+          (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BD, BN] "K_block_ptr") [])
+            MaskOpt.none)]
+      [Stmt.assign TileDType.real [BD, BN] "k"
+          (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BD, BN] "K_block_ptr") [0, 1])
+            MaskOpt.none)],
+    Stmt.assign TileDType.nat [] "lo" (Op.constNat 0),
+    Stmt.assign TileDType.nat [] "hi" (Op.constNat ROUND_CTX),
+    Stmt.assign TileDType.real [] "qk_scale" (Op.const sm_scale),
+    Stmt.assign TileDType.real [] "qk_scale"
+      (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale")
+        (Op.const 1.4426950408889634))]
+
+private theorem scoreCase1PreScalarsG_append (Q K M : RegionName) (sm_scale : ℝ)
+    (H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk : Nat) :
+    attentionScoreCase1PreLoopG Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      = scoreCase1PreScalarsG Q K M H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+        ++ scoreCase1PreTailG sm_scale ROUND_CTX BN BD := rfl
+
+/-- The scalar prefix is cast-free. -/
+private theorem score_preScalarsG_castFree (R : RoundingModel)
+    (Q K M : RegionName) (sm_scale : ℝ)
+    (H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk : Nat)
+    (t : BlockState) :
+    stepStmtsR R (scoreCase1PreScalarsG Q K M H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk) t
+      = stepStmts (scoreCase1PreScalarsG Q K M H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk) t :=
+  score_stepStmtsR_castFree_of_stmts R _
+    (fun st hst =>
+      score_preLoopG_stmt_castFree R Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk st
+        (by
+          rw [scoreCase1PreScalarsG_append Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+            stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk]
+          exact List.mem_append_left _ hst)) t
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak scalar-prefix eval**: from an **arbitrary** launch state (no
+clean-`undef` hypothesis) the 11 scalar preLoop statements step to a state
+with the register pins the k-load safety and the loop entry need. -/
+private theorem score_preScalars_evalW
+    (s : BlockState) (Q K M : RegionName)
+    (H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk : Nat) :
+    ∃ s11, stepStmts (scoreCase1PreScalarsG Q K M H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk) s = some s11
+      ∧ s11.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0))
+      ∧ s11.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / H))
+      ∧ s11.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % H))
+      ∧ s11.regs .real [BN] "o" = some ⟨fun _ : TileIndex [BN] => some (0 : ℝ)⟩
+      ∧ s11.regs .blockPtr [BN, BD] "Q_block_ptr" = some ⟨fun _ : TileIndex [BN, BD] =>
+          { region := Q, baseOffset := case1QKOffsetQG s H stride_qz stride_qh, parentShape := [N_CTX, BD],
+            blockShape := [BN, BD], strides := [stride_qm, stride_qk], offsets := [0, 0] }⟩
+      ∧ s11.regs .blockPtr [BD, BN] "K_block_ptr" = some ⟨fun _ : TileIndex [BD, BN] =>
+          { region := K, baseOffset := case1QKOffsetKG s H H_KV stride_kz stride_kh, parentShape := [BD, NKV_CTX],
+            blockShape := [BD, BN], strides := [stride_kk, stride_kn], offsets := [0, s.pids 0 * BN] }⟩
+      ∧ s11.regs .ptr [BN] "m_ptrs" = some ⟨fun idx : TileIndex [BN] =>
+          (M.cast, s.pids 1 * ROUND_CTX + idx.1.val)⟩ := by
+  unfold scoreCase1PreScalarsG
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)) _
+        = some (Tile.scalar (s.pids 1 / H)) from by
+      rw [evalOp_floorDiv']
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat H)) _
+        = some (Tile.scalar (s.pids 1 % H)) from by
+      rw [evalOp_mod']
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+        BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "off_h")
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat H) (Op.constNat H_KV))) _
+        = some (Tile.scalar ((s.pids 1 % H) / (H / H_KV))) from by
+      rw [evalOp_floorDiv', evalOp_floorDiv']
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rw [scalarBop, scalarBop]; rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat stride_qz))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat stride_qh))) _
+        = some (Tile.scalar (case1QKOffsetQG s H stride_qz stride_qh)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_constNat, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat stride_kz))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_hkv") (Op.constNat stride_kh))) _
+        = some (Tile.scalar (case1QKOffsetKG s H H_KV stride_kz stride_kh)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_constNat, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase M)
+        (Op.add NumericDType.nat Broadcast.scalarL
+          (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_hz") (Op.constNat ROUND_CTX))
+          (Op.arange BN))) _
+        = some (⟨fun idx : TileIndex [BN] => (M.cast, s.pids 1 * ROUND_CTX + idx.1.val)⟩ : Tile .ptr [BN]) from by
+      rw [evalOp_ptrAdd', evalOp_add, evalOp_mul]
+      simp only [evalOp_ptrBase', evalOp_constNat, evalOp_ref, evalOp_arange,
+        BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Tile.vec, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add, NumericDType.mul, BlockState.setReg_pids]
+        omega))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BN] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [BN] => some (0 : ℝ)⟩ : Tile .real [BN]) from by
+      simp [evalOp_full]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (makeBlockPtrDyn_eval Q (Op.ref .nat [] "q_offset") [N_CTX, BD] [BN, BD] [stride_qm, stride_qk] [0, 0] _
+      (case1QKOffsetQG s H stride_qz stride_qh) (by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.makeBlockPtrDynOffsets K (Op.ref .nat [] "k_offset") [BD, NKV_CTX] [BD, BN] [stride_kk, stride_kn]
+        [Op.constNat 0, Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat BN)]) _
+        = some (⟨fun _ : TileIndex [BD, BN] =>
+            { region := K, baseOffset := case1QKOffsetKG s H H_KV stride_kz stride_kh, parentShape := [BD, NKV_CTX],
+              blockShape := [BD, BN], strides := [stride_kk, stride_kn], offsets := [0, s.pids 0 * BN] }⟩
+            : Tile .blockPtr [BD, BN]) from by
+      rw [makeBlockPtr2_eval]
+      simp only [evalOp_ref, evalOp_constNat, evalOp_mul, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind,
+        Option.bind_some, List.mapM_cons, List.mapM_nil, scalarBop]
+      refine congrArg some ?_; ext idx <;> rfl))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+
+set_option maxHeartbeats 2000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak preLoop eval**: from an arbitrary launch state the full case-1
+preLoop steps to the loop-entry state, with exact pins for the safety-relevant
+registers and bare existence for the loaded `k` tile. -/
+private theorem score_preLoop_evalW
+    (s : BlockState) (Q K M : RegionName) (sm_scale : ℝ)
+    (H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk : Nat) :
+    ∃ s0, stepStmts (attentionScoreCase1PreLoopG Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk) s = some s0
+      ∧ s0.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / H))
+      ∧ s0.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % H))
+      ∧ s0.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.4426950408889634)))
+      ∧ s0.regs .real [BN] "o" = some ⟨fun _ : TileIndex [BN] => some (0 : ℝ)⟩
+      ∧ (∃ kT : Tile .real [BD, BN], s0.regs .real [BD, BN] "k" = some kT)
+      ∧ s0.regs .blockPtr [BN, BD] "Q_block_ptr" = some ⟨fun _ : TileIndex [BN, BD] =>
+          { region := Q, baseOffset := case1QKOffsetQG s H stride_qz stride_qh, parentShape := [N_CTX, BD],
+            blockShape := [BN, BD], strides := [stride_qm, stride_qk], offsets := [0, 0] }⟩
+      ∧ s0.regs .ptr [BN] "m_ptrs" = some ⟨fun idx : TileIndex [BN] =>
+          (M.cast, s.pids 1 * ROUND_CTX + idx.1.val)⟩
+      ∧ s0.regs .nat [] "lo" = some (Tile.scalar 0)
+      ∧ s0.regs .nat [] "hi" = some (Tile.scalar ROUND_CTX) := by
+  obtain ⟨s11, h11, hsn, hoz, hoh, ho, hQp, hKp, hmp⟩ :=
+    score_preScalars_evalW s Q K M H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+  rw [scoreCase1PreScalarsG_append Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+    stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk]
+  rw [stepStmts.append_some h11]
+  unfold scoreCase1PreTailG
+  set ktile : Tile .real [BD, BN] := ⟨fun idx : TileIndex [BD, BN] =>
+      some (s11.readMem K (case1QKOffsetKG s H H_KV stride_kz stride_kh
+        + idx.1.val * stride_kk + (s.pids 0 * BN + idx.2.1.val) * stride_kn))⟩ with hkt
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.ifThenElse (Op.constBool Bool.true) _ _) _ = some _ from by
+      rw [stepStmt_ifThenElse_true, stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BD, BN] "K_block_ptr") []) MaskOpt.none) _
+            = some ktile from
+          load_blockPtr_K_eval K (case1QKOffsetKG s H H_KV stride_kz stride_kh) BD NKV_CTX BD BN
+            stride_kk stride_kn (s.pids 0 * BN)
+            (Op.ref .blockPtr [BD, BN] "K_block_ptr") _ (by rw [evalOp_ref]; exact hKp)))]
+      exact stepStmts.nil)]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (show evalOp (Op.constNat 0) _ = _ from evalOp_constNat 0 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (show evalOp (Op.constNat ROUND_CTX) _ = _ from evalOp_constNat ROUND_CTX _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (show evalOp (Op.const sm_scale) _ = _ from evalOp_const sm_scale _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.ref .real [] "qk_scale")
+        (Op.const 1.4426950408889634)) _
+        = some (Tile.scalar (some (sm_scale * 1.4426950408889634))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, evalOp_const, BlockState.setReg_same, Option.bind_eq_bind,
+        Option.bind_some, scalarBop]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ⟨ktile, ?_⟩, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    exact hsn
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    exact hoz
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    exact hoh
+  · simp only [BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    exact ho
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    exact hQp
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    exact hmp
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+
+/-- Safety-walk loop invariant: counter bounds, the `start_n`/`off_z`/`off_h`
+scalar pins (the post-loop store addresses), the exact `Q_block_ptr`/`m_ptrs`
+shapes at counter `m`, and existence of the value registers. -/
+private def scoreSafeInv (Q M : RegionName)
+    (qbase mbase sn ozv ohv N_CTX ROUND_CTX BN BD stride_qm stride_qk : Nat)
+    (m : Nat) (s : BlockState) : Prop :=
+  BN ∣ m ∧ m ≤ ROUND_CTX ∧
+  s.regs .nat [] "start_n" = some (Tile.scalar sn) ∧
+  s.regs .nat [] "off_z" = some (Tile.scalar ozv) ∧
+  s.regs .nat [] "off_h" = some (Tile.scalar ohv) ∧
+  (∃ kT : Tile .real [BD, BN], s.regs .real [BD, BN] "k" = some kT) ∧
+  (∃ sc : ℝ, s.regs .real [] "qk_scale" = some (Tile.scalar (some sc))) ∧
+  (∃ oT : Tile .real [BN], s.regs .real [BN] "o" = some oT) ∧
+  s.regs .blockPtr [BN, BD] "Q_block_ptr" = some ⟨fun _ : TileIndex [BN, BD] =>
+    { region := Q, baseOffset := qbase, parentShape := [N_CTX, BD],
+      blockShape := [BN, BD], strides := [stride_qm, stride_qk], offsets := [m, 0] }⟩ ∧
+  s.regs .ptr [BN] "m_ptrs" = some ⟨fun idx : TileIndex [BN] =>
+    (M.cast, mbase + m + idx.1.val)⟩
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak loop-body eval** (`score_loopBody_evalG` minus the clean-`undef`
+and memory/pid tracking, value pins weakened to existence): the case-1 body
+steps successfully from register pins alone, advancing `Q_block_ptr` and
+`m_ptrs` by one `BN` block and preserving the scalar pins. -/
+private theorem score_loopBody_evalW
+    (sin : BlockState) (Q M : RegionName)
+    (N_CTX ROUND_CTX BN BD swo sws stride_qm stride_qk qbase mbase sn ozv ohv : Nat)
+    (c : Nat) (sc : ℝ)
+    (kT : Tile .real [BD, BN]) (oT : Tile .real [BN])
+    (hsm : sin.regs .nat [] "start_m" = some (Tile.scalar (c * BN)))
+    (hsn : sin.regs .nat [] "start_n" = some (Tile.scalar sn))
+    (hoz : sin.regs .nat [] "off_z" = some (Tile.scalar ozv))
+    (hoh : sin.regs .nat [] "off_h" = some (Tile.scalar ohv))
+    (hqks : sin.regs .real [] "qk_scale" = some (Tile.scalar (some sc)))
+    (ho : sin.regs .real [BN] "o" = some oT)
+    (hk : sin.regs .real [BD, BN] "k" = some kT)
+    (hQbp : sin.regs .blockPtr [BN, BD] "Q_block_ptr" = some ⟨fun _ : TileIndex [BN, BD] =>
+        { region := Q, baseOffset := qbase, parentShape := [N_CTX, BD],
+          blockShape := [BN, BD], strides := [stride_qm, stride_qk], offsets := [c * BN, 0] }⟩)
+    (hmp : sin.regs .ptr [BN] "m_ptrs" = some ⟨fun idx : TileIndex [BN] =>
+        (M.cast, mbase + c * BN + idx.1.val)⟩) :
+    ∃ sF, stepStmts (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX) sin = some sF
+      ∧ sF.regs .nat [] "start_n" = some (Tile.scalar sn)
+      ∧ sF.regs .nat [] "off_z" = some (Tile.scalar ozv)
+      ∧ sF.regs .nat [] "off_h" = some (Tile.scalar ohv)
+      ∧ sF.regs .real [BD, BN] "k" = some kT
+      ∧ sF.regs .real [] "qk_scale" = some (Tile.scalar (some sc))
+      ∧ (∃ oT' : Tile .real [BN], sF.regs .real [BN] "o" = some oT')
+      ∧ sF.regs .blockPtr [BN, BD] "Q_block_ptr" = some ⟨fun _ : TileIndex [BN, BD] =>
+          { region := Q, baseOffset := qbase, parentShape := [N_CTX, BD],
+            blockShape := [BN, BD], strides := [stride_qm, stride_qk], offsets := [c * BN + BN, 0] }⟩
+      ∧ sF.regs .ptr [BN] "m_ptrs" = some ⟨fun idx : TileIndex [BN] =>
+          (M.cast, mbase + (c * BN + BN) + idx.1.val)⟩ := by
+  set qtile : Tile .real [BN, BD] := ⟨fun idx : TileIndex [BN, BD] =>
+      some (sin.readMem Q (qbase + (c * BN + idx.1.val) * stride_qm + idx.2.1.val * stride_qk))⟩ with hqt
+  set mtile : Tile .real [BN] := ⟨fun idx : TileIndex [BN] =>
+      some (sin.readMem M (mbase + c * BN + idx.1.val))⟩ with hmt
+  set disttile : Tile .nat [BN, BN] := ⟨fun idx : TileIndex [BN, BN] =>
+      (((idx.1.val - idx.2.1.val) + c * BN) - sn * BN) + swo⟩ with hdistt
+  set masktile : Tile .bool [BN, BN] := ⟨fun idx : TileIndex [BN, BN] =>
+      decide (disttile.data idx < sws)⟩ with hmask
+  have hmask_eq : (⟨fun idx : TileIndex [BN, BN] =>
+      (decide (0 ≤ disttile.data idx) && decide (disttile.data idx < sws))⟩ : Tile .bool [BN, BN])
+      = masktile := by
+    rw [hmask]
+    refine congrArg _ ?_
+    ext idx
+    simp
+  unfold attentionScoreCase1LoopBodyG
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "start_m") sin = some (Tile.scalar (c * BN)) from by
+      rw [evalOp_ref]; exact hsm))]
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.ifThenElse (Op.constBool Bool.true) _ _) _ = some _ from by
+      rw [stepStmt_ifThenElse_true, stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BN, BD] "Q_block_ptr") []) MaskOpt.none) _
+            = some qtile from by
+          rw [load_blockPtr_Q_eval Q qbase N_CTX BD BN BD stride_qm stride_qk (c * BN)
+            (Op.ref .blockPtr [BN, BD] "Q_block_ptr") _
+            (by rw [evalOp_ref]
+                simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+                exact hQbp)]
+          rw [hqt]; refine congrArg some ?_; ext idx
+          simp only [BlockState.setReg_readMem]))]
+      exact stepStmts.nil)]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (MemAccess.ptr (Op.ref .ptr [BN] "m_ptrs")) MaskOpt.none) _ = some mtile from by
+      rw [load_ptr_none_real_score (Op.ref .ptr [BN] "m_ptrs") _
+        (⟨fun idx : TileIndex [BN] => (M.cast, mbase + c * BN + idx.1.val)⟩ : Tile .ptr [BN])
+        (by rw [evalOp_ref]
+            simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hmp)]
+      rw [hmt]; refine congrArg some ?_; ext idx
+      simp [BlockState.readMem, BlockState.setReg_mem]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BN,BN] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [BN,BN] => some (0:ℝ)⟩ : Tile .real [BN,BN]) from by
+      simp [evalOp_full]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_qkRaw_evalG BN BD _ (⟨fun _ : TileIndex [BN,BN] => some (0:ℝ)⟩ : Tile .real [BN,BN]) qtile kT
+      (by simp) (by simp) (by simp [hk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_qkScale_evalG BN _
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ : TileIndex [BN,BN] => some (0:ℝ)⟩ : Tile .real [BN,BN]) (Tile.dot [] qtile kT))
+      sc (by simp) (by simp [hqks])))]
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.ifThen (Op.constBool Bool.true) _) _ = some _ from by
+      rw [stepStmt_ifThen_true, stepStmts.cons_some (stepStmt_assign_eq_some
+        (score_dist_evalG BN swo _ c sn (by simp [hsm]) (by simp [hsn])))]
+      rw [stepStmts.cons_some
+        (show stepStmt (Stmt.ifThenElse (Op.constBool Bool.false) _ _) _ = some _ from by
+          rw [stepStmt_ifThenElse_false, stepStmts.cons_some (stepStmt_assign_eq_some
+            ((score_mask_evalG BN sws _ disttile (by simp [hdistt])).trans
+              (congrArg some hmask_eq)))]
+          exact stepStmts.nil)]
+      exact stepStmts.nil)]
+  set scaledqk : Tile .real [BN, BN] := Tile.bop NumericDType.real.mul Broadcast.scalarR
+      (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (⟨fun _ : TileIndex [BN,BN] => some (0:ℝ)⟩ : Tile .real [BN,BN]) (Tile.dot [] qtile kT))
+      (Tile.scalar (some sc)) with hsq
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_qk2_evalG BN _ scaledqk mtile (by simp [hsq]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_p_evalG BN _ (Tile.bop NumericDType.real.sub (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        scaledqk (Tile.expandDim ⟨1, by simp⟩ mtile)) (by simp)))]
+  rw [stepStmts.cons_some
+    (show stepStmt (Stmt.ifThen (Op.constBool Bool.true) _) _ = some _ from by
+      rw [stepStmt_ifThen_true, stepStmts.cons_some (stepStmt_assign_eq_some
+        (score_pwhere_evalG BN _ masktile
+          (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+            (Broadcast.consSame (Broadcast.consR Broadcast.nil)) scaledqk (Tile.expandDim ⟨1, by simp⟩ mtile)))
+          (by simp) (by simp)))]
+      exact stepStmts.nil)]
+  rw [stepStmts.cons_some (stepStmt_ifThen_boolNot_true _ _)]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (score_oAcc_evalG BN _ oT
+      (Tile.select masktile
+        (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil)) scaledqk (Tile.expandDim ⟨1, by simp⟩ mtile)))
+        (⟨fun _ : TileIndex [BN,BN] => some (0:ℝ)⟩ : Tile .real [BN,BN]))
+      (by simp [ho]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.advanceBlockPtr (Op.ref .blockPtr [BN,BD] "Q_block_ptr") [BN, (0:Nat)]) _
+        = some (⟨fun _ : TileIndex [BN, BD] =>
+            { region := Q, baseOffset := qbase, parentShape := [N_CTX, BD],
+              blockShape := [BN, BD], strides := [stride_qm, stride_qk], offsets := [c * BN + BN, 0] }⟩
+            : Tile .blockPtr [BN,BD]) from by
+      rw [advanceBlockPtr_eval]; simp [hQbp]
+      funext i; congr 1 <;> omega))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN] "m_ptrs") (Op.constNat BN)) _
+        = some (⟨fun idx : TileIndex [BN] =>
+            (M.cast, mbase + (c * BN + BN) + idx.1.val)⟩ : Tile .ptr [BN]) from by
+      rw [evalOp_ptrAdd']; simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff, hmp,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.scalar, Broadcast.rightIndex, Broadcast.leftIndex]
+        omega))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_,
+    ⟨Tile.bop NumericDType.real.add (Broadcast.consSame Broadcast.nil) oT
+      (Tile.reduceSumDrop (⟨0, by simp⟩ : Fin [BN,BN].length)
+        (Tile.select masktile
+          (Tile.uop WithBot.realExp2 (Tile.bop NumericDType.real.sub
+            (Broadcast.consSame (Broadcast.consR Broadcast.nil)) scaledqk
+            (Tile.expandDim ⟨1, by simp⟩ mtile)))
+          (⟨fun _ : TileIndex [BN,BN] => some (0:ℝ)⟩ : Tile .real [BN,BN]))), ?_⟩, ?_, ?_⟩
+  · simp [hsn]
+  · simp [hoz]
+  · simp [hoh]
+  · simp [hk]
+  · simp [hqks]
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_same]
+  · simp
+  · simp
+
+set_option maxHeartbeats 2000000 in
+/-- **Weak invariant step**: one case-1 body iteration from `scoreSafeInv m`
+steps successfully (exact stepper) and re-establishes `scoreSafeInv (m + BN)`. -/
+private theorem score_attn_stepW (Q M : RegionName)
+    (qbase mbase sn ozv ohv N_CTX ROUND_CTX BN BD swo sws stride_qm stride_qk : Nat)
+    (hBN : 0 < BN) (hdvd : BN ∣ ROUND_CTX)
+    (m : Nat) (s : BlockState) (hm : m < ROUND_CTX)
+    (hP : scoreSafeInv Q M qbase mbase sn ozv ohv N_CTX ROUND_CTX BN BD stride_qm stride_qk m s) :
+    ∃ s', stepStmts (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX)
+        (s.setReg "start_m" .nat [] (Tile.scalar m)) = some s'
+      ∧ scoreSafeInv Q M qbase mbase sn ozv ohv N_CTX ROUND_CTX BN BD stride_qm stride_qk (m + BN) s' := by
+  obtain ⟨hdvdm, hle, hsn, hoz, hoh, ⟨kT, hk⟩, ⟨sc, hqks⟩, ⟨oT, ho⟩, hQbp, hmp⟩ := hP
+  have hcm : m / BN * BN = m := Nat.div_mul_cancel hdvdm
+  obtain ⟨sF, hstep, hsnF, hozF, hohF, hkF, hqksF, hoF, hQbpF, hmpF⟩ :=
+    score_loopBody_evalW (s.setReg "start_m" .nat [] (Tile.scalar m)) Q M
+      N_CTX ROUND_CTX BN BD swo sws stride_qm stride_qk qbase mbase sn ozv ohv (m / BN) sc kT oT
+      (by rw [BlockState.setReg_same, hcm])
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsn)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoz)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hoh)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hqks)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact ho)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hk)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hcm]; exact hQbp)
+      (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hcm]; exact hmp)
+  obtain ⟨qq, hqq⟩ := hdvd
+  have hnextle : m + BN ≤ ROUND_CTX := by
+    rw [← hcm] at hm ⊢
+    rw [hqq] at hm ⊢
+    have hlt : m / BN < qq := by
+      by_contra hc
+      push_neg at hc
+      have : BN * qq ≤ m / BN * BN := by rw [Nat.mul_comm BN qq]; exact Nat.mul_le_mul_right BN hc
+      omega
+    calc m / BN * BN + BN = BN * (m / BN + 1) := by ring
+      _ ≤ BN * qq := Nat.mul_le_mul_left BN hlt
+  have hQbpF' := hQbpF
+  rw [hcm] at hQbpF'
+  have hmpF' := hmpF
+  rw [hcm] at hmpF'
+  exact ⟨sF, hstep, Nat.dvd_add hdvdm (Dvd.intro 1 (by ring)), hnextle, hsnF, hozF, hohF,
+    ⟨kT, hkF⟩, ⟨sc, hqksF⟩, hoF, hQbpF', hmpF'⟩
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak body safety**: the case-1 loop body is `TraceSafeListR` from any
+`scoreSafeInv m` state — the `q` load is bounded by the `read1` window at
+step `m / BN`, the `m` load by the `read3` window; everything else is
+register-only. -/
+private theorem score_bodySafeW (R : RoundingModel) (bounds : RegionBounds)
+    (Q M : RegionName)
+    (qbase mbase sn ozv ohv N_CTX ROUND_CTX BN BD swo sws stride_qm stride_qk : Nat)
+    (hBN : 0 < BN) (hdvd : BN ∣ ROUND_CTX)
+    (m : Nat) (s : BlockState) (hm : m < ROUND_CTX)
+    (hP : scoreSafeInv Q M qbase mbase sn ozv ohv N_CTX ROUND_CTX BN BD stride_qm stride_qk m s)
+    (hbQ : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin (BN * BD)),
+      qbase + (t.val * BN + j.val / BD) * stride_qm + (j.val % BD) * stride_qk < bounds Q)
+    (hbM : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin BN),
+      mbase + (t.val * BN + j.val) < bounds M) :
+    Stmt.TraceSafeListR R bounds (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX)
+      (s.setReg "start_m" .nat [] (Tile.scalar m)) := by
+  obtain ⟨hdvdm, hle, hsn, hoz, hoh, ⟨kT, hk⟩, ⟨sc, hqks⟩, ⟨oT, ho⟩, hQbp, hmp⟩ := hP
+  have hcm : m / BN * BN = m := Nat.div_mul_cancel hdvdm
+  have hmdivlt : m / BN < ROUND_CTX / BN := by
+    have h1 : m / BN * BN < ROUND_CTX / BN * BN := by
+      rw [hcm, Nat.div_mul_cancel hdvd]
+      exact hm
+    exact lt_of_mul_lt_mul_right h1 (Nat.zero_le BN)
+  unfold attentionScoreCase1LoopBodyG
+  -- (0) start_m = ref start_m
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s1 h1 => ?_)
+  obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+  -- (1) the q-load ifThenElse: `read1` bound at step m / BN
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s2 h2 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [score_evalOpR_constBool]
+    show Stmt.TraceSafeListR R bounds
+      [Stmt.assign TileDType.real [BN, BD] "q"
+        (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BN, BD] "Q_block_ptr") [])
+          MaskOpt.none)] _
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+    rw [hQbp] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hbound := hbQ ⟨m / BN, hmdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+    rw [hcm] at hbound
+    simpa using hbound
+  rw [score_ifThenElse_trueR] at h2
+  obtain ⟨u2, hu2, h2⟩ := score_stepStmtsR_cons_inv h2
+  obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv hu2
+  rw [stepStmtsR_nil] at h2
+  obtain rfl := Option.some.inj h2
+  -- (2) m = load(m_ptrs): the `read3` bound at step m / BN
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 h3 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs i _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+    rw [hmp] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    have hbound := hbM ⟨m / BN, hmdivlt⟩ i.1
+    rw [hcm] at hbound
+    show mbase + m + i.1.val < bounds (Region.cast M)
+    simpa [Nat.add_assoc] using hbound
+  obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv h3
+  -- (3) qk = zeros
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s4 h4 => ?_)
+  obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv h4
+  -- (4) qk += dot q k
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s5 h5 => ?_)
+  obtain ⟨v5, -, rfl⟩ := stepStmtR_assign_inv h5
+  -- (5) qk *= qk_scale
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s6 h6 => ?_)
+  obtain ⟨v6, -, rfl⟩ := stepStmtR_assign_inv h6
+  -- (6) the SLIDING_WINDOW ifThen (dist + the COMPLEMENT ifThenElse)
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s7 h7 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [score_evalOpR_constBool]
+    show Stmt.TraceSafeListR R bounds [_, _] _
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u7 hu7 => ?_)
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [score_evalOpR_constBool]
+    show Stmt.TraceSafeListR R bounds [_] _
+    exact Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  rw [score_ifThen_trueR] at h7
+  obtain ⟨u7, hu7, h7⟩ := score_stepStmtsR_cons_inv h7
+  obtain ⟨v7, -, rfl⟩ := stepStmtR_assign_inv hu7
+  obtain ⟨u8, hu8, h7⟩ := score_stepStmtsR_cons_inv h7
+  rw [score_ifThenElse_falseR] at hu8
+  obtain ⟨u9, hu9, hu8⟩ := score_stepStmtsR_cons_inv hu8
+  obtain ⟨v9, -, rfl⟩ := stepStmtR_assign_inv hu9
+  rw [stepStmtsR_nil] at hu8
+  obtain rfl := Option.some.inj hu8
+  rw [stepStmtsR_nil] at h7
+  obtain rfl := Option.some.inj h7
+  -- (7) qk -= m[:, None]
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s8 h8 => ?_)
+  obtain ⟨v8, -, rfl⟩ := stepStmtR_assign_inv h8
+  -- (8) p = exp2 qk
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s9 h9 => ?_)
+  obtain ⟨v9', -, rfl⟩ := stepStmtR_assign_inv h9
+  -- (9) the SLIDING_WINDOW where ifThen
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s10 h10 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [score_evalOpR_constBool]
+    show Stmt.TraceSafeListR R bounds [_] _
+    exact Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  rw [score_ifThen_trueR] at h10
+  obtain ⟨u10, hu10, h10⟩ := score_stepStmtsR_cons_inv h10
+  obtain ⟨v10, -, rfl⟩ := stepStmtR_assign_inv hu10
+  rw [stepStmtsR_nil] at h10
+  obtain rfl := Option.some.inj h10
+  -- (10) the dead `not IS_EVEN_N` ifThen (skipped)
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s11 h11 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [score_evalOpR_boolNot_true]
+    exact trivial
+  rw [score_ifThen_falseR R (score_evalOpR_boolNot_true R _)] at h11
+  obtain rfl := Option.some.inj h11
+  -- (11) o += reduceSum p
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s12 h12 => ?_)
+  obtain ⟨v12, -, rfl⟩ := stepStmtR_assign_inv h12
+  -- (12) Q_block_ptr advance (register-only)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s13 h13 => ?_)
+  obtain ⟨v13, -, rfl⟩ := stepStmtR_assign_inv h13
+  -- (13) m_ptrs += BN (register-only)
+  exact Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **`TraceSafeListR` for the case-1 postLoop**: the three scalar/pointer
+assigns are register-only; the terminal masked store's active lanes are
+bounded by the `write` window (`hbO`, gated on the `o_range < NKV_CTX`
+mask). -/
+private theorem score_postSafeW (R : RoundingModel) (bounds : RegionBounds)
+    (Out : RegionName)
+    (sn ozv ohv NKV_CTX BN stride_oz stride_oh : Nat)
+    (s : BlockState)
+    (hoz : s.regs .nat [] "off_z" = some (Tile.scalar ozv))
+    (hoh : s.regs .nat [] "off_h" = some (Tile.scalar ohv))
+    (hsn : s.regs .nat [] "start_n" = some (Tile.scalar sn))
+    (hbO : ∀ j : Fin BN, sn * BN + j.val < NKV_CTX →
+      ozv * stride_oz + ohv * stride_oh + (sn * BN + j.val) < bounds Out) :
+    Stmt.TraceSafeListR R bounds (attentionScoreCase1PostG Out BN NKV_CTX stride_oz stride_oh) s := by
+  unfold attentionScoreCase1PostG
+  -- (1) o_offset (register-only; concrete successor via inversion)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s1 h1 => ?_)
+  obtain ⟨v1, hv1, rfl⟩ := stepStmtR_assign_inv h1
+  obtain rfl := Option.some.inj (hv1.symm.trans
+    (show evalOpR R (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_z") (Op.constNat stride_oz))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "off_h") (Op.constNat stride_oh))) s
+        = some (Tile.scalar (ozv * stride_oz + ohv * stride_oh)) from by
+      simp only [evalOpR, hoz, hoh, Option.bind_eq_bind, Option.bind_some]
+      rfl))
+  -- (2) o_range (register-only; concrete successor via inversion)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s2 h2 => ?_)
+  obtain ⟨v2, hv2, rfl⟩ := stepStmtR_assign_inv h2
+  obtain rfl := Option.some.inj (hv2.symm.trans
+    (show evalOpR R (Op.add NumericDType.nat Broadcast.scalarR (Op.arange BN)
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_n") (Op.constNat BN)))
+        (s.setReg "o_offset" TileDType.nat [] (Tile.scalar (ozv * stride_oz + ohv * stride_oh)))
+        = some (⟨fun idx : TileIndex [BN] => idx.1.val + sn * BN⟩ : Tile .nat [BN]) from by
+      simp only [evalOpR, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        hsn, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul, Tile.vec_data]))
+  -- (3) o_ptrs (register-only; concrete successor via inversion)
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s3 h3 => ?_)
+  obtain ⟨v3, hv3, rfl⟩ := stepStmtR_assign_inv h3
+  obtain rfl := Option.some.inj (hv3.symm.trans
+    (show evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add NumericDType.nat Broadcast.scalarL (Op.ref TileDType.nat [] "o_offset")
+          (Op.ref TileDType.nat [BN] "o_range")))
+        ((s.setReg "o_offset" TileDType.nat [] (Tile.scalar (ozv * stride_oz + ohv * stride_oh))).setReg
+          "o_range" TileDType.nat [BN] (⟨fun idx : TileIndex [BN] => idx.1.val + sn * BN⟩ : Tile .nat [BN]))
+        = some (⟨fun idx : TileIndex [BN] =>
+            (Out.cast, ozv * stride_oz + ohv * stride_oh + (sn * BN + idx.1.val))⟩ : Tile .ptr [BN]) from by
+      simp only [evalOpR, BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add]
+        omega))
+  -- (4) the masked store: active lanes bounded by the write window
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, Op.SafeAtR.eq_def,
+    MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+  refine ⟨trivial, trivial, ⟨trivial, trivial⟩, ?_⟩
+  intro ptrs hptrs i hact
+  rw [evalOpR_ref, BlockState.setReg_same] at hptrs
+  obtain rfl := Option.some.inj hptrs
+  obtain ⟨masks, hmasks, hmi⟩ := hact
+  rw [show evalOpR R (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref TileDType.nat [BN] "o_range")
+      (Op.constNat NKV_CTX)) _
+      = some (Tile.cop ComparableDType.nat.lt Broadcast.scalarR
+          (⟨fun idx : TileIndex [BN] => idx.1.val + sn * BN⟩ : Tile .nat [BN])
+          (Tile.scalar NKV_CTX)) from by
+    simp only [evalOpR, evalOpR_ref, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, BlockState.setReg_same, Option.bind_eq_bind, Option.bind_some]
+    rfl] at hmasks
+  obtain rfl := Option.some.inj hmasks
+  have hlt : i.1.val + sn * BN < NKV_CTX := by
+    simpa only [Tile.cop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      ComparableDType.lt, decide_eq_true_eq] using hmi
+  have hbound := hbO i.1 (by omega)
+  show ozv * stride_oz + ohv * stride_oh + (sn * BN + i.1.val) < bounds (Region.cast Out)
+  simpa using hbound
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PreLoop safety**: the 11 scalar assigns are safe at every state; the
+pre-loop k-load is bounded by the (static, `t`-free) `read2` window at step
+`0`. -/
+private theorem score_preSafeW (R : RoundingModel) (bounds : RegionBounds)
+    (Q K M : RegionName) (sm_scale : ℝ)
+    (H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk : Nat)
+    (s : BlockState) (hT : 0 < ROUND_CTX / BN)
+    (hbK : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin (BD * BN)),
+      case1QKOffsetKG s H H_KV stride_kz stride_kh
+        + (j.val / BN) * stride_kk + (s.pids 0 * BN + j.val % BN) * stride_kn < bounds K) :
+    Stmt.TraceSafeListR R bounds
+      (attentionScoreCase1PreLoopG Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk) s := by
+  rw [scoreCase1PreScalarsG_append Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+    stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- statements 0–10: register-only assigns, safe at every state
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro st hst u
+    simp only [scoreCase1PreScalarsG, List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+      simp [Stmt.TraceSafeR, Op.SafeAtR]
+  · intro s1 hs1
+    obtain ⟨s11, h11, hsn11, hoz11, hoh11, ho11, hQp11, hKp11, hmp11⟩ :=
+      score_preScalars_evalW s Q K M H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+    rw [score_preScalarsG_castFree R Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk s, h11] at hs1
+    obtain rfl := Option.some.inj hs1
+    unfold scoreCase1PreTailG
+    -- the k-load ifThenElse: the static `read2` bound at step 0
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun s2 hs2 => ?_)
+    · simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+      rw [score_evalOpR_constBool]
+      show Stmt.TraceSafeListR R bounds
+        [Stmt.assign TileDType.real [BD, BN] "k"
+          (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BD, BN] "K_block_ptr") [])
+            MaskOpt.none)] _
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+      refine ⟨trivial, trivial, ?_⟩
+      intro ptrs hptrs idx _
+      rw [evalOpR_ref, hKp11] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      intro _
+      have hbound := hbK ⟨0, hT⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+      simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+      simpa using hbound
+    rw [score_ifThenElse_trueR] at hs2
+    obtain ⟨u1, hu1, hs2⟩ := score_stepStmtsR_cons_inv hs2
+    obtain ⟨vk, -, rfl⟩ := stepStmtR_assign_inv hu1
+    rw [stepStmtsR_nil] at hs2
+    obtain rfl := Option.some.inj hs2
+    -- lo / hi / qk_scale ×2: register-only
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u2 hu2 => ?_)
+    obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv hu2
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u3 hu3 => ?_)
+    obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv hu3
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u4 hu4 => ?_)
+    obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv hu4
+    exact Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `TraceSafeR` walk for the whole case-1 kernel**: the 11 leading
+scalar assigns are safe at every state, the pre-loop k-load is bounded by
+the (static, `t`-free) `read2` window at step `0` — the pre-loop static load
+is what forces `0 < ROUND_CTX` — the query loop runs
+`Stmt.forRangeTraceSafeR_inv` over `scoreSafeInv` after resolving the
+`forRangeDyn` bounds ops, and the masked terminal store is bounded by the
+`write` window. -/
+private theorem score_traceSafeR_case1 (R : RoundingModel) (bounds : RegionBounds)
+    (Q K M Out : RegionName) (sm_scale : ℝ)
+    (stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+     stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+     BN BD : Nat) (s : BlockState)
+    (hBN : 0 < BN) (hRC : 0 < ROUND_CTX) (hdvd : BN ∣ ROUND_CTX)
+    (hbQ : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin (BN * BD)),
+      case1QKOffsetQG s H stride_qz stride_qh
+        + (t.val * BN + j.val / BD) * stride_qm + (j.val % BD) * stride_qk < bounds Q)
+    (hbK : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin (BD * BN)),
+      case1QKOffsetKG s H H_KV stride_kz stride_kh
+        + (j.val / BN) * stride_kk + (s.pids 0 * BN + j.val % BN) * stride_kn < bounds K)
+    (hbM : ∀ (t : Fin (ROUND_CTX / BN)) (j : Fin BN),
+      s.pids 1 * ROUND_CTX + (t.val * BN + j.val) < bounds M)
+    (hbO : ∀ j : Fin BN, case1OutActiveG s BN NKV_CTX j →
+      case1OutStoreOffsetG s H BN stride_oz stride_oh j < bounds Out) :
+    ((attention_score_kernel Q K M Out
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+      BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel).TraceSafeR R bounds s := by
+  have hT : 0 < ROUND_CTX / BN := Nat.div_pos (Nat.le_of_dvd hRC hdvd) hBN
+  unfold Kernel.TraceSafeR
+  rw [score_case1_body_splitG Q K M Out
+    stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+    stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- the preLoop
+    exact score_preSafeW R bounds Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk s hT hbK
+  · -- after the preLoop: the query loop, then the postLoop store
+    intro s2 hs2
+    obtain ⟨spW, hpreW, hsnW, hozW, hohW, hqksW, hoW, hkEW, hQbpW, hmpW, hloW, hhiW⟩ :=
+      score_preLoop_evalW s Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+    rw [score_preLoopG_castFree R Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk s,
+      hpreW] at hs2
+    obtain rfl := Option.some.inj hs2
+    have hinv0 : scoreSafeInv Q M (case1QKOffsetQG s H stride_qz stride_qh)
+        (s.pids 1 * ROUND_CTX) (s.pids 0) (s.pids 1 / H) (s.pids 1 % H)
+        N_CTX ROUND_CTX BN BD stride_qm stride_qk 0 spW := by
+      refine ⟨Dvd.intro 0 rfl, Nat.zero_le _, hsnW, hozW, hohW, hkEW,
+        ⟨sm_scale * 1.4426950408889634, hqksW⟩, ⟨_, hoW⟩, ?_, ?_⟩
+      · exact hQbpW
+      · exact hmpW
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 hs3 => ?_)
+    · -- the query loop is trace-safe (invariant principle over `scoreSafeInv`)
+      simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def],
+        by simp [Op.SafeAtR.eq_def], ?_⟩
+      rw [evalOpR_ref, hloW, evalOpR_ref, hhiW, score_evalOpR_constNat]
+      show Stmt.forRangeTraceSafeR R bounds "start_m" 0 ROUND_CTX BN
+        (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX) spW
+      refine Stmt.forRangeTraceSafeR_inv R bounds "start_m" ROUND_CTX BN
+        (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX)
+        (scoreSafeInv Q M (case1QKOffsetQG s H stride_qz stride_qh)
+          (s.pids 1 * ROUND_CTX) (s.pids 0) (s.pids 1 / H) (s.pids 1 % H)
+          N_CTX ROUND_CTX BN BD stride_qm stride_qk) ?_ 0 spW hinv0
+      intro m st hm hP
+      refine ⟨score_bodySafeW R bounds Q M (case1QKOffsetQG s H stride_qz stride_qh)
+        (s.pids 1 * ROUND_CTX) (s.pids 0) (s.pids 1 / H) (s.pids 1 % H)
+        N_CTX ROUND_CTX BN BD swo sws stride_qm stride_qk hBN hdvd m st hm hP hbQ hbM, ?_⟩
+      obtain ⟨st', hstep, hP'⟩ :=
+        score_attn_stepW Q M (case1QKOffsetQG s H stride_qz stride_qh)
+          (s.pids 1 * ROUND_CTX) (s.pids 0) (s.pids 1 / H) (s.pids 1 % H)
+          N_CTX ROUND_CTX BN BD swo sws stride_qm stride_qk hBN hdvd m st hm hP
+      exact ⟨st', by rw [score_loopBodyG_castFree]; exact hstep, hP'⟩
+    · -- identify the post-loop state and finish on the masked store
+      obtain ⟨final, sfin, hLoop, hfinal, hPfin⟩ :=
+        forRangeDyn_inv (idx := "start_m")
+          (startOp := Op.ref .nat [] "lo") (stopOp := Op.ref .nat [] "hi")
+          (stepOp := Op.constNat BN)
+          (start := 0) (stop := ROUND_CTX) (step := BN)
+          (body := attentionScoreCase1LoopBodyG BN BD swo sws N_CTX)
+          (P := scoreSafeInv Q M (case1QKOffsetQG s H stride_qz stride_qh)
+            (s.pids 1 * ROUND_CTX) (s.pids 0) (s.pids 1 / H) (s.pids 1 % H)
+            N_CTX ROUND_CTX BN BD stride_qm stride_qk)
+          (s_init := spW)
+          (by rw [evalOp_ref]; exact hloW) (by rw [evalOp_ref]; exact hhiW)
+          (evalOp_constNat BN spW) hBN.ne' hinv0
+          (fun m st hm hP =>
+            score_attn_stepW Q M (case1QKOffsetQG s H stride_qz stride_qh)
+              (s.pids 1 * ROUND_CTX) (s.pids 0) (s.pids 1 / H) (s.pids 1 % H)
+              N_CTX ROUND_CTX BN BD swo sws stride_qm stride_qk hBN hdvd m st hm hP)
+      rw [show stepStmtR R (Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+          (Op.constNat BN) (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX)) spW = some sfin from by
+        rw [score_stepStmtR_forRangeDyn, evalOpR_ref, hloW, evalOpR_ref, hhiW,
+          score_evalOpR_constNat]
+        simp only [Option.bind_eq_bind, Option.bind_some, Tile.scalar_data]
+        rw [stepForRangeAuxR_castFree R _ (score_loopBodyG_castFree R BN BD swo sws N_CTX) "start_m"]
+        rw [stepForRangeAux.forRangeDyn_unfold,
+          show evalOp (Op.ref .nat [] "lo") spW = some (Tile.scalar 0) from by
+            rw [evalOp_ref]; exact hloW,
+          show evalOp (Op.ref .nat [] "hi") spW = some (Tile.scalar ROUND_CTX) from by
+            rw [evalOp_ref]; exact hhiW,
+          evalOp_constNat] at hLoop
+        simpa only [Option.bind_eq_bind, Option.bind_some, Tile.scalar_data] using hLoop] at hs3
+      obtain rfl := Option.some.inj hs3
+      obtain ⟨-, -, hsnF, hozF, hohF, -, -, -, -, -⟩ := hPfin
+      exact score_postSafeW R bounds Out (s.pids 0) (s.pids 1 / H) (s.pids 1 % H)
+        NKV_CTX BN stride_oz stride_oh sfin hozF hohF hsnF hbO
+
+/-! ## The postLoop frame and the rounded Hoare triple -/
+
+/-- A masked single-region `writeMem` scatter preserves every cell it does
+not actively hit. -/
+private theorem score_foldl_writeMem_masked_frame {α : Type} (region : RegionName)
+    (offFn : α → Nat) (valFn : α → ℝ) (mskFn : α → Bool) :
+    ∀ (l : List α) (s : BlockState) (r : RegionName) (o : Nat),
+      (r = region → ∀ k ∈ l, mskFn k = Bool.true → offFn k ≠ o) →
+      ((l.foldl (fun acc k =>
+          if mskFn k then acc.writeMem region (offFn k) (valFn k) else acc) s).mem r o
+        = s.mem r o)
+  | [], _, _, _, _ => rfl
+  | k :: rest, s, r, o, h => by
+      rw [List.foldl_cons,
+        score_foldl_writeMem_masked_frame region offFn valFn mskFn rest _ r o
+          (fun hr k' hk' => h hr k' (List.mem_cons_of_mem _ hk'))]
+      by_cases hm : mskFn k
+      · rw [if_pos hm, BlockState.writeMem_mem]
+        rw [if_neg (fun hro => h hro.1 k List.mem_cons_self hm hro.2.symm)]
+      · rw [if_neg hm]
+
+set_option maxHeartbeats 2000000 in
+/-- **General post-loop store readback + frame** (the `score_post_evalG`
+walk extended with the single-output frame the io skin needs): the 4 post
+statements write `case1OutClosedFormG` to `Out` at every active column and
+touch no other cell. -/
+private theorem score_post_evalFrameG
+    (s sL : BlockState) (Q K M Out : RegionName) (sm_scale : ℝ)
+    (H H_KV ROUND_CTX NKV_CTX BN BD
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn
+      stride_oz stride_oh swo sws : Nat)
+    (hmem : sL.mem = s.mem)
+    (hoz : sL.regs .nat [] "off_z" = some (Tile.scalar (s.pids 1 / H)))
+    (hoh : sL.regs .nat [] "off_h" = some (Tile.scalar (s.pids 1 % H)))
+    (hsn : sL.regs .nat [] "start_n" = some (Tile.scalar (s.pids 0)))
+    (ho : sL.regs .real [BN] "o" = some ⟨fun idx : TileIndex [BN] =>
+        some (case1OutClosedFormG s Q K M sm_scale H H_KV ROUND_CTX BN BN BD
+          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn swo sws idx.1)⟩) :
+    ∃ sF, stepStmts (attentionScoreCase1PostG Out BN NKV_CTX stride_oz stride_oh) sL = some sF
+      ∧ (∀ i : Fin BN, sF.readMem Out (case1OutStoreOffsetG s H BN stride_oz stride_oh i)
+          = (if case1OutActiveG s BN NKV_CTX i
+              then case1OutClosedFormG s Q K M sm_scale H H_KV ROUND_CTX BN BN BD
+                stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn swo sws i
+              else s.readMem Out (case1OutStoreOffsetG s H BN stride_oz stride_oh i)))
+      ∧ (∀ r o, (r = Out → ∀ i : Fin BN, case1OutActiveG s BN NKV_CTX i →
+            o ≠ case1OutStoreOffsetG s H BN stride_oz stride_oh i) →
+          sF.mem r o = sL.mem r o) := by
+  unfold attentionScoreCase1PostG
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.nil
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_z") (Op.constNat stride_oz))
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "off_h") (Op.constNat stride_oh))) _
+        = some (Tile.scalar ((s.pids 1 / H) * stride_oz + (s.pids 1 % H) * stride_oh)) from by
+      rw [evalOp_add, evalOp_mul, evalOp_mul]
+      simp only [evalOp_constNat, evalOp_ref, hoz, hoh, Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add NumericDType.nat Broadcast.scalarR (Op.arange BN)
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat BN))) _
+        = some (⟨fun idx : TileIndex [BN] => idx.1.val + s.pids 0 * BN⟩ : Tile .nat [BN]) from by
+      rw [evalOp_add, evalOp_mul]
+      simp only [evalOp_arange, evalOp_constNat, evalOp_ref, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, hsn, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul, Tile.vec_data]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out)
+        (Op.add NumericDType.nat Broadcast.scalarL (Op.ref .nat [] "o_offset")
+          (Op.ref .nat [BN] "o_range"))) _
+        = some (⟨fun idx : TileIndex [BN] =>
+            (Out.cast, case1OutStoreOffsetG s H BN stride_oz stride_oh idx.1)⟩ : Tile .ptr [BN]) from by
+      rw [evalOp_ptrAdd', evalOp_add]
+      simp only [evalOp_ptrBase', evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+        ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · rfl
+      · simp only [Tile.ptrAdd_data, Tile.bop_data, Tile.scalar, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add, case1OutStoreOffsetG]
+        omega))]
+  set sP := (((sL.setReg "o_offset" .nat [] (Tile.scalar ((s.pids 1 / H) * stride_oz + (s.pids 1 % H) * stride_oh))).setReg
+      "o_range" .nat [BN] (⟨fun idx : TileIndex [BN] => idx.1.val + s.pids 0 * BN⟩ : Tile .nat [BN])).setReg
+      "o_ptrs" .ptr [BN] (⟨fun idx : TileIndex [BN] => (Out.cast, case1OutStoreOffsetG s H BN stride_oz stride_oh idx.1)⟩ : Tile .ptr [BN]))
+    with hsPdef
+  set offFn : TileIndex [BN] → Nat := fun idx => case1OutStoreOffsetG s H BN stride_oz stride_oh idx.1 with hoffFn
+  set valFn : TileIndex [BN] → ℝ := fun idx => case1OutClosedFormG s Q K M sm_scale H H_KV ROUND_CTX BN BN BD
+    stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn swo sws idx.1 with hvalFn
+  set mskFn : TileIndex [BN] → Bool := fun idx => decide (idx.1.val + s.pids 0 * BN < NKV_CTX) with hmskFn
+  have hStore : stepStmt (Stmt.store .real [BN] (MemAccess.ptr (Op.ref .ptr [BN] "o_ptrs"))
+      (Op.ref .real [BN] "o")
+      (MaskOpt.mask (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [BN] "o_range")
+        (Op.constNat NKV_CTX)))) sP
+      = some ((TileShape.allIndices [BN]).foldl
+          (fun acc idx => if mskFn idx then acc.writeMem Out (offFn idx) (valFn idx) else acc) sP) := by
+    have hoP : sP.regs .real [BN] "o" = some ⟨fun idx : TileIndex [BN] =>
+        some (case1OutClosedFormG s Q K M sm_scale H H_KV ROUND_CTX BN BN BD
+          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn swo sws idx.1)⟩ := by
+      rw [hsPdef, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+      exact ho
+    have hrangeP : sP.regs .nat [BN] "o_range"
+        = some (⟨fun idx : TileIndex [BN] => idx.1.val + s.pids 0 * BN⟩ : Tile .nat [BN]) := by
+      rw [hsPdef, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_same]
+    have hptrsP : sP.regs .ptr [BN] "o_ptrs"
+        = some (⟨fun idx : TileIndex [BN] => (Out.cast, case1OutStoreOffsetG s H BN stride_oz stride_oh idx.1)⟩ : Tile .ptr [BN]) := by
+      rw [hsPdef, BlockState.setReg_same]
+    simp only [stepStmt, evalOp_ref, hoP, hrangeP, hptrsP, evalOp_lt, evalOp_constNat,
+      Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    refine congrArg some ?_
+    refine congrArg (fun f => List.foldl f sP (TileShape.allIndices [BN])) ?_
+    funext acc idx
+    by_cases hm : idx.1.val + s.pids 0 * BN < NKV_CTX
+    · simp only [Tile.cop, Tile.scalar, Broadcast.rightIndex, Broadcast.leftIndex,
+        ComparableDType.lt, hmskFn, hm, decide_true, if_true, hoffFn, hvalFn, case1OutStoreOffsetG,
+        Region.cast_id, BlockState.writeMemTyped_real, FloatDType.storeValue,
+        FloatDType.real_toWithBot, WithBot.unbotD_coe, WithBot.unbotD_some]
+    · simp only [Tile.cop, Tile.scalar, Broadcast.rightIndex, Broadcast.leftIndex,
+        ComparableDType.lt, hmskFn, hm, decide_false, Bool.false_eq_true, if_false,
+        decide_eq_true_eq]
+  rw [stepStmts.cons_some hStore, stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · -- per-column readback (the store offsets are injective in the lane)
+    intro i
+    have hinj : Function.Injective offFn := by
+      intro a b hab
+      simp only [hoffFn, case1OutStoreOffsetG] at hab
+      exact Prod.ext (Fin.ext (by omega)) (by cases a.2; cases b.2; rfl)
+    have hread := BlockState.scatter_readback_masked_nd (region := Out) sP offFn valFn mskFn
+      hinj (i, PUnit.unit)
+    rw [show case1OutStoreOffsetG s H BN stride_oz stride_oh i = offFn (i, PUnit.unit) from rfl, hread]
+    have hmsk_iff : (mskFn (i, PUnit.unit) = Bool.true) ↔ case1OutActiveG s BN NKV_CTX i := by
+      simp only [hmskFn, decide_eq_true_eq, case1OutActiveG]; omega
+    by_cases hi : case1OutActiveG s BN NKV_CTX i
+    · rw [if_pos (hmsk_iff.mpr hi), if_pos hi]
+    · rw [if_neg (fun h => hi (hmsk_iff.mp h)), if_neg hi]
+      rw [show offFn (i, PUnit.unit) = case1OutStoreOffsetG s H BN stride_oz stride_oh i from rfl]
+      simp only [hsPdef, BlockState.setReg_readMem]
+      unfold BlockState.readMem; rw [hmem]
+  · -- the frame: cells outside the active write window are untouched
+    intro r o hcond
+    have hmiss : r = Out → ∀ k ∈ TileShape.allIndices [BN], mskFn k = Bool.true → offFn k ≠ o := by
+      intro hr k _ hmk
+      have hact : case1OutActiveG s BN NKV_CTX k.1 := by
+        rw [hmskFn] at hmk
+        have h2 := of_decide_eq_true hmk
+        unfold case1OutActiveG
+        omega
+      exact fun hko => hcond hr k.1 hact hko.symm
+    rw [score_foldl_writeMem_masked_frame Out offFn valFn mskFn (TileShape.allIndices [BN])
+      sP r o hmiss, hsPdef]
+    simp only [BlockState.setReg_mem]
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The case-1 `⊨[R]` io headline — the first consumer of the
+single-output attention fold skin `StreamMasked3DKernelIO₃`.** For every
+rounding model `R`, the case-1
+(`(SLIDING_WINDOW, COMPLEMENT, IS_EVEN_M, IS_EVEN_N) = (1,0,1,1)`)
+`_score_kernel` surface implements, on its three-stream single-output io
+signature, the **ideal-ℝ masked-`exp2` column sum**
+`attentionScoreCase1IOSpec` — the existing `case1OutClosedFormG` closed form
+restated over the streamed `Q`/`K`/`M` tiles, sliding-window mask kept in its
+**verbatim ℕ-truncated** `case1DistG` arithmetic. The output grid is the
+`.real` default (the store-side `.to(Out.type.element_ty)` cast erases to the
+identity at translation), so at every `R` the active `Out` cells carry the
+exact fold values, gated by the kernel's own `o_range < NKV_CTX` store mask.
+
+**Hypothesis provenance** (all truth-forced): `0 < BLOCK_N` and
+`BLOCK_N ∣ ROUND_CTX` shape the query walk (`T = ROUND_CTX / BLOCK_N` full
+blocks; inherited verbatim from the exact headline
+`attention_score_python_case1_output_summary_general`); `0 < ROUND_CTX` is
+**new** and forced by the io form itself — the `K` tile is loaded *before*
+the loop, so its safety bound must come from some stream step, i.e. the
+step space `Fin (ROUND_CTX / BLOCK_N)` must be inhabited. The exact
+headline's `hundef` is **not** a hypothesis here — the skin's Hoare triple
+carries the `undef` pin itself. The store-lane injectivity is arithmetic
+(`omega`), so no injectivity hypotheses are needed.
+
+**Scope disclosed**: this headline showcases the io face on **case 1 only**;
+the complement-window / uneven cases 2–4 stay on the existing exact coverage
+(`attention_score_final_store_slice_*` and the case-1 exact stack). The
+port's known fidelity gaps (casts erased to identity,
+`@triton.autotune`/`@triton.heuristics` not modeled) are inherited as-is
+from the surface. -/
+specification attention_score_case1_io_correctness (R : RoundingModel)
+    (Q K M Out : RegionName)
+    (stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+     stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+     BN BD : Nat) (sm_scale : ℝ)
+    (hBN : 0 < BN) (hRC : 0 < ROUND_CTX) (hdvd : BN ∣ ROUND_CTX) :
+    attentionScoreCase1IO Q K M Out
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+        stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale ⊨[R]
+      fun p₀ _ _ xs ys zs j =>
+        attentionScoreCase1IOSpec BN BD (ROUND_CTX / BN) swo sws
+          (Nat.div_pos (Nat.le_of_dvd hRC hdvd) hBN) sm_scale p₀ xs ys zs j := by
+  have hT : 0 < ROUND_CTX / BN := Nat.div_pos (Nat.le_of_dvd hRC hdvd) hBN
+  refine StreamMasked3DKernelIO₃.ImplementsR.intro _ ?_ ?_ ?_
+  · exact score_case1_flattenOkG Q K M Out
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale
+  · -- the safety walk
+    intro bounds s xs ys zs _hx _hy _hz hbr1 hbr2 hbr3 hbw
+    simp only [attentionScoreCase1IO] at hbr1 hbr2 hbr3 hbw ⊢
+    exact score_traceSafeR_case1 R bounds Q K M Out sm_scale
+      stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+      stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD s
+      hBN hRC hdvd
+      (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial)
+      (fun t j => hbr3 t j trivial) (fun j hj => hbw j hj)
+  · -- the rounded Hoare triple: exact invariant stack + cast-free collapses
+    intro s₀ xs ys zs hu hx hy hz
+    simp only [attentionScoreCase1IO] at hx hy hz ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
+    obtain ⟨sp, hpre, hpids0, hmem0, hundef0, hsn0, hoz0, hoh0, hqks0, ho0, hk0, hQbp0, hmp0, hlo0, hhi0⟩ :=
+      score_preLoop_evalG s₀ Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk hundef'
+    obtain ⟨sL, hloop, hpidsL, hmemL, hozL, hohL, hsnL, hoL⟩ :=
+      score_loop_evalG s₀ sp Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD swo sws
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn
+        hBN hdvd hpids0 hmem0 hundef0 hsn0 hoz0 hoh0 hqks0 ho0 hk0 hQbp0 hmp0 hlo0 hhi0
+    obtain ⟨sF, hpost, hread, hframe⟩ :=
+      score_post_evalFrameG s₀ sL Q K M Out sm_scale H H_KV ROUND_CTX NKV_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn
+        stride_oz stride_oh swo sws hmemL hozL hohL hsnL hoL
+    refine ⟨sF, ?_, ?_, ?_⟩
+    · -- termination under `execR R` (everything cast-free)
+      show execR R (attention_score_kernel Q K M Out
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+        stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws
+        BN BD BN sm_scale Bool.true Bool.false Bool.true Bool.true rfl).toAlgKernel s₀ = some sF
+      unfold execR
+      rw [score_case1_body_splitG Q K M Out
+          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk
+          stride_oz stride_oh stride_on Z H H_KV N_CTX ROUND_CTX NKV_CTX swo sws BN BD sm_scale,
+        stepStmtsR_append,
+        score_preLoopG_castFree R Q K M sm_scale H H_KV N_CTX ROUND_CTX NKV_CTX BN BD
+          stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kn stride_kk s₀,
+        hpre, Option.bind_some,
+        stepStmtsR_cons_some (show stepStmtR R (Stmt.forRangeDyn "start_m" (Op.ref .nat [] "lo")
+            (Op.ref .nat [] "hi") (Op.constNat BN)
+            (attentionScoreCase1LoopBodyG BN BD swo sws N_CTX)) sp = some sL from by
+          rw [score_stepStmtR_forRangeDyn, evalOpR_ref, hlo0, evalOpR_ref, hhi0,
+            score_evalOpR_constNat]
+          simp only [Option.bind_eq_bind, Option.bind_some, Tile.scalar_data]
+          rw [stepForRangeAuxR_castFree R _ (score_loopBodyG_castFree R BN BD swo sws N_CTX) "start_m"]
+          rw [stepForRangeAux.forRangeDyn_unfold,
+            show evalOp (Op.ref .nat [] "lo") sp = some (Tile.scalar 0) from by
+              rw [evalOp_ref]; exact hlo0,
+            show evalOp (Op.ref .nat [] "hi") sp = some (Tile.scalar ROUND_CTX) from by
+              rw [evalOp_ref]; exact hhi0,
+            evalOp_constNat] at hloop
+          simpa only [Option.bind_eq_bind, Option.bind_some, Tile.scalar_data] using hloop),
+        score_postG_castFree R Out BN NKV_CTX stride_oz stride_oh sL]
+      exact hpost
+    · -- terminal readback = the streamed closed form (rounded at `.real` = exact)
+      intro j hj
+      rw [BlockState.readMemAs_real]
+      have hr := hread j
+      rw [if_pos (show case1OutActiveG s₀ BN NKV_CTX j from hj)] at hr
+      rw [show s₀.pids 1 / H * stride_oz + s₀.pids 1 % H * stride_oh + (s₀.pids 0 * BN + j.val)
+          = case1OutStoreOffsetG s₀ H BN stride_oz stride_oh j from rfl, hr]
+      rw [score_case1_closedFormG_eq_ioSpec s₀ Q K M sm_scale H H_KV ROUND_CTX BN BD
+        stride_qz stride_qh stride_qm stride_qk stride_kz stride_kh stride_kk stride_kn swo sws hT
+        xs ys zs (fun t j' => hx t j' trivial) (fun t j' => hy t j' trivial)
+        (fun t j' => hz t j' trivial) j]
+      simp [FloatDType.ofReal]
+    · -- the frame: cells outside the active write window are untouched
+      intro r o hcond
+      have hmiss : r = Out → ∀ i : Fin BN, case1OutActiveG s₀ BN NKV_CTX i →
+          o ≠ case1OutStoreOffsetG s₀ H BN stride_oz stride_oh i := by
+        intro hr i hact
+        rcases hcond with hne | hall
+        · exact absurd hr hne
+        · exact hall i hact
+      rw [hframe r o hmiss, hmemL]
+
+end IOFaceCase1
 
 end VeriTile.Bench.TritonBenchG.AttentionScore
