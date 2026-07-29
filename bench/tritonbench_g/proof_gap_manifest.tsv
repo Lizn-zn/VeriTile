@@ -14,6 +14,7 @@ bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case3_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case2_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case4_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_genuine_output_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
@@ -82,6 +83,7 @@ bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_genuine_output_compute_
 bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_genuine_l_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_python_case1_genuine_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_python_case2_genuine_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_normalization_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_running_max_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_masked_accumulator_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
