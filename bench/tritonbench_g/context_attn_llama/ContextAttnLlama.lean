@@ -2985,4 +2985,2637 @@ specification context_attn_llama_surface_compute_correct_general
 end Correct_without_Rounding
 
 
+/-! # ══════════ IO-face (`⊨[R]`) — the paged-KV gather skin ══════════ -/
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamMetaGatherMasked3DKernelIO₃
+
+/-! ## Slot table and IO signature
+
+`context_attn_llama` consumes `StreamMetaGatherMasked3DKernelIO₃` (metadata +
+a per-step gathered index channel + three streamed float inputs +
+launch-legality `pre`) on a **2-D grid** (`start_m = pid₀`, `cur_bh = pid₁`;
+`pid₂` is unused): four `.nat` metadata slots, all loaded at cell
+`cur_batch = pid₁ / H` of their own regions, in the kernel's own load order —
+slot `0` = `B_Start_Loc[pid₁/H]` (`cur_batch_in_all_start_index`), slot `1` =
+`b_prompt_cache_len[pid₁/H]` (`prompt_cache_len`), slot `2` =
+`B_Seqlen[pid₁/H]` **raw**, slot `3` = `B_req_idx[pid₁/H]`
+(`cur_batch_req_idx`, the page-table row this program gathers through). The
+`B_Seqlen` slot is the raw load because the kernel loads the raw total length
+and subtracts in-register
+(`cur_batch_seq_len = tl.load(B_Seqlen + cur_batch) - prompt_cache_len`), so
+the honest slot is the raw load and every window/mask carries the
+ℕ-truncated `m 2 - m 1` verbatim.
+
+The **gather channel** is the `Req_to_tokens` page table: per step the kernel
+loads a `[BLOCK_N]` `.nat` tile of physical token slots at
+`stride_req_b·m 3 + stride_req_s·(t·BN + jL)`, masked by the same
+`block_end_loc` liveness the K/V loads carry, with `other=0` — the skin's
+`gbuf`/`gty`/`Bg`/`gread`/`gmask`/`gother` fields. Its *values* address the
+`K`/`V` loads, so `read2`/`read3` eat the gathered tile `G`. -/
+
+/-- Slot-region table of the four per-batch metadata slots, in the kernel's
+own load order. A shared def, never an inline `match` in a window/spec
+position. -/
+def ctxLlamaIOMetaBuf (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat) :
+    Fin 4 → RegionName
+  | ⟨0, _⟩ => B_Start_Loc.cast
+  | ⟨1, _⟩ => b_prompt_cache_len.cast
+  | ⟨2, _⟩ => B_Seqlen.cast
+  | ⟨_ + 3, _⟩ => B_req_idx.cast
+
+/-- The pid-free step budget `T = ⌈NT·BLOCK_M / BLOCK_N⌉`: at a `pre`-legal
+launch the live trip count `block_mask·block_end_loc ≤ B_Seqlen[b] ≤
+NT·BLOCK_M` never outruns `T·BLOCK_N` (`ctxFwdIOBel_le` below). -/
+def ctxFwdIOT (NT BLOCK_M BLOCK_N : Nat) : Nat :=
+  (NT * BLOCK_M + (BLOCK_N - 1)) / BLOCK_N
+
+/-- `0 < T` for nonempty tiles and a nonempty grid (the static `Q` stream is
+read at step `0`, so the skin forces this). -/
+theorem ctxFwdIOT_pos (NT BLOCK_M BLOCK_N : Nat) (hBM : 0 < BLOCK_M)
+    (hBN : 0 < BLOCK_N) (hNT : 0 < NT) : 0 < ctxFwdIOT NT BLOCK_M BLOCK_N := by
+  have h1 : 0 < NT * BLOCK_M := Nat.mul_pos hNT hBM
+  exact Nat.div_pos (by omega) hBN
+
+/-- Ceil property: `NT·BLOCK_M ≤ BLOCK_N·T`. -/
+theorem ctxFwdIOT_mul_le (NT BLOCK_M BLOCK_N : Nat) (hBN : 0 < BLOCK_N) :
+    NT * BLOCK_M ≤ BLOCK_N * ctxFwdIOT NT BLOCK_M BLOCK_N := by
+  rw [ctxFwdIOT]
+  have hdm := Nat.div_add_mod (NT * BLOCK_M + (BLOCK_N - 1)) BLOCK_N
+  have h3 : (NT * BLOCK_M + (BLOCK_N - 1)) % BLOCK_N < BLOCK_N := Nat.mod_lt _ hBN
+  omega
+
+/-- The kernel-decoded `block_end_loc = min(BLOCK_M·pid₀ + BLOCK_M + plen,
+(rawsl − plen) + plen)`, transcribed VERBATIM on the slot values (ℕ-truncated
+subtraction and all) — `ctxFwdBelG` freed from its state anchor (they are
+definitionally equal at the slot reads). -/
+def ctxFwdIOBel (BLOCK_M pid₀ plen rawsl : Nat) : Nat :=
+  let sl := rawsl - plen
+  let a := BLOCK_M * pid₀ + BLOCK_M + plen
+  let b := sl + plen
+  if a < b then a else b
+
+/-- Under the raw-slot launch bound the live trip count `bm·bel` is at most
+`NT·BLOCK_M`: a live block (`bm = 1`) forces `plen < rawsl`, so
+`bel ≤ (rawsl − plen) + plen = rawsl`. This is what makes the `pre`-forced
+budget `T` citable for every live step. -/
+private theorem ctxFwdIOBel_le (BLOCK_M pid₀ plen rawsl NT : Nat)
+    (hraw : rawsl ≤ NT * BLOCK_M) :
+    (if BLOCK_M * pid₀ < rawsl - plen then 1 else 0)
+        * ctxFwdIOBel BLOCK_M pid₀ plen rawsl ≤ NT * BLOCK_M := by
+  by_cases hbm : BLOCK_M * pid₀ < rawsl - plen
+  · rw [if_pos hbm, one_mul]
+    simp only [ctxFwdIOBel]
+    split <;> omega
+  · rw [if_neg hbm, zero_mul]
+    exact Nat.zero_le _
+
+/-- **Gather-indexed streaming metadata IO signature** of
+`context_attn_llama` on the gather-widened three-stream fold skin (S1:
+online-softmax fold + terminal masked store, 2-D pid grid
+`(start_m, cur_bh)`), at the existing headline's `kv_group_num = 1` pin (so
+`cur_kv_head = cur_head`) and fully **symbolic per-axis strides**.
+
+The kernel's `forRangeDyn` trip count `block_mask·block_end_loc` grows with
+`pid₀` × the loaded slots, so the walk has **no pid-free step bound**:
+`T := ⌈NT·BLOCK_M / BLOCK_N⌉` for a new `Nat` parameter `NT` (the host
+grid's **first** dimension `cdiv(max_input_len, BLOCK_M)`), and the skin's
+launch-legality field is
+
+`pre := pid₀ < NT ∧ B_Seqlen[pid₁/H] ≤ NT·BLOCK_M`
+
+— exactly the port's documented **trusted boundary** (see the file
+docstring's Scope section): the host launches
+`grid = (cdiv(max_input_len, BLOCK_M), batch·head)`, so every real program
+has `start_m < NT`, and every raw `B_Seqlen[b] ≤ max_input_len ≤
+NT·BLOCK_M`. The `⊨[R]` triple says nothing about launches outside this
+boundary.
+
+Windows transcribe the kernel's pointer arithmetic exactly, with the loaded
+slot vector `m` in place of the in-state metadata reads (`m 0 =
+cur_batch_in_all_start_index`, `m 1 = prompt_cache_len`, `m 2 = raw
+B_Seqlen[pid₁/H]`, `m 3 = cur_batch_req_idx`; the register
+`cur_batch_seq_len` is `m 2 - m 1`) and the gathered tile `G` in place of the
+in-state `kv_loc` register:
+
+* `gread` (`Req_to_tokens`, the page table — `Bg = BLOCK_N`, `gty = .nat`,
+  `gother = 0` from the load's `other=0`): lane `jL` at step `t` reads
+  `stride_req_b·m 3 + stride_req_s·(t·BN + jL)`; `gmask` is the K/V liveness
+  `t·BN + jL < block_end_loc(pid₀, m)` — the **same** guard the data loads
+  carry, so dead lanes are never dereferenced.
+* `read1` (`Q`, the **static** stream — the window ignores `t`): lane
+  `j = (i, e)` row-major over `[BLOCK_M, BLOCK_DMODEL]` reads
+  `(m 0 + (pid₀·BM + i))·stride_qbs + (pid₁%H)·stride_qh + e·stride_qd`;
+  `mask1` is the row guard `pid₀·BM + i < m 2 − m 1`.
+* `read2` (`K`, **gather-addressed**, `kv_loc[None,:]` so the gathered lane
+  sits on axis 1): lane `j = (e, jL)` over `[BLOCK_DMODEL, BLOCK_N]` reads
+  `G t jL·stride_kbs + (pid₁%H)·stride_kh + e·stride_kd`; `mask2` is
+  `t·BN + jL < block_end_loc(pid₀, m)` — the **slot-eating step mask** that
+  keeps the dead tail steps unpinned.
+* `read3` (`V`, mirror at `[BLOCK_N, BLOCK_DMODEL]`, `kv_loc[:,None]` so the
+  gathered lane sits on axis 0): lane `j = (jL, e)` reads
+  `G t jL·stride_vbs + (pid₁%H)·stride_vh + e·stride_vd`; `mask3` is
+  `t·BN + jL < block_end_loc(pid₀, m)`.
+* `write` (`Out`, the terminal store after the post-loop divide): lane
+  `j = (i, e)` writes `(m 0 + (pid₀·BM + i))·stride_obs +
+  (pid₁%H)·stride_oh + e·stride_od`; `writeMask` is the row guard.
+
+The gathered *values* are host page-table contents — a trusted input, like
+the slot values — so their in-bounds-ness is an `hbr2`/`hbr3` hypothesis of
+the triple (quantified over `G`), not a `pre` fact.
+
+`outDType` is the `.real` default: the terminal `tl.store` is untyped, so
+there is no quantization event. -/
+def contextAttnLlamaIO (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat) (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      H BLOCK_DMODEL BLOCK_M BLOCK_N NT : Nat) :
+    StreamMetaGatherMasked3DKernelIO₃ where
+  kernel := context_attn_llama_fwd_kernel_surface Q K V sm_scale Out
+    B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len
+    stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+    stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+    stride_req_b stride_req_s 1 H BLOCK_DMODEL BLOCK_M BLOCK_N
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  out := Out
+  nMeta := 4
+  sty := fun _ => ChanTy.nat
+  mbuf := ctxLlamaIOMetaBuf B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+  mwin := fun _ _ pid₁ _ => pid₁ / H
+  gbuf := Req_to_tokens
+  gty := ChanTy.nat
+  Bg := BLOCK_N
+  gother := 0
+  T := ctxFwdIOT NT BLOCK_M BLOCK_N
+  B1 := BLOCK_M * BLOCK_DMODEL
+  B2 := BLOCK_DMODEL * BLOCK_N
+  B3 := BLOCK_N * BLOCK_DMODEL
+  C := BLOCK_M * BLOCK_DMODEL
+  pre := fun pid₀ _ _ m =>
+    pid₀ < NT ∧ m (⟨2, by omega⟩ : Fin 4) ≤ NT * BLOCK_M
+  gread := fun _ _ _ m t j =>
+    stride_req_b * m (⟨3, by omega⟩ : Fin 4) + stride_req_s * (t.val * BLOCK_N + j.val)
+  gmask := fun pid₀ _ _ m t j =>
+    t.val * BLOCK_N + j.val
+      < ctxFwdIOBel BLOCK_M pid₀ (m (⟨1, by omega⟩ : Fin 4)) (m (⟨2, by omega⟩ : Fin 4))
+  read1 := fun pid₀ pid₁ _ m _ j =>
+    (m (⟨0, by omega⟩ : Fin 4) + (pid₀ * BLOCK_M + j.val / BLOCK_DMODEL)) * stride_qbs
+      + pid₁ % H * stride_qh + j.val % BLOCK_DMODEL * stride_qd
+  read2 := fun _ pid₁ _ _ G t j =>
+    G t (Lane2D.decode j).2.1 * stride_kbs
+      + pid₁ % H * stride_kh + j.val / BLOCK_N * stride_kd
+  read3 := fun _ pid₁ _ _ G t j =>
+    G t (Lane2D.decode j).1 * stride_vbs
+      + pid₁ % H * stride_vh + j.val % BLOCK_DMODEL * stride_vd
+  write := fun pid₀ pid₁ _ m j =>
+    (m (⟨0, by omega⟩ : Fin 4) + (pid₀ * BLOCK_M + j.val / BLOCK_DMODEL)) * stride_obs
+      + pid₁ % H * stride_oh + j.val % BLOCK_DMODEL * stride_od
+  mask1 := fun pid₀ _ _ m _ j =>
+    pid₀ * BLOCK_M + j.val / BLOCK_DMODEL
+      < m (⟨2, by omega⟩ : Fin 4) - m (⟨1, by omega⟩ : Fin 4)
+  mask2 := fun pid₀ _ _ m t j =>
+    t.val * BLOCK_N + j.val % BLOCK_N
+      < ctxFwdIOBel BLOCK_M pid₀ (m (⟨1, by omega⟩ : Fin 4)) (m (⟨2, by omega⟩ : Fin 4))
+  mask3 := fun pid₀ _ _ m t j =>
+    t.val * BLOCK_N + j.val / BLOCK_DMODEL
+      < ctxFwdIOBel BLOCK_M pid₀ (m (⟨1, by omega⟩ : Fin 4)) (m (⟨2, by omega⟩ : Fin 4))
+  writeMask := fun pid₀ _ _ m j =>
+    pid₀ * BLOCK_M + j.val / BLOCK_DMODEL
+      < m (⟨2, by omega⟩ : Fin 4) - m (⟨1, by omega⟩ : Fin 4)
+
+/-! ## Stream-indexed tiles and the streamed closed form -/
+
+/-- The `Q` cell read off the (static) first stream, row-guarded like the
+kernel's masked `q` load (`offs_m < cur_batch_seq_len` on the slot values
+`sl = rawsl − plen`); the window ignores `t`, so the step-`0` slice carries
+the whole `[BLOCK_M, BLOCK_DMODEL]` tile. -/
+noncomputable def ctxFwdIOqM (BLOCK_M BLOCK_DMODEL T : Nat) (hT : 0 < T)
+    (pid₀ sl : Nat) (xs : Fin T → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ)
+    (i : Fin BLOCK_M) (e : Fin BLOCK_DMODEL) : ℝ :=
+  if pid₀ * BLOCK_M + i.val < sl then
+    xs ⟨0, hT⟩ (Lane2D.encode (i, e, PUnit.unit))
+  else 0
+
+/-- The `block_end_loc`-masked `K` cell at global key `jg` off the second
+stream: step `jg / BLOCK_N`, block column `jg % BLOCK_N`, stream lane
+`(e, jg % BLOCK_N)`; `0` at or beyond `bel` (the kernel's `other=0.0`) and
+beyond the `T`-step budget (unreachable at any `pre`-legal launch). -/
+noncomputable def ctxFwdIOkM (BLOCK_DMODEL BLOCK_N T : Nat) (hBN : 0 < BLOCK_N)
+    (bel : Nat) (ys : Fin T → Fin (BLOCK_DMODEL * BLOCK_N) → ℝ)
+    (jg : Nat) (e : Fin BLOCK_DMODEL) : ℝ :=
+  if jg < bel then
+    if h : jg / BLOCK_N < T then
+      ys ⟨jg / BLOCK_N, h⟩
+        (Lane2D.encode (e, ⟨jg % BLOCK_N, Nat.mod_lt _ hBN⟩, PUnit.unit))
+    else 0
+  else 0
+
+/-- The `block_end_loc`-masked `V` cell at global key `jg` off the third
+stream, at stream lane `(jg % BLOCK_N, d)`. -/
+noncomputable def ctxFwdIOvM (BLOCK_N BLOCK_DMODEL T : Nat) (hBN : 0 < BLOCK_N)
+    (bel : Nat) (zs : Fin T → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ)
+    (jg : Nat) (d : Fin BLOCK_DMODEL) : ℝ :=
+  if jg < bel then
+    if h : jg / BLOCK_N < T then
+      zs ⟨jg / BLOCK_N, h⟩
+        (Lane2D.encode (⟨jg % BLOCK_N, Nat.mod_lt _ hBN⟩, d, PUnit.unit))
+    else 0
+  else 0
+
+/-- **The streamed closed form**: `ctxFwdGenuineOutValueG` restated VERBATIM
+over the three streamed tiles — the `acc/l` readback of the ⊥-seeded
+online-softmax `exp2` fold over the kernel's live streamed window
+`S = BLOCK_N·⌈bm·bel / BLOCK_N⌉` (a function of `pid₀` and the slots), with
+the prompt-cache-offset causal boundary and the **finite `-1e8` sentinel**
+(`0.0 - 10e7`) on future lanes — masked keys genuinely carry weight
+`exp2(-1e8 - m)`, so this is NOT cleaned up into a pure causal softmax.
+Output lane `j = (i, e)` row-major over `[BLOCK_M, BLOCK_DMODEL]`. -/
+noncomputable def contextAttnLlamaIOSpec (BLOCK_M BLOCK_DMODEL BLOCK_N NT : Nat)
+    (hBN : 0 < BLOCK_N) (hT : 0 < ctxFwdIOT NT BLOCK_M BLOCK_N) (sm_scale : ℝ)
+    (pid₀ plen rawsl : Nat)
+    (xs : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N) → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ)
+    (ys : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N) → Fin (BLOCK_DMODEL * BLOCK_N) → ℝ)
+    (zs : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N) → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ)
+    (j : Fin (BLOCK_M * BLOCK_DMODEL)) : ℝ :=
+  let st := gStateBot
+    (BLOCK_N * (((if BLOCK_M * pid₀ < rawsl - plen then 1 else 0)
+        * ctxFwdIOBel BLOCK_M pid₀ plen rawsl + (BLOCK_N - 1)) / BLOCK_N))
+    (BLOCK_N * (((if BLOCK_M * pid₀ < rawsl - plen then 1 else 0)
+        * ctxFwdIOBel BLOCK_M pid₀ plen rawsl + (BLOCK_N - 1)) / BLOCK_N))
+    (fun jg =>
+      (if jg.val ≤ pid₀ * BLOCK_M + (Lane2D.decode j).1.val + plen then
+          sm_scale * Finset.univ.sum (fun e : Fin BLOCK_DMODEL =>
+            ctxFwdIOqM BLOCK_M BLOCK_DMODEL (ctxFwdIOT NT BLOCK_M BLOCK_N) hT
+                pid₀ (rawsl - plen) xs (Lane2D.decode j).1 e
+              * ctxFwdIOkM BLOCK_DMODEL BLOCK_N (ctxFwdIOT NT BLOCK_M BLOCK_N) hBN
+                  (ctxFwdIOBel BLOCK_M pid₀ plen rawsl) ys jg.val e)
+        else (0.0 - 10e7 : ℝ),
+       ctxFwdIOvM BLOCK_N BLOCK_DMODEL (ctxFwdIOT NT BLOCK_M BLOCK_N) hBN
+         (ctxFwdIOBel BLOCK_M pid₀ plen rawsl) zs jg.val (Lane2D.decode j).2.1))
+  st.2.2 / st.2.1
+
+set_option maxHeartbeats 3200000 in
+/-- **Stream-spec bridge**: at a `pre`-legal launch (`rawsl ≤ NT·BLOCK_M`),
+the port's genuine closed form `ctxFwdGenuineOutValueG` *is* the streamed
+closed form `contextAttnLlamaIOSpec`, under the skin's input pins. Both sides
+are the same `gStateBot` fold over the same live window — no window
+extension is needed (the finite `-1e8` sentinel means dead keys carry
+weight, so the window is transcribed, not extended); the per-key data agree
+pointwise because every `bel`-live key sits inside the `T`-step budget
+(`ctxFwdIOBel_le` + the ceil property).
+
+This is the **only** place the gathered tile `G` is seen: the kernel's gather
+closed form `ctxKvLocG` at a `bel`-live global key `jg` is rewritten to
+`G ⟨jg/BN⟩ ⟨jg%BN⟩` through the gather pin's active leg (`hgv` below), after
+which the `K`/`V` data pins apply verbatim. Dead keys need no gather fact:
+both sides substitute the load's `other=0.0` there. -/
+private theorem ctxFwdIOSpec_eq_genuine
+    (s : BlockState) (Q K V : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat) (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd
+      H BLOCK_DMODEL BLOCK_M BLOCK_N NT : Nat)
+    (hBN : 0 < BLOCK_N) (hT : 0 < ctxFwdIOT NT BLOCK_M BLOCK_N)
+    (m0 m1 m2 m3 : Nat)
+    (hm0 : s.readMemValue .nat ↑b_prompt_cache_len (s.pids 1 / H) = m0)
+    (hm1 : s.readMemValue .nat ↑B_Start_Loc (s.pids 1 / H) = m1)
+    (hm2 : s.readMemValue .nat ↑B_Seqlen (s.pids 1 / H) = m2)
+    (hm3 : s.readMemValue .nat ↑B_req_idx (s.pids 1 / H) = m3)
+    (hm2NT : m2 ≤ NT * BLOCK_M)
+    (G : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N) → Fin BLOCK_N → Nat)
+    (xs : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N) → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ)
+    (ys : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N) → Fin (BLOCK_DMODEL * BLOCK_N) → ℝ)
+    (zs : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N) → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ)
+    (hgv : ∀ (t : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N)) (jL : Fin BLOCK_N),
+      t.val * BLOCK_N + jL.val < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 →
+      s.readMemValue .nat ↑Req_to_tokens
+          (stride_req_b * m3 + stride_req_s * (t.val * BLOCK_N + jL.val)) = G t jL)
+    (hx : ∀ (t : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N)) (l : Fin (BLOCK_M * BLOCK_DMODEL)),
+      s.pids 0 * BLOCK_M + l.val / BLOCK_DMODEL < m2 - m0 →
+      s.readMem Q ((m1 + (s.pids 0 * BLOCK_M + l.val / BLOCK_DMODEL)) * stride_qbs
+          + s.pids 1 % H * stride_qh + l.val % BLOCK_DMODEL * stride_qd) = xs t l)
+    (hy : ∀ (t : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N)) (l : Fin (BLOCK_DMODEL * BLOCK_N)),
+      t.val * BLOCK_N + l.val % BLOCK_N < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 →
+      s.readMem K (G t (Lane2D.decode l).2.1 * stride_kbs
+          + s.pids 1 % H * stride_kh + l.val / BLOCK_N * stride_kd) = ys t l)
+    (hz : ∀ (t : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N)) (l : Fin (BLOCK_N * BLOCK_DMODEL)),
+      t.val * BLOCK_N + l.val / BLOCK_DMODEL < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 →
+      s.readMem V (G t (Lane2D.decode l).1 * stride_vbs
+          + s.pids 1 % H * stride_vh + l.val % BLOCK_DMODEL * stride_vd) = zs t l)
+    (j : Fin (BLOCK_M * BLOCK_DMODEL)) :
+    ctxFwdGenuineOutValueG s Q K V ↑B_Start_Loc ↑B_Seqlen ↑Req_to_tokens ↑B_req_idx
+        ↑b_prompt_cache_len sm_scale
+        H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N (Lane2D.decode j)
+      = contextAttnLlamaIOSpec BLOCK_M BLOCK_DMODEL BLOCK_N NT hBN hT sm_scale (s.pids 0)
+          m0 m2 xs ys zs j := by
+  have hbel : ctxFwdBelG s ↑B_Seqlen ↑b_prompt_cache_len H BLOCK_M
+      = ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 := by
+    simp only [ctxFwdBelG, ctxFwdIOBel, hm0, hm2]
+  have hSwin : ctxFwdWindowG s ↑B_Seqlen ↑b_prompt_cache_len H BLOCK_M BLOCK_N
+      = BLOCK_N * (((if BLOCK_M * s.pids 0 < m2 - m0 then 1 else 0)
+          * ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 + (BLOCK_N - 1)) / BLOCK_N) := by
+    simp only [ctxFwdWindowG, ctxFwdBelG, ctxFwdIOBel, hm0, hm2]
+  have hSxle : BLOCK_N * (((if BLOCK_M * s.pids 0 < m2 - m0 then 1 else 0)
+        * ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 + (BLOCK_N - 1)) / BLOCK_N)
+      ≤ ctxFwdIOT NT BLOCK_M BLOCK_N * BLOCK_N := by
+    have hbb := ctxFwdIOBel_le BLOCK_M (s.pids 0) m0 m2 NT hm2NT
+    have h1 : ((if BLOCK_M * s.pids 0 < m2 - m0 then 1 else 0)
+          * ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 + (BLOCK_N - 1)) / BLOCK_N
+        ≤ ctxFwdIOT NT BLOCK_M BLOCK_N := by
+      rw [ctxFwdIOT]
+      exact Nat.div_le_div_right (by omega)
+    calc BLOCK_N * (((if BLOCK_M * s.pids 0 < m2 - m0 then 1 else 0)
+            * ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 + (BLOCK_N - 1)) / BLOCK_N)
+        ≤ BLOCK_N * ctxFwdIOT NT BLOCK_M BLOCK_N := Nat.mul_le_mul_left _ h1
+      _ = ctxFwdIOT NT BLOCK_M BLOCK_N * BLOCK_N := Nat.mul_comm _ _
+  rw [ctxFwdGenuineOutValueG, hSwin, hbel]
+  simp only [contextAttnExactFoldMG, contextAttnLlamaIOSpec]
+  have hg : ctxKVMG s Q K V ↑B_Start_Loc ↑B_Seqlen ↑Req_to_tokens ↑B_req_idx
+      ↑b_prompt_cache_len sm_scale H
+      stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M
+      (BLOCK_N * (((if BLOCK_M * s.pids 0 < m2 - m0 then 1 else 0)
+          * ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 + (BLOCK_N - 1)) / BLOCK_N))
+      (ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2)
+      (Lane2D.decode j).1 (Lane2D.decode j).2.1.val
+      = fun jg =>
+        (if jg.val ≤ s.pids 0 * BLOCK_M + (Lane2D.decode j).1.val + m0 then
+            sm_scale * Finset.univ.sum (fun e : Fin BLOCK_DMODEL =>
+              ctxFwdIOqM BLOCK_M BLOCK_DMODEL (ctxFwdIOT NT BLOCK_M BLOCK_N) hT
+                  (s.pids 0) (m2 - m0) xs (Lane2D.decode j).1 e
+                * ctxFwdIOkM BLOCK_DMODEL BLOCK_N (ctxFwdIOT NT BLOCK_M BLOCK_N) hBN
+                    (ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2) ys jg.val e)
+          else (0.0 - 10e7 : ℝ),
+         ctxFwdIOvM BLOCK_N BLOCK_DMODEL (ctxFwdIOT NT BLOCK_M BLOCK_N) hBN
+           (ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2) zs jg.val (Lane2D.decode j).2.1) := by
+    funext jg
+    have hjT : jg.val / BLOCK_N < ctxFwdIOT NT BLOCK_M BLOCK_N :=
+      (Nat.div_lt_iff_lt_mul hBN).mpr (lt_of_lt_of_le jg.isLt hSxle)
+    have hplen : promptLen s H ↑b_prompt_cache_len = m0 := hm0
+    have hsl : seqLen s H ↑B_Seqlen ↑b_prompt_cache_len = m2 - m0 := by
+      simp only [seqLen, promptLen, curBatch, hm0, hm2]
+    -- the gather pin, transported to the kernel's own closed form at key `jg`
+    have hgkv : jg.val < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2 →
+        ctxKvLocG s ↑Req_to_tokens ↑B_req_idx H stride_req_b stride_req_s jg.val
+          = G ⟨jg.val / BLOCK_N, hjT⟩ ⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩ := by
+      intro hb
+      have hsplit : jg.val / BLOCK_N * BLOCK_N + jg.val % BLOCK_N = jg.val :=
+        Nat.div_add_mod' jg.val BLOCK_N
+      have hpin := hgv ⟨jg.val / BLOCK_N, hjT⟩ ⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩
+        (by show jg.val / BLOCK_N * BLOCK_N + jg.val % BLOCK_N
+              < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2
+            rw [hsplit]; exact hb)
+      rw [hsplit] at hpin
+      rw [ctxKvLocG]
+      show s.readMemValue .nat ↑Req_to_tokens
+          (stride_req_b * s.readMemValue .nat ↑B_req_idx (s.pids 1 / H)
+            + stride_req_s * jg.val) = _
+      rw [hm3]
+      exact hpin
+    refine Prod.ext ?_ ?_
+    · -- the score component
+      show (if jg.val ≤ s.pids 0 * BLOCK_M + (Lane2D.decode j).1.val
+            + promptLen s H ↑b_prompt_cache_len then
+          sm_scale * Finset.univ.sum (fun e : Fin BLOCK_DMODEL =>
+            ctxQTileMG s Q ↑B_Start_Loc ↑B_Seqlen ↑b_prompt_cache_len H
+                stride_qbs stride_qh stride_qd BLOCK_M (Lane2D.decode j).1 e.val
+              * ctxKTileMG s K ↑Req_to_tokens ↑B_req_idx H stride_req_b stride_req_s
+                  stride_kbs stride_kh stride_kd _
+                  (ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2) jg e.val)
+        else (0.0 - 10e7 : ℝ)) = _
+      rw [hplen]
+      by_cases hc : jg.val ≤ s.pids 0 * BLOCK_M + (Lane2D.decode j).1.val + m0
+      · rw [if_pos hc, if_pos hc]
+        refine congrArg (sm_scale * ·) (Finset.sum_congr rfl (fun e _ => ?_))
+        refine congrArg₂ (· * ·) ?_ ?_
+        · -- the Q cell
+          rw [ctxQTileMG, ctxFwdIOqM, hsl]
+          by_cases hrow : s.pids 0 * BLOCK_M + (Lane2D.decode j).1.val < m2 - m0
+          · rw [if_pos hrow, if_pos hrow, ctxQTileG,
+              ← hx ⟨0, hT⟩ (Lane2D.encode ((Lane2D.decode j).1, e, PUnit.unit))
+                (by rw [Lane2D.encode_div]; exact hrow)]
+            rw [Lane2D.encode_div, Lane2D.encode_mod]
+            simp only [BlockState.readMem, curBatch, curHead, hm1]
+          · rw [if_neg hrow, if_neg hrow]
+        · -- the K cell (gather-addressed)
+          rw [ctxKTileMG, ctxFwdIOkM]
+          by_cases hb : jg.val < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2
+          · rw [if_pos hb, if_pos hb, dif_pos hjT, ctxKTileG,
+              ← hy ⟨jg.val / BLOCK_N, hjT⟩
+                (Lane2D.encode (e, ⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩, PUnit.unit))
+                (by rw [Lane2D.encode_mod]
+                    show jg.val / BLOCK_N * BLOCK_N + jg.val % BLOCK_N
+                      < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2
+                    rw [Nat.div_add_mod']; exact hb)]
+            rw [Lane2D.decode_encode, Lane2D.encode_div, hgkv hb]
+            show s.readMem K (G ⟨jg.val / BLOCK_N, hjT⟩ ⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩
+                  * stride_kbs + curHead s H * stride_kh + e.val * stride_kd)
+              = s.readMem K (G ⟨jg.val / BLOCK_N, hjT⟩ ⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩
+                  * stride_kbs + s.pids 1 % H * stride_kh + e.val * stride_kd)
+            rfl
+          · rw [if_neg hb, if_neg hb]
+      · rw [if_neg hc, if_neg hc]
+    · -- the value component (gather-addressed)
+      show ctxVTileMG s V ↑Req_to_tokens ↑B_req_idx H stride_req_b stride_req_s
+          stride_vbs stride_vh stride_vd _
+          (ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2) jg (Lane2D.decode j).2.1.val = _
+      rw [ctxVTileMG, ctxFwdIOvM]
+      by_cases hb : jg.val < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2
+      · rw [if_pos hb, if_pos hb, dif_pos hjT, ctxVTileG,
+          ← hz ⟨jg.val / BLOCK_N, hjT⟩
+            (Lane2D.encode (⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩,
+              (Lane2D.decode j).2.1, PUnit.unit))
+            (by rw [Lane2D.encode_div]
+                show jg.val / BLOCK_N * BLOCK_N + jg.val % BLOCK_N
+                  < ctxFwdIOBel BLOCK_M (s.pids 0) m0 m2
+                rw [Nat.div_add_mod']; exact hb)]
+        rw [Lane2D.decode_encode, Lane2D.encode_mod, hgkv hb]
+        show s.readMem V (G ⟨jg.val / BLOCK_N, hjT⟩ ⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩
+              * stride_vbs + curHead s H * stride_vh + (Lane2D.decode j).2.1.val * stride_vd)
+          = s.readMem V (G ⟨jg.val / BLOCK_N, hjT⟩ ⟨jg.val % BLOCK_N, Nat.mod_lt _ hBN⟩
+              * stride_vbs + s.pids 1 % H * stride_vh + (Lane2D.decode j).2.1.val * stride_vd)
+        rfl
+      · rw [if_neg hb, if_neg hb]
+  rw [hg]
+
+/-! ## Flat-bridge coverage and cast-freedom
+
+The LightLLM port is cast-free post-erasure (`p.to(v.dtype)` lowered to a
+self-assign; all loads/stores at `.real`/`.nat`, plain pointers throughout —
+no `ptrSub`, no block pointers), so `stepStmtsR R` collapses verbatim onto
+the exact stepper on every segment. -/
+
+set_option maxHeartbeats 4000000 in
+/-- The surface sits inside the flat-memory bridge's covered fragment. -/
+theorem ctxFwdIO_flattenOk (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat) (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) :
+    ((context_attn_llama_fwd_kernel_surface Q K V sm_scale Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len
+      stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      stride_req_b stride_req_s 1 H BLOCK_DMODEL BLOCK_M BLOCK_N).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [ctxBody_splitG]
+  simp [ctxPreLoopG, ctxLoopBodyG, ctxPostLoopG, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-- Per-statement cast-free collapse lifts to statement lists (walks the
+actual successor chain; a failing step collapses on both sides). Private
+copy of the aft3/nopad helper (bench files never import each other). -/
+private theorem ctxFwdIO_stepStmtsR_castFree_of_stmts (R : RoundingModel) :
+    ∀ (l : List Stmt), (∀ st ∈ l, ∀ u, stepStmtR R st u = stepStmt st u) →
+      ∀ s, stepStmtsR R l s = stepStmts l s
+  | [], _, s => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, s => by
+      simp only [stepStmtsR, stepStmts, h st List.mem_cons_self s]
+      cases stepStmt st s with
+      | none => rfl
+      | some s' =>
+          exact ctxFwdIO_stepStmtsR_castFree_of_stmts R rest
+            (fun st' h' u => h st' (List.mem_cons_of_mem _ h') u) s'
+
+set_option maxHeartbeats 4000000 in
+/-- Every preLoop statement is cast-free (`.nat` slot loads, register-only
+`.nat` arithmetic, the `other=0.0`-masked `.real` `q` load, `full`/`where`
+seeds). -/
+private theorem ctxFwdIO_preLoop_stmt_castFree (R : RoundingModel)
+    (Q : RegionName) (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat)
+    (stride_qbs stride_qh stride_qd kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) :
+    ∀ st ∈ ctxPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+        stride_qbs stride_qh stride_qd kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [ctxPreLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  all_goals simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The preLoop is cast-free as a list. -/
+private theorem ctxFwdIO_preLoop_castFree (R : RoundingModel)
+    (Q : RegionName) (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat)
+    (stride_qbs stride_qh stride_qd kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (t : BlockState) :
+    stepStmtsR R (ctxPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+        stride_qbs stride_qh stride_qd kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N) t
+      = stepStmts (ctxPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+          stride_qbs stride_qh stride_qd kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N) t :=
+  ctxFwdIO_stepStmtsR_castFree_of_stmts R _
+    (ctxFwdIO_preLoop_stmt_castFree R Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+      stride_qbs stride_qh stride_qd kv_group_num H BLOCK_DMODEL BLOCK_M BLOCK_N) t
+
+set_option maxHeartbeats 4000000 in
+/-- Every loop-body statement is cast-free (the erased `p.to(v.dtype)` is a
+self-assign; the `kv_loc` gather is a `.nat` load with `other=0`, the `k`/`v`
+loads carry `other=0.0` at `.real`; `exp2` is exact `.real` arithmetic). -/
+private theorem ctxFwdIO_body_stmt_castFree (R : RoundingModel)
+    (Q K V Req_to_tokens : RegionName) (sm_scale : ℝ)
+    (stride_req_b stride_req_s stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd
+      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) :
+    ∀ st ∈ ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [ctxLoopBodyG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl
+  all_goals simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+/-- The loop body is cast-free as a list. -/
+private theorem ctxFwdIO_body_castFree (R : RoundingModel)
+    (Q K V Req_to_tokens : RegionName) (sm_scale : ℝ)
+    (stride_req_b stride_req_s stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd
+      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (t : BlockState) :
+    stepStmtsR R (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N) t
+      = stepStmts (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh
+          stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N) t :=
+  ctxFwdIO_stepStmtsR_castFree_of_stmts R _
+    (ctxFwdIO_body_stmt_castFree R Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N) t
+
+set_option maxHeartbeats 4000000 in
+/-- Every postLoop statement is cast-free (`writeMemTypedR R .real` *is*
+`writeMemTyped .real`). -/
+private theorem ctxFwdIO_postLoop_stmt_castFree (R : RoundingModel)
+    (Out : RegionName) (stride_obs stride_oh stride_od BLOCK_DMODEL BLOCK_M : Nat) :
+    ∀ st ∈ ctxPostLoopG Out stride_obs stride_oh stride_od BLOCK_DMODEL BLOCK_M,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [ctxPostLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl
+  all_goals
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      BlockState.writeMemTypedR]
+
+/-- The postLoop is cast-free as a list. -/
+private theorem ctxFwdIO_postLoop_castFree (R : RoundingModel)
+    (Out : RegionName) (stride_obs stride_oh stride_od BLOCK_DMODEL BLOCK_M : Nat)
+    (t : BlockState) :
+    stepStmtsR R (ctxPostLoopG Out stride_obs stride_oh stride_od BLOCK_DMODEL BLOCK_M) t
+      = stepStmts (ctxPostLoopG Out stride_obs stride_oh stride_od BLOCK_DMODEL BLOCK_M) t :=
+  ctxFwdIO_stepStmtsR_castFree_of_stmts R _
+    (ctxFwdIO_postLoop_stmt_castFree R Out stride_obs stride_oh stride_od
+      BLOCK_DMODEL BLOCK_M) t
+
+/-- `evalOpR` of a `constNat` (R-independent). -/
+private theorem ctxFwdIO_evalOpR_constNat (R : RoundingModel) (n : Nat) (u : BlockState) :
+    evalOpR R (Op.constNat n) u = some (Tile.scalar n) := by
+  simp [evalOpR]
+
+/-- `evalOpR` of the `forRangeDyn` stop expression
+`block_mask * block_end_loc` is the exact evaluation (register-only `.nat`
+arithmetic — R-independent). -/
+private theorem ctxFwdIO_stopOpR_castFree (R : RoundingModel) (u : BlockState) :
+    evalOpR R (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+        (Op.ref .nat [] "block_end_loc")) u
+      = evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+          (Op.ref .nat [] "block_end_loc")) u := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+set_option maxHeartbeats 1600000 in
+/-- The streaming `forRangeDyn` statement is cast-free per-state: its bound
+expressions are register-only `.nat` arithmetic and its body is cast-free,
+so `stepStmtR R` on the whole loop *is* `stepStmt`. -/
+private theorem ctxFwdIO_dyn_castFree (R : RoundingModel)
+    (Q K V Req_to_tokens : RegionName) (sm_scale : ℝ)
+    (stride_req_b stride_req_s stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd
+      BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) :
+    ∀ u, stepStmtR R (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+          (Op.ref .nat [] "block_end_loc"))
+        (Op.constNat BLOCK_N)
+        (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh
+          stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)) u
+      = stepStmt (Stmt.forRangeDyn "start_n" (Op.constNat 0)
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+            (Op.ref .nat [] "block_end_loc"))
+          (Op.constNat BLOCK_N)
+          (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+            stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)) u := by
+  intro u
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  simp only [stepStmtR, ctxFwdIO_evalOpR_constNat, ctxFwdIO_stopOpR_castFree,
+    evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  cases hstop : evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+      (Op.ref .nat [] "block_end_loc")) u with
+  | none => rfl
+  | some t =>
+      simp only [Option.bind_some]
+      exact stepForRangeAuxR_castFree R _
+        (ctxFwdIO_body_castFree R Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh
+          stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)
+        "start_n" _ _ _ u
+
+/-- The whole lowered body is cast-free, statement by statement: `execR R`
+on the surface *is* the exact `stepStmts` run. -/
+private theorem ctxFwdIO_execR_collapse (R : RoundingModel)
+    (Q K V Out : RegionName) (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (s : BlockState) :
+    execR R ((context_attn_llama_fwd_kernel_surface Q K V sm_scale Out
+        B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s 1 H BLOCK_DMODEL BLOCK_M BLOCK_N).toAlgKernel) s
+      = stepStmts ((context_attn_llama_fwd_kernel_surface Q K V sm_scale Out
+          B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len
+          stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+          stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+          stride_req_b stride_req_s 1 H BLOCK_DMODEL BLOCK_M BLOCK_N).toAlgKernel.body) s := by
+  unfold execR
+  rw [ctxBody_splitG]
+  refine ctxFwdIO_stepStmtsR_castFree_of_stmts R _ ?_ s
+  intro st hst
+  rcases List.mem_append.mp hst with hpre | hrest
+  · exact ctxFwdIO_preLoop_stmt_castFree R Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+      stride_qbs stride_qh stride_qd 1 H BLOCK_DMODEL BLOCK_M BLOCK_N st hpre
+  · rcases List.mem_cons.mp hrest with rfl | hpost
+    · exact ctxFwdIO_dyn_castFree R Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N
+    · exact ctxFwdIO_postLoop_stmt_castFree R Out stride_obs stride_oh stride_od
+        BLOCK_DMODEL BLOCK_M st hpost
+
+/-! ## The weak safety stack (`hts`)
+
+The skin's `hts` obligation quantifies over **arbitrary** launch states (no
+clean-`undef` pin), so the exact stack's `ctxInvariantG` (whose third
+conjunct pins `undef`) is unavailable there. Since every load in this kernel
+is masked with an explicit `other` (`0.0` for `q`/`k`/`v`, `0` for the
+`kv_loc` gather) or an unmasked `.nat` scalar (never `other=None`), the
+whole walk is `undef`-independent: the weak stack re-runs the register chain
+with exact pins for the address-bearing registers and **existential** pins
+for the value registers (`q`/`m_i`/`l_i`/`acc`) — the aft3/nopad pattern.
+The `pre` hypothesis (`raw B_Seqlen slot ≤ NT·BLOCK_M`) is what makes the
+per-step `Fin T` window bounds citable at all. -/
+
+/-- Combined walk cons: safety of the head at the current state, the R-step
+it actually takes, and the pair (safety, run) of the tail from the successor
+give the pair for the whole list. Private copy of the nopad combinator. -/
+private theorem ctxFwdIO_walkCons {R : RoundingModel} {bounds : RegionBounds}
+    {P : BlockState → Prop} {st : Stmt} {rest : List Stmt} {s s' : BlockState}
+    (h1 : Stmt.TraceSafeR R bounds st s)
+    (hstep : stepStmtR R st s = some s')
+    (h2 : Stmt.TraceSafeListR R bounds rest s'
+      ∧ ∃ sF, stepStmtsR R rest s' = some sF ∧ P sF) :
+    Stmt.TraceSafeListR R bounds (st :: rest) s
+      ∧ ∃ sF, stepStmtsR R (st :: rest) s = some sF ∧ P sF :=
+  ⟨Stmt.TraceSafeListR.cons_intro h1 (fun u hu => by
+      rw [hstep] at hu
+      exact (Option.some.inj hu) ▸ h2.1),
+    by rw [stepStmtsR_cons_some hstep]; exact h2.2⟩
+
+/-- R-step of an assign whose op is cast-free: the two collapse into one
+walk-ready equation. -/
+private theorem ctxFwdIO_stepR_of_assign {R : RoundingModel} {dt : TileDType}
+    {sh : TileShape} {nm : RegName} {e : Op dt sh} {s : BlockState} {v : Tile dt sh}
+    (hcf : evalOpR R e s = evalOp e s) (h : evalOp e s = some v) :
+    stepStmtR R (.assign dt sh nm e) s = some (s.setReg nm dt sh v) :=
+  stepStmtR_assign_eq_some (hcf.trans h)
+
+/-- `evalOpR` of the K-load column mask `(start_n + offs_n[None,:]) <
+block_end_loc` at pinned registers (R-side wrapper of `ctxKMask_eval`). -/
+private theorem ctxFwdIO_kmaskR_eval (R : RoundingModel) {BN D : Nat} (u : BlockState)
+    (SN bel : Nat)
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hbel : u.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOpR R (Op.remap [D, BN] (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+          (Op.ref .nat [] "block_end_loc"))) u
+      = some (⟨fun idx : TileIndex [D, BN] => decide (SN + idx.2.1.val < bel)⟩
+          : Tile .bool [D, BN]) := by
+  rw [show evalOpR R (Op.remap [D, BN]
+        (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+          (Op.ref .nat [] "block_end_loc"))) u
+      = evalOp (Op.remap [D, BN]
+          (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+            (Op.ref .nat [] "block_end_loc"))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  exact ctxKMask_eval u SN bel hsn hn hbel
+
+/-- `evalOpR` of the V-load row mask `(start_n + offs_n[:,None]) <
+block_end_loc` at pinned registers (R-side wrapper of `ctxVMask_eval`). -/
+private theorem ctxFwdIO_vmaskR_eval (R : RoundingModel) {BN D : Nat} (u : BlockState)
+    (SN bel : Nat)
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hbel : u.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOpR R (Op.remap [BN, D] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+          (Op.ref .nat [] "block_end_loc"))) u
+      = some (⟨fun idx : TileIndex [BN, D] => decide (SN + idx.1.val < bel)⟩
+          : Tile .bool [BN, D]) := by
+  rw [show evalOpR R (Op.remap [BN, D]
+        (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+          (Op.ref .nat [] "block_end_loc"))) u
+      = evalOp (Op.remap [BN, D]
+          (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+          (Op.lt .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n")))
+            (Op.ref .nat [] "block_end_loc"))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  exact ctxVMask_eval u SN bel hsn hn hbel
+
+/-- `evalOpR` of the shared row mask `offs_m[:,None] < cur_batch_seq_len`
+(the `q` load's and the terminal store's mask) at pinned registers (R-side
+wrapper of `ctxRowMask_eval`). -/
+private theorem ctxFwdIO_rowmaskR_eval (R : RoundingModel) {BM D : Nat} (u : BlockState)
+    (gOM : Fin BM → Nat) (sl : Nat)
+    (hm : u.regs .nat [BM] "offs_m" = some (Tile.vec gOM))
+    (hsl : u.regs .nat [] "cur_batch_seq_len" = some (Tile.scalar sl)) :
+    evalOpR R (Op.remap [BM, D] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))) u
+      = some (⟨fun idx : TileIndex [BM, D] => decide (gOM idx.1 < sl)⟩ : Tile .bool [BM, D]) := by
+  rw [show evalOpR R (Op.remap [BM, D]
+        (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))) u
+      = evalOp (Op.remap [BM, D]
+          (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len"))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  exact ctxRowMask_eval u gOM sl hm hsl
+
+/-- Pinned-register eval of the `kv_loc` gather's **address** tree
+`stride_req_b·cur_batch_req_idx + stride_req_s·(start_n + offs_n)` (the
+skin's `gread` window, one chain level: pids and slots only). -/
+private theorem ctxFwdIO_gread_eval {BN : Nat} (u : BlockState)
+    (rqi SN stride_req_b stride_req_s : Nat)
+    (hrqi : u.regs .nat [] "cur_batch_req_idx" = some (Tile.scalar rqi))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
+    evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.constNat stride_req_b)
+          (Op.ref .nat [] "cur_batch_req_idx"))
+        (Op.mul .nat Broadcast.scalarL (Op.constNat stride_req_s)
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.ref .nat [BN] "offs_n")))) u
+      = some (Tile.vec (fun j : Fin BN =>
+          stride_req_b * rqi + stride_req_s * (SN + j.val))) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, hrqi, hsn, hn,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+/-- `evalOpR` of the gather address tree is the exact evaluation
+(register-only `.nat` arithmetic — R-independent). -/
+private theorem ctxFwdIO_greadR_eval (R : RoundingModel) {BN : Nat} (u : BlockState)
+    (rqi SN stride_req_b stride_req_s : Nat)
+    (hrqi : u.regs .nat [] "cur_batch_req_idx" = some (Tile.scalar rqi))
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val))) :
+    evalOpR R (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.constNat stride_req_b)
+          (Op.ref .nat [] "cur_batch_req_idx"))
+        (Op.mul .nat Broadcast.scalarL (Op.constNat stride_req_s)
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.ref .nat [BN] "offs_n")))) u
+      = some (Tile.vec (fun j : Fin BN =>
+          stride_req_b * rqi + stride_req_s * (SN + j.val))) := by
+  rw [show evalOpR R (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.constNat stride_req_b)
+          (Op.ref .nat [] "cur_batch_req_idx"))
+        (Op.mul .nat Broadcast.scalarL (Op.constNat stride_req_s)
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.ref .nat [BN] "offs_n")))) u
+      = evalOp (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.constNat stride_req_b)
+            (Op.ref .nat [] "cur_batch_req_idx"))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat stride_req_s)
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+              (Op.ref .nat [BN] "offs_n")))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  exact ctxFwdIO_gread_eval u rqi SN stride_req_b stride_req_s hrqi hsn hn
+
+/-- Pinned-register eval of the `kv_loc` gather's **mask**
+`(start_n + offs_n) < block_end_loc` — the skin's `gmask`, the same liveness
+guard the `K`/`V` loads carry (`[BN]`-shaped, not `remap`ped). -/
+private theorem ctxFwdIO_gmask_eval {BN : Nat} (u : BlockState) (SN bel : Nat)
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hbel : u.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOp (Op.lt .nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.ref .nat [BN] "offs_n"))
+        (Op.ref .nat [] "block_end_loc")) u
+      = some (⟨fun idx : TileIndex [BN] => decide (SN + idx.1.val < bel)⟩
+          : Tile .bool [BN]) := by
+  simp only [evalOp_lt, evalOp_add, evalOp_ref, hsn, hn, hbel,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp [Tile.cop_data, Tile.bop_data, Tile.scalar_data, Tile.scalar_data_index, Tile.vec_data,
+    Broadcast.leftIndex, Broadcast.rightIndex, ComparableDType.lt, NumericDType.add]
+
+/-- `evalOpR` of the gather mask at pinned registers (R-side wrapper of
+`ctxFwdIO_gmask_eval`). -/
+private theorem ctxFwdIO_gmaskR_eval (R : RoundingModel) {BN : Nat} (u : BlockState)
+    (SN bel : Nat)
+    (hsn : u.regs .nat [] "start_n" = some (Tile.scalar SN))
+    (hn : u.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => j.val)))
+    (hbel : u.regs .nat [] "block_end_loc" = some (Tile.scalar bel)) :
+    evalOpR R (Op.lt .nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.ref .nat [BN] "offs_n"))
+        (Op.ref .nat [] "block_end_loc")) u
+      = some (⟨fun idx : TileIndex [BN] => decide (SN + idx.1.val < bel)⟩
+          : Tile .bool [BN]) := by
+  rw [show evalOpR R (Op.lt .nat Broadcast.scalarR
+        (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+          (Op.ref .nat [BN] "offs_n"))
+        (Op.ref .nat [] "block_end_loc")) u
+      = evalOp (Op.lt .nat Broadcast.scalarR
+          (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.ref .nat [BN] "offs_n"))
+          (Op.ref .nat [] "block_end_loc")) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  exact ctxFwdIO_gmask_eval u SN bel hsn hn hbel
+/-- Pinned-register `off_o` eval (the postLoop offset tree, generic row
+vector `gOM`). -/
+private theorem ctxFwdIO_offo_eval {BM D : Nat} (u : BlockState) (gOM : Fin BM → Nat)
+    (cbsi ch stride_obs stride_oh stride_od : Nat)
+    (hcbsi : u.regs .nat [] "cur_batch_in_all_start_index" = some (Tile.scalar cbsi))
+    (hch : u.regs .nat [] "cur_head" = some (Tile.scalar ch))
+    (hom : u.regs .nat [BM] "offs_m" = some (Tile.vec gOM))
+    (hod : u.regs .nat [D] "offs_d" = some (Tile.vec (fun e : Fin D => e.val))) :
+    evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")))
+            (Op.constNat stride_obs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_oh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat stride_od))) u
+      = some (⟨fun idx : TileIndex [BM, D] =>
+          (cbsi + gOM idx.1) * stride_obs + ch * stride_oh + idx.2.1.val * stride_od⟩
+            : Tile .nat [BM, D]) := by
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+    ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+    hcbsi, hch, hom, hod, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_; ext idx
+  simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+/-- `evalOpR` of the `off_o` offset tree is the exact evaluation
+(register-only `.nat` arithmetic — R-independent, ∀-state). -/
+private theorem ctxFwdIO_offoR_castFree (R : RoundingModel)
+    {BM D : Nat} (stride_obs stride_oh stride_od : Nat) (u : BlockState) :
+    evalOpR R (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")))
+            (Op.constNat stride_obs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_oh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+          (Op.constNat stride_od))) u
+      = evalOp (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarR
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")))
+              (Op.constNat stride_obs))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_oh)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [D] "offs_d"))
+            (Op.constNat stride_od))) u := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- `evalOpR` of the `out_ptrs` pointer tree is the exact evaluation. -/
+private theorem ctxFwdIO_outptrR_castFree (R : RoundingModel) (Out : RegionName)
+    (BM D : Nat) (u : BlockState) :
+    evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BM, D] "off_o")) u
+      = evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BM, D] "off_o")) u := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- Weak (safety-walk) invariant: address-register pins + value-register
+existence, anchored to the launch state `s`. All pins are state-based (slot
+reads spelled through `readMemValue`, `block_end_loc` through
+`ctxFwdIOBel`); `kv_group_num = 1` leaves the register `cur_kv_head` at the
+literal `pids 1 % H / 1`. The `kv_loc` register is **not** pinned: it is
+re-derived inside each body pass (the gather is a loop-local read). -/
+private def ctxFwdIOSafeInvW (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat)
+    (H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (s s' : BlockState) : Prop :=
+  s'.mem = s.mem
+  ∧ s'.pids = s.pids
+  ∧ s'.regs .nat [] "cur_batch" = some (Tile.scalar (s.pids 1 / H))
+  ∧ s'.regs .nat [] "cur_head" = some (Tile.scalar (s.pids 1 % H))
+  ∧ s'.regs .nat [] "cur_kv_head" = some (Tile.scalar (s.pids 1 % H / 1))
+  ∧ s'.regs .nat [] "prompt_cache_len"
+      = some (Tile.scalar (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H)))
+  ∧ s'.regs .nat [] "cur_batch_in_all_start_index"
+      = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)))
+  ∧ s'.regs .nat [] "cur_batch_seq_len"
+      = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+          - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H)))
+  ∧ s'.regs .nat [] "cur_batch_req_idx"
+      = some (Tile.scalar (s.readMemValue .nat (Region.cast B_req_idx) (s.pids 1 / H)))
+  ∧ s'.regs .nat [] "block_mask"
+      = some (Tile.scalar (if BLOCK_M * s.pids 0
+          < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+            - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H)
+          then 1 else 0))
+  ∧ s'.regs .nat [] "block_end_loc"
+      = some (Tile.scalar (ctxFwdIOBel BLOCK_M (s.pids 0)
+          (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+          (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H))))
+  ∧ s'.regs .nat [BLOCK_N] "offs_n" = some (Tile.vec (fun jn : Fin BLOCK_N => jn.val))
+  ∧ s'.regs .nat [BLOCK_DMODEL] "offs_d" = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val))
+  ∧ s'.regs .nat [BLOCK_M] "offs_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => BLOCK_M * s.pids 0 + r.val))
+  ∧ (∃ qT : Tile .real [BLOCK_M, BLOCK_DMODEL],
+      s'.regs .real [BLOCK_M, BLOCK_DMODEL] "q" = some qT)
+  ∧ (∃ mT : Tile .real [BLOCK_M], s'.regs .real [BLOCK_M] "m_i" = some mT)
+  ∧ (∃ lT : Tile .real [BLOCK_M], s'.regs .real [BLOCK_M] "l_i" = some lT)
+  ∧ (∃ aT : Tile .real [BLOCK_M, BLOCK_DMODEL],
+      s'.regs .real [BLOCK_M, BLOCK_DMODEL] "acc" = some aT)
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak preLoop walk** (single pass): from an **arbitrary** launch state
+the 20 preLoop statements are trace-safe (the four `.nat` metadata loads
+bounded by the slot windows, the masked `q` load by the `read1` window) and
+step to a state satisfying `ctxFwdIOSafeInvW`. -/
+private theorem ctxFwdIO_preLoopW (R : RoundingModel) (bounds : RegionBounds)
+    (Q : RegionName) (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat)
+    (stride_qbs stride_qh stride_qd H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat)
+    (s : BlockState)
+    (hbPC : s.pids 1 / H < bounds (Region.cast b_prompt_cache_len))
+    (hbSL : s.pids 1 / H < bounds (Region.cast B_Start_Loc))
+    (hbSQ : s.pids 1 / H < bounds (Region.cast B_Seqlen))
+    (hbRQ : s.pids 1 / H < bounds (Region.cast B_req_idx))
+    (hbQ : ∀ (i : Fin BLOCK_M) (e : Fin BLOCK_DMODEL),
+      s.pids 0 * BLOCK_M + i.val < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+          - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H) →
+      (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)
+          + (s.pids 0 * BLOCK_M + i.val)) * stride_qbs
+        + s.pids 1 % H * stride_qh + e.val * stride_qd < bounds Q) :
+    Stmt.TraceSafeListR R bounds (ctxPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+        stride_qbs stride_qh stride_qd 1 H BLOCK_DMODEL BLOCK_M BLOCK_N) s
+      ∧ ∃ s0, stepStmtsR R (ctxPreLoopG Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+            stride_qbs stride_qh stride_qd 1 H BLOCK_DMODEL BLOCK_M BLOCK_N) s = some s0
+          ∧ ctxFwdIOSafeInvW B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+              H BLOCK_DMODEL BLOCK_M BLOCK_N s s0 := by
+  unfold ctxPreLoopG
+  -- stmt 0: start_m = programId 0
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar (s.pids 0)) from evalOp_programId 0 s)) ?_
+  -- stmt 1: cur_bh = programId 1
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp _ _ = some (Tile.scalar (s.pids 1)) from evalOp_programId 1 _)) ?_
+  -- stmt 2: cur_batch = cur_bh // H
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_bh") (Op.constNat H)) _
+          = some (Tile.scalar (s.pids 1 / H)) from by
+        rw [ctx_evalOp_floorDiv]
+        simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+          Option.bind_eq_bind, Option.bind_some]
+        rfl)) ?_
+  -- stmt 3: cur_head = cur_bh % H
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.mod .nat Broadcast.nil (Op.ref .nat [] "cur_bh") (Op.constNat H)) _
+          = some (Tile.scalar (s.pids 1 % H)) from by
+        rw [ctx_evalOp_mod]
+        simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+          ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+          Option.bind_eq_bind, Option.bind_some]
+        rfl)) ?_
+  -- stmt 4: cur_kv_head = cur_head // 1
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat 1)) _
+          = some (Tile.scalar (s.pids 1 % H / 1)) from by
+        rw [ctx_evalOp_floorDiv]
+        simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, Option.bind_eq_bind,
+          Option.bind_some]
+        rfl)) ?_
+  -- stmt 5: cur_batch_in_all_start_index = load(B_Start_Loc + cur_batch)
+  refine ctxFwdIO_walkCons ?_
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.load .nat
+          (MemAccess.region B_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Start_Loc)
+              (s.pids 1 / H))) from by
+        rw [ctx_evalOp_load_scalar_nat B_Start_Loc (Op.ref .nat [] "cur_batch") _
+          (s.pids 1 / H)
+          (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])]
+        rfl)) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR], ?_⟩
+    intro offsets hoff idx _
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    exact hbSL
+  -- stmt 6: prompt_cache_len = load(bpc + cur_batch)  [slot-window bound]
+  refine ctxFwdIO_walkCons ?_
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.load .nat
+          (MemAccess.region b_prompt_cache_len (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast b_prompt_cache_len)
+              (s.pids 1 / H))) from by
+        rw [ctx_evalOp_load_scalar_nat b_prompt_cache_len (Op.ref .nat [] "cur_batch") _
+          (s.pids 1 / H)
+          (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])]
+        rfl)) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR], ?_⟩
+    intro offsets hoff idx _
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    exact hbPC
+  -- stmt 7: cur_batch_seq_len = load(B_Seqlen + cur_batch) - prompt_cache_len
+  refine ctxFwdIO_walkCons ?_
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.sub .nat Broadcast.nil
+          (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none)
+          (Op.ref .nat [] "prompt_cache_len")) _
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+              - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))) from by
+        rw [evalOp_sub, ctx_evalOp_load_scalar_nat B_Seqlen (Op.ref .nat [] "cur_batch") _ (s.pids 1 / H)
+          (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])]
+        simp only [evalOp_ref, BlockState.setReg_same, Option.bind_eq_bind, Option.bind_some]
+        rfl)) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨⟨by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR], ?_⟩,
+      by simp [Op.SafeAtR.eq_def]⟩
+    intro offsets hoff idx _
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    exact hbSQ
+  -- stmt 8: cur_batch_req_idx = load(B_req_idx + cur_batch)  [slot-window bound]
+  refine ctxFwdIO_walkCons ?_
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.load .nat
+          (MemAccess.region B_req_idx (Op.ref .nat [] "cur_batch")) MaskOpt.none) _
+          = some (Tile.scalar (s.readMemValue .nat (Region.cast B_req_idx)
+              (s.pids 1 / H))) from by
+        rw [ctx_evalOp_load_scalar_nat B_req_idx (Op.ref .nat [] "cur_batch") _
+          (s.pids 1 / H)
+          (by rw [evalOp_ref]; simp [BlockState.setReg_ne_name, BlockState.setReg_same])]
+        rfl)) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR], ?_⟩
+    intro offsets hoff idx _
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    exact hbRQ
+  -- stmt 9: block_start_loc = BLOCK_M * start_m
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.mul .nat Broadcast.nil (Op.constNat BLOCK_M) (Op.ref .nat [] "start_m")) _
+          = some (Tile.scalar (BLOCK_M * s.pids 0)) from by
+        rw [evalOp_mul]
+        simp only [evalOp_constNat, evalOp_ref, BlockState.setReg_same, BlockState.setReg_ne_name,
+          ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+          Option.bind_eq_bind, Option.bind_some]
+        rfl)) ?_
+  -- stmt 10: offs_n = arange BLOCK_N
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.arange BLOCK_N) _ = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) from
+        evalOp_arange BLOCK_N _)) ?_
+  -- stmt 11: offs_d = arange BLOCK_DMODEL
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.arange BLOCK_DMODEL) _
+          = some (Tile.vec (fun e : Fin BLOCK_DMODEL => e.val)) from
+        evalOp_arange BLOCK_DMODEL _)) ?_
+  -- stmt 12: offs_m = block_start_loc + arange BLOCK_M
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "block_start_loc") (Op.arange BLOCK_M)) _
+          = some (Tile.vec (fun r : Fin BLOCK_M => BLOCK_M * s.pids 0 + r.val)) from by
+        rw [evalOp_add]
+        simp only [evalOp_ref, evalOp_arange, BlockState.setReg_same, BlockState.setReg_ne_name,
+          ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+          Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_; ext r
+        simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add])) ?_
+  -- stmt 13: off_q
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .nat Broadcast.nil.consL.consR
+          (Op.add .nat Broadcast.scalarR
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")))
+              (Op.constNat stride_qbs))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_qh)))
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+            (Op.constNat stride_qd))) _
+          = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+              (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)
+                  + (BLOCK_M * s.pids 0 + idx.1.val))
+                  * stride_qbs + s.pids 1 % H * stride_qh + idx.2.1.val * stride_qd⟩
+                : Tile .nat [BLOCK_M, BLOCK_DMODEL]) from by
+        simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+          ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat,
+          BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+          not_false_eq_true, Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_; ext idx
+        simp [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Tile.expandDim, Broadcast.leftIndex,
+          Broadcast.rightIndex, NumericDType.add, NumericDType.mul])) ?_
+  -- stmt 14: q = masked load  [read1-window bound]
+  refine ctxFwdIO_walkCons ?_
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctx_evalOp_load_region_maskOther Q (Op.ref .nat [BLOCK_M, BLOCK_DMODEL] "off_q") _ _ _
+        (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+            (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)
+                + (BLOCK_M * s.pids 0 + idx.1.val))
+                * stride_qbs + s.pids 1 % H * stride_qh + idx.2.1.val * stride_qd⟩
+              : Tile .nat [BLOCK_M, BLOCK_DMODEL])
+        (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => decide (BLOCK_M * s.pids 0 + idx.1.val
+            < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+              - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))⟩
+              : Tile .bool [BLOCK_M, BLOCK_DMODEL])
+        (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (0.0 : ℝ)⟩
+              : Tile .real [BLOCK_M, BLOCK_DMODEL])
+        (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+        (ctxRowMask_eval _ (fun r : Fin BLOCK_M => BLOCK_M * s.pids 0 + r.val) _
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same]))
+        (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl))) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ⟨by simp [Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro offsets hoff idx hactive
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    obtain ⟨masks, hmask, hmi⟩ := hactive
+    rw [ctxFwdIO_rowmaskR_eval R _ (fun r : Fin BLOCK_M => BLOCK_M * s.pids 0 + r.val)
+      (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+        - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same])] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨i, e, pu⟩ := idx
+    have hrow : BLOCK_M * s.pids 0 + i.val
+        < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+          - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H) := by
+      simpa using hmi
+    have hb := hbQ i e (by rw [Nat.mul_comm]; exact hrow)
+    show (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)
+        + (BLOCK_M * s.pids 0 + i.val)) * stride_qbs
+        + s.pids 1 % H * stride_qh + e.val * stride_qd < bounds Q
+    rw [show BLOCK_M * s.pids 0 = s.pids 0 * BLOCK_M from Nat.mul_comm _ _]
+    exact hb
+  -- stmt 15: m_i = full 0 + (-inf)
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf) _
+          = some (⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩ : Tile .real [BLOCK_M]) from by
+        rw [evalOp_add]
+        simp only [evalOp_full, evalOp_const, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_; ext idx
+        simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+          NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+        rfl)) ?_
+  -- stmt 16: l_i = full 0
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.full [BLOCK_M] (Op.const 0)) _
+          = some (⟨fun _ : TileIndex [BLOCK_M] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M]) from by
+        simp [evalOp_full, evalOp_const])) ?_
+  -- stmt 17: acc = full 0
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.full [BLOCK_M, BLOCK_DMODEL] (Op.const 0)) _
+          = some (⟨fun _ : TileIndex [BLOCK_M, BLOCK_DMODEL] => some (0 : ℝ)⟩
+              : Tile .real [BLOCK_M, BLOCK_DMODEL]) from by
+        simp [evalOp_full, evalOp_const])) ?_
+  -- stmt 18: block_mask
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp ((Op.lt .nat Broadcast.nil (Op.ref .nat [] "block_start_loc")
+              (Op.ref .nat [] "cur_batch_seq_len")).where (Op.constNat 1) (Op.constNat 0)) _
+          = some (Tile.scalar (if BLOCK_M * s.pids 0
+              < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+                - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H)
+              then 1 else 0)) from by
+        rw [evalOp_where]
+        simp only [evalOp_lt, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+          BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_
+        ext _idx
+        simp only [Tile.select_data, Tile.cop_data, Tile.scalar_data_index, ComparableDType.lt]
+        by_cases h : BLOCK_M * s.pids 0 < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+            - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H)
+        · simp [h]
+        · simp [h])) ?_
+  -- stmt 19: block_end_loc
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp ((Op.lt .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.constNat BLOCK_M))
+                (Op.ref .nat [] "prompt_cache_len"))
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+                (Op.ref .nat [] "prompt_cache_len"))).where
+            (Op.add .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.ref .nat [] "block_start_loc") (Op.constNat BLOCK_M))
+              (Op.ref .nat [] "prompt_cache_len"))
+            (Op.add .nat Broadcast.nil (Op.ref .nat [] "cur_batch_seq_len")
+              (Op.ref .nat [] "prompt_cache_len"))) _
+          = some (Tile.scalar (ctxFwdIOBel BLOCK_M (s.pids 0)
+              (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+              (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)))) from by
+        simp only [ctxFwdIOBel]
+        rw [evalOp_where]
+        simp only [evalOp_lt, evalOp_add, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+          BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_
+        ext _idx
+        simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Tile.scalar_data_index,
+          ComparableDType.lt, NumericDType.add, Broadcast.leftIndex, Broadcast.rightIndex]
+        by_cases h : BLOCK_M * s.pids 0 + BLOCK_M
+              + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H)
+            < (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+                - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+              + s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H)
+        · simp [h]
+        · simp [h])) ?_
+  refine ⟨Stmt.TraceSafeListR.nil_intro, _, stepStmtsR_nil R _, ?_⟩
+  -- the weak-invariant pins of the final state
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    ⟨_, by
+      simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+        not_false_eq_true, reduceCtorEq]
+      rfl⟩,
+    ⟨_, by
+      simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+        not_false_eq_true, reduceCtorEq]
+      rfl⟩,
+    ⟨_, by
+      simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+        not_false_eq_true, reduceCtorEq]
+      rfl⟩,
+    ⟨_, by
+      simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq, String.reduceEq,
+        not_false_eq_true, reduceCtorEq]
+      rfl⟩⟩
+  · funext rg o; simp only [BlockState.setReg_mem]
+  · simp only [BlockState.setReg_pids]
+  all_goals
+    (simp only [BlockState.setReg_ne_name, BlockState.setReg_same, BlockState.setReg_pids,
+      BlockState.setReg_readMemValue, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq]
+     try rfl)
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak loop-body walk** (single pass): from any `ctxFwdIOSafeInvW` state
+with the counter register set, the 19 body statements are trace-safe (the
+`kv_loc` gather bounded by the skin's `gread` window and the two masked data
+loads by the `read2`/`read3` windows at the current step — those two eat the
+gathered tile, so their bounds are stated on the loaded page-table value) and
+step to a state satisfying `ctxFwdIOSafeInvW` again — the value registers
+advance existentially, the address registers are untouched. -/
+private theorem ctxFwdIO_bodyW (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V Req_to_tokens : RegionName)
+    (B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len : Region .nat)
+    (sm_scale : ℝ)
+    (stride_req_b stride_req_s stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd
+      H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (hBN : 0 < BLOCK_N)
+    (s stt : BlockState) (c : Nat)
+    (hP : ctxFwdIOSafeInvW B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+        H BLOCK_DMODEL BLOCK_M BLOCK_N s stt)
+    (hbG : ∀ jL : Fin BLOCK_N,
+      c + jL.val < ctxFwdIOBel BLOCK_M (s.pids 0)
+          (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+          (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)) →
+      stride_req_b * s.readMemValue .nat (Region.cast B_req_idx) (s.pids 1 / H)
+          + stride_req_s * (c + jL.val) < bounds Req_to_tokens)
+    (hbK : ∀ (e : Fin BLOCK_DMODEL) (jL : Fin BLOCK_N),
+      c + jL.val < ctxFwdIOBel BLOCK_M (s.pids 0)
+          (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+          (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)) →
+      s.readMemValue .nat (Region.cast Req_to_tokens)
+            (stride_req_b * s.readMemValue .nat (Region.cast B_req_idx) (s.pids 1 / H)
+              + stride_req_s * (c + jL.val)) * stride_kbs
+        + s.pids 1 % H * stride_kh + e.val * stride_kd < bounds K)
+    (hbV : ∀ (jL : Fin BLOCK_N) (e : Fin BLOCK_DMODEL),
+      c + jL.val < ctxFwdIOBel BLOCK_M (s.pids 0)
+          (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+          (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)) →
+      s.readMemValue .nat (Region.cast Req_to_tokens)
+            (stride_req_b * s.readMemValue .nat (Region.cast B_req_idx) (s.pids 1 / H)
+              + stride_req_s * (c + jL.val)) * stride_vbs
+        + s.pids 1 % H * stride_vh + e.val * stride_vd < bounds V) :
+    Stmt.TraceSafeListR R bounds
+        (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh
+          stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)
+        (stt.setReg "start_n" .nat [] (Tile.scalar c))
+      ∧ ∃ s', stepStmtsR R
+            (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh
+              stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)
+            (stt.setReg "start_n" .nat [] (Tile.scalar c)) = some s'
+          ∧ ctxFwdIOSafeInvW B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+              H BLOCK_DMODEL BLOCK_M BLOCK_N s s' := by
+  obtain ⟨hmem, hpids, hcb, hch, hckvh, hplen, hcbsi, hseq, hrqi, hbmk, hbel, hn, hd, hom,
+    ⟨qT, hq⟩, ⟨mT, hmi⟩, ⟨lT, hli⟩, ⟨aT, hacc⟩⟩ := hP
+  set plenv := s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H) with hplenv
+  set rqiv := s.readMemValue .nat (Region.cast B_req_idx) (s.pids 1 / H) with hrqiv
+  set belv := ctxFwdIOBel BLOCK_M (s.pids 0)
+    (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+    (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)) with hbelv
+  -- the body writes registers only, so every read is the launch state's
+  have hmemvN : ∀ (rg : RegionName) (o : Nat),
+      stt.readMemValue .nat rg o = s.readMemValue .nat rg o := by
+    intro rg o
+    simp only [BlockState.readMemValue, BlockState.readMemTyped, hmem]
+  -- the gathered page-table tile at this step (`other = 0` on dead lanes)
+  set kvf : Fin BLOCK_N → Nat := fun jL =>
+    if decide (c + jL.val < belv) then
+      stt.readMemValue .nat (Region.cast Req_to_tokens)
+        (stride_req_b * rqiv + stride_req_s * (c + jL.val))
+    else 0 with hkvf
+  have hkvfs : ∀ jL : Fin BLOCK_N, c + jL.val < belv →
+      kvf jL = s.readMemValue .nat (Region.cast Req_to_tokens)
+        (stride_req_b * rqiv + stride_req_s * (c + jL.val)) := by
+    intro jL hlt
+    simp only [hkvf]
+    rw [if_pos (by simp only [decide_eq_true_eq]; exact hlt), hmemvN]
+  set kloadT : Tile .real [BLOCK_DMODEL, BLOCK_N] := ⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+      if decide (c + idx.2.1.val < belv) then
+        stt.readMemValue .real (Region.cast K)
+          (kvf idx.2.1 * stride_kbs
+            + s.pids 1 % H / 1 * stride_kh + idx.1.val * stride_kd)
+      else some (0.0 : ℝ)⟩ with hkl
+  set vloadT : Tile .real [BLOCK_N, BLOCK_DMODEL] := ⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+      if decide (c + idx.1.val < belv) then
+        stt.readMemValue .real (Region.cast V)
+          (kvf idx.1 * stride_vbs
+            + s.pids 1 % H / 1 * stride_vh + idx.2.1.val * stride_vd)
+      else some (0.0 : ℝ)⟩ with hvl
+  set masktile : Tile .bool [BLOCK_M, BLOCK_N] :=
+      ⟨fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
+        decide (c + idx.2.1.val ≤ (BLOCK_M * s.pids 0 + idx.1.val) + plenv)⟩ with hmt
+  set qkdotT : Tile .real [BLOCK_M, BLOCK_N] := Tile.dot [] qT kloadT with hqkdot
+  set qkT : Tile .real [BLOCK_M, BLOCK_N] := Tile.select masktile
+      (Tile.bop NumericDType.real.mul Broadcast.scalarR qkdotT (Tile.scalar (some sm_scale)))
+      (⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] => some (0.0 - 10e7 : ℝ)⟩
+        : Tile .real [BLOCK_M, BLOCK_N]) with hqk
+  obtain ⟨rmaxT, hrm⟩ : ∃ t, Tile.reduceMaxDrop
+      (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) qkT = some t :=
+    ⟨_, by
+      unfold Tile.reduceMaxDrop
+      rw [dif_pos (show 0 < TileShape.axisDim [BLOCK_M, BLOCK_N]
+        (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) from hBN)]⟩
+  set mijT : Tile .real [BLOCK_M] :=
+    Tile.select (Tile.cop ComparableDType.real.gt Broadcast.nil.consSame mT rmaxT) mT rmaxT with hmij
+  set qk2T : Tile .real [BLOCK_M, BLOCK_N] := Tile.bop NumericDType.real.sub
+    Broadcast.nil.consR.consSame qkT (Tile.expandDim ⟨1, by simp⟩ mijT) with hqk2
+  set pT : Tile .real [BLOCK_M, BLOCK_N] := Tile.uop WithBot.realExp2 qk2T with hpT
+  set lijT : Tile .real [BLOCK_M] := Tile.reduceSumDrop
+    (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) pT with hlij
+  set alphaT : Tile .real [BLOCK_M] := Tile.uop WithBot.realExp2
+    (Tile.bop NumericDType.real.sub Broadcast.nil.consSame mT mijT) with hal
+  set acc1T : Tile .real [BLOCK_M, BLOCK_DMODEL] := Tile.bop NumericDType.real.mul
+    Broadcast.nil.consR.consSame aT (Tile.expandDim ⟨1, by simp⟩ alphaT) with hacc1
+  unfold ctxLoopBodyG
+  -- stmt 0: start_n = ref start_n
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.ref .nat [] "start_n") _ = some (Tile.scalar c) from by
+        rw [evalOp_ref, BlockState.setReg_same])) ?_
+  -- stmt 1: kv_loc = masked `.nat` page-table gather  [gread-window bound]
+  refine ctxFwdIO_walkCons ?_
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.load .nat
+          (MemAccess.region Req_to_tokens
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.constNat stride_req_b)
+                (Op.ref .nat [] "cur_batch_req_idx"))
+              (Op.mul .nat Broadcast.scalarL (Op.constNat stride_req_s)
+                (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                  (Op.ref .nat [BLOCK_N] "offs_n")))))
+          (MaskOpt.maskOther
+            (Op.lt .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                (Op.ref .nat [BLOCK_N] "offs_n"))
+              (Op.ref .nat [] "block_end_loc"))
+            (Op.broadcast (Op.constNat 0) [BLOCK_N]))) _
+          = some (Tile.vec kvf) from by
+        rw [ctx_kvloc_gather_evalG _ Req_to_tokens rqiv c belv stride_req_b stride_req_s
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+              exact hrqi)
+          (by rw [BlockState.setReg_same])
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+              exact hn)
+          (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+              exact hbel)]
+        refine congrArg some ?_
+        ext idx
+        simp only [hkvf, Tile.vec_data, BlockState.setReg_readMemValue])) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def],
+      ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro offsets hoff idx hactive
+    rw [ctxFwdIO_greadR_eval R _ rqiv c stride_req_b stride_req_s
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hrqi)
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hn)] at hoff
+    obtain rfl := Option.some.inj hoff
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [ctxFwdIO_gmaskR_eval R _ c belv
+      (by rw [BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hn)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hbel)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨jL, pu⟩ := idx
+    have hcol : c + jL.val < belv := by simpa using hactl
+    show stride_req_b * rqiv + stride_req_s * (c + jL.val)
+      < bounds (Region.cast Req_to_tokens)
+    exact hbG jL hcol
+  -- stmt 2: off_k (gather-addressed)
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctx_offk_gather_evalG _ (s.pids 1 % H / 1) kvf stride_kbs stride_kh stride_kd
+        (by rw [BlockState.setReg_same])
+        (by simp [BlockState.setReg_ne_name, hckvh])
+        (by simp [BlockState.setReg_ne_name, hd]))) ?_
+  -- stmt 3: k = masked load  [read2-window bound]
+  refine ctxFwdIO_walkCons ?_
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.load .real
+          (MemAccess.region K (Op.ref .nat [BLOCK_DMODEL, BLOCK_N] "off_k"))
+          (MaskOpt.maskOther
+            (Op.remap [BLOCK_DMODEL, BLOCK_N]
+              (fun x => (⟨0, Broadcast.leftIndex._proof_1⟩, x.2.1, PUnit.unit))
+              (Op.lt .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                  (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))
+                (Op.ref .nat [] "block_end_loc")))
+            ((Op.const (0.0 : ℝ)).broadcast [BLOCK_DMODEL, BLOCK_N]))) _
+          = some kloadT from
+        ctx_evalOp_load_region_maskOther K (Op.ref .nat [BLOCK_DMODEL, BLOCK_N] "off_k") _ _ _
+          (⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] =>
+              kvf idx.2.1 * stride_kbs
+                + s.pids 1 % H / 1 * stride_kh + idx.1.val * stride_kd⟩
+              : Tile .nat [BLOCK_DMODEL, BLOCK_N])
+          (⟨fun idx : TileIndex [BLOCK_DMODEL, BLOCK_N] => decide (c + idx.2.1.val < belv)⟩
+              : Tile .bool [BLOCK_DMODEL, BLOCK_N])
+          (⟨fun _ : TileIndex [BLOCK_DMODEL, BLOCK_N] => some (0.0 : ℝ)⟩
+              : Tile .real [BLOCK_DMODEL, BLOCK_N])
+          (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+          (ctxKMask_eval _ c belv
+            (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+            (by simp [BlockState.setReg_ne_name, hn])
+            (by simp [BlockState.setReg_ne_name, hbel]))
+          (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl))) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def],
+      ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro offsets hoff idx hactive
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [ctxFwdIO_kmaskR_eval R _ c belv
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hn)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hbel)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨e, jL, pu⟩ := idx
+    have hcol : c + jL.val < belv := by simpa using hactl
+    have hb := hbK e jL hcol
+    show kvf jL * stride_kbs
+        + s.pids 1 % H / 1 * stride_kh + e.val * stride_kd < bounds (Region.cast K)
+    rw [Nat.div_one, hkvfs jL hcol]
+    exact hb
+  -- stmt 4: qk = dot(q, k)
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show @evalOp .real [BLOCK_M, BLOCK_N]
+          (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "q")
+            (Op.ref .real [BLOCK_DMODEL, BLOCK_N] "k")) _
+          = some (Tile.dot [] qT kloadT) from
+        ctxQk_op_eval _ qT kloadT
+          (by simp [BlockState.setReg_ne_name, hq])
+          (by rw [BlockState.setReg_same]))) ?_
+  -- stmt 5: mask = ge(...)
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.ge ComparableDType.nat Broadcast.nil.consL.consR
+          (Op.add NumericDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+            (Op.ref .nat [] "prompt_cache_len"))
+          (Op.add NumericDType.nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))) _
+          = some masktile from
+        ctxMask_eval _ BLOCK_M BLOCK_N plenv c
+          (fun r : Fin BLOCK_M => BLOCK_M * s.pids 0 + r.val)
+          (by simp [BlockState.setReg_ne_name, hom]) (by simp [BlockState.setReg_ne_name, hn])
+          (by simp [BlockState.setReg_ne_name, hplen])
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same]))) ?_
+  -- stmt 6: qk = where(mask, qk*sm, -1e8)
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp ((Op.ref .bool [BLOCK_M, BLOCK_N] "mask").where
+          (Op.mul .real Broadcast.scalarR (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+            (Op.const (sm_scale : ℝ)))
+          ((Op.sub .real Broadcast.nil (Op.const (0.0 : ℝ)) (Op.const (10e7 : ℝ))).broadcast
+            [BLOCK_M, BLOCK_N])) _
+          = some qkT from
+        ctxWhere_eval _ BLOCK_M BLOCK_N sm_scale masktile qkdotT
+          (by rw [BlockState.setReg_same])
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same, hqkdot]))) ?_
+  -- stmt 7: m_ij
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.where
+          (Op.gt .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "m_i")
+            (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "qk")))
+          (Op.ref .real [BLOCK_M] "m_i")
+          (Op.reduceMax ⟨1, by simp⟩ Bool.false (Op.ref .real [BLOCK_M, BLOCK_N] "qk"))) _
+          = some mijT from
+        ctxMij_op_eval _ mT rmaxT qkT
+          (by simp [BlockState.setReg_ne_name, hmi])
+          (by simp [BlockState.setReg_same]) hrm)) ?_
+  -- stmt 8: qk -= m_ij[:,None]
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.sub .real Broadcast.nil.consR.consSame (Op.ref .real [BLOCK_M, BLOCK_N] "qk")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "m_ij"))) _
+          = some qk2T from
+        ctxQk2_op_eval _ qkT mijT
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+          (by rw [BlockState.setReg_same]))) ?_
+  -- stmt 9: p = exp2 qk
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.ref .real [BLOCK_M, BLOCK_N] "qk").exp2 _ = some pT from
+        ctxP_op_eval _ qk2T (by rw [BlockState.setReg_same]))) ?_
+  -- stmt 10: l_ij = sum p 1
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show @evalOp .real [BLOCK_M]
+          (Op.reduceSum (⟨1, by simp⟩ : Fin [BLOCK_M, BLOCK_N].length) Bool.false
+            (Op.ref .real [BLOCK_M, BLOCK_N] "p")) _
+          = some lijT from
+        ctxLij_op_eval _ pT (by rw [BlockState.setReg_same]))) ?_
+  -- stmt 11: alpha = exp2(m_i - m_ij)
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.sub .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "m_i")
+          (Op.ref .real [BLOCK_M] "m_ij")).exp2 _
+          = some alphaT from
+        ctxAlpha_op_eval _ mT mijT
+          (by simp [BlockState.setReg_ne_name, hmi])
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same]))) ?_
+  -- stmt 12: l_i = l_i*alpha + l_ij
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .real Broadcast.nil.consSame
+          (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BLOCK_M] "l_i")
+            (Op.ref .real [BLOCK_M] "alpha"))
+          (Op.ref .real [BLOCK_M] "l_ij")) _
+          = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame
+              (Tile.bop NumericDType.real.mul Broadcast.nil.consSame lT alphaT) lijT) from
+        ctxLi_op_eval _ lT alphaT lijT
+          (by simp [BlockState.setReg_ne_name, hli])
+          (by rw [BlockState.setReg_same])
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same]))) ?_
+  -- stmt 13: acc *= alpha[:,None]
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.mul .real Broadcast.nil.consR.consSame
+          (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "alpha"))) _
+          = some acc1T from
+        ctxAcc1_op_eval _ aT alphaT
+          (by simp [BlockState.setReg_ne_name, hacc])
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same]))) ?_
+  -- stmt 14: off_v
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (ctx_offv_gather_evalG _ (s.pids 1 % H / 1) kvf stride_vbs stride_vh stride_vd
+        (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+        (by simp [BlockState.setReg_ne_name, hckvh])
+        (by simp [BlockState.setReg_ne_name, hd]))) ?_
+  -- stmt 15: v = masked load  [read3-window bound]
+  refine ctxFwdIO_walkCons ?_
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.load .real
+          (MemAccess.region V (Op.ref .nat [BLOCK_N, BLOCK_DMODEL] "off_v"))
+          (MaskOpt.maskOther
+            (Op.remap [BLOCK_N, BLOCK_DMODEL]
+              (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+              (Op.lt .nat Broadcast.scalarR
+                (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "start_n")
+                  (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_N] "offs_n")))
+                (Op.ref .nat [] "block_end_loc")))
+            ((Op.const (0.0 : ℝ)).broadcast [BLOCK_N, BLOCK_DMODEL]))) _
+          = some vloadT from
+        ctx_evalOp_load_region_maskOther V (Op.ref .nat [BLOCK_N, BLOCK_DMODEL] "off_v") _ _ _
+          (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+              kvf idx.1 * stride_vbs
+                + s.pids 1 % H / 1 * stride_vh + idx.2.1.val * stride_vd⟩
+              : Tile .nat [BLOCK_N, BLOCK_DMODEL])
+          (⟨fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] => decide (c + idx.1.val < belv)⟩
+              : Tile .bool [BLOCK_N, BLOCK_DMODEL])
+          (⟨fun _ : TileIndex [BLOCK_N, BLOCK_DMODEL] => some (0.0 : ℝ)⟩
+              : Tile .real [BLOCK_N, BLOCK_DMODEL])
+          (by rw [evalOp_ref]; simp [BlockState.setReg_same])
+          (ctxVMask_eval _ c belv
+            (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+            (by simp [BlockState.setReg_ne_name, hn])
+            (by simp [BlockState.setReg_ne_name, hbel]))
+          (by simp only [evalOp, Option.bind_eq_bind, Option.bind_some]; rfl))) ?_
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def],
+      ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro offsets hoff idx hactive
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [ctxFwdIO_vmaskR_eval R _ c belv
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same])
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hn)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hbel)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨jL, e, pu⟩ := idx
+    have hcol : c + jL.val < belv := by simpa using hactl
+    have hb := hbV jL e hcol
+    show kvf jL * stride_vbs
+        + s.pids 1 % H / 1 * stride_vh + e.val * stride_vd < bounds (Region.cast V)
+    rw [Nat.div_one, hkvfs jL hcol]
+    exact hb
+  -- stmt 16: p = ref p (erased cast)
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.ref .real [BLOCK_M, BLOCK_N] "p") _ = some pT from by
+        rw [evalOp_ref]
+        simp [BlockState.setReg_ne_name, BlockState.setReg_same])) ?_
+  -- stmt 17: acc = dot(p, v) + acc
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .real Broadcast.nil.consSame.consSame
+          (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_N] "p")
+            (Op.ref .real [BLOCK_N, BLOCK_DMODEL] "v"))
+          (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")) _
+          = some (Tile.bop NumericDType.real.add Broadcast.nil.consSame.consSame
+              (Tile.dot [] pT vloadT) acc1T) from
+        ctxAcc2_op_eval _ acc1T pT vloadT
+          (by rw [BlockState.setReg_same])
+          (by simp [BlockState.setReg_ne_name, BlockState.setReg_same])
+          (by simp [BlockState.setReg_ne_name, hacc, BlockState.setReg_same]))) ?_
+  -- stmt 18: m_i = ref m_ij
+  refine ctxFwdIO_walkCons (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (ctxFwdIO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.ref .real [BLOCK_M] "m_ij") _ = some mijT from by
+        rw [evalOp_ref]
+        simp [BlockState.setReg_ne_name, BlockState.setReg_same])) ?_
+  refine ⟨Stmt.TraceSafeListR.nil_intro, _, stepStmtsR_nil R _, ?_⟩
+  refine ⟨?_, ?_,
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hcb),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hch),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hckvh),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hplen),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hcbsi),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hseq),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hrqi),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hbmk),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hbel),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hn),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hd),
+    (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+        exact hom),
+    ⟨qT, by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+      exact hq⟩,
+    ⟨mijT, by rw [BlockState.setReg_same]⟩,
+    ⟨_, by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same]
+      rfl⟩,
+    ⟨_, by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+        BlockState.setReg_same]
+      rfl⟩⟩
+  · funext rg o
+    simp only [BlockState.setReg_mem]
+    rw [hmem]
+  · simp only [BlockState.setReg_pids]
+    exact hpids
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `TraceSafeR` walk for the whole kernel** from an arbitrary launch
+state under the `pre`-legal window bounds (`raw B_Seqlen slot ≤
+NT·BLOCK_M`): weak preLoop walk, the streaming `forRangeDyn` driven by
+`Stmt.forRangeTraceSafeR_inv` over `ctxFwdIOSafeInvW` (every live step
+`cc < bm·bel ≤ NT·BLOCK_M ≤ BLOCK_N·T` indexes `Fin T`), and the terminal
+masked store bounded by the `write` window. -/
+private theorem ctxFwdIO_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V Out : RegionName) (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      H BLOCK_DMODEL BLOCK_M BLOCK_N NT : Nat) (hBN : 0 < BLOCK_N)
+    (s : BlockState)
+    (hm2NT : s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H) ≤ NT * BLOCK_M)
+    (hbPC : s.pids 1 / H < bounds (Region.cast b_prompt_cache_len))
+    (hbSL : s.pids 1 / H < bounds (Region.cast B_Start_Loc))
+    (hbSQ : s.pids 1 / H < bounds (Region.cast B_Seqlen))
+    (hbQ : ∀ (i : Fin BLOCK_M) (e : Fin BLOCK_DMODEL),
+      s.pids 0 * BLOCK_M + i.val < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+          - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H) →
+      (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)
+          + (s.pids 0 * BLOCK_M + i.val)) * stride_qbs
+        + s.pids 1 % H * stride_qh + e.val * stride_qd < bounds Q)
+    (hbRQ : s.pids 1 / H < bounds (Region.cast B_req_idx))
+    (hbG : ∀ (t : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N)) (jL : Fin BLOCK_N),
+      t.val * BLOCK_N + jL.val < ctxFwdIOBel BLOCK_M (s.pids 0)
+          (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+          (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)) →
+      stride_req_b * s.readMemValue .nat (Region.cast B_req_idx) (s.pids 1 / H)
+          + stride_req_s * (t.val * BLOCK_N + jL.val) < bounds Req_to_tokens)
+    (hbK : ∀ (t : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N)) (e : Fin BLOCK_DMODEL) (jL : Fin BLOCK_N),
+      t.val * BLOCK_N + jL.val < ctxFwdIOBel BLOCK_M (s.pids 0)
+          (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+          (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)) →
+      s.readMemValue .nat (Region.cast Req_to_tokens)
+            (stride_req_b * s.readMemValue .nat (Region.cast B_req_idx) (s.pids 1 / H)
+              + stride_req_s * (t.val * BLOCK_N + jL.val)) * stride_kbs
+        + s.pids 1 % H * stride_kh + e.val * stride_kd < bounds K)
+    (hbV : ∀ (t : Fin (ctxFwdIOT NT BLOCK_M BLOCK_N)) (jL : Fin BLOCK_N) (e : Fin BLOCK_DMODEL),
+      t.val * BLOCK_N + jL.val < ctxFwdIOBel BLOCK_M (s.pids 0)
+          (s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H))
+          (s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)) →
+      s.readMemValue .nat (Region.cast Req_to_tokens)
+            (stride_req_b * s.readMemValue .nat (Region.cast B_req_idx) (s.pids 1 / H)
+              + stride_req_s * (t.val * BLOCK_N + jL.val)) * stride_vbs
+        + s.pids 1 % H * stride_vh + e.val * stride_vd < bounds V)
+    (hbO : ∀ (i : Fin BLOCK_M) (e : Fin BLOCK_DMODEL),
+      s.pids 0 * BLOCK_M + i.val < s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H)
+          - s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H) →
+      (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)
+          + (s.pids 0 * BLOCK_M + i.val)) * stride_obs
+        + s.pids 1 % H * stride_oh + e.val * stride_od < bounds Out) :
+    ((context_attn_llama_fwd_kernel_surface Q K V sm_scale Out
+      B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len
+      stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      stride_req_b stride_req_s 1 H BLOCK_DMODEL BLOCK_M BLOCK_N).toAlgKernel).TraceSafeR R bounds s := by
+  set plenv := s.readMemValue .nat (Region.cast b_prompt_cache_len) (s.pids 1 / H) with hplenv
+  set rawv := s.readMemValue .nat (Region.cast B_Seqlen) (s.pids 1 / H) with hrawv
+  set bmv := (if BLOCK_M * s.pids 0 < rawv - plenv then 1 else 0) with hbmv
+  set belv := ctxFwdIOBel BLOCK_M (s.pids 0) plenv rawv with hbelv
+  have hstople : bmv * belv ≤ NT * BLOCK_M := ctxFwdIOBel_le BLOCK_M (s.pids 0) plenv rawv NT hm2NT
+  have hTle : NT * BLOCK_M ≤ BLOCK_N * ctxFwdIOT NT BLOCK_M BLOCK_N :=
+    ctxFwdIOT_mul_le NT BLOCK_M BLOCK_N hBN
+  -- shared per-iteration body handler
+  have hbody : ∀ (cc : Nat) (st : BlockState),
+      cc < bmv * belv →
+      ctxFwdIOSafeInvW B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+          H BLOCK_DMODEL BLOCK_M BLOCK_N s st ∧ cc % BLOCK_N = 0 →
+      Stmt.TraceSafeListR R bounds
+          (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+            stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)
+          (st.setReg "start_n" .nat [] (Tile.scalar cc))
+        ∧ ∃ s', stepStmtsR R
+              (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh
+                stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)
+              (st.setReg "start_n" .nat [] (Tile.scalar cc)) = some s'
+            ∧ (ctxFwdIOSafeInvW B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+                H BLOCK_DMODEL BLOCK_M BLOCK_N s s'
+              ∧ (cc + BLOCK_N) % BLOCK_N = 0) := by
+    intro cc st hcc hPP
+    obtain ⟨hPinv, hPmod⟩ := hPP
+    have hceq : cc / BLOCK_N * BLOCK_N = cc := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hPmod)
+    have hcT : cc / BLOCK_N < ctxFwdIOT NT BLOCK_M BLOCK_N := by
+      refine (Nat.div_lt_iff_lt_mul hBN).mpr ?_
+      calc cc < bmv * belv := hcc
+        _ ≤ NT * BLOCK_M := hstople
+        _ ≤ BLOCK_N * ctxFwdIOT NT BLOCK_M BLOCK_N := hTle
+        _ = ctxFwdIOT NT BLOCK_M BLOCK_N * BLOCK_N := Nat.mul_comm _ _
+    obtain ⟨hsafeB, s', hrunB, hInvB⟩ :=
+      ctxFwdIO_bodyW R bounds Q K V Req_to_tokens B_Start_Loc B_Seqlen B_req_idx
+        b_prompt_cache_len sm_scale
+        stride_req_b stride_req_s stride_kbs stride_kh stride_kd stride_vbs stride_vh stride_vd
+        H BLOCK_DMODEL BLOCK_M BLOCK_N hBN s st cc hPinv
+        (fun jL hc => by
+          have hb := hbG ⟨cc / BLOCK_N, hcT⟩ jL (by rw [hceq]; exact hc)
+          rwa [hceq] at hb)
+        (fun e jL hc => by
+          have hb := hbK ⟨cc / BLOCK_N, hcT⟩ e jL (by rw [hceq]; exact hc)
+          rwa [hceq] at hb)
+        (fun jL e hc => by
+          have hb := hbV ⟨cc / BLOCK_N, hcT⟩ jL e (by rw [hceq]; exact hc)
+          rwa [hceq] at hb)
+    exact ⟨hsafeB, s', hrunB, hInvB, by rw [Nat.add_mod_right]; exact hPmod⟩
+  unfold Kernel.TraceSafeR
+  rw [ctxBody_splitG]
+  obtain ⟨hsafePre, s0, hrun0, hInv0⟩ :=
+    ctxFwdIO_preLoopW R bounds Q B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+      stride_qbs stride_qh stride_qd H BLOCK_DMODEL BLOCK_M BLOCK_N s hbPC hbSL hbSQ hbRQ hbQ
+  have hInv0' := hInv0
+  obtain ⟨hmem0, hpids0, hcb0, hch0, hckvh0, hplen0, hcbsi0, hseq0, hrqi0, hbmk0, hbel0,
+    hn0, hd0, hom0, hqE, hmiE, hliE, haccE⟩ := hInv0
+  have hstopExact : evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+      (Op.ref .nat [] "block_end_loc")) s0 = some (Tile.scalar (bmv * belv)) := by
+    rw [evalOp_mul, evalOp_ref, evalOp_ref, hbmk0, hbel0]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    rfl
+  refine Stmt.TraceSafeListR.append_intro _ _ hsafePre ?_
+  intro s1 hs1
+  rw [hrun0] at hs1
+  obtain rfl := Option.some.inj hs1
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s2 hs2 => ?_)
+  · -- TraceSafeR of the forRangeDyn itself
+    simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [ctxFwdIO_evalOpR_constNat, ctxFwdIO_evalOpR_constNat,
+      ctxFwdIO_stopOpR_castFree, hstopExact]
+    refine Stmt.forRangeTraceSafeR_inv R bounds "start_n" _ _
+      (ctxLoopBodyG Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N)
+      (fun i st => ctxFwdIOSafeInvW B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+        H BLOCK_DMODEL BLOCK_M BLOCK_N s st ∧ i % BLOCK_N = 0)
+      ?_ _ s0 ⟨hInv0', Nat.zero_mod BLOCK_N⟩
+    intro cc st hcc hPP
+    obtain ⟨hsafeB, s', hrunB, hInvB⟩ := hbody cc st hcc hPP
+    exact ⟨hsafeB, s', hrunB, hInvB⟩
+  · -- the loop's actual successor, then the postLoop
+    obtain ⟨finalC, sL, hLoopExact, hfin, hPL⟩ :=
+      forRangeDyn_inv (idx := "start_n")
+        (startOp := Op.constNat 0)
+        (stopOp := Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+          (Op.ref .nat [] "block_end_loc"))
+        (stepOp := Op.constNat BLOCK_N)
+        (P := fun i st => ctxFwdIOSafeInvW B_Start_Loc B_Seqlen B_req_idx b_prompt_cache_len
+          H BLOCK_DMODEL BLOCK_M BLOCK_N s st ∧ i % BLOCK_N = 0)
+        (s_init := s0)
+        (evalOp_constNat 0 s0) hstopExact (evalOp_constNat BLOCK_N s0)
+        hBN.ne'
+        ⟨hInv0', Nat.zero_mod BLOCK_N⟩
+        (fun i st hi hP => by
+          obtain ⟨hsafeB, s', hrunB, hInvB⟩ := hbody i st hi hP
+          exact ⟨s', by
+            rw [← ctxFwdIO_body_castFree R Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh
+              stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N]
+            exact hrunB, hInvB⟩)
+    rw [ctxFwdIO_dyn_castFree R Q K V Req_to_tokens sm_scale stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N s0,
+      hLoopExact] at hs2
+    obtain rfl := Option.some.inj hs2
+    obtain ⟨⟨hmemL, hpidsL, hcbL, hchL, hckvhL, hplenL, hcbsiL, hseqL, hrqiL, hbmkL, hbelL,
+      hnL, hdL, homL, hqEL, hmiEL, hliEL, haccEL⟩, hmodL⟩ := hPL
+    -- postLoop: `acc /= l_i`, `off_o`, `out_ptrs`, the masked terminal store
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s3 hs3 => ?_)
+    obtain ⟨v3, hv3, rfl⟩ := stepStmtR_assign_inv hs3
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s4 hs4 => ?_)
+    obtain ⟨v4, hv4, rfl⟩ := stepStmtR_assign_inv hs4
+    rw [ctxFwdIO_offoR_castFree R stride_obs stride_oh stride_od,
+      ctxFwdIO_offo_eval _ (fun r : Fin BLOCK_M => BLOCK_M * s.pids 0 + r.val)
+        (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)) (s.pids 1 % H)
+        stride_obs stride_oh stride_od
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hcbsiL)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hchL)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact homL)
+        (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+            exact hdL)] at hv4
+    obtain rfl := Option.some.inj hv4
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s5 hs5 => ?_)
+    obtain ⟨v5, hv5, rfl⟩ := stepStmtR_assign_inv hs5
+    rw [ctxFwdIO_outptrR_castFree R Out BLOCK_M BLOCK_DMODEL] at hv5
+    simp only [evalOp, evalOp_ref, BlockState.setReg_same, Option.bind] at hv5
+    obtain rfl := Option.some.inj hv5
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [MemAccess.SafeAtR, Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR, Op.SafeAtR.eq_def], ?_⟩
+    intro ptrs hptrs idx hactive
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [ctxFwdIO_rowmaskR_eval R _ (fun r : Fin BLOCK_M => BLOCK_M * s.pids 0 + r.val)
+      (rawv - plenv)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact homL)
+      (by simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+          exact hseqL)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨i2, e2, pu⟩ := idx
+    have hrow : BLOCK_M * s.pids 0 + i2.val < rawv - plenv := by simpa using hactl
+    have hb := hbO i2 e2 (by rw [Nat.mul_comm]; exact hrow)
+    have hb' : (s.readMemValue .nat (Region.cast B_Start_Loc) (s.pids 1 / H)
+          + (BLOCK_M * s.pids 0 + i2.val)) * stride_obs
+        + s.pids 1 % H * stride_oh + e2.val * stride_od < bounds Out := by
+      rw [show BLOCK_M * s.pids 0 = s.pids 0 * BLOCK_M from Nat.mul_comm _ _]
+      exact hb
+    simpa [Tile.ptrAdd_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+      Region.cast_id] using hb'
+
+/-! ## The rounded Hoare triple (`hrun`): framed exact run
+
+`hrun` rides the exact `ctxPreLoop_evalG` → `forRangeDyn_inv` →
+`ctxPostLoop_evalG` stack unchanged (everything is cast-free, so `execR R`
+collapses onto it verbatim); the only new obligation the skin adds over the
+existing headline is the **memory frame**, recovered by replaying the
+deterministic 4-statement postLoop and framing its masked scatter. -/
+
+/-- A masked `writeMem` scatter `foldl` leaves every cell not hit by an
+active lane untouched. Private copy of the nopad helper. -/
+private theorem ctxFwdIO_foldl_writeMem_frame_masked {α : Type} (region : RegionName)
+    (offFn : α → Nat) (valFn : α → ℝ) (P : α → Prop) [DecidablePred P] :
+    ∀ (l : List α) (st : BlockState) (r : RegionName) (o : Nat),
+      (r = region → ∀ k ∈ l, P k → offFn k ≠ o) →
+      ((l.foldl (fun acc k =>
+          if P k then acc.writeMem region (offFn k) (valFn k) else acc) st).mem r o
+        = st.mem r o)
+  | [], _, _, _, _ => rfl
+  | k :: rest, st, r, o, h => by
+      rw [List.foldl_cons]
+      by_cases hPk : P k
+      · rw [if_pos hPk,
+          ctxFwdIO_foldl_writeMem_frame_masked region offFn valFn P rest _ r o
+            (fun hr k' hk' hPk' => h hr k' (List.mem_cons_of_mem _ hk') hPk'),
+          BlockState.writeMem_mem]
+        rw [if_neg (fun hro => h hro.1 k List.mem_cons_self hPk hro.2.symm)]
+      · rw [if_neg hPk]
+        exact ctxFwdIO_foldl_writeMem_frame_masked region offFn valFn P rest _ r o
+          (fun hr k' hk' hPk' => h hr k' (List.mem_cons_of_mem _ hk') hPk')
+
+set_option maxHeartbeats 3200000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop frame**: every cell outside the terminal store's active
+window is untouched by the postLoop (replay of `ctxPostLoop_evalG`'s
+deterministic 4-statement chain, framed). -/
+private theorem ctxFwdIO_postLoop_frame
+    (Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : RegionName) (s0 : BlockState)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      BLOCK_DMODEL BLOCK_N BLOCK_M H : Nat) (hD : 0 < BLOCK_DMODEL)
+    (S bel : Nat) (c : Nat) (sL sP : BlockState) (hSc : S = c * BLOCK_N)
+    (hinv : ctxInvariantG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+        sm_scale H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_N BLOCK_M hD S bel c sL)
+    (hpost : stepStmts (ctxPostLoopG Out stride_obs stride_oh stride_od BLOCK_DMODEL BLOCK_M) sL
+      = some sP) :
+    ∀ r o,
+      (r = Out → ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+        active s0 H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx →
+        o ≠ outOffset s0 H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx) →
+      sP.mem r o = sL.mem r o := by
+  subst hSc
+  set plen := s0.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s0.pids 1 / H) with hplend
+  set sl := s0.readMemValue .nat (Region.cast B_Seqlen) (s0.pids 1 / H) - plen with hsld
+  set d0 : Nat := (⟨0, hD⟩ : Fin BLOCK_DMODEL).val with hd0def
+  set g := fun (i : Fin BLOCK_M) (d : Nat) =>
+    ctxGG s0 Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
+      H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M (c * BLOCK_N) bel i d with hgd
+  simp only [ctxInvariantG] at hinv
+  obtain ⟨hpids, hmem, hundef, hcb, hckvh, hch, hplen, hsl, hbel, hcbsi, hrqi, hom, hon, hod,
+      hq, hmi, hli, hacc, hcle⟩ := hinv
+  set accDiv : Tile .real [BLOCK_M, BLOCK_DMODEL] := ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      some ((gStateBot (c * BLOCK_N) (c * BLOCK_N) (g idx.1 idx.2.1.val)).2.2
+        / (gStateBot (c * BLOCK_N) (c * BLOCK_N) (g idx.1 d0)).2.1)⟩
+    with haccDiv
+  unfold ctxPostLoopG at hpost
+  -- stmt 0: acc = acc / l_i[:, None]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.div .real Broadcast.nil.consR.consSame
+        (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_i"))) sL = some accDiv from by
+      have hexp : @evalOp TileDType.real [BLOCK_M, 1]
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BLOCK_M] "l_i")) sL
+          = some (Tile.expandDim ⟨1, by simp⟩
+              (⟨fun r : TileIndex [BLOCK_M] =>
+                some (gStateBot (c * BLOCK_N) (c * BLOCK_N) (g r.1 d0)).2.1⟩
+                : Tile .real [BLOCK_M])) :=
+        evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hli
+      rw [evalOp_div]
+      simp only [evalOp_ref, hacc, hexp, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [haccDiv, Tile.bop_data, Tile.expandDim_data, TileShape.dropInsertedIndex,
+        TileShape.insertAxisIndex, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.div, WithBot.realDiv, Option.map₂, Option.bind, Option.map]
+      rfl))] at hpost
+  set s1 := sL.setReg "acc" .real [BLOCK_M, BLOCK_DMODEL] accDiv with hs1
+  set offoTile : Tile .nat [BLOCK_M, BLOCK_DMODEL] :=
+    ⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      outOffset s0 H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx⟩ with hoffo
+  -- stmt 1: off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.nil.consL.consR
+        (Op.add .nat Broadcast.scalarR
+          (Op.mul .nat Broadcast.scalarR
+            (Op.add .nat Broadcast.scalarL (Op.ref .nat [] "cur_batch_in_all_start_index")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m")))
+            (Op.constNat stride_obs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat stride_oh)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BLOCK_DMODEL] "offs_d"))
+          (Op.constNat stride_od))) s1 = some offoTile from by
+      simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+        ctx_evalOp_expandDim_one_nat, ctx_evalOp_expandDim_zero_nat, hs1,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq,
+        hcbsi, hch, hom, hod, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [hoffo, outOffset, startLoc, curBatch, curHead, mIndex, dIndex,
+        Tile.bop_data, Tile.scalar_data, Tile.vec_data,
+        Tile.expandDim, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, NumericDType.mul]
+      generalize s0.readMemValue .nat B_Start_Loc (s0.pids 1 / H) = A
+      ring))] at hpost
+  set s2 := s1.setReg "off_o" .nat [BLOCK_M, BLOCK_DMODEL] offoTile with hs2
+  -- stmt 2: out_ptrs = Out + off_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase Out) (Op.ref .nat [BLOCK_M, BLOCK_DMODEL] "off_o")) s2
+        = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+            (Out, offoTile.data idx)⟩ : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) from by
+      simp only [evalOp, hs2, BlockState.setReg_same, Region.cast_id,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      · simp only [Tile.ptrAdd, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex]
+      · simp only [Tile.ptrAdd, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+          Nat.zero_add]))] at hpost
+  set s3 := s2.setReg "out_ptrs" .ptr [BLOCK_M, BLOCK_DMODEL]
+    (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out, offoTile.data idx)⟩
+      : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) with hs3
+  -- stmt 3: masked store
+  set P : TileIndex [BLOCK_M, BLOCK_DMODEL] → Prop :=
+    fun idx => BLOCK_M * s0.pids 0 + idx.1.val < sl with hP
+  have hmaskev : evalOp (Op.remap [BLOCK_M, BLOCK_DMODEL] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+        (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+          (Op.ref .nat [] "cur_batch_seq_len"))) s3
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          decide (BLOCK_M * s0.pids 0 + idx.1.val < sl)⟩
+          : Tile .bool [BLOCK_M, BLOCK_DMODEL]) := by
+    have := @ctxRowMask_eval BLOCK_M BLOCK_DMODEL s3 (fun r : Fin BLOCK_M => BLOCK_M * s0.pids 0 + r.val) sl
+      (by rw [hs3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hom)
+      (by rw [hs3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+            hs1, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hsl)
+    exact this
+  have haccref : evalOp (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc") s3 = some accDiv := by
+    rw [evalOp_ref, hs3, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hs2, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hs1, BlockState.setReg_same]
+  have hptrref : evalOp (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "out_ptrs") s3
+      = some (⟨fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out, offoTile.data idx)⟩
+          : Tile .ptr [BLOCK_M, BLOCK_DMODEL]) := by
+    rw [evalOp_ref, hs3, BlockState.setReg_same]
+  have hstore : stepStmt (Stmt.store .real [BLOCK_M, BLOCK_DMODEL]
+      (MemAccess.ptr (Op.ref .ptr [BLOCK_M, BLOCK_DMODEL] "out_ptrs"))
+      (Op.ref .real [BLOCK_M, BLOCK_DMODEL] "acc")
+      (MaskOpt.mask
+        (Op.remap [BLOCK_M, BLOCK_DMODEL] (fun x => (x.1, ⟨0, Broadcast.leftIndex._proof_1⟩, PUnit.unit))
+          (Op.lt .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BLOCK_M] "offs_m"))
+            (Op.ref .nat [] "cur_batch_seq_len"))))) s3
+      = some ((TileShape.allIndices [BLOCK_M, BLOCK_DMODEL]).foldl
+          (fun acc idx => if P idx then acc.writeMem Out (offoTile.data idx)
+            ((accDiv.data idx).unbotD 0) else acc) s3) := by
+    unfold stepStmt
+    rw [haccref]
+    simp only [hmaskev, Option.bind_eq_bind, Option.bind_some, Option.map_some]
+    rw [hptrref]
+    simp only [Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some ?_
+    refine List.foldl_ext _ _ s3 ?_
+    intro acc idx _
+    by_cases h : BLOCK_M * s0.pids 0 + idx.1.val < sl
+    · simp only [h, decide_true, if_pos, hP, if_pos h, BlockState.writeMemTyped_real,
+        FloatDType.real_storeValue]
+    · simp only [decide_eq_false_iff_not.mpr h, Bool.false_eq_true, if_false, hP, if_neg h]
+  rw [stepStmts.cons_some hstore, stepStmts.nil] at hpost
+  obtain rfl := Option.some.inj hpost
+  intro r o hno
+  have hactive_of_P : ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+      P idx → active s0 H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx := by
+    intro idx hPk
+    have he : mIndex s0 BLOCK_M idx.1 = BLOCK_M * s0.pids 0 + idx.1.val := by
+      simp only [mIndex]; ring
+    have he2 : seqLen s0 H B_Seqlen B_Prompt_Cache_Len = sl := by
+      rw [hsld, hplend]; rfl
+    simp only [active, he, he2]
+    exact hPk
+  refine (ctxFwdIO_foldl_writeMem_frame_masked Out _ _ _ _ s3 r o ?_).trans ?_
+  · intro hr k _ hPk
+    exact Ne.symm (hno hr k (hactive_of_P k hPk))
+  · rw [hs3, hs2, hs1]
+    simp only [BlockState.setReg_mem]
+
+set_option maxHeartbeats 3200000 in
+set_option maxRecDepth 8000 in
+/-- **Framed general execution**: `ctx_exec_general` extended with the
+per-cell memory frame (this is the exact run `hrun` rides). -/
+private theorem ctxFwdIO_exec_framed
+    (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len : Region .nat) (s : BlockState)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      H BLOCK_DMODEL BLOCK_M BLOCK_N : Nat) (hD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N)
+    (hOInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx))
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ sF, stepStmts ((context_attn_llama_fwd_kernel_surface Q K V
+        sm_scale Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+        stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        stride_req_b stride_req_s 1 H BLOCK_DMODEL BLOCK_M BLOCK_N).toAlgKernel.body) s = some sF
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+          active s H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx →
+          sF.readMem Out (outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)
+            = ctxFwdGenuineOutValueG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len
+                sm_scale H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh
+                stride_kd stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M BLOCK_N idx)
+      ∧ (∀ r o, (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+            active s H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx →
+            o ≠ outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx) →
+          sF.mem r o = s.mem r o) := by
+  rw [ctxBody_splitG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
+    stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd
+    stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+    stride_req_b stride_req_s 1 H BLOCK_DMODEL BLOCK_M BLOCK_N]
+  -- preLoop
+  obtain ⟨s0, hpre, hpids, hmem, hundef0, hstart_m, hcb, hch, hckvh, hplen, hcbsi, hrqi, hsl0,
+      hbsl, hon, hod, hom, hmi, hli, hacc, hbm0, hbel0, hq⟩ :=
+    ctxPreLoop_evalG s Q B_Start_Loc B_Seqlen B_req_idx B_Prompt_Cache_Len
+      stride_qbs stride_qh stride_qd 1 H BLOCK_DMODEL BLOCK_M BLOCK_N hundef
+  rw [stepStmts.append_some hpre]
+  set plen := s0.readMemValue .nat (Region.cast B_Prompt_Cache_Len) (s0.pids 1 / H) with hplend
+  set slv := s0.readMemValue .nat (Region.cast B_Seqlen) (s0.pids 1 / H) with hslvd
+  set sl := slv - plen with hsld
+  set bel := (let a := BLOCK_M * s0.pids 0 + BLOCK_M + plen
+              let b := sl + plen
+              if a < b then a else b) with hbeld
+  set bm := (if BLOCK_M * s0.pids 0 < sl then 1 else 0) with hbmd
+  set S := BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N) with hSd
+  have hmemv : ∀ (rg : RegionName) (i : Nat),
+      s.readMemValue .nat rg i = s0.readMemValue .nat rg i := by
+    intro rg i
+    simp only [BlockState.readMemValue, BlockState.readMemTyped, hmem]
+  have hmemvr : ∀ (rg : RegionName) (i : Nat),
+      s.readMemValue .real rg i = s0.readMemValue .real rg i := by
+    intro rg i
+    simp only [BlockState.readMemValue, BlockState.readMemAs, hmem]
+  have hbelrb : s0.regs .nat [] "block_end_loc" = some (Tile.scalar bel) := by
+    rw [hbel0]
+    refine congrArg (fun x => some (Tile.scalar x)) ?_
+    simp only [hbeld, hsld, hslvd, hplend, Region.cast_cast, ← hpids, hmemv]
+  have hbmrb : s0.regs .nat [] "block_mask" = some (Tile.scalar bm) := by
+    rw [hbm0]
+    refine congrArg (fun x => some (Tile.scalar x)) ?_
+    simp only [hbmd, hsld, hslvd, hplend, Region.cast_cast, ← hpids, hmemv]
+  -- invariant at counter 0
+  have hinv0 : ctxInvariantG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+      sm_scale H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_N BLOCK_M hD S bel 0 s0 := by
+    refine ⟨rfl, rfl, hundef0, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+    · rw [hcb, hpids]
+    · rw [hckvh, hpids]
+    · rw [hch, hpids]
+    · rw [hplen]; simp only [Region.cast_cast, hmemv, ← hpids]
+    · rw [hsl0]; simp only [Region.cast_cast, hmemv, ← hpids]
+    · exact hbelrb
+    · rw [hcbsi]; simp only [startLoc, curBatch, Region.cast_cast, hmemv, ← hpids]
+    · rw [hrqi]; simp only [curBatch, Region.cast_cast, hmemv, ← hpids]
+    · rw [hom, hpids]
+    · rw [hon]
+    · rw [hod]
+    · rw [hq]; refine congrArg some ?_; ext idx
+      simp only [Region.cast_cast, hmemv, hmemvr, ← hpids]; rfl
+    · rw [hmi]; refine congrArg some ?_; ext r
+      simp only [Nat.zero_mul, gStateBot_zero]
+    · rw [hli]; refine congrArg some ?_; ext r
+      simp only [Nat.zero_mul, gStateBot_zero]
+    · rw [hacc]; refine congrArg some ?_; ext idx
+      simp only [Nat.zero_mul, gStateBot_zero]
+    · omega
+  -- run the loop
+  obtain ⟨final, sL, hloop, hfin, c_final, hfinaleq, hinvL⟩ :=
+    forRangeDyn_inv (idx := "start_n")
+      (startOp := Op.constNat 0)
+      (stopOp := Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask") (Op.ref .nat [] "block_end_loc"))
+      (stepOp := Op.constNat BLOCK_N)
+      (P := fun i st => ∃ c, i = c * BLOCK_N ∧
+        ctxInvariantG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+          sm_scale H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+          stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_N BLOCK_M hD S bel c st)
+      (s_init := s0)
+      (by rw [evalOp_constNat])
+      (show evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "block_mask")
+            (Op.ref .nat [] "block_end_loc")) s0 = some (Tile.scalar (bm * bel)) from by
+        rw [evalOp_mul, evalOp_ref, evalOp_ref, hbmrb, hbelrb]
+        simp only [Option.bind_eq_bind, Option.bind_some]; rfl)
+      (by rw [evalOp_constNat])
+      (Nat.pos_iff_ne_zero.mp hBN)
+      ⟨0, by ring, hinv0⟩
+      (fun i st hi hP => by
+        obtain ⟨c, hic, hinvc⟩ := hP
+        have hwin : (c + 1) * BLOCK_N ≤ S := by
+          have hstop : c * BLOCK_N < bm * bel := hic ▸ hi
+          rw [hSd]
+          have hge : bm * bel ≤ BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N) := by
+            have hdm := Nat.div_add_mod (bm * bel + (BLOCK_N - 1)) BLOCK_N
+            have h3 : (bm * bel + (BLOCK_N - 1)) % BLOCK_N < BLOCK_N := Nat.mod_lt _ hBN
+            omega
+          have hcq : c < (bm * bel + (BLOCK_N - 1)) / BLOCK_N := by
+            by_contra hcon
+            have hcon' : (bm * bel + (BLOCK_N - 1)) / BLOCK_N ≤ c := Nat.not_lt.mp hcon
+            have h1 : BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N) ≤ BLOCK_N * c :=
+              Nat.mul_le_mul_left _ hcon'
+            have h2 : bm * bel ≤ BLOCK_N * c := le_trans hge h1
+            rw [Nat.mul_comm BLOCK_N c] at h2
+            omega
+          calc (c + 1) * BLOCK_N = BLOCK_N * (c + 1) := by ring
+            _ ≤ BLOCK_N * ((bm * bel + (BLOCK_N - 1)) / BLOCK_N) := Nat.mul_le_mul_left _ hcq
+        obtain ⟨s', hs', hinv'⟩ :=
+          ctx_attn_stepG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+            sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+            stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_N BLOCK_M H hD hBN
+            S bel c i st hwin hic hinvc
+        exact ⟨s', hs', c + 1, by rw [hic]; ring, hinv'⟩)
+  subst hfinaleq
+  have hcle : c_final * BLOCK_N ≤ S := hinvL.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+  have hScfinal : S = c_final * BLOCK_N := by
+    have hfinge : bm * bel ≤ c_final * BLOCK_N := hfin
+    have hqle : (bm * bel + (BLOCK_N - 1)) / BLOCK_N ≤ c_final := by
+      rw [Nat.div_le_iff_le_mul_add_pred hBN]
+      have hcomm : c_final * BLOCK_N = BLOCK_N * c_final := Nat.mul_comm _ _
+      omega
+    have hSub : S ≤ c_final * BLOCK_N := by
+      rw [hSd, Nat.mul_comm BLOCK_N]
+      exact Nat.mul_le_mul_right _ hqle
+    omega
+  -- postLoop
+  obtain ⟨sP, hpostStep, hO⟩ :=
+    ctxPostLoop_evalG Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len s0
+      sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      BLOCK_DMODEL BLOCK_N BLOCK_M H hD S bel c_final sL hScfinal
+      (by
+        have : (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s0 H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)
+            = (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx) := by
+          funext idx
+          simp only [outOffset, startLoc, curBatch, curHead, mIndex, dIndex, hpids, hmem,
+            BlockState.readMemValue, BlockState.readMemTyped]
+        rw [this]; exact hOInj)
+      hinvL
+  have hframeP := ctxFwdIO_postLoop_frame Q K V Out
+    (Region.cast B_Start_Loc) (Region.cast B_Seqlen) (Region.cast Req_to_tokens)
+    (Region.cast B_req_idx) (Region.cast B_Prompt_Cache_Len) s0
+    sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh
+    stride_kd stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+    BLOCK_DMODEL BLOCK_N BLOCK_M H hD S bel c_final sL sP hScfinal hinvL hpostStep
+  refine ⟨sP, ?_, ?_, ?_⟩
+  · rw [stepStmts.cons_some hloop]
+    exact hpostStep
+  · intro idx hac
+    have hOidx := hO idx
+    have houtoff : outOffset s0 H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx
+        = outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx := by
+      simp only [outOffset, startLoc, curBatch, curHead, mIndex, hpids, hmemv]
+    have hact : active s0 H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx
+        ↔ active s H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx := by
+      simp only [active, mIndex, seqLen, promptLen, curBatch, hpids, hmemv]
+    rw [houtoff] at hOidx
+    rw [hOidx, if_pos (hact.mpr hac)]
+    have hreadmem : ∀ (rg : RegionName) (o : Nat), s0.readMem rg o = s.readMem rg o := by
+      intro rg o; unfold BlockState.readMem; rw [hmem]
+    have hbeleq : bel = ctxFwdBelG s B_Seqlen B_Prompt_Cache_Len H BLOCK_M := by
+      simp only [ctxFwdBelG, hbeld, hsld, hslvd, hplend, ← hpids, hmemv]
+    have hSeq : S = ctxFwdWindowG s B_Seqlen B_Prompt_Cache_Len H BLOCK_M BLOCK_N := by
+      simp only [ctxFwdWindowG, ctxFwdBelG, hSd, hbmd, hbeld, hsld, hslvd, hplend, ← hpids, hmemv]
+    rw [ctxFwdGenuineOutValueG, ← hbeleq, ← hSeq]
+    have hkvm : ctxKVMG s0 Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
+          H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+          stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M S bel idx.1 idx.2.1.val
+        = ctxKVMG s Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx B_Prompt_Cache_Len sm_scale
+          H stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+          stride_vbs stride_vh stride_vd BLOCK_DMODEL BLOCK_M S bel idx.1 idx.2.1.val := by
+      funext j
+      simp only [ctxKVMG, ctxQTileMG, ctxKTileMG, ctxVTileMG, ctxQTileG, ctxKTileG, ctxVTileG,
+        ctxKvLocG, promptLen, seqLen, curBatch, curHead, hpids, hmemv, hreadmem]
+    simp only [contextAttnExactFoldMG, hkvm]
+  · intro r o hcond
+    have hcond0 : r = Out → ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+        active s0 H (Region.cast B_Seqlen) (Region.cast B_Prompt_Cache_Len) BLOCK_M idx →
+        o ≠ outOffset s0 H (Region.cast B_Start_Loc) stride_obs stride_oh stride_od BLOCK_M idx := by
+      intro hr idx hact0
+      rcases hcond with hne | hno
+      · exact absurd hr hne
+      · have hactIff : active s0 H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx
+            ↔ active s H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx := by
+          simp only [active, mIndex, seqLen, promptLen, curBatch, hpids, hmemv]
+        have houtoff : outOffset s0 H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx
+            = outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx := by
+          simp only [outOffset, startLoc, curBatch, curHead, mIndex, hpids, hmemv]
+        have h := hno idx (hactIff.mp hact0)
+        rw [houtoff]
+        exact h
+    rw [hframeP r o hcond0]
+    have hmemL : sL.mem = s0.mem := hinvL.2.1
+    rw [hmemL, hmem]
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `⊨[R]` gather-skin headline** — `context_attn_llama` on
+`StreamMetaGatherMasked3DKernelIO₃`, the paged-KV gather skin, at fully
+symbolic per-axis strides. For every rounding model `R`, the faithful
+surface implements, on its metadata + gather + three-stream signature, the
+streamed closed form `contextAttnLlamaIOSpec`: every write-active output lane
+`j = (i, e)` holds the `acc/l` readback of the ⊥-seeded online-softmax
+`exp2` fold over the live streamed window, with the prompt-cache-offset
+causal boundary and the **finite `-1e8` sentinel** — masked keys genuinely
+carry weight `exp2(-1e8 − m)`, so the spec transcribes the kernel's fold
+verbatim rather than a cleaned-up causal softmax (the `-1e8` honesty is
+inherited from the exact headline, not repaired here). The four `.nat`
+slots enter only through the windows/masks (`m 0 =
+cur_batch_in_all_start_index`, `m 1 = prompt_cache_len`, `m 2` = the **raw**
+`B_Seqlen` load — the kernel subtracts in-register, so masks carry the
+ℕ-truncated `m 2 - m 1` verbatim — and `m 3 = cur_batch_req_idx`, the
+page-table row).
+
+**The gather layer.** `Req_to_tokens` is the skin's index channel: a
+`[BLOCK_N]` `.nat` tile `G t ·` per step, read at
+`stride_req_b·m 3 + stride_req_s·(t·BN + jL)` under the same
+`block_end_loc` liveness the `K`/`V` loads carry, `other = 0` on dead lanes.
+`G` is universally quantified beside the slot vector and pinned with the
+skin's two legs; the `K`/`V` windows eat it (`read2`/`read3`), while the
+spec `f` does **not** — the gathered index moves addresses only, and the
+data pins already deliver the gathered cells as the ordinary streams
+(`ctxFwdIOSpec_eq_genuine` is the single place `ctxKvLocG ↦ G` is rewritten,
+on the pin's active leg). Consequently the in-bounds-ness of the *gathered
+values* is a hypothesis of the triple (`hbr2`/`hbr3`, quantified over `G`),
+exactly like the slot values: host page-table contents are trusted input.
+
+The kernel has **zero rounding events** (`.nat` slot/gather loads,
+`other=0.0`-masked `.real` loads, `.real` in-loop arithmetic, untyped
+terminal store), so the skin's boundary quantization degenerates: the
+readback's `R.round .real` is the identity by the model's defining
+`round_real`.
+
+**Launch legality (`pre` = the trusted-launch boundary).** The triple is
+guarded by `io.pre pid₀ m = (pid₀ < NT ∧ m 2 ≤ NT·BLOCK_M)` — the gather
+adds **nothing** to `pre` — exactly the
+port's documented trusted boundary (see the file docstring's Scope section):
+the host launches `grid = (cdiv(max_input_len, BLOCK_M), batch·head)` with
+`NT` the first grid dimension and every raw `B_Seqlen[b] ≤ max_input_len ≤
+NT·BLOCK_M`. The live trip count `block_mask·block_end_loc` has no pid-free
+bound; under `pre` it is `≤ NT·BLOCK_M ≤ BLOCK_N·T`
+(`ctxFwdIOBel_le`/`ctxFwdIOT_mul_le`), which is what makes the
+`T = ⌈NT·BLOCK_M/BLOCK_N⌉`-step window citable in both the safety walk and
+the value bridge. The `⊨[R]` triple says nothing about launches outside this
+boundary.
+
+**Hypothesis provenance**: `0 < BLOCK_DMODEL`, `0 < BLOCK_N` are the exact
+headline's side conditions (nonempty tiles; `reduceMax` totality);
+`0 < BLOCK_M` and `0 < NT` are truth-forced by the static `Q` stream's
+step-`0` read (`0 < T`); `hOInj` restates the exact headline's **open**
+output-offset injectivity side condition in ∀-pids/∀-slot form (per-axis
+strides are symbolic here — unlike `context_attn_nopad`'s contiguous pin, no
+`DM ≤ rs` discharge is available). `kv_group_num = 1` is inherited from the
+exact headline's pin. The exact headline's `hundef` is **not** a hypothesis
+here — the skin's Hoare triple carries the `undef` pin itself.
+
+Relation to the exact surface: the `Realizes_without_Rounding` headline
+above is retained unchanged; this `⊨[R]` face restates the same genuine
+closed form (`ctxFwdGenuineOutValueG`) on the gather skin, for every `R` at
+once. -/
+specification context_attn_llama_io_correctness (R : RoundingModel)
+    (Q K V Out : RegionName)
+    (B_Start_Loc B_Seqlen Req_to_tokens B_req_idx b_prompt_cache_len : Region .nat)
+    (sm_scale : ℝ)
+    (stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      H BLOCK_DMODEL BLOCK_M BLOCK_N NT : Nat)
+    (hD : 0 < BLOCK_DMODEL) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hNT : 0 < NT)
+    (hOInj : ∀ pid₀ pid₁ base : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        (base + (pid₀ * BLOCK_M + idx.1.val)) * stride_obs + pid₁ % H * stride_oh
+          + idx.2.1.val * stride_od)) :
+    contextAttnLlamaIO Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
+        b_prompt_cache_len sm_scale
+        stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        H BLOCK_DMODEL BLOCK_M BLOCK_N NT ⊨[R]
+      fun pid₀ _ _ m xs ys zs j =>
+        contextAttnLlamaIOSpec BLOCK_M BLOCK_DMODEL BLOCK_N NT hBN
+          (ctxFwdIOT_pos NT BLOCK_M BLOCK_N hBM hBN hNT) sm_scale pid₀
+          (m (⟨1, by omega⟩ : Fin 4)) (m (⟨2, by omega⟩ : Fin 4)) xs ys zs j := by
+  refine StreamMetaGatherMasked3DKernelIO₃.ImplementsR.intro _ ?_ ?_ ?_
+  · exact ctxFwdIO_flattenOk Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
+      b_prompt_cache_len sm_scale
+      stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      H BLOCK_DMODEL BLOCK_M BLOCK_N
+  · -- the safety walk
+    intro bounds s m G xs ys zs hpre hm hg _hgo _hx _hy _hz hbm hbrG hbr1 hbr2 hbr3 hbw
+    simp only [contextAttnLlamaIO] at hpre hm hg hbm hbrG hbr1 hbr2 hbr3 hbw ⊢
+    have hm0 : s.readMemValue .nat ↑b_prompt_cache_len (s.pids 1 / H)
+        = m (⟨1, by omega⟩ : Fin 4) := hm (⟨1, by omega⟩ : Fin 4)
+    have hm1 : s.readMemValue .nat ↑B_Start_Loc (s.pids 1 / H)
+        = m (⟨0, by omega⟩ : Fin 4) := hm (⟨0, by omega⟩ : Fin 4)
+    have hm2 : s.readMemValue .nat ↑B_Seqlen (s.pids 1 / H)
+        = m (⟨2, by omega⟩ : Fin 4) := hm (⟨2, by omega⟩ : Fin 4)
+    have hm3 : s.readMemValue .nat ↑B_req_idx (s.pids 1 / H)
+        = m (⟨3, by omega⟩ : Fin 4) := hm (⟨3, by omega⟩ : Fin 4)
+    refine ctxFwdIO_traceSafeR R bounds Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
+      b_prompt_cache_len
+      sm_scale stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+      stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+      H BLOCK_DMODEL BLOCK_M BLOCK_N NT hBN s
+      (by rw [hm2]; exact hpre.2)
+      (hbm (⟨1, by omega⟩ : Fin 4)) (hbm (⟨0, by omega⟩ : Fin 4))
+      (hbm (⟨2, by omega⟩ : Fin 4)) ?_ (hbm (⟨3, by omega⟩ : Fin 4)) ?_ ?_ ?_ ?_
+    · intro i e hrow
+      have h := hbr1 ⟨0, ctxFwdIOT_pos NT BLOCK_M BLOCK_N hBM hBN hNT⟩
+        (Lane2D.encode (i, e, PUnit.unit))
+        (by rw [Lane2D.encode_div, ← hm0, ← hm2]; exact hrow)
+      rw [Lane2D.encode_div, Lane2D.encode_mod, ← hm1] at h
+      exact h
+    · -- the gather window itself
+      intro t jL hcol
+      have h := hbrG t jL (by rw [← hm0, ← hm2]; exact hcol)
+      rw [← hm3] at h
+      exact h
+    · -- `K`: the gathered value's window, pinned back to memory by `hg`
+      intro t e jL hcol
+      have hcolm : t.val * BLOCK_N + jL.val
+          < ctxFwdIOBel BLOCK_M (s.pids 0) (m (⟨1, by omega⟩ : Fin 4))
+              (m (⟨2, by omega⟩ : Fin 4)) := by
+        rw [← hm0, ← hm2]; exact hcol
+      have hgv : s.readMemValue .nat ↑Req_to_tokens
+          (stride_req_b * m (⟨3, by omega⟩ : Fin 4)
+            + stride_req_s * (t.val * BLOCK_N + jL.val)) = G t jL := hg t jL hcolm
+      have h := hbr2 t (Lane2D.encode (e, jL, PUnit.unit))
+        (by rw [Lane2D.encode_mod]; exact hcolm)
+      rw [Lane2D.decode_encode, Lane2D.encode_div, ← hgv, ← hm3] at h
+      exact h
+    · -- `V`: mirror
+      intro t jL e hcol
+      have hcolm : t.val * BLOCK_N + jL.val
+          < ctxFwdIOBel BLOCK_M (s.pids 0) (m (⟨1, by omega⟩ : Fin 4))
+              (m (⟨2, by omega⟩ : Fin 4)) := by
+        rw [← hm0, ← hm2]; exact hcol
+      have hgv : s.readMemValue .nat ↑Req_to_tokens
+          (stride_req_b * m (⟨3, by omega⟩ : Fin 4)
+            + stride_req_s * (t.val * BLOCK_N + jL.val)) = G t jL := hg t jL hcolm
+      have h := hbr3 t (Lane2D.encode (jL, e, PUnit.unit))
+        (by rw [Lane2D.encode_div]; exact hcolm)
+      rw [Lane2D.decode_encode, Lane2D.encode_mod, ← hgv, ← hm3] at h
+      exact h
+    · intro i e hrow
+      have h := hbw (Lane2D.encode (i, e, PUnit.unit))
+        (by rw [Lane2D.encode_div, ← hm0, ← hm2]; exact hrow)
+      rw [Lane2D.encode_div, Lane2D.encode_mod, ← hm1] at h
+      exact h
+  · -- the rounded Hoare triple: framed exact stack + cast-free collapse
+    intro s₀ m G xs ys zs hpre hu hm hg _hgo hx hy hz
+    simp only [contextAttnLlamaIO] at hpre hm hg hx hy hz ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
+    have hm0 : s₀.readMemValue .nat ↑b_prompt_cache_len (s₀.pids 1 / H)
+        = m (⟨1, by omega⟩ : Fin 4) := hm (⟨1, by omega⟩ : Fin 4)
+    have hm1 : s₀.readMemValue .nat ↑B_Start_Loc (s₀.pids 1 / H)
+        = m (⟨0, by omega⟩ : Fin 4) := hm (⟨0, by omega⟩ : Fin 4)
+    have hm2 : s₀.readMemValue .nat ↑B_Seqlen (s₀.pids 1 / H)
+        = m (⟨2, by omega⟩ : Fin 4) := hm (⟨2, by omega⟩ : Fin 4)
+    have hm3 : s₀.readMemValue .nat ↑B_req_idx (s₀.pids 1 / H)
+        = m (⟨3, by omega⟩ : Fin 4) := hm (⟨3, by omega⟩ : Fin 4)
+    have hOInj' : Function.Injective
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          outOffset s₀ H ↑B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx) :=
+      hOInj (s₀.pids 0) (s₀.pids 1) (startLoc s₀ H ↑B_Start_Loc)
+    obtain ⟨sF, hstep, hOut, hframe⟩ :=
+      ctxFwdIO_exec_framed Q K V Out B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
+        b_prompt_cache_len s₀ sm_scale
+        stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd stride_obs stride_oh stride_od
+        H BLOCK_DMODEL BLOCK_M BLOCK_N hD hBN hOInj' hundef'
+    refine ⟨sF, ?_, ?_, ?_⟩
+    · rw [ctxFwdIO_execR_collapse]
+      exact hstep
+    · -- readback: the genuine closed form = the streamed closed form
+      intro j hj
+      have hact : active s₀ H ↑B_Seqlen ↑b_prompt_cache_len BLOCK_M (Lane2D.decode j) := by
+        show s₀.pids 0 * BLOCK_M + (Lane2D.decode j).1.val
+          < s₀.readMemValue .nat ↑B_Seqlen (s₀.pids 1 / H)
+            - s₀.readMemValue .nat ↑b_prompt_cache_len (s₀.pids 1 / H)
+        rw [Lane2D.decode_row, hm0, hm2]
+        exact hj
+      have hOutj := hOut (Lane2D.decode j) hact
+      have haddr : (s₀.readMemValue .nat ↑B_Start_Loc (s₀.pids 1 / H)
+            + (s₀.pids 0 * BLOCK_M + j.val / BLOCK_DMODEL)) * stride_obs
+          + s₀.pids 1 % H * stride_oh + j.val % BLOCK_DMODEL * stride_od
+          = outOffset s₀ H ↑B_Start_Loc stride_obs stride_oh stride_od BLOCK_M
+              (Lane2D.decode j) := by
+        simp only [outOffset, startLoc, curBatch, curHead, mIndex, dIndex, Lane2D.decode_row,
+          Lane2D.decode_col]
+      rw [BlockState.readMemAs_real, ← hm1, haddr, hOutj, R.round_real_apply]
+      refine congrArg some ?_
+      exact ctxFwdIOSpec_eq_genuine s₀ Q K V B_Start_Loc B_Seqlen Req_to_tokens B_req_idx
+        b_prompt_cache_len sm_scale
+        stride_qbs stride_qh stride_qd stride_req_b stride_req_s stride_kbs stride_kh stride_kd
+        stride_vbs stride_vh stride_vd H BLOCK_DMODEL BLOCK_M BLOCK_N NT hBN
+        (ctxFwdIOT_pos NT BLOCK_M BLOCK_N hBM hBN hNT)
+        (m (⟨1, by omega⟩ : Fin 4)) (m (⟨0, by omega⟩ : Fin 4)) (m (⟨2, by omega⟩ : Fin 4))
+        (m (⟨3, by omega⟩ : Fin 4))
+        hm0 hm1 hm2 hm3 hpre.2 G xs ys zs hg hx hy hz j
+    · -- the frame
+      intro r o hcond
+      refine hframe r o ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · refine Or.inr (fun idx hact hoeq => ?_)
+        exact hno (Lane2D.encode idx)
+          (by rw [Lane2D.encode_div, ← hm2, ← hm0]; exact hact)
+          (hoeq.trans (by
+            simp only [outOffset, startLoc, curBatch, curHead, mIndex, dIndex,
+              Lane2D.encode_div, Lane2D.encode_mod, hm1]))
+
+end IOFace
+
 end VeriTile.Bench.TritonBenchG.ContextAttnLlama
