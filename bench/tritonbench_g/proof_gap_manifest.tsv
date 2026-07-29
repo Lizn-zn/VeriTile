@@ -206,6 +206,7 @@ bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_forward_kernel_correc
 bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_backward_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_attn_mistral/TokenAttnMistral.lean	token_attn_mistral_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/token_attn_mistral/TokenAttnMistral.lean	token_attn_mistral_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_attn_reduceV/TokenAttnReduceV.lean	token_attn_reducev_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_softmax_bloom/TokenSoftmaxBloom.lean	token_softmax_bloom_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/token_softmax_llama/TokenSoftmaxLlama.lean	token_softmax_llama_correctness	full_value_candidate	none		no proof-gap marker in summary context
@@ -218,7 +219,9 @@ bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forwa
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	triton_conv2d_fwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_inplace_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_softmax/TritonSoftmax.lean	softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context

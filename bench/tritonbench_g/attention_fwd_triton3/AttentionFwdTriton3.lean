@@ -8217,7 +8217,7 @@ specification attention_fwd_triton3_case3_io_correctness (R : RoundingModel)
   refine StreamMasked3DKernelIO₃ₓ₂.ImplementsR.intro _ ?_ ?_ ?_
   · exact aft3_flattenOkG3 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off BM ND BN
   · -- the safety walk
-    intro bounds s xs ys zs _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
+    intro bounds s xs ys zs _hlaunch _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
     simp only [attentionFwdTriton3Case3IO] at hbr1 hbr2 hbr3 hbw1 hbw2 ⊢
     exact aft3_traceSafeR_case3 R bounds Q K V M Out L sm_scale
       sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
@@ -8226,7 +8226,7 @@ specification attention_fwd_triton3_case3_io_correctness (R : RoundingModel)
       (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial)
       (fun t j => hbr3 t j trivial) (fun j => hbw1 j trivial) (fun j => hbw2 j trivial)
   · -- the rounded Hoare triple: exact invariant stack + cast-free collapses
-    intro s₀ xs ys zs hu hx hy hz
+    intro s₀ xs ys zs _hlaunch hu hx hy hz
     simp only [attentionFwdTriton3Case3IO] at hx hy hz ⊢
     have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
     set base := s₀.pids 1 / H * sqz + s₀.pids 1 % H * sqh with hbase
@@ -9956,7 +9956,7 @@ specification attention_fwd_triton3_case1_io_correctness (R : RoundingModel)
   refine StreamMasked3DKernelIO₃ₓ₂.ImplementsR.intro _ ?_ ?_ ?_
   · exact aft3_flattenOkG1 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
   · -- the safety walk
-    intro bounds s xs ys zs _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
+    intro bounds s xs ys zs _hlaunch _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
     simp only [attentionFwdTriton3Case1IO] at hbr1 hbr2 hbr3 hbw1 hbw2 ⊢
     exact aft3_traceSafeR_case1 R bounds Q K V M Out L sm_scale
       sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
@@ -9965,7 +9965,7 @@ specification attention_fwd_triton3_case1_io_correctness (R : RoundingModel)
       (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial)
       (fun t j => hbr3 t j trivial) (fun j => hbw1 j trivial) (fun j => hbw2 j trivial)
   · -- the rounded Hoare triple: exact KG invariant stack + cast-free collapses
-    intro s₀ xs ys zs hu hx hy hz
+    intro s₀ xs ys zs _hlaunch hu hx hy hz
     simp only [attentionFwdTriton3Case1IO] at hx hy hz ⊢
     have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
     set base := s₀.pids 1 / H * sqz + s₀.pids 1 % H * sqh with hbase
@@ -10085,7 +10085,7 @@ specification attention_fwd_triton3_case2_io_correctness (R : RoundingModel)
   refine StreamMasked3DKernelIO₃ₓ₂.ImplementsR.intro _ ?_ ?_ ?_
   · exact aft3_flattenOkG2 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
   · -- the safety walk
-    intro bounds s xs ys zs _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
+    intro bounds s xs ys zs _hlaunch _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
     simp only [attentionFwdTriton3Case2IO] at hbr1 hbr2 hbr3 hbw1 hbw2 ⊢
     exact aft3_traceSafeR_case2 R bounds Q K V M Out L sm_scale
       sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
@@ -10094,7 +10094,7 @@ specification attention_fwd_triton3_case2_io_correctness (R : RoundingModel)
       (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial)
       (fun t j => hbr3 t j trivial) (fun j => hbw1 j trivial) (fun j => hbw2 j trivial)
   · -- the rounded Hoare triple: exact KG invariant stack + cast-free collapses
-    intro s₀ xs ys zs hu hx hy hz
+    intro s₀ xs ys zs _hlaunch hu hx hy hz
     simp only [attentionFwdTriton3Case2IO] at hx hy hz ⊢
     have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
     set base := s₀.pids 1 / H * sqz + s₀.pids 1 % H * sqh with hbase

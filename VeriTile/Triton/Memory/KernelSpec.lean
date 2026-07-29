@@ -10713,6 +10713,16 @@ structure StreamMasked3DKernelIO₃ₓ₂ where
   /-- `out2`'s floating dtype (the `L`/`M` statistics rows are routinely
   unrounded `.real`). -/
   out2DType : FloatDType := .real
+  /-- The launch-legality precondition (defaulted unconstrained; the
+  `StreamMasked3DKernelIO₃ₓ₃` precedent): the triple is claimed only for
+  pids satisfying `pre`. Besides that skin's pid-dependent-trip-count
+  case, the other genuine need is a **wrapping store**: a kernel whose
+  store mask tests already-wrapped (`% M`) offsets still writes at every
+  pid, so an out-of-fit program overwrites in-range cells — folding the
+  fit condition into `writeMask` would leave the frame clause false.
+  Consumers instantiate `pre` with the host-grid fit facts their exact
+  stack already carries (triton_linear_activation's `hFitM`/`hFitN`). -/
+  pre : Nat → Nat → Nat → Prop := fun _ _ _ => True
   /-- Step `t`, lane `j`'s `inp1` read address for program
   `(pid₀, pid₁, pid₂)`. -/
   read1 : Nat → Nat → Nat → Fin T → Fin B1 → Nat
@@ -10762,6 +10772,7 @@ def ImplementsR (io : StreamMasked3DKernelIO₃ₓ₂) (R : RoundingModel)
   ∀ pid₀ pid₁ pid₂ : Nat,
   ∀ (xs : Fin io.T → Fin io.B1 → ℝ) (ys : Fin io.T → Fin io.B2 → ℝ)
     (zs : Fin io.T → Fin io.B3 → ℝ) (s₀ : BlockState),
+    io.pre pid₀ pid₁ pid₂ →
     s₀.pids 0 = pid₀ →
     s₀.pids 1 = pid₁ →
     s₀.pids 2 = pid₂ →
@@ -10828,6 +10839,7 @@ theorem ImplementsR.intro (io : StreamMasked3DKernelIO₃ₓ₂)
     (hts : ∀ (bounds : RegionBounds) (s : BlockState)
         (xs : Fin io.T → Fin io.B1 → ℝ) (ys : Fin io.T → Fin io.B2 → ℝ)
         (zs : Fin io.T → Fin io.B3 → ℝ),
+      io.pre (s.pids 0) (s.pids 1) (s.pids 2) →
       (∀ (t : Fin io.T) (j : Fin io.B1),
         io.mask1 (s.pids 0) (s.pids 1) (s.pids 2) t j →
         s.readMem io.inp1
@@ -10858,6 +10870,7 @@ theorem ImplementsR.intro (io : StreamMasked3DKernelIO₃ₓ₂)
       (io.kernel.toAlgKernel).TraceSafeR R bounds s)
     (hrun : ∀ (s₀ : BlockState) (xs : Fin io.T → Fin io.B1 → ℝ)
         (ys : Fin io.T → Fin io.B2 → ℝ) (zs : Fin io.T → Fin io.B3 → ℝ),
+      io.pre (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) →
       s₀.undef = (fun _ _ => 0) →
       (∀ (t : Fin io.T) (j : Fin io.B1),
         io.mask1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) t j →
@@ -10900,14 +10913,14 @@ theorem ImplementsR.intro (io : StreamMasked3DKernelIO₃ₓ₂)
                 oo ≠ io.write2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)) →
             s1.mem r oo = s₀.mem r oo)) :
     io.ImplementsR R f := by
-  intro A hd hregs hcov pid₀ pid₁ pid₂ xs ys zs s₀ hpid₀ hpid₁ hpid₂ hu
+  intro A hd hregs hcov pid₀ pid₁ pid₂ xs ys zs s₀ hpre hpid₀ hpid₁ hpid₂ hu
     hbr1 hbr2 hbr3 hbw1 hbw2 hx hy hz
   subst hpid₀
   subst hpid₁
   subst hpid₂
-  obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀ xs ys zs hu hx hy hz
+  obtain ⟨s1, hexec, hval1, hval2, hframe⟩ := hrun s₀ xs ys zs hpre hu hx hy hz
   have hts' : (io.kernel.toAlgKernel).TraceSafeR R A.extent s₀ :=
-    hts A.extent s₀ xs ys zs hx hy hz hbr1 hbr2 hbr3 hbw1 hbw2
+    hts A.extent s₀ xs ys zs hpre hx hy hz hbr1 hbr2 hbr3 hbw1 hbw2
   have hbridge := A.execR_flatten hd hcov R _ s₀ hts' hok hu
   have hmem1 : io.out1 ∈ A.regions := by rw [hregs]; simp
   have hmem2 : io.out2 ∈ A.regions := by rw [hregs]; simp
