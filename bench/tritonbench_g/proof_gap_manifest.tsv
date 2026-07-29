@@ -2,6 +2,7 @@ file	declaration	coverage_level	blocker_family	issue	evidence
 bench/tritonbench_g/adam_update_triton/AdamUpdateTriton.lean	update_fn_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/add_example/AddExample.lean	add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/apply_penalty/ApplyPenalty.lean	apply_penalty_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_forward_triton/AttentionForwardTriton.lean	attention_forward_triton_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
