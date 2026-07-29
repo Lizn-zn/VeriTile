@@ -6,9 +6,11 @@ import VeriTile.Triton
 `_fwd_kernel` is BLOOM-style varlen context (prefill) attention. Each program
 `(cur_batch, cur_head, start_m)` loads a `[BLOCK_M, BLOCK_DMODEL]` query tile,
 streams over the cached key/value tokens gathered through `Req_to_tokens`,
-runs an online-softmax (`m_i`/`l_i`/`acc`) loop with a causal/ALiBi-position
-mask offset by `prompt_cache_len`, and stores the accumulated `acc` tile back to
-`Out`, masked by `offs_m < cur_batch_seq_len` and `offs_d < head_dim`.
+runs an online-softmax (`m_i`/`l_i`/`acc`) loop with a plain causal mask offset
+by `prompt_cache_len` (`offs_m + prompt_cache_len ≥ start_n + offs_n`; there is
+no ALiBi slope or positional bias anywhere in this kernel), and stores the
+accumulated `acc` tile back to `Out`, masked by `offs_m < cur_batch_seq_len`
+and `offs_d < head_dim`.
 
 ## Scope
 
