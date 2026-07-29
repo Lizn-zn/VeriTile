@@ -1371,4 +1371,882 @@ specification chunk_cumsum_scalar_output_summary_general
 
 end Correct_without_Rounding
 
+/-! ## The `⊨[R]` streaming headline (wave-5 S3 per-step emit genre)
+
+Everything below is purely additive; the exact surface above is untouched.
+This is a consumer of the single-stream per-step emit skin
+`StreamEmitMasked2DKernelIO₁` (streaming genre, style S3): the block-pointer
+store sits **inside** the chunk loop, so the output is a per-step `BT`-lane
+window family rather than one terminal tile, and the kernel's spec `f t j`
+is the genre's *scan* shape — the guarded prefix sum of the whole stream up
+to and including the flat lane `t·BT + j`.
+
+Structure of the `execR R` story: this kernel has **zero rounding events**.
+Both `.to(...)` casts of the Python source erase at the algorithm layer (the
+lowered body carries no `Op.castFloat` at all — the load is
+`Op.load TileDType.real` and the in-loop store is
+`Stmt.store TileDType.real … MaskOpt.none`), so `outDType := .real` (the
+skin default) is the honest grid and `writeMemTypedR R .real` is
+definitionally the exact write. The whole body therefore steps identically
+under `stepStmtsR R` and the exact stepper, the `forRangeDyn` collapses via
+`stepForRangeAuxR_castFree`, and the proven `surfaceInv` / `surface_step` /
+`forRangeDyn_inv` stack above is reused verbatim; the `⊨[R]` face adds only
+the `TraceSafeR` walk (through **block pointers**), the per-cell memory
+frame, and the stream-lane spec bridge. The skin's readback contract at the
+`.real` grid carries `R.round .real`, the identity by the model's defining
+`round_real` — the ∀-`R` face is the exact streaming contract via the
+model's `.real` identity fields, not a `.triv` special case. -/
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamEmitMasked2DKernelIO₁
+
+set_option maxHeartbeats 4000000
+set_option linter.unusedVariables false
+
+/-! ### Stream geometry: trip count and windows -/
+
+/-- Trip count of `for i_t in range(0, tl.cdiv(T, BT), 1)`: `⌈T / BT⌉`. -/
+def ccNumChunks (NT BT : Nat) : Nat := (NT + BT - 1) / BT
+
+private theorem ccNumChunks_mul_ge (NT BT : Nat) (hBT : 0 < BT) :
+    NT ≤ ccNumChunks NT BT * BT := by
+  unfold ccNumChunks
+  have hdm := Nat.div_add_mod (NT + BT - 1) BT
+  have hmod : (NT + BT - 1) % BT < BT := Nat.mod_lt _ hBT
+  rw [Nat.mul_comm]
+  omega
+
+private theorem ccChunk_lt (NT BT m : Nat) (hBT : 0 < BT) (hm : m < NT) :
+    m / BT < ccNumChunks NT BT := by
+  have h2 : m / BT * BT < ccNumChunks NT BT * BT :=
+    Nat.lt_of_le_of_lt (Nat.div_mul_le_self m BT)
+      (Nat.lt_of_lt_of_le hm (ccNumChunks_mul_ge NT BT hBT))
+  exact Nat.lt_of_mul_lt_mul_right h2
+
+/-! ### IO signature -/
+
+/-- **Streaming IO signature** of `chunk_cumsum_scalar_surface` on the
+single-stream per-step emit skin (S3: in-loop store). Step `t` (the loop
+counter `i_t`) reads the `BT`-lane `s` chunk through the block pointer `p_s`
+and stores the `BT`-lane output chunk through `p_o` at the **`.real`** grid
+(`outDType` default — the lowered store is `Stmt.store TileDType.real`, so
+the per-step stores carry no quantization event). The windows transcribe the
+kernel's block-pointer arithmetic verbatim (base `i_bh·T`, stride `1`,
+offsets `i_t·BT`, block shape `BT`):
+
+* `read1` step `t`, lane `j`: `pid₀·T + (t·BT + j)`.
+* `write` step `t`, lane `j`: `pid₀·T + (t·BT + j)`.
+
+Both masks are the block pointers' `boundary_check=(0,)` guard,
+`t·BT + j < T`. The second pid is unused (the launch grid is 1-D). -/
+def chunkCumsumKernelIO (S O : RegionName) (NT BT : Nat) :
+    StreamEmitMasked2DKernelIO₁ where
+  kernel := chunk_cumsum_scalar_surface S O NT BT
+  inp1 := S
+  out := O
+  T := ccNumChunks NT BT
+  B1 := BT
+  C := BT
+  read1 := fun p₀ _ t j => p₀ * NT + (t.val * BT + j.val)
+  write := fun p₀ _ t j => p₀ * NT + (t.val * BT + j.val)
+  mask1 := fun _ _ t j => t.val * BT + j.val < NT
+  writeMask := fun _ _ t j => t.val * BT + j.val < NT
+
+/-! ### The stream-level spec -/
+
+/-- The stream-level global-cumsum spec (the genre's *scan* shape): output
+window `(t, j)` holds the **guarded prefix sum** of the whole curried stream
+— every stream cell `(u, e)` whose flat index `u·BT + e` is at most the
+window's flat index `t·BT + j` and lies inside the row (`< T`). The guard is
+the skin's `mask1`, so the spec never reads an unmasked lane (the contract
+pins `xs` only where `mask1` holds). -/
+noncomputable def ccStreamSpec (NT BT : Nat)
+    (xs : Fin (ccNumChunks NT BT) → Fin BT → ℝ)
+    (t : Fin (ccNumChunks NT BT)) (j : Fin BT) : ℝ :=
+  ∑ u : Fin (ccNumChunks NT BT), ∑ e : Fin BT,
+    if u.val * BT + e.val ≤ t.val * BT + j.val ∧ u.val * BT + e.val < NT then
+      xs u e else 0
+
+/-! ### The stream-lane spec bridge -/
+
+/-- Re-blocking `m ↔ (m / BT, m % BT)`: the guarded stream double sum is the
+flat guarded sum over `m ∈ range T` with `m ≤ flat`. -/
+private theorem ccGuardedSum_eq_flat (NT BT flat : Nat) (hBT : 0 < BT) (F : Nat → ℝ) :
+    (∑ u : Fin (ccNumChunks NT BT), ∑ e : Fin BT,
+        (if u.val * BT + e.val ≤ flat ∧ u.val * BT + e.val < NT then
+          F (u.val * BT + e.val) else 0))
+      = ∑ m ∈ (Finset.range NT).filter (fun m => m ≤ flat), F m := by
+  rcases Nat.eq_zero_or_pos NT with rfl | hNT
+  · simp
+  have hnc : 0 < ccNumChunks NT BT := by
+    rcases Nat.eq_zero_or_pos (ccNumChunks NT BT) with h0 | h
+    · have hge := ccNumChunks_mul_ge NT BT hBT
+      rw [h0, Nat.zero_mul] at hge
+      omega
+    · exact h
+  have hprod : (∑ p : Fin (ccNumChunks NT BT) × Fin BT,
+        (if p.1.val * BT + p.2.val ≤ flat ∧ p.1.val * BT + p.2.val < NT then
+          F (p.1.val * BT + p.2.val) else 0))
+      = ∑ u : Fin (ccNumChunks NT BT), ∑ e : Fin BT,
+        (if u.val * BT + e.val ≤ flat ∧ u.val * BT + e.val < NT then
+          F (u.val * BT + e.val) else 0) := Fintype.sum_prod_type _
+  rw [← hprod, ← Finset.sum_filter]
+  apply Finset.sum_nbij'
+    (i := fun p : Fin (ccNumChunks NT BT) × Fin BT => p.1.val * BT + p.2.val)
+    (j := fun m => ((⟨if h : m / BT < ccNumChunks NT BT then m / BT else 0, by
+        split
+        · assumption
+        · exact hnc⟩ : Fin (ccNumChunks NT BT)),
+      (⟨m % BT, Nat.mod_lt _ hBT⟩ : Fin BT)))
+  · intro p hp
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and] at hp
+    simp only [Finset.mem_filter, Finset.mem_range]
+    exact ⟨hp.2, hp.1⟩
+  · intro m hm
+    simp only [Finset.mem_filter, Finset.mem_range] at hm
+    simp only [Finset.mem_filter, Finset.mem_univ, true_and]
+    have hd : m / BT < ccNumChunks NT BT := ccChunk_lt NT BT m hBT hm.1
+    have hdm : m / BT * BT + m % BT = m := Nat.div_add_mod' m BT
+    refine ⟨?_, ?_⟩
+    · show (if h : m / BT < ccNumChunks NT BT then m / BT else 0) * BT + m % BT ≤ flat
+      rw [dif_pos hd, hdm]; exact hm.2
+    · show (if h : m / BT < ccNumChunks NT BT then m / BT else 0) * BT + m % BT < NT
+      rw [dif_pos hd, hdm]; exact hm.1
+  · intro p hp
+    have hdiv : (p.1.val * BT + p.2.val) / BT = p.1.val := by
+      rw [Nat.add_comm, Nat.add_mul_div_right _ _ hBT, Nat.div_eq_of_lt p.2.isLt,
+        Nat.zero_add]
+    have hmod : (p.1.val * BT + p.2.val) % BT = p.2.val := by
+      rw [Nat.add_comm, Nat.add_mul_mod_self_right, Nat.mod_eq_of_lt p.2.isLt]
+    obtain ⟨a, b⟩ := p
+    simp only [Prod.mk.injEq]
+    constructor
+    · apply Fin.ext
+      show (if h : (a.val * BT + b.val) / BT < ccNumChunks NT BT then
+        (a.val * BT + b.val) / BT else 0) = a.val
+      rw [hdiv, dif_pos a.isLt]
+    · exact Fin.ext hmod
+  · intro m hm
+    simp only [Finset.mem_filter, Finset.mem_range] at hm
+    have hd : m / BT < ccNumChunks NT BT := ccChunk_lt NT BT m hBT hm.1
+    show (if h : m / BT < ccNumChunks NT BT then m / BT else 0) * BT + m % BT = m
+    rw [dif_pos hd]
+    exact Nat.div_add_mod' m BT
+  · intro p _
+    rfl
+
+/-- Per-lane spec bridge: at a masked window `(t, j)` the stream spec **is**
+the exact stack's `surfaceClosed` at the global flat lane `t·BT + j` (the
+`Σ_{m ≤ flat, m < T} S[i_bh·T + m]` the retained exact headline realizes). -/
+private theorem ccStreamSpec_eq_surfaceClosed (S : RegionName) (s₀ : BlockState)
+    (NT BT : Nat) (hBT : 0 < BT)
+    (xs : Fin (ccNumChunks NT BT) → Fin BT → ℝ)
+    (hx : ∀ (u : Fin (ccNumChunks NT BT)) (e : Fin BT), u.val * BT + e.val < NT →
+      s₀.readMem S (s₀.pids 0 * NT + (u.val * BT + e.val)) = xs u e)
+    (t : Fin (ccNumChunks NT BT)) (j : Fin BT) :
+    ccStreamSpec NT BT xs t j = surfaceClosed s₀ S NT (t.val * BT + j.val) := by
+  unfold ccStreamSpec surfaceClosed
+  rw [← ccGuardedSum_eq_flat NT BT (t.val * BT + j.val) hBT
+      (fun m => s₀.readMem S (s₀.pids 0 * NT + m))]
+  refine Finset.sum_congr rfl fun u _ => Finset.sum_congr rfl fun e _ => ?_
+  by_cases h : u.val * BT + e.val ≤ t.val * BT + j.val ∧ u.val * BT + e.val < NT
+  · rw [if_pos h, if_pos h, hx u e h.2]
+  · rw [if_neg h, if_neg h]
+
+/-! ### The lowered body -/
+
+/-- The lowered `tl.cdiv(T, BT)` trip-count op of the chunk loop. -/
+def ccStopOp (NT BT : Nat) : Op .nat [] :=
+  Op.div NumericDType.nat Broadcast.nil
+    (Op.sub NumericDType.nat Broadcast.nil
+      (Op.add NumericDType.nat Broadcast.nil (Op.constNat NT) (Op.constNat BT))
+      (Op.constNat 1))
+    (Op.constNat BT)
+
+/-- The lowered seven-statement chunk-loop body (verbatim the statement list
+`surface_step` runs). -/
+def ccLoopBody (S O : RegionName) (NT BT : Nat) : List Stmt :=
+  [ Stmt.assign TileDType.blockPtr [BT] "p_s"
+      (Op.makeBlockPtrDynOffsets S
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh")
+          (Op.constNat NT)) [NT] [BT] [1]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_t")
+          (Op.constNat BT)]),
+    Stmt.assign TileDType.blockPtr [BT] "p_o"
+      (Op.makeBlockPtrDynOffsets O
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh")
+          (Op.constNat NT)) [NT] [BT] [1]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_t")
+          (Op.constNat BT)]),
+    Stmt.assign TileDType.real [BT] "b_s"
+      (Op.load TileDType.real
+        (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BT] "p_s") [0]) MaskOpt.none),
+    Stmt.assign TileDType.real [BT] "b_o"
+      (Op.add NumericDType.real Broadcast.nil.consR
+        (Op.scan ScanOp.sum ⟨0, by simp⟩ .forward (Op.ref TileDType.real [BT] "b_s"))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref TileDType.real [] "b_z"))),
+    Stmt.assign TileDType.real [] "b_zz"
+      (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref TileDType.real [BT] "b_s")),
+    Stmt.assign TileDType.real [] "b_z"
+      (Op.add NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "b_z")
+        (Op.ref TileDType.real [] "b_zz")),
+    Stmt.store TileDType.real [BT]
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BT] "p_o") [0])
+      (Op.ref TileDType.real [BT] "b_o") MaskOpt.none]
+
+/-- The full surface lowers to the prefix pair plus the `forRangeDyn` over
+`ccLoopBody`. **`outDType` verdict**: the last element is
+`Stmt.store TileDType.real …` — the `.to(p_o.dtype.element_ty)` cast erased,
+so `.real` (the skin default, zero boundary quantization) is the honest
+grid and a `.fp16` face would be false. -/
+private theorem ccBody_eq (S O : RegionName) (NT BT : Nat) :
+    (chunk_cumsum_scalar_surface S O NT BT).toAlgKernel.body
+      = [ Stmt.assign TileDType.nat [] "i_bh" (Op.programId 0),
+          Stmt.assign TileDType.real [] "b_z" (Op.full [] (Op.const 0)),
+          Stmt.forRangeDyn "i_t" (Op.constNat 0) (ccStopOp NT BT) (Op.constNat 1)
+            (ccLoopBody S O NT BT) ] := by
+  simp only [chunk_cumsum_scalar_surface, ComputeKernel.toAlgKernel,
+    ComputeKernel.toAlgorithm?, ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
+    Except.bind, bind, ccLoopBody, ccStopOp]
+
+/-- The block-pointer tile the two `tl.make_block_ptr` assigns produce at
+chunk `c` of program `base`. -/
+def ccPtrTile (Reg : RegionName) (NT BT c base : Nat) : Tile .blockPtr [BT] :=
+  ⟨fun _ => ({ region := Reg, baseOffset := base * NT, parentShape := [NT], blockShape := [BT], strides := [1], offsets := [c * BT] } : BlockPtr)⟩
+
+private theorem ccPtrTile_region (Reg : RegionName) (NT BT c base : Nat)
+    (i : TileIndex [BT]) : ((ccPtrTile Reg NT BT c base).data i).region = Reg := rfl
+
+private theorem ccPtrTile_address (Reg : RegionName) (NT BT c base : Nat)
+    (i : TileIndex [BT]) :
+    ((ccPtrTile Reg NT BT c base).data i).address (TileShape.indexToList [BT] i)
+      = base * NT + (c * BT + i.1.val) := by
+  rw [show TileShape.indexToList [BT] i = [i.1.val] from rfl]
+  simp only [ccPtrTile, BlockPtr.address_1d]
+  ring
+
+private theorem ccPtrTile_inBounds (Reg : RegionName) (NT BT c base : Nat)
+    (i : TileIndex [BT]) :
+    ((ccPtrTile Reg NT BT c base).data i).inBounds (TileShape.indexToList [BT] i) [0]
+      = decide (c * BT + i.1.val < NT) := by
+  rw [show TileShape.indexToList [BT] i = [i.1.val] from rfl]
+  simp only [ccPtrTile, BlockPtr.inBounds_1d]
+
+/-- The `tl.make_block_ptr` evaluation, from the pinned `i_bh` / `i_t`
+registers. -/
+private theorem ccBlockPtr_eval (Reg : RegionName) (NT BT c base : Nat) (u : BlockState)
+    (hibh : u.regs .nat [] "i_bh" = some (Tile.scalar base))
+    (hit : u.regs .nat [] "i_t" = some (Tile.scalar c)) :
+    evalOp (Op.makeBlockPtrDynOffsets Reg
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh")
+          (Op.constNat NT)) [NT] [BT] [1]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_t")
+          (Op.constNat BT)]) u
+      = some (ccPtrTile Reg NT BT c base) := by
+  simp only [evalOp, Option.bind, Option.map, hibh, hit, Tile.bop, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.mul, List.mapM, List.mapM.loop, ccPtrTile]
+  rfl
+
+private theorem ccStop_eval (NT BT : Nat) (u : BlockState) :
+    evalOp (ccStopOp NT BT) u = some (Tile.scalar (ccNumChunks NT BT)) := by
+  simp only [ccStopOp, ccNumChunks, evalOp_div, evalOp_sub, evalOp_add, evalOp_constNat,
+    Option.bind, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.div]
+  rfl
+
+/-! ### Cast-free collapses and the covered fragment -/
+
+private theorem ccEvalR_mulRef (R : RoundingModel) (nm : RegName) (n : Nat)
+    (u : BlockState) :
+    evalOpR R (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] nm)
+        (Op.constNat n)) u
+      = evalOp (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] nm)
+        (Op.constNat n)) u := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+private theorem ccEvalR_blockPtr (R : RoundingModel) (Reg : RegionName) (NT BT : Nat)
+    (u : BlockState) :
+    evalOpR R (Op.makeBlockPtrDynOffsets Reg
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh")
+          (Op.constNat NT)) [NT] [BT] [1]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_t")
+          (Op.constNat BT)]) u
+      = evalOp (Op.makeBlockPtrDynOffsets Reg
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_bh")
+          (Op.constNat NT)) [NT] [BT] [1]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "i_t")
+          (Op.constNat BT)]) u := by
+  simp only [evalOpR, evalOp, List.mapM_cons, List.mapM_nil, ccEvalR_mulRef]
+
+private theorem ccEvalR_stop (R : RoundingModel) (NT BT : Nat) (u : BlockState) :
+    evalOpR R (ccStopOp NT BT) u = evalOp (ccStopOp NT BT) u := by
+  simp only [ccStopOp, evalOpR.eq_def, evalOp.eq_def]
+
+/-- An assign steps identically under `stepStmtR R` once its operand does. -/
+private theorem ccAssign_castFree {R : RoundingModel} {d : TileDType} {sh : TileShape}
+    {nm : RegName} (e : Op d sh) (u : BlockState) (h : evalOpR R e u = evalOp e u) :
+    stepStmtR R (Stmt.assign d sh nm e) u = stepStmt (Stmt.assign d sh nm e) u := by
+  simp only [stepStmtR, stepStmt, h]
+
+/-- Statement lists whose members all step identically step identically. -/
+private theorem ccStepList_castFree {R : RoundingModel} :
+    ∀ (l : List Stmt), (∀ st ∈ l, ∀ u : BlockState, stepStmtR R st u = stepStmt st u) →
+      ∀ u : BlockState, stepStmtsR R l u = stepStmts l u
+  | [], _, u => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, u => by
+      cases hv : stepStmt st u with
+      | none =>
+          simp only [stepStmtsR, stepStmts, h st List.mem_cons_self u, hv]
+      | some u' =>
+          simp only [stepStmtsR, stepStmts, h st List.mem_cons_self u, hv]
+          exact ccStepList_castFree rest
+            (fun s' hs' => h s' (List.mem_cons_of_mem _ hs')) u'
+
+/-- The chunk-loop body is cast-free **including its in-loop `.real` block-
+pointer store**: `stepStmtR` delegates a `.real`-typed store to the exact
+`writeMemTyped` (`writeMemTypedR R .real` is definitionally the exact
+write), so the whole storing loop steps identically under `stepStmtsR R` and
+the exact `surfaceInv` stack transports to `execR`. -/
+private theorem ccLoopBody_castFree (R : RoundingModel) (S O : RegionName) (NT BT : Nat)
+    (u : BlockState) :
+    stepStmtsR R (ccLoopBody S O NT BT) u = stepStmts (ccLoopBody S O NT BT) u := by
+  refine ccStepList_castFree _ ?_ u
+  intro st hst v
+  simp only [ccLoopBody, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  · exact ccAssign_castFree _ v (ccEvalR_blockPtr R S NT BT v)
+  · exact ccAssign_castFree _ v (ccEvalR_blockPtr R O NT BT v)
+  · exact ccAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · exact ccAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · exact ccAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · exact ccAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · simp only [stepStmtR, stepStmt, evalOpR_ref, evalOp_ref, BlockState.writeMemTypedR]
+
+private theorem ccForDyn_castFree (R : RoundingModel) (S O : RegionName) (NT BT : Nat)
+    (u : BlockState) :
+    stepStmtR R (Stmt.forRangeDyn "i_t" (Op.constNat 0) (ccStopOp NT BT) (Op.constNat 1)
+        (ccLoopBody S O NT BT)) u
+      = stepStmt (Stmt.forRangeDyn "i_t" (Op.constNat 0) (ccStopOp NT BT) (Op.constNat 1)
+        (ccLoopBody S O NT BT)) u := by
+  have hR : evalOpR R (ccStopOp NT BT) u = some (Tile.scalar (ccNumChunks NT BT)) :=
+    (ccEvalR_stop R NT BT u).trans (ccStop_eval NT BT u)
+  rw [stepForRangeAux.forRangeDyn_unfold, ccStop_eval NT BT u]
+  simp only [stepStmtR, hR, evalOpR, evalOp, Option.bind]
+  exact stepForRangeAuxR_castFree R _ (ccLoopBody_castFree R S O NT BT) "i_t" _ _ _ u
+
+/-- **The whole kernel is cast-free**: `execR R` is the exact `exec`. -/
+private theorem cc_execR_eq_exec (R : RoundingModel) (S O : RegionName) (NT BT : Nat)
+    (u : BlockState) :
+    execR R (chunk_cumsum_scalar_surface S O NT BT).toAlgKernel u
+      = exec (chunk_cumsum_scalar_surface S O NT BT).toAlgKernel u := by
+  unfold execR exec
+  rw [ccBody_eq]
+  refine ccStepList_castFree _ ?_ u
+  intro st hst v
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl
+  · exact ccAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · exact ccAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · exact ccForDyn_castFree R S O NT BT v
+
+/-- The full surface sits inside the flat-memory bridge's covered fragment
+(`FlattenOk`; block pointers and `makeBlockPtrDynOffsets` are covered, and
+the `forRangeDyn` clause recurses into the body). -/
+theorem chunk_cumsum_scalar_surface_flattenOk (S O : RegionName) (NT BT : Nat) :
+    ((chunk_cumsum_scalar_surface S O NT BT).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [ccBody_eq]
+  simp only [ccLoopBody, ccStopOp, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk,
+    ne_eq, reduceCtorEq, not_false_eq_true, and_self, and_true, true_and,
+    List.mem_singleton, List.mem_cons, List.not_mem_nil, or_false, forall_eq]
+  refine ⟨?_, ?_⟩ <;> simp only [Op.FlattenOk.eq_def]
+
+/-! ### Cell-level memory frames
+
+The exact stack proves per-lane `readMem` values at the in-range `O`
+offsets; the `⊨[R]` Hoare triple additionally needs a per-**cell** frame, so
+one loop iteration gets a `mem`-level twin of `surface_step`: the only
+memory-touching statement of the body is the terminal block-pointer store,
+whose active lanes hit exactly `O` at `pid₀·T + (c·BT + i)` with
+`c·BT + i < T`. -/
+
+/-- Inversion of a successful exact assign step. -/
+private theorem ccAssign_inv {d : TileDType} {sh : TileShape} {nm : RegName}
+    {e : Op d sh} {u u' : BlockState}
+    (h : stepStmt (Stmt.assign d sh nm e) u = some u') :
+    ∃ v, evalOp e u = some v ∧ u' = u.setReg nm d sh v := by
+  cases hv : evalOp e u with
+  | none => simp [stepStmt, hv] at h
+  | some v => simp [stepStmt, hv] at h; exact ⟨v, rfl, h.symm⟩
+
+/-- Cons-level inversion of a successful exact statement-list run. -/
+private theorem ccStepStmts_cons_inv {st : Stmt} {rest : List Stmt} {u u' : BlockState}
+    (h : stepStmts (st :: rest) u = some u') :
+    ∃ v, stepStmt st u = some v ∧ stepStmts rest v = some u' := by
+  cases hv : stepStmt st u with
+  | none => rw [stepStmts.cons_none hv] at h; exact absurd h (by simp)
+  | some v => exact ⟨v, rfl, by rwa [stepStmts.cons_some hv] at h⟩
+
+/-- Cell-level frame of the terminal block-pointer store's masked scatter:
+an active lane writes `O` at `pid₀·T + (c·BT + i)` with `c·BT + i < T`, so
+every cell off that window is untouched. -/
+private theorem ccStore_frame_aux (O : RegionName) (NT BT c p₀ : Nat)
+    (boT : Tile .real [BT]) (r : RegionName) (oo : Nat)
+    (hcond : r ≠ O ∨ ∀ m, m < NT → oo ≠ p₀ * NT + m)
+    (l : List (TileIndex [BT])) (u : BlockState) :
+    ((l.foldl
+      (fun acc i =>
+        if (decide True && ((ccPtrTile O NT BT c p₀).data i).inBounds
+            (TileShape.indexToList [BT] i) [0]) then
+          acc.writeMemTyped .real ((ccPtrTile O NT BT c p₀).data i).region
+            (((ccPtrTile O NT BT c p₀).data i).address (TileShape.indexToList [BT] i))
+            (boT.data i)
+        else acc) u).mem r oo) = u.mem r oo := by
+  induction l generalizing u with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons, ih]
+      split
+      · rename_i hcnd
+        rw [ccPtrTile_region, ccPtrTile_address, BlockState.writeMemTyped_real,
+          BlockState.writeMem_mem, if_neg]
+        rintro ⟨rfl, rfl⟩
+        rcases hcond with h | h
+        · exact h rfl
+        · refine h (c * BT + hd.1.val) ?_ rfl
+          rw [ccPtrTile_inBounds] at hcnd
+          simpa using hcnd
+      · rfl
+
+set_option maxHeartbeats 4000000 in
+/-- **Cell-level frame of one chunk iteration** (the `mem` twin of
+`surface_step`, tracking only the `p_o` block pointer): from the `i_bh` pin,
+one body iteration leaves every cell off the `{(O, pid₀·T + m) : m < T}`
+window untouched. -/
+private theorem cc_body_frame (S O : RegionName) (NT BT : Nat) (s : BlockState)
+    (c : Nat) (sc s' : BlockState)
+    (hibh : sc.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0)))
+    (hstep : stepStmts (ccLoopBody S O NT BT) (sc.setReg "i_t" .nat [] (Tile.scalar c))
+      = some s')
+    (r : RegionName) (oo : Nat)
+    (hcond : r ≠ O ∨ ∀ m, m < NT → oo ≠ s.pids 0 * NT + m) :
+    s'.mem r oo = sc.mem r oo := by
+  simp only [ccLoopBody] at hstep
+  have hibh0 : (sc.setReg "i_t" .nat [] (Tile.scalar c)).regs .nat [] "i_bh"
+      = some (Tile.scalar (s.pids 0)) := by
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hibh
+  have hit0 : (sc.setReg "i_t" .nat [] (Tile.scalar c)).regs .nat [] "i_t"
+      = some (Tile.scalar c) := BlockState.setReg_same _ _ _ _ _
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ccBlockPtr_eval S NT BT c (s.pids 0) _ hibh0 hit0))] at hstep
+  have hibh1 : (((sc.setReg "i_t" .nat [] (Tile.scalar c)).setReg "p_s" .blockPtr [BT]
+      (ccPtrTile S NT BT c (s.pids 0)))).regs .nat [] "i_bh"
+      = some (Tile.scalar (s.pids 0)) := by
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hibh0
+  have hit1 : (((sc.setReg "i_t" .nat [] (Tile.scalar c)).setReg "p_s" .blockPtr [BT]
+      (ccPtrTile S NT BT c (s.pids 0)))).regs .nat [] "i_t" = some (Tile.scalar c) := by
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hit0
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (ccBlockPtr_eval O NT BT c (s.pids 0) _ hibh1 hit1))] at hstep
+  -- the four value assigns: only their `p_o` / `b_o` register traces matter
+  obtain ⟨t3, h3, hstep⟩ := ccStepStmts_cons_inv hstep
+  obtain ⟨v3, -, ht3⟩ := ccAssign_inv h3
+  obtain ⟨t4, h4, hstep⟩ := ccStepStmts_cons_inv hstep
+  obtain ⟨v4, -, ht4⟩ := ccAssign_inv h4
+  obtain ⟨t5, h5, hstep⟩ := ccStepStmts_cons_inv hstep
+  obtain ⟨v5, -, ht5⟩ := ccAssign_inv h5
+  obtain ⟨t6, h6, hstep⟩ := ccStepStmts_cons_inv hstep
+  obtain ⟨v6, -, ht6⟩ := ccAssign_inv h6
+  have hpo3 : t3.regs .blockPtr [BT] "p_o" = some (ccPtrTile O NT BT c (s.pids 0)) := by
+    rw [ht3]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact BlockState.setReg_same _ _ _ _ _
+  have hpo4 : t4.regs .blockPtr [BT] "p_o" = some (ccPtrTile O NT BT c (s.pids 0)) := by
+    rw [ht4]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hpo3
+  have hbo4 : t4.regs .real [BT] "b_o" = some v4 := by
+    rw [ht4]; exact BlockState.setReg_same _ _ _ _ _
+  have hpo5 : t5.regs .blockPtr [BT] "p_o" = some (ccPtrTile O NT BT c (s.pids 0)) := by
+    rw [ht5]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hpo4
+  have hbo5 : t5.regs .real [BT] "b_o" = some v4 := by
+    rw [ht5]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hbo4
+  have hpo6 : t6.regs .blockPtr [BT] "p_o" = some (ccPtrTile O NT BT c (s.pids 0)) := by
+    rw [ht6]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hpo5
+  have hbo6 : t6.regs .real [BT] "b_o" = some v4 := by
+    rw [ht6]
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hbo5
+  have hmem6 : t6.mem = sc.mem := by
+    rw [ht6, ht5, ht4, ht3]; rfl
+  obtain ⟨t7, h7, hstep⟩ := ccStepStmts_cons_inv hstep
+  rw [stepStmts.nil] at hstep
+  obtain rfl := Option.some.inj hstep
+  have hstore : stepStmt (Stmt.store TileDType.real [BT]
+      (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BT] "p_o") [0])
+      (Op.ref TileDType.real [BT] "b_o") MaskOpt.none) t6
+      = some ((TileShape.allIndices [BT]).foldl
+        (fun acc i =>
+          if (decide True && ((ccPtrTile O NT BT c (s.pids 0)).data i).inBounds
+              (TileShape.indexToList [BT] i) [0]) then
+            acc.writeMemTyped .real ((ccPtrTile O NT BT c (s.pids 0)).data i).region
+              (((ccPtrTile O NT BT c (s.pids 0)).data i).address
+                (TileShape.indexToList [BT] i)) (v4.data i)
+          else acc) t6) := by
+    simp only [stepStmt, evalOp, Option.bind, hbo6, hpo6]
+    rfl
+  rw [hstore] at h7
+  obtain rfl := Option.some.inj h7
+  rw [ccStore_frame_aux O NT BT c (s.pids 0) v4 r oo hcond _ t6]
+  exact congrFun (congrFun hmem6 r) oo
+
+/-! ### The `TraceSafeR` walk (through block pointers) -/
+
+/-- `Op.SafeAtR` of the shape-indexed `expandDim` arm: applied, not
+`simp`-fired (the goal carries the reduced shape index). -/
+private theorem ccSafeR_expandDim (R : RoundingModel) (bounds : RegionBounds)
+    (u : BlockState) :
+    Op.SafeAtR R bounds u (Op.expandDim ⟨0, by simp⟩ (Op.ref TileDType.real [] "b_z")) := by
+  simp only [Op.SafeAtR.eq_def]
+
+/-- `Op.SafeAtR` of the shape-indexed `reduceSum` arm. -/
+private theorem ccSafeR_reduceSum (R : RoundingModel) (bounds : RegionBounds) (BT : Nat)
+    (u : BlockState) :
+    Op.SafeAtR R bounds u
+      (Op.reduceSum ⟨0, by simp⟩ Bool.false (Op.ref TileDType.real [BT] "b_s")) := by
+  simp only [Op.SafeAtR.eq_def]
+
+set_option maxHeartbeats 4000000 in
+/-- **Per-iteration `TraceSafeListR` for the chunk-loop body.** The two
+`tl.make_block_ptr` assigns and the three register-only value assigns impose
+nothing; the block-pointer load's and the block-pointer store's active lanes
+are exactly the `boundary_check=(0,)` guard `c·BT + i < T`, i.e. the skin's
+`mask1` / `writeMask` window at step `c`, in bounds by the `read1` / `write`
+window bounds. -/
+private theorem cc_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (S O : RegionName) (NT BT : Nat) (s : BlockState) (c : Nat) (sc : BlockState)
+    (hc : c < ccNumChunks NT BT)
+    (hibh : sc.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 0)))
+    (hbr1 : ∀ (t : Fin (ccNumChunks NT BT)) (j : Fin BT), t.val * BT + j.val < NT →
+      s.pids 0 * NT + (t.val * BT + j.val) < bounds S)
+    (hbw : ∀ (t : Fin (ccNumChunks NT BT)) (j : Fin BT), t.val * BT + j.val < NT →
+      s.pids 0 * NT + (t.val * BT + j.val) < bounds O) :
+    Stmt.TraceSafeListR R bounds (ccLoopBody S O NT BT)
+      (sc.setReg "i_t" .nat [] (Tile.scalar c)) := by
+  have hbS : ∀ i : Fin BT, c * BT + i.val < NT →
+      s.pids 0 * NT + (c * BT + i.val) < bounds S := fun i hi => hbr1 ⟨c, hc⟩ i hi
+  have hbO : ∀ i : Fin BT, c * BT + i.val < NT →
+      s.pids 0 * NT + (c * BT + i.val) < bounds O := fun i hi => hbw ⟨c, hc⟩ i hi
+  have hibh0 : (sc.setReg "i_t" .nat [] (Tile.scalar c)).regs .nat [] "i_bh"
+      = some (Tile.scalar (s.pids 0)) := by
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hibh
+  have hit0 : (sc.setReg "i_t" .nat [] (Tile.scalar c)).regs .nat [] "i_t"
+      = some (Tile.scalar c) := BlockState.setReg_same _ _ _ _ _
+  simp only [ccLoopBody]
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR, List.mem_cons, List.not_mem_nil,
+      or_false, forall_eq, and_self]) (fun t1 ht1 => ?_)
+  rw [stepStmtR_assign_eq_some ((ccEvalR_blockPtr R S NT BT _).trans
+    (ccBlockPtr_eval S NT BT c (s.pids 0) _ hibh0 hit0))] at ht1
+  obtain rfl := Option.some.inj ht1
+  have hibh1 : ((sc.setReg "i_t" .nat [] (Tile.scalar c)).setReg "p_s" .blockPtr [BT]
+      (ccPtrTile S NT BT c (s.pids 0))).regs .nat [] "i_bh"
+      = some (Tile.scalar (s.pids 0)) := by
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hibh0
+  have hit1 : ((sc.setReg "i_t" .nat [] (Tile.scalar c)).setReg "p_s" .blockPtr [BT]
+      (ccPtrTile S NT BT c (s.pids 0))).regs .nat [] "i_t" = some (Tile.scalar c) := by
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact hit0
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR, List.mem_cons, List.not_mem_nil,
+      or_false, forall_eq, and_self]) (fun t2 ht2 => ?_)
+  rw [stepStmtR_assign_eq_some ((ccEvalR_blockPtr R O NT BT _).trans
+    (ccBlockPtr_eval O NT BT c (s.pids 0) _ hibh1 hit1))] at ht2
+  obtain rfl := Option.some.inj ht2
+  have hps2 : (((sc.setReg "i_t" .nat [] (Tile.scalar c)).setReg "p_s" .blockPtr [BT]
+      (ccPtrTile S NT BT c (s.pids 0))).setReg "p_o" .blockPtr [BT]
+      (ccPtrTile O NT BT c (s.pids 0))).regs .blockPtr [BT] "p_s"
+      = some (ccPtrTile S NT BT c (s.pids 0)) := by
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+    exact BlockState.setReg_same _ _ _ _ _
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t3 ht3 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref, hps2] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro hib
+    rw [ccPtrTile_region, ccPtrTile_address]
+    refine hbS idx.1 ?_
+    rw [ccPtrTile_inBounds] at hib
+    simpa using hib
+  · obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv ht3
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp only [Stmt.TraceSafeR, Op.SafeAtR]
+          exact ⟨trivial, ccSafeR_expandDim R bounds _⟩) (fun t4 ht4 => ?_)
+    obtain ⟨v4, -, rfl⟩ := stepStmtR_assign_inv ht4
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp only [Stmt.TraceSafeR]
+          exact ccSafeR_reduceSum R bounds BT _) (fun t5 ht5 => ?_)
+    obtain ⟨v5, -, rfl⟩ := stepStmtR_assign_inv ht5
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp only [Stmt.TraceSafeR, Op.SafeAtR, and_self]) (fun t6 ht6 => ?_)
+    obtain ⟨v6, -, rfl⟩ := stepStmtR_assign_inv ht6
+    have hpo6 : (((((((sc.setReg "i_t" .nat [] (Tile.scalar c)).setReg "p_s" .blockPtr [BT]
+        (ccPtrTile S NT BT c (s.pids 0))).setReg "p_o" .blockPtr [BT]
+        (ccPtrTile O NT BT c (s.pids 0))).setReg "b_s" .real [BT] v3).setReg
+        "b_o" .real [BT] v4).setReg "b_zz" .real [] v5).setReg "b_z" .real [] v6).regs
+        .blockPtr [BT] "p_o" = some (ccPtrTile O NT BT c (s.pids 0)) := by
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true]
+      exact BlockState.setReg_same _ _ _ _ _
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR, Op.SafeAtR, MemAccess.SafeAtR, MaskOpt.SafeAtR,
+      MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref, hpo6] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro hib
+    rw [ccPtrTile_region, ccPtrTile_address]
+    refine hbO idx.1 ?_
+    rw [ccPtrTile_inBounds] at hib
+    simpa using hib
+
+/-- The loop-entry state after the `i_bh` / `b_z` prologue satisfies
+`surfaceInv` at chunk `0` (the exact stack's entry invariant). -/
+private theorem cc_entry_inv (S O : RegionName) (NT BT : Nat) (s : BlockState) :
+    surfaceInv s S O NT BT 0
+      ((s.setReg "i_bh" .nat [] (Tile.scalar (s.pids 0))).setReg "b_z" .real []
+        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [])) := by
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · simp [BlockState.setReg]
+  · intro a; simp [BlockState.setReg_readMem]
+  · simp
+  · simp only [BlockState.setReg_same]
+    congr 1; congr 1; unfold surfaceCarry
+    rw [Finset.filter_false_of_mem (by intro x _; omega), Finset.sum_empty]
+  · intro flat hlt _; omega
+
+set_option maxHeartbeats 4000000 in
+/-- **The `TraceSafeR` walk for the whole kernel** — the two prologue
+assigns are register-only; the `forRangeDyn` is driven by
+`Stmt.forRangeTraceSafeR_inv` over the exact stack's `surfaceInv` (whose
+`i_bh` pin is all the block-pointer bound argument needs), with the
+per-iteration step supplied by `surface_step` transported through the
+cast-free collapse. -/
+private theorem cc_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (S O : RegionName) (NT BT : Nat) (hSO : O ≠ S) (hBT : 0 < BT) (s : BlockState)
+    (hbr1 : ∀ (t : Fin (ccNumChunks NT BT)) (j : Fin BT), t.val * BT + j.val < NT →
+      s.pids 0 * NT + (t.val * BT + j.val) < bounds S)
+    (hbw : ∀ (t : Fin (ccNumChunks NT BT)) (j : Fin BT), t.val * BT + j.val < NT →
+      s.pids 0 * NT + (t.val * BT + j.val) < bounds O) :
+    ((chunk_cumsum_scalar_surface S O NT BT).toAlgKernel).TraceSafeR R bounds s := by
+  unfold Kernel.TraceSafeR
+  rw [ccBody_eq]
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR]) (fun t1 ht1 => ?_)
+  rw [stepStmtR_assign_eq_some (show evalOpR R (Op.programId 0) s
+      = some (Tile.scalar (s.pids 0)) from by simp [evalOpR])] at ht1
+  obtain rfl := Option.some.inj ht1
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR]) (fun t2 ht2 => ?_)
+  rw [stepStmtR_assign_eq_some (show evalOpR R (Op.full [] (Op.const 0))
+      (s.setReg "i_bh" .nat [] (Tile.scalar (s.pids 0)))
+      = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real []) from by
+        simp only [evalOpR, Option.bind]; rfl)] at ht2
+  obtain rfl := Option.some.inj ht2
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [Stmt.TraceSafeR]
+  refine ⟨by simp only [Op.SafeAtR], by simp only [ccStopOp, Op.SafeAtR, and_self],
+    by simp only [Op.SafeAtR], ?_⟩
+  rw [show evalOpR R (Op.constNat 0)
+        ((s.setReg "i_bh" .nat [] (Tile.scalar (s.pids 0))).setReg "b_z" .real []
+          (⟨fun _ => some (0 : ℝ)⟩ : Tile .real []))
+      = some (Tile.scalar 0) from by simp [evalOpR],
+    (ccEvalR_stop R NT BT _).trans (ccStop_eval NT BT _),
+    show evalOpR R (Op.constNat 1)
+        ((s.setReg "i_bh" .nat [] (Tile.scalar (s.pids 0))).setReg "b_z" .real []
+          (⟨fun _ => some (0 : ℝ)⟩ : Tile .real []))
+      = some (Tile.scalar 1) from by simp [evalOpR]]
+  refine Stmt.forRangeTraceSafeR_inv R bounds "i_t" (ccNumChunks NT BT) 1
+    (ccLoopBody S O NT BT) (surfaceInv s S O NT BT) ?_ 0 _ (cc_entry_inv S O NT BT s)
+  intro c sc hc hP
+  refine ⟨cc_bodySafeR R bounds S O NT BT s c sc hc hP.2.2.1 hbr1 hbw, ?_⟩
+  obtain ⟨sc', hstep, hP'⟩ := surface_step S O NT BT s hSO hBT c sc hP
+  exact ⟨sc', by rw [ccLoopBody_castFree]; exact hstep, hP'⟩
+
+/-! ### The exact run with the cell frame, and the rounded Hoare triple -/
+
+set_option maxHeartbeats 4000000 in
+/-- The chunk loop from an arbitrary `surfaceInv`-entry state: the exact
+stack's `forRangeDyn_inv` argument, carrying the per-cell frame alongside
+`surfaceInv`. -/
+private theorem cc_loopRun (S O : RegionName) (NT BT : Nat) (s : BlockState)
+    (hSO : O ≠ S) (hBT : 0 < BT) (z : BlockState)
+    (hP0 : surfaceInv s S O NT BT 0 z)
+    (hF0 : ∀ r oo, (r ≠ O ∨ ∀ m, m < NT → oo ≠ s.pids 0 * NT + m) →
+      z.mem r oo = s.mem r oo) :
+    ∃ sfinal,
+      stepStmt (Stmt.forRangeDyn "i_t" (Op.constNat 0) (ccStopOp NT BT) (Op.constNat 1)
+        (ccLoopBody S O NT BT)) z = some sfinal ∧
+      (∀ flat, flat < NT →
+        sfinal.readMem O (s.pids 0 * NT + flat) = surfaceClosed s S NT flat) ∧
+      (∀ r oo, (r ≠ O ∨ ∀ m, m < NT → oo ≠ s.pids 0 * NT + m) →
+        sfinal.mem r oo = s.mem r oo) := by
+  obtain ⟨final, sLoop, hLoop, hfinal, hPfinal⟩ :=
+    forRangeDyn_inv (idx := "i_t") (body := ccLoopBody S O NT BT) (s_init := z)
+      (P := fun c sc => surfaceInv s S O NT BT c sc ∧
+        ∀ r oo, (r ≠ O ∨ ∀ m, m < NT → oo ≠ s.pids 0 * NT + m) →
+          sc.mem r oo = s.mem r oo)
+      (show evalOp (Op.constNat 0) z = some (Tile.scalar 0) from by simp [evalOp])
+      (ccStop_eval NT BT z)
+      (show evalOp (Op.constNat 1) z = some (Tile.scalar 1) from by simp [evalOp])
+      (by norm_num) ⟨hP0, hF0⟩
+      (fun i st _ hPi => by
+        obtain ⟨st', hstep, hinv'⟩ := surface_step S O NT BT s hSO hBT i st hPi.1
+        refine ⟨st', hstep, hinv', ?_⟩
+        intro r oo hcond
+        rw [cc_body_frame S O NT BT s i st st' hPi.1.2.2.1 hstep r oo hcond]
+        exact hPi.2 r oo hcond)
+  refine ⟨sLoop, hLoop, ?_, hPfinal.2⟩
+  obtain ⟨-, -, -, -, hO⟩ := hPfinal.1
+  intro flat hlt
+  refine hO flat ?_ hlt
+  have hdm := Nat.div_add_mod (NT + BT - 1) BT
+  have hmod : (NT + BT - 1) % BT < BT := Nat.mod_lt _ hBT
+  have hTle : NT ≤ (NT + BT - 1) / BT * BT := by rw [Nat.mul_comm]; omega
+  have h2 : (NT + BT - 1) / BT ≤ final := hfinal
+  have h3 : (NT + BT - 1) / BT * BT ≤ final * BT := Nat.mul_le_mul_right _ h2
+  omega
+
+set_option maxHeartbeats 4000000 in
+/-- Termination, per-lane values and the per-cell frame of the whole kernel
+under the exact stepper, from an **arbitrary** launch state. -/
+private theorem cc_runExact (S O : RegionName) (NT BT : Nat) (s : BlockState)
+    (hSO : O ≠ S) (hBT : 0 < BT) :
+    ∃ sfinal,
+      exec (chunk_cumsum_scalar_surface S O NT BT).toAlgKernel s = some sfinal ∧
+      (∀ flat, flat < NT →
+        sfinal.readMem O (s.pids 0 * NT + flat) = surfaceClosed s S NT flat) ∧
+      (∀ r oo, (r ≠ O ∨ ∀ m, m < NT → oo ≠ s.pids 0 * NT + m) →
+        sfinal.mem r oo = s.mem r oo) := by
+  unfold exec
+  rw [ccBody_eq]
+  have hstep1 : stepStmt (Stmt.assign TileDType.nat [] "i_bh" (Op.programId 0)) s
+      = some (s.setReg "i_bh" .nat [] (Tile.scalar (s.pids 0))) :=
+    stepStmt_assign_eq_some (by simp [evalOp])
+  have hstep2 : stepStmt (Stmt.assign TileDType.real [] "b_z" (Op.full [] (Op.const 0)))
+      (s.setReg "i_bh" .nat [] (Tile.scalar (s.pids 0)))
+      = some ((s.setReg "i_bh" .nat [] (Tile.scalar (s.pids 0))).setReg "b_z" .real []
+        (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [])) :=
+    stepStmt_assign_eq_some (by simp only [evalOp_full, evalOp_const, Option.bind]; rfl)
+  rw [stepStmts.cons_some hstep1, stepStmts.cons_some hstep2,
+    show ∀ (X : Stmt) (w : BlockState), stepStmts [X] w = stepStmt X w from
+      fun X w => by cases h : stepStmt X w <;> simp [stepStmts, h]]
+  exact cc_loopRun S O NT BT s hSO hBT _ (cc_entry_inv S O NT BT s)
+    (fun r oo _ => rfl)
+
+/-! ### The headline -/
+
+set_option maxHeartbeats 4000000 in
+/-- **The `⊨[R]` streaming headline (wave-5 S3 per-step emit genre).** For
+every rounding model `R`, the faithful `chunk_cumsum_scalar_surface` — the
+whole per-program kernel, prologue plus the `forRangeDyn` over
+`cdiv(T, BT)` chunks that threads the running carry `b_z` — implements, on
+its `StreamEmitMasked2DKernelIO₁` signature, the **ideal ℝ global cumulative
+sum** over the streamed chunks: emitted window `(t, j)` holds the guarded
+prefix sum `Σ_{u·BT+e ≤ t·BT+j, u·BT+e < T} xs[u, e]` of the entire stream.
+The spec `f` is exact real arithmetic and is a standalone `Finset.sum` over
+the *input* stream — never a read-back of the kernel's own output.
+
+Rounding story: this kernel has **zero rounding events**. The lowered body
+carries no `Op.castFloat` at all (both Python `.to(...)`s erase), its load is
+`Op.load TileDType.real` and its in-loop store is
+`Stmt.store TileDType.real … MaskOpt.none`, so `outDType := .real` (the skin
+default) is the honest grid: the readback contract's `R.round .real` is the
+identity by the model's defining `round_real`, and `writeMemTypedR R .real`
+is definitionally the exact write. The ∀-`R` face therefore holds via the
+`RoundingModel` `.real` identity fields, not as a `.triv` special case.
+
+Layer map: the body is cast-free, so under `execR R` the whole kernel
+collapses verbatim onto the exact stepper (`ccStepList_castFree` +
+`stepForRangeAuxR_castFree` through the `forRangeDyn`), and the proven
+`surfaceInv` / `surface_step` / `forRangeDyn_inv` stack above is reused
+unchanged; the `⊨[R]` face adds the block-pointer `TraceSafeR` walk
+(`cc_traceSafeR`, whose load/store obligations are discharged from the
+`boundary_check=(0,)` guard `BlockPtr.inBounds_1d`), the per-cell memory
+frame (`cc_body_frame`, the `mem` twin of `surface_step`), and the
+stream-lane spec bridge (`ccGuardedSum_eq_flat`, re-blocking the global flat
+index `m ↔ (m / BT, m % BT)`).
+
+Both hypotheses are truth-forced — they are exactly the retained exact
+headline `chunk_cumsum_scalar_output_summary_general`'s side conditions:
+
+* `hSO : O ≠ S` — chunk `c+1` **loads** `s` after chunk `c` has **stored**
+  into `o`; if the output aliased the input, later chunks would re-read
+  already-overwritten values and the closed form would be false. It is the
+  hypothesis `surface_step` consumes (via `surfaceScatter_readMem_ne`) to
+  keep the streamed input pinned across the in-loop store.
+* `hBT : 0 < BT` — the chunk width. It is the loop's block size: at
+  `BT = 0` the trip count `cdiv(T, 0)` is meaningless, `surface_carry_succ`
+  fails, and the step index `m / BT` used by the stream re-blocking is
+  undefined. It holds for every real launch (the autotune set is
+  `BT ∈ {16, 32, 64}`).
+
+Relation to the exact surface: the exact headline
+`chunk_cumsum_scalar_output_summary_general`
+(`Realizes_without_Rounding`) above is retained unchanged; this `⊨[R]` face
+restates the same global-cumsum content on the streaming emit skin, for
+every `R` at once (at the `.real` grid the two faces carry the same exact
+cell). Both faces are kept per the rounding-as-default doctrine. -/
+specification chunk_cumsum_scalar_io_correctness (R : RoundingModel)
+    (S O : RegionName) (NT BT : Nat) (hSO : O ≠ S) (hBT : 0 < BT) :
+    chunkCumsumKernelIO S O NT BT ⊨[R]
+      fun _ _ xs t j => ccStreamSpec NT BT xs t j := by
+  refine StreamEmitMasked2DKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact chunk_cumsum_scalar_surface_flattenOk S O NT BT
+  · -- safety walk
+    intro bounds s xs _hx hbr1 hbw
+    simp only [chunkCumsumKernelIO] at hbr1 hbw ⊢
+    exact cc_traceSafeR R bounds S O NT BT hSO hBT s hbr1 hbw
+  · -- the rounded Hoare triple
+    intro s₀ xs _hundef hx
+    simp only [chunkCumsumKernelIO] at hx ⊢
+    obtain ⟨sfin, hexec, hval, hframe⟩ := cc_runExact S O NT BT s₀ hSO hBT
+    refine ⟨sfin, ?_, ?_, ?_⟩
+    · rw [cc_execR_eq_exec]; exact hexec
+    · intro t j hj
+      have hj' : t.val * BT + j.val < NT := hj
+      rw [BlockState.readMemAs_real, hval (t.val * BT + j.val) hj',
+        ← ccStreamSpec_eq_surfaceClosed S s₀ NT BT hBT xs hx t j]
+      simp [FloatDType.ofReal]
+    · intro r oo hcond
+      refine hframe r oo ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · refine Or.inr fun m hm => ?_
+        have hfin : (⟨m / BT, ccChunk_lt NT BT m hBT hm⟩ :
+              Fin (ccNumChunks NT BT)).val * BT
+            + (⟨m % BT, Nat.mod_lt _ hBT⟩ : Fin BT).val = m := Nat.div_add_mod' m BT
+        have h := hno ⟨m / BT, ccChunk_lt NT BT m hBT hm⟩ ⟨m % BT, Nat.mod_lt _ hBT⟩
+          (by rw [hfin]; exact hm)
+        rw [hfin] at h
+        exact h
+
+end IOFace
+
 end VeriTile.Bench.TritonBenchG.ChunkCumsumKernel
