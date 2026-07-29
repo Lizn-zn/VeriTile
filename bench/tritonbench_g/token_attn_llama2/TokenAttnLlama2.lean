@@ -1296,4 +1296,1534 @@ specification token_attn_llama2_output_summary_general
       stride_qbs stride_qh stride_qd stride_kbs stride_kh stride_kd att_stride_h
       att_stride_bs kv_group_num BLOCK_DMODEL BLOCK_N s hundef hOutInj
 
+section IOFace
+
+open scoped VeriTile.Triton.StreamMetaGatherMasked3DKernelIO₂
+
+/-! ## Slot table, step budget and IO signature
+
+`token_attn_llama2` is a consumer of `StreamMetaGatherMasked3DKernelIO₂`, the
+**gather-indexed** two-stream fold skin. The 3-D grid is
+`(cur_batch, cur_head, start_n) = (pid₀, pid₁, pid₂)`; the **two** `.nat`
+metadata slots are read at cell `cur_batch = pid₀` of their own regions, in the
+kernel's own load order — slot `0` = `B_Seqlen[pid₀]` (`cur_batch_seq_len`, the
+varlen right edge) and slot `1` = `B_Start_Loc[pid₀]`
+(`cur_batch_in_all_start_index`, the `Att_Out` row base).
+
+**Step budget.** The kernel's only loop is `range(0, block_mask, 1)` with
+`block_mask ∈ {0, 1}`, so the pid-free upper bound of the walk is `T = 1`: the
+single step `t = 0` is live exactly when `block_mask = 1`, and that gating lives
+in `writeMask` (an inactive block writes nothing). No launch restriction is
+needed, so `pre ≡ True`.
+
+**Store genre.** The `tl.store` sits syntactically *inside* the loop, but the
+loop runs at most once and the store is its only memory effect, so the kernel
+still writes **one** window and the skin's terminal-store frame is honest: on an
+active block the footprint is exactly `{write i | active i}`, and on an inactive
+block `writeMask` is empty everywhere and nothing is written at all.
+
+**The gather channel** is the paged-KV page table `B_Loc` at `gty = .nat` with
+`gother = 0` (the kernel's own `other=0`): the step loads `BLOCK_N` page indices
+masked by `offs_n_new i < max_input_len`, and those *values* address the `K`
+load. Like the `token_attn_mistral` sibling — and unlike the softmax_reducev
+exemplar — this port's `K` load carries **the same mask as the gather**
+(`offs_n_new[:, None] < cur_batch_end_index`), so a dead lane never dereferences
+the `other=` sentinel and no bound on `gother` is needed anywhere.
+
+Stride abbreviations used throughout this section: `mil` = `max_input_len`,
+`sblb`/`sbls` = `stride_b_loc_b`/`_s`, `sqbs`/`sqh`/`sqd` = the three `Q`
+strides, `skbs`/`skh`/`skd` = the three `K` strides, `ash`/`asbs` =
+`att_stride_h`/`att_stride_bs`, `kvg` = `kv_group_num`, `BD` = `BLOCK_DMODEL`,
+`BN` = `BLOCK_N`. -/
+
+/-- Slot-region table of the two per-batch metadata slots, in the kernel's own
+load order (`B_Seqlen`, `B_Start_Loc`). A shared def, never an inline `match` in
+a window position. -/
+def llama2IOMetaBuf (B_Start_Loc B_Seqlen : Region .nat) : Fin 2 → RegionName
+  | ⟨0, _⟩ => B_Seqlen.cast
+  | ⟨_ + 1, _⟩ => B_Start_Loc.cast
+
+/-- The kernel's single streaming step (`T = 1`). -/
+def llama2IOStep : Fin 1 := ⟨0, by omega⟩
+
+/-- **Gather-indexed IO signature** of `token_attn_llama2` on the gather-indexed
+two-stream fold skin (S1: one-step QK fold + masked store, 3-D pid grid), at
+fully **symbolic per-axis strides**.
+
+Windows transcribe the kernel's pointer arithmetic VERBATIM, with the loaded
+slot vector `m` in place of the in-state metadata reads:
+
+* `gread` (`B_Loc`, the page table): lane `j` reads
+  `sblb · pid₀ + sbls · ((mil − m 0) + (pid₂ · BN + j))`; `gmask` is
+  `(mil − m 0) + (pid₂ · BN + j) < mil` and `gother = 0`.
+* `read1` (`Q`, the query row): lane `d` of step `t` reads
+  `pid₀ · sqbs + pid₁ · sqh + d · sqd + t` (the `+ start_mark` the kernel
+  spells; at the single live step it is `+ 0`). The load is **unmasked**, so
+  `mask1 ≡ True`.
+* `read2` (`K`, the **gather-addressed** cache rows, lane `j = (jL, d)`
+  row-major over `[BLOCK_N, BLOCK_DMODEL]`) reads
+  `G t jL · skbs + (pid₁ / kvg) · skh + d · skd`. `mask2` repeats `gmask`'s
+  predicate on the row coordinate.
+* `write` (`Att_Out`): lane `i` writes `pid₁ · ash + (m 1 + (pid₂ · BN + i)) · asbs`,
+  with `writeMask` = `block_mask = 1` **and** the store's own lane mask.
+
+`outDType` is the `.real` default: the terminal `tl.store` lowers to
+`Stmt.store .real` (no `.to(...)` cast anywhere in this kernel), so there is no
+quantization event. -/
+def llama2IO (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat) :
+    StreamMetaGatherMasked3DKernelIO₂ where
+  kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out
+    mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN
+  inp1 := Q
+  inp2 := K
+  out := Att_Out
+  nMeta := 2
+  sty := fun _ => ChanTy.nat
+  mbuf := llama2IOMetaBuf B_Start_Loc B_Seqlen
+  mwin := fun _ pid₀ _ _ => pid₀
+  gbuf := B_Loc.cast
+  gty := ChanTy.nat
+  Bg := BN
+  gother := 0
+  T := 1
+  B1 := BD
+  B2 := BN * BD
+  C := BN
+  outDType := .real
+  pre := fun _ _ _ _ => True
+  gread := fun pid₀ _ pid₂ m _ j =>
+    sblb * pid₀ + sbls * ((mil - m (⟨0, by omega⟩ : Fin 2)) + (pid₂ * BN + j.val))
+  gmask := fun _ _ pid₂ m _ j =>
+    (mil - m (⟨0, by omega⟩ : Fin 2)) + (pid₂ * BN + j.val) < mil
+  read1 := fun pid₀ pid₁ _ _ t d => pid₀ * sqbs + pid₁ * sqh + d.val * sqd + t.val
+  mask1 := fun _ _ _ _ _ _ => True
+  read2 := fun _ pid₁ _ _ G t j =>
+    G t (Lane2D.decode j).1 * skbs + (pid₁ / kvg) * skh + (Lane2D.decode j).2.1.val * skd
+  mask2 := fun _ _ pid₂ m _ j =>
+    (mil - m (⟨0, by omega⟩ : Fin 2)) + (pid₂ * BN + (Lane2D.decode j).1.val) < mil
+  write := fun _ pid₁ pid₂ m i =>
+    pid₁ * ash + (m (⟨1, by omega⟩ : Fin 2) + (pid₂ * BN + i.val)) * asbs
+  writeMask := fun _ _ pid₂ m i =>
+    pid₂ * BN < m (⟨0, by omega⟩ : Fin 2) ∧
+      (mil - m (⟨0, by omega⟩ : Fin 2)) + (pid₂ * BN + i.val) < mil
+
+/-! ## The streamed closed form -/
+
+/-- **The streamed closed form**: `tokenAttnLlama2DotScore` restated over the two
+pinned streams — `att_out[i] = (Σ_d q[d] · k[i, d]) · sm_scale`, where the page
+indirection lives in the *window* (`read2` eats `G`), so the second stream cell
+is already the gathered cache row at flat lane `(i, d)`. -/
+noncomputable def llama2IOSpec (BD BN : Nat) (sm_scale : ℝ)
+    (xs : Fin 1 → Fin BD → ℝ) (ys : Fin 1 → Fin (BN * BD) → ℝ) (i : Fin BN) : ℝ :=
+  (∑ d : Fin BD,
+      xs llama2IOStep d *
+        ys llama2IOStep
+          (Lane2D.encode ((i, d, PUnit.unit) : TileIndex [BN, BD]))) * sm_scale
+
+/-! ## The spec-equals-genuine bridge
+
+The exact stack's genuine closed form names the kernel's own memory-side reads
+(`qOffset` / `kOffset` — the latter **inlines the gather** `kLoc` inside the `K`
+address). The io face states the same value over the pinned streams; the bridge
+rewrites `kLoc ↦ G t j` through the gather pin, which is the one real proof
+content of the gather skin. Because `mask2` repeats `gmask`'s predicate, only the
+pin's **active** leg is ever used. -/
+
+set_option maxHeartbeats 1000000 in
+/-- **Streamed spec = genuine closed form.** Under the slot/gather/data pins the
+exact headline's `tokenAttnLlama2DotScore` is the streamed `llama2IOSpec` at
+every store-active lane. -/
+theorem llama2IOSpec_eq_genuine (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Seqlen : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd kvg BD BN : Nat)
+    (s₀ : BlockState) (seq : Nat) (hseq : seqLen s₀ B_Seqlen = seq)
+    (G : Fin 1 → Fin BN → Nat) (xs : Fin 1 → Fin BD → ℝ)
+    (ys : Fin 1 → Fin (BN * BD) → ℝ)
+    (hg : ∀ (t : Fin 1) (j : Fin BN),
+      (mil - seq) + (s₀.pids 2 * BN + j.val) < mil →
+      s₀.readMemValue .nat B_Loc
+          (sblb * s₀.pids 0 + sbls * ((mil - seq) + (s₀.pids 2 * BN + j.val))) = G t j)
+    (hx : ∀ (t : Fin 1) (d : Fin BD),
+      s₀.readMem Q (s₀.pids 0 * sqbs + s₀.pids 1 * sqh + d.val * sqd + t.val) = xs t d)
+    (hy : ∀ (t : Fin 1) (j : Fin (BN * BD)),
+      (mil - seq) + (s₀.pids 2 * BN + (Lane2D.decode j).1.val) < mil →
+      s₀.readMem K (G t (Lane2D.decode j).1 * skbs + (s₀.pids 1 / kvg) * skh
+          + (Lane2D.decode j).2.1.val * skd) = ys t j)
+    (i : Fin BN) (hact : active s₀ B_Seqlen mil BN i) :
+    tokenAttnLlama2DotScore s₀ Q K sm_scale B_Loc B_Seqlen mil sblb sbls sqbs sqh sqd
+        skbs skh skd kvg BD BN i
+      = llama2IOSpec BD BN sm_scale xs ys i := by
+  have hlive : (mil - seq) + (s₀.pids 2 * BN + i.val) < mil := by
+    rw [← hseq]
+    simpa only [active, blockOffset] using hact
+  have hkloc : kLoc s₀ B_Loc B_Seqlen mil sblb sbls BN i = G llama2IOStep i := by
+    rw [kLoc, hseq]
+    exact hg llama2IOStep i hlive
+  unfold tokenAttnLlama2DotScore llama2IOSpec
+  refine congrArg (· * sm_scale) (Finset.sum_congr rfl (fun d _ => ?_))
+  have hq : s₀.readMem Q (qOffset s₀ sqbs sqh sqd d.val) = xs llama2IOStep d := by
+    rw [qOffset]
+    exact hx llama2IOStep d
+  have hk : s₀.readMem K (kOffset s₀ B_Loc B_Seqlen mil sblb sbls skbs skh skd kvg BN i d.val)
+      = ys llama2IOStep (Lane2D.encode ((i, d, PUnit.unit) : TileIndex [BN, BD])) := by
+    have h := hy llama2IOStep (Lane2D.encode ((i, d, PUnit.unit) : TileIndex [BN, BD]))
+    rw [Lane2D.decode_encode] at h
+    rw [kOffset, hkloc]
+    exact h hlive
+  rw [hq, hk]
+
+/-! ## Flat-bridge coverage and cast-freedom
+
+The port is cast-free in the `R` sense: every load/store is at `.real` or
+`.nat`, there is no `.to(...)` cast, no `Op.castFloat`, no `ptrSub` and no block
+pointer anywhere in the file. So `stepStmtsR R` collapses verbatim onto the exact
+stepper on every segment, and no `R.round … = id` boundary hypothesis is
+needed. -/
+
+/-- The 13-statement prelude of `token_attn_llama2_surface`, transcribed
+(`rfl`-equal to `…toAlgKernel.body.take 13`). -/
+private def llama2IOPrelude (B_Start_Loc B_Seqlen : Region .nat)
+    (mil sqbs sqh sqd kvg BD BN : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "cur_batch" (Op.programId 0),
+    Stmt.assign .nat [] "cur_head" (Op.programId 1),
+    Stmt.assign .nat [] "start_n" (Op.programId 2),
+    Stmt.assign .nat [] "cur_kv_head"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat kvg)),
+    Stmt.assign .nat [BD] "offs_d" (Op.arange BD),
+    Stmt.assign .nat [] "cur_batch_seq_len"
+      (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "cur_batch_in_all_start_index"
+      (Op.load .nat (MemAccess.region B_Start_Loc (Op.ref .nat [] "cur_batch")) MaskOpt.none),
+    Stmt.assign .nat [] "cur_batch_start_index"
+      (Op.sub .nat Broadcast.nil (Op.constNat mil) (Op.ref .nat [] "cur_batch_seq_len")),
+    Stmt.assign .nat [] "cur_batch_end_index" (Op.constNat mil),
+    Stmt.assign .nat [BD] "off_q"
+      (Op.add .nat Broadcast.scalarL
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat sqbs))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat sqh)))
+        (Op.mul .nat Broadcast.scalarR (Op.ref .nat [BD] "offs_d") (Op.constNat sqd))),
+    Stmt.assign .nat [BN] "offs_n"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat BN))
+        (Op.arange BN)),
+    Stmt.assign .nat [] "block_stard_index"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat BN)),
+    Stmt.assign .nat [] "block_mask"
+      ((Op.lt .nat Broadcast.nil (Op.ref .nat [] "block_stard_index")
+            (Op.ref .nat [] "cur_batch_seq_len")).where
+        (Op.constNat 1) (Op.constNat 0)) ]
+
+/-- Body decomposition against the literal prelude list. By `rfl`. -/
+private theorem llama2IO_body_split (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat) :
+    (token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil sblb
+        sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN).toAlgKernel.body
+      = llama2IOPrelude B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg BD BN
+        ++ [Stmt.forRangeDyn "start_mark" (Op.constNat 0) (Op.ref .nat [] "block_mask")
+              (Op.constNat 1)
+              (llama2LoopBody Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash asbs
+                BD BN)] := rfl
+
+set_option maxHeartbeats 4000000 in
+/-- The surface sits inside the flat-memory bridge's covered fragment. -/
+private theorem llama2IO_flattenOk (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat) :
+    ((token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil sblb
+      sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [llama2IO_body_split]
+  simp [llama2IOPrelude, llama2LoopBody, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-- Per-statement cast-free collapse lifts to statement lists (walks the actual
+successor chain; a failing step collapses on both sides). Private copy of the
+family helper (bench files never import each other). -/
+private theorem llama2IO_stepStmtsR_castFree_of_stmts (R : RoundingModel) :
+    ∀ (l : List Stmt), (∀ st ∈ l, ∀ u, stepStmtR R st u = stepStmt st u) →
+      ∀ s, stepStmtsR R l s = stepStmts l s
+  | [], _, s => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, s => by
+      simp only [stepStmtsR, stepStmts, h st List.mem_cons_self s]
+      cases stepStmt st s with
+      | none => rfl
+      | some s' =>
+          exact llama2IO_stepStmtsR_castFree_of_stmts R rest
+            (fun st' h' u => h st' (List.mem_cons_of_mem _ h') u) s'
+
+set_option maxHeartbeats 4000000 in
+/-- Every prelude statement is cast-free (two `.nat` slot loads, register-only
+`.nat` address arithmetic and the `block_mask` select). -/
+private theorem llama2IO_prelude_stmt_castFree (R : RoundingModel)
+    (B_Start_Loc B_Seqlen : Region .nat) (mil sqbs sqh sqd kvg BD BN : Nat) :
+    ∀ st ∈ llama2IOPrelude B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg BD BN,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [llama2IOPrelude, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  all_goals simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+
+set_option maxHeartbeats 4000000 in
+/-- Every loop-body statement is cast-free: the unmasked `.real` `Q` load, the
+`.nat` page-table gather (`other = 0`), the gather-addressed `.real` `K` load
+(`other = 0.0`), the `.real` dot reduce and scale, and the masked `.real` store
+(`writeMemTypedR R .real` *is* `writeMemTyped .real`). -/
+private theorem llama2IO_body_stmt_castFree (R : RoundingModel)
+    (Q K B_Loc Att_Out : RegionName) (sm_scale : ℝ)
+    (sblb sbls skbs skh skd ash asbs BD BN : Nat) :
+    ∀ st ∈ llama2LoopBody Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash asbs BD BN,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [llama2LoopBody, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  all_goals
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      BlockState.writeMemTypedR]
+
+/-- The loop body is cast-free as a list. -/
+private theorem llama2IO_body_castFree (R : RoundingModel)
+    (Q K B_Loc Att_Out : RegionName) (sm_scale : ℝ)
+    (sblb sbls skbs skh skd ash asbs BD BN : Nat) (t : BlockState) :
+    stepStmtsR R (llama2LoopBody Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash
+        asbs BD BN) t
+      = stepStmts (llama2LoopBody Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash
+          asbs BD BN) t :=
+  llama2IO_stepStmtsR_castFree_of_stmts R _
+    (llama2IO_body_stmt_castFree R Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash
+      asbs BD BN) t
+
+/-- `evalOpR` of a `constNat` (R-independent). -/
+private theorem llama2IO_evalOpR_constNat (R : RoundingModel) (n : Nat) (u : BlockState) :
+    evalOpR R (Op.constNat n) u = some (Tile.scalar n) := by
+  simp [evalOpR]
+
+/-- `evalOpR` of the `forRangeDyn` stop expression (a bare `.nat` register read —
+R-independent). -/
+private theorem llama2IO_stopOpR_castFree (R : RoundingModel) (u : BlockState) :
+    evalOpR R (Op.ref .nat [] "block_mask") u = evalOp (Op.ref .nat [] "block_mask") u := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+set_option maxHeartbeats 1600000 in
+/-- The guard `forRangeDyn` statement is cast-free per-state: its bound
+expressions are two literals and a `.nat` register read, and its body is
+cast-free, so `stepStmtR R` on the whole loop *is* `stepStmt`. -/
+private theorem llama2IO_dyn_castFree (R : RoundingModel)
+    (Q K B_Loc Att_Out : RegionName) (sm_scale : ℝ)
+    (sblb sbls skbs skh skd ash asbs BD BN : Nat) :
+    ∀ u, stepStmtR R (Stmt.forRangeDyn "start_mark" (Op.constNat 0)
+        (Op.ref .nat [] "block_mask") (Op.constNat 1)
+        (llama2LoopBody Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash asbs BD BN)) u
+      = stepStmt (Stmt.forRangeDyn "start_mark" (Op.constNat 0)
+          (Op.ref .nat [] "block_mask") (Op.constNat 1)
+          (llama2LoopBody Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash asbs BD BN)) u := by
+  intro u
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  simp only [stepStmtR, llama2IO_evalOpR_constNat, llama2IO_stopOpR_castFree,
+    evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  cases hstop : evalOp (Op.ref .nat [] "block_mask") u with
+  | none => rfl
+  | some t =>
+      simp only [Option.bind_some]
+      exact stepForRangeAuxR_castFree R _
+        (llama2IO_body_castFree R Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash
+          asbs BD BN) "start_mark" _ _ _ u
+
+/-- The whole lowered body is cast-free, statement by statement: `execR R` on the
+surface *is* the exact `stepStmts` run. -/
+private theorem llama2IO_execR_collapse (R : RoundingModel) (Q K : RegionName)
+    (sm_scale : ℝ) (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat) (s : BlockState) :
+    execR R ((token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil
+        sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN).toAlgKernel) s
+      = stepStmts ((token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen
+          Att_Out mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN).toAlgKernel.body) s := by
+  unfold execR
+  rw [llama2IO_body_split]
+  refine llama2IO_stepStmtsR_castFree_of_stmts R _ ?_ s
+  intro st hst
+  rcases List.mem_append.mp hst with hpre | hrest
+  · exact llama2IO_prelude_stmt_castFree R B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg BD BN
+      st hpre
+  · rcases List.mem_cons.mp hrest with rfl | hnil
+    · exact llama2IO_dyn_castFree R Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd ash
+        asbs BD BN
+    · exact absurd hnil (List.not_mem_nil)
+
+/-! ## The combined walk (`hts` + `hrun` in one pass)
+
+Both skin obligations ride the *same* statement walk. To share it, the walk's
+conclusion pairs the run (`∃ sF, stepStmtsR R … = some sF ∧ P sF`, which needs no
+region bounds at all) with a **bounds-decoupled** safety clause
+`∀ bounds, C bounds → TraceSafeListR R bounds …`: the bound hypotheses are
+collected into one predicate `C` on `RegionBounds` so that `hrun` — which has no
+allocator in scope — can use the run half and simply ignore the safety half. -/
+
+/-- Combined walk cons: safety of the head under `C`, the R-step it actually
+takes, and the pair (run, `C`-safety) of the tail from the successor give the
+pair for the whole list. -/
+private theorem llama2IO_walkCons {R : RoundingModel} {C : RegionBounds → Prop}
+    {P : BlockState → Prop} {st : Stmt} {rest : List Stmt} {s s' : BlockState}
+    (hsafe : ∀ bounds : RegionBounds, C bounds → Stmt.TraceSafeR R bounds st s)
+    (hstep : stepStmtR R st s = some s')
+    (h2 : (∃ sF, stepStmtsR R rest s' = some sF ∧ P sF)
+      ∧ ∀ bounds : RegionBounds, C bounds → Stmt.TraceSafeListR R bounds rest s') :
+    (∃ sF, stepStmtsR R (st :: rest) s = some sF ∧ P sF)
+      ∧ ∀ bounds : RegionBounds, C bounds →
+          Stmt.TraceSafeListR R bounds (st :: rest) s := by
+  refine ⟨by rw [stepStmtsR_cons_some hstep]; exact h2.1, ?_⟩
+  intro bounds hC
+  refine Stmt.TraceSafeListR.cons_intro (hsafe bounds hC) (fun u hu => ?_)
+  rw [hstep] at hu
+  exact (Option.some.inj hu) ▸ h2.2 bounds hC
+
+/-- Walk terminator: the empty tail runs to the current state and is safe. -/
+private theorem llama2IO_walkNil {R : RoundingModel} {C : RegionBounds → Prop}
+    {P : BlockState → Prop} (s : BlockState) (h : P s) :
+    (∃ sF, stepStmtsR R [] s = some sF ∧ P sF)
+      ∧ ∀ bounds : RegionBounds, C bounds → Stmt.TraceSafeListR R bounds [] s :=
+  ⟨⟨s, by simp only [stepStmtsR], h⟩, fun _ _ => Stmt.TraceSafeListR.nil_intro⟩
+
+/-- R-step of an assign whose op is cast-free: the two collapse into one
+walk-ready equation. -/
+private theorem llama2IO_stepR_of_assign {R : RoundingModel} {dt : TileDType}
+    {sh : TileShape} {nm : RegName} {e : Op dt sh} {s : BlockState} {v : Tile dt sh}
+    (hcf : evalOpR R e s = evalOp e s) (h : evalOp e s = some v) :
+    stepStmtR R (.assign dt sh nm e) s = some (s.setReg nm dt sh v) :=
+  stepStmtR_assign_eq_some (hcf.trans h)
+
+/-- `readMem` depends on `mem` only (re-anchors memory-derived quantities at the
+launch state across a `setReg` chain). -/
+private theorem llama2IO_readMem_of_mem (u s : BlockState) (h : u.mem = s.mem)
+    (r : RegionName) (a : Nat) : u.readMem r a = s.readMem r a := by
+  simp only [BlockState.readMem, BlockState.readMemValue, BlockState.readMemTyped, h]
+
+/-- `readMemValue` depends on `mem` only, at every channel dtype. -/
+private theorem llama2IO_readMemValue_of_mem (u s : BlockState) (h : u.mem = s.mem)
+    (dt : TileDType) (r : RegionName) (a : Nat) :
+    u.readMemValue dt r a = s.readMemValue dt r a := by
+  cases dt <;>
+    simp only [BlockState.readMemValue, BlockState.readMemAs, BlockState.readMemTyped,
+      BlockState.readMem, h]
+
+/-- Weak (walk) invariant: exact pins for every address-bearing register, all
+anchored to the launch state `s` through `readMemValue`, so they survive the
+whole run. This is `llama2Invariant` with the clean-`undef` conjunct dropped (the
+skin's `hts` runs from an arbitrary launch state) and the unused
+`cur_batch_seq_len` pin omitted. -/
+private def llama2IOInvW (B_Start_Loc B_Seqlen : RegionName)
+    (mil sqbs sqh sqd kvg BD BN : Nat) (s u : BlockState) : Prop :=
+  u.mem = s.mem
+  ∧ u.pids = s.pids
+  ∧ u.regs .nat [] "cur_batch" = some (Tile.scalar (s.pids 0))
+  ∧ u.regs .nat [] "cur_head" = some (Tile.scalar (s.pids 1))
+  ∧ u.regs .nat [] "cur_kv_head" = some (Tile.scalar (s.pids 1 / kvg))
+  ∧ u.regs .nat [BD] "offs_d" = some (Tile.vec (fun e : Fin BD => e.val))
+  ∧ u.regs .nat [] "cur_batch_start_index"
+      = some (Tile.scalar (mil - seqLen s B_Seqlen))
+  ∧ u.regs .nat [] "cur_batch_end_index" = some (Tile.scalar mil)
+  ∧ u.regs .nat [] "cur_batch_in_all_start_index"
+      = some (Tile.scalar (startLoc s B_Start_Loc))
+  ∧ u.regs .nat [BD] "off_q"
+      = some (Tile.vec (fun d : Fin BD => qOffset s sqbs sqh sqd d.val))
+  ∧ u.regs .nat [BN] "offs_n"
+      = some (Tile.vec (fun j : Fin BN => s.pids 2 * BN + j.val))
+  ∧ u.regs .nat [] "block_mask"
+      = some (Tile.scalar (if blockActive s B_Seqlen BN then 1 else 0))
+
+/-- The prelude's bound obligations: the two `.nat` metadata slots, read at cell
+`cur_batch = pid₀` of their own regions. -/
+private def llama2IOPreBounds (B_Start_Loc B_Seqlen : RegionName) (s : BlockState)
+    (bounds : RegionBounds) : Prop :=
+  s.pids 0 < bounds B_Seqlen ∧ s.pids 0 < bounds B_Start_Loc
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **Prelude walk** (single pass): from an **arbitrary** launch state the 13
+prelude statements step to a state satisfying `llama2IOInvW`, and are trace-safe
+whenever the two slot cells are in bounds. -/
+private theorem llama2IO_preLoopW (R : RoundingModel)
+    (B_Start_Loc B_Seqlen : Region .nat) (mil sqbs sqh sqd kvg BD BN : Nat)
+    (s : BlockState) :
+    (∃ s0, stepStmtsR R (llama2IOPrelude B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg BD BN) s
+        = some s0
+      ∧ llama2IOInvW B_Start_Loc.cast B_Seqlen.cast mil sqbs sqh sqd kvg BD BN s s0)
+    ∧ ∀ bounds : RegionBounds,
+        llama2IOPreBounds B_Start_Loc.cast B_Seqlen.cast s bounds →
+        Stmt.TraceSafeListR R bounds
+          (llama2IOPrelude B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg BD BN) s := by
+  unfold llama2IOPrelude
+  -- stmt 0: cur_batch = programId 0
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (evalOp_programId 0 s)) ?_
+  -- stmt 1: cur_head = programId 1
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (evalOp_programId 1 _)) ?_
+  -- stmt 2: start_n = programId 2
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (evalOp_programId 2 _)) ?_
+  -- stmt 3: cur_kv_head = cur_head // kv_group_num
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "cur_head")
+            (Op.constNat kvg)) _
+          = some (Tile.scalar (s.pids 1 / kvg)) from by
+        simp only [evalOp, evalOp_ref, evalOp_constNat, BlockState.setReg_same,
+          BlockState.setReg_ne_name, BlockState.setReg_pids, Option.bind]
+        refine congrArg some ?_
+        ext idx
+        simp only [Tile.bop, Tile.scalar, BlockState.setReg_pids, IntegralDType.nat_floorDiv,
+          castTile_self, Tile.scalar_data_index, Broadcast.leftIndex,
+          Broadcast.rightIndex])) ?_
+  -- stmt 4: offs_d = arange BD
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.arange BD) _ = some (Tile.vec (fun e : Fin BD => e.val)) from
+        evalOp_arange _ _)) ?_
+  -- stmt 5: cur_batch_seq_len = load(B_Seqlen + cur_batch)   [slot 0]
+  refine llama2IO_walkCons ?_
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.load .nat (MemAccess.region B_Seqlen (Op.ref .nat [] "cur_batch"))
+            MaskOpt.none) _
+          = some (Tile.scalar (seqLen s B_Seqlen.cast)) from by
+        simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+          BlockState.setReg_ne_name, Option.bind, Option.pure_def]
+        rfl)) ?_
+  · intro bounds hC
+    simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR], ?_⟩
+    intro offsets hoff idx _
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      reduceCtorEq, BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    exact hC.1
+  -- stmt 6: cur_batch_in_all_start_index = load(B_Start_Loc + cur_batch)   [slot 1]
+  refine llama2IO_walkCons ?_
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.load .nat (MemAccess.region B_Start_Loc (Op.ref .nat [] "cur_batch"))
+            MaskOpt.none) _
+          = some (Tile.scalar (startLoc s B_Start_Loc.cast)) from by
+        simp only [evalOp_load_region_none, evalOp_ref, BlockState.setReg_same,
+          BlockState.setReg_ne_name, Option.bind, Option.pure_def]
+        rfl)) ?_
+  · intro bounds hC
+    simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [MaskOpt.SafeAtR], ?_⟩
+    intro offsets hoff idx _
+    rw [evalOpR_ref] at hoff
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      reduceCtorEq, BlockState.setReg_same] at hoff
+    obtain rfl := Option.some.inj hoff
+    exact hC.2
+  -- stmt 7: cur_batch_start_index = max_input_len - cur_batch_seq_len
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.sub .nat Broadcast.nil (Op.constNat mil)
+            (Op.ref .nat [] "cur_batch_seq_len")) _
+          = some (Tile.scalar (mil - seqLen s B_Seqlen.cast)) from by
+        simp only [evalOp_sub, evalOp_constNat, evalOp_ref, BlockState.setReg_same,
+          BlockState.setReg_ne_name, Option.bind]
+        refine congrArg some ?_
+        ext idx
+        simp only [Tile.bop, Tile.scalar, NumericDType.sub, Broadcast.leftIndex,
+          Broadcast.rightIndex, castTile_self, Tile.scalar_data,
+          Tile.scalar_data_index])) ?_
+  -- stmt 8: cur_batch_end_index = max_input_len
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.constNat mil) _ = some (Tile.scalar mil) from
+        evalOp_constNat _ _)) ?_
+  -- stmt 9: off_q
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .nat Broadcast.scalarL
+            (Op.add .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_batch") (Op.constNat sqbs))
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat sqh)))
+            (Op.mul .nat Broadcast.scalarR (Op.ref .nat [BD] "offs_d")
+              (Op.constNat sqd))) _
+          = some (Tile.vec (fun d : Fin BD => qOffset s sqbs sqh sqd d.val)) from by
+        rw [llama2_offq_eval _ BD (s.pids 0) (s.pids 1) sqbs sqh sqd
+          (by simp) (by simp) (by simp [Tile.vec])]
+        refine congrArg some ?_
+        ext idx
+        simp [Tile.vec, qOffset])) ?_
+  -- stmt 10: offs_n
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n") (Op.constNat BN))
+            (Op.arange BN)) _
+          = some (Tile.vec (fun j : Fin BN => s.pids 2 * BN + j.val)) from by
+        rw [llama2_offsn_eval _ BN (s.pids 2) BN (by simp)])) ?_
+  -- stmt 11: block_stard_index
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_n")
+            (Op.constNat BN)) _
+          = some (Tile.scalar (s.pids 2 * BN)) from by
+        simp only [evalOp_mul, evalOp_constNat, evalOp_ref, BlockState.setReg_same,
+          BlockState.setReg_ne_name, BlockState.setReg_pids, Option.bind]
+        refine congrArg some ?_
+        ext idx
+        simp only [Tile.bop, Tile.scalar, NumericDType.mul, Broadcast.leftIndex,
+          Broadcast.rightIndex, BlockState.setReg_pids, castTile_self,
+          Tile.scalar_data_index])) ?_
+  -- stmt 12: block_mask
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp ((Op.lt .nat Broadcast.nil (Op.ref .nat [] "block_stard_index")
+                (Op.ref .nat [] "cur_batch_seq_len")).where (Op.constNat 1)
+              (Op.constNat 0)) _
+          = some (Tile.scalar (if blockActive s B_Seqlen.cast BN then 1 else 0)) from by
+        simp only [evalOp_where, evalOp_lt, evalOp_constNat, evalOp_ref,
+          BlockState.setReg_same, BlockState.setReg_ne_name, Option.bind]
+        refine congrArg some ?_
+        ext idx
+        simp only [Tile.select_data, Tile.cop_data, Tile.scalar, Broadcast.leftIndex,
+          Broadcast.rightIndex, ComparableDType.lt, blockActive, seqLen]
+        by_cases h : s.pids 2 * BN < s.readMemValue .nat B_Seqlen.cast (s.pids 0)
+        · rw [if_pos (by simpa using h), if_pos h]
+        · rw [if_neg (by simpa using h), if_neg h])) ?_
+  refine llama2IO_walkNil _ ?_
+  refine ⟨by funext rg o; simp, by simp, by simp, by simp, by simp, by simp [Tile.vec],
+    by simp, by simp, by simp, by simp [Tile.vec], by simp [Tile.vec], by simp⟩
+
+/-! ### `evalOpR` decoders and memory-transparent load recipes
+
+The address/mask trees of the loop body, decoded at pinned registers. Each
+memory-touching load gets a **rewrite-based** recipe carrying
+`hmem : u.mem = s.mem` (never a `show … = some <load>` through the `setReg`
+tower), so the whole walk speaks in the launch state's vocabulary. -/
+
+/-- A register write is transparent to `readMem`. -/
+private theorem llama2IO_readMem_setReg (u : BlockState) {dt : TileDType}
+    {sh : TileShape} (nm : RegName) (t : Tile dt sh) (r : RegionName) (a : Nat) :
+    (u.setReg nm dt sh t).readMem r a = u.readMem r a :=
+  llama2IO_readMem_of_mem _ u rfl r a
+
+/-- A register write is transparent to `readMemValue`. -/
+private theorem llama2IO_readMemValue_setReg (u : BlockState) {dt : TileDType}
+    {sh : TileShape} (nm : RegName) (t : Tile dt sh) (d : TileDType) (r : RegionName)
+    (a : Nat) :
+    (u.setReg nm dt sh t).readMemValue d r a = u.readMemValue d r a :=
+  llama2IO_readMemValue_of_mem _ u rfl d r a
+
+set_option maxHeartbeats 1600000 in
+/-- **`q` load recipe under `R`** (unmasked `.real` load at `off_q + start_mark`),
+anchored at the launch state through `hmem`. -/
+private theorem llama2IO_qLoadR_eval (R : RoundingModel) (Q : RegionName) (BD c : Nat)
+    (u s : BlockState) (hmem : u.mem = s.mem) (offq : Fin BD → Nat) (qv : Fin BD → ℝ)
+    (hoffq : u.regs .nat [BD] "off_q" = some (Tile.vec offq))
+    (hsm : u.regs .nat [] "start_mark" = some (Tile.scalar c))
+    (hqv : ∀ d : Fin BD, s.readMem Q (offq d + c) = qv d) :
+    evalOpR R (Op.load .real
+        (MemAccess.region Q
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [BD] "off_q")
+            (Op.ref .nat [] "start_mark"))) MaskOpt.none) u
+      = some (⟨fun idx : TileIndex [BD] => some (qv idx.1)⟩ : Tile .real [BD]) := by
+  rw [show evalOpR R (Op.load .real
+        (MemAccess.region Q
+          (Op.add .nat Broadcast.scalarR (Op.ref .nat [BD] "off_q")
+            (Op.ref .nat [] "start_mark"))) MaskOpt.none) u
+      = evalOp (Op.load .real
+          (MemAccess.region Q
+            (Op.add .nat Broadcast.scalarR (Op.ref .nat [BD] "off_q")
+              (Op.ref .nat [] "start_mark"))) MaskOpt.none) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  rw [llama2_q_load_eval u Q BD c offq hoffq hsm]
+  refine congrArg some ?_
+  ext idx
+  simp only [llama2IO_readMem_of_mem u s hmem, hqv]
+
+set_option maxHeartbeats 1600000 in
+/-- **`k_loc` gather recipe under `R`**, anchored at the launch state. -/
+private theorem llama2IO_klocR_eval (R : RoundingModel) (B_Loc B_Seqlen : RegionName)
+    (BN mil sblb sbls : Nat) (u s : BlockState) (hmem : u.mem = s.mem)
+    (hpids : u.pids = s.pids) (onn : Fin BN → Nat) (kl : Fin BN → Nat)
+    (honn : u.regs .nat [BN] "offs_n_new" = some (Tile.vec onn))
+    (hcb : u.regs .nat [] "cur_batch" = some (Tile.scalar (s.pids 0)))
+    (hend : u.regs .nat [] "cur_batch_end_index" = some (Tile.scalar mil))
+    (hkl : ∀ j : Fin BN,
+      (if onn j < mil then s.readMemValue .nat B_Loc (sblb * s.pids 0 + sbls * onn j)
+        else 0) = kl j) :
+    evalOpR R (Op.load .nat
+        (MemAccess.region B_Loc
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.constNat sblb) (Op.ref .nat [] "cur_batch"))
+            (Op.mul .nat Broadcast.scalarL (Op.constNat sbls)
+              (Op.ref .nat [BN] "offs_n_new"))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+            (Op.ref .nat [] "cur_batch_end_index"))
+          ((Op.constNat 0).broadcast [BN]))) u
+      = some (Tile.vec kl) := by
+  rw [show evalOpR R (Op.load .nat
+        (MemAccess.region B_Loc
+          (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.constNat sblb) (Op.ref .nat [] "cur_batch"))
+            (Op.mul .nat Broadcast.scalarL (Op.constNat sbls)
+              (Op.ref .nat [BN] "offs_n_new"))))
+        (MaskOpt.maskOther
+          (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+            (Op.ref .nat [] "cur_batch_end_index"))
+          ((Op.constNat 0).broadcast [BN]))) u
+      = evalOp (Op.load .nat
+          (MemAccess.region B_Loc
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.constNat sblb) (Op.ref .nat [] "cur_batch"))
+              (Op.mul .nat Broadcast.scalarL (Op.constNat sbls)
+                (Op.ref .nat [BN] "offs_n_new"))))
+          (MaskOpt.maskOther
+            (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+              (Op.ref .nat [] "cur_batch_end_index"))
+            ((Op.constNat 0).broadcast [BN]))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  rw [llama2_kloc_gather_eval u B_Loc B_Seqlen BN mil sblb sbls onn honn
+    (by rw [hpids]; exact hcb) hend]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.vec, hpids, llama2IO_readMemValue_of_mem u s hmem, hkl]
+
+set_option maxHeartbeats 1600000 in
+/-- **`k` gather recipe under `R`** (the gather-addressed `.real` load, masked by
+the gather's own predicate), anchored at the launch state. -/
+private theorem llama2IO_kLoadR_eval (R : RoundingModel) (K : RegionName)
+    (BN BD mil : Nat) (u s : BlockState) (hmem : u.mem = s.mem)
+    (offk : Fin BN → Fin BD → Nat) (onn : Fin BN → Nat) (kv : Fin BN → Fin BD → ℝ)
+    (hoffk : u.regs .nat [BN, BD] "off_k" =
+      some (⟨fun idx : TileIndex [BN, BD] => offk idx.1 idx.2.1⟩ : Tile .nat [BN, BD]))
+    (honn : u.regs .nat [BN] "offs_n_new" = some (Tile.vec onn))
+    (hend : u.regs .nat [] "cur_batch_end_index" = some (Tile.scalar mil))
+    (hkv : ∀ (j : Fin BN) (d : Fin BD),
+      (if onn j < mil then s.readMem K (offk j d) else 0) = kv j d) :
+    evalOpR R (Op.load .real (MemAccess.region K (Op.ref .nat [BN, BD] "off_k"))
+        (MaskOpt.maskOther
+          (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+            (Op.lt .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n_new"))
+              (Op.ref .nat [] "cur_batch_end_index")))
+          ((Op.const 0.0).broadcast [BN, BD]))) u
+      = some (⟨fun idx : TileIndex [BN, BD] => some (kv idx.1 idx.2.1)⟩
+          : Tile .real [BN, BD]) := by
+  rw [show evalOpR R (Op.load .real (MemAccess.region K (Op.ref .nat [BN, BD] "off_k"))
+        (MaskOpt.maskOther
+          (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+            (Op.lt .nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n_new"))
+              (Op.ref .nat [] "cur_batch_end_index")))
+          ((Op.const 0.0).broadcast [BN, BD]))) u
+      = evalOp (Op.load .real (MemAccess.region K (Op.ref .nat [BN, BD] "off_k"))
+          (MaskOpt.maskOther
+            (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+              (Op.lt .nat Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n_new"))
+                (Op.ref .nat [] "cur_batch_end_index")))
+            ((Op.const 0.0).broadcast [BN, BD]))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  rw [llama2_k_gather_eval u K BN BD mil offk onn hoffk honn hend]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨j, d, uu⟩ := idx
+  simp only [llama2IO_readMem_of_mem u s hmem, hkv]
+
+set_option maxHeartbeats 1600000 in
+/-- The masked-store step under `R`: the `off_o` scatter over the store's own
+lane mask. -/
+private theorem llama2IO_storeR_eval (R : RoundingModel) (Att_Out : RegionName)
+    (BN mil : Nat) (u : BlockState) (ooF : Fin BN → Nat) (av : Fin BN → ℝ)
+    (onn : Fin BN → Nat)
+    (hoffo : u.regs .nat [BN] "off_o" = some (Tile.vec ooF))
+    (hav : u.regs .real [BN] "att_value" =
+      some (⟨fun idx : TileIndex [BN] => some (av idx.1)⟩ : Tile .real [BN]))
+    (honn : u.regs .nat [BN] "offs_n_new" = some (Tile.vec onn))
+    (hend : u.regs .nat [] "cur_batch_end_index" = some (Tile.scalar mil)) :
+    stepStmtR R (Stmt.store .real [BN] (MemAccess.region Att_Out (Op.ref .nat [BN] "off_o"))
+        (Op.ref .real [BN] "att_value")
+        (MaskOpt.mask
+          (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+            (Op.ref .nat [] "cur_batch_end_index")))) u
+      = some ((TileShape.allIndices [BN]).foldl
+          (fun acc k => if onn k.1 < mil then acc.writeMem Att_Out (ooF k.1) (av k.1)
+            else acc) u) := by
+  rw [show stepStmtR R (Stmt.store .real [BN]
+        (MemAccess.region Att_Out (Op.ref .nat [BN] "off_o"))
+        (Op.ref .real [BN] "att_value")
+        (MaskOpt.mask
+          (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+            (Op.ref .nat [] "cur_batch_end_index")))) u
+      = stepStmt (Stmt.store .real [BN]
+          (MemAccess.region Att_Out (Op.ref .nat [BN] "off_o"))
+          (Op.ref .real [BN] "att_value")
+          (MaskOpt.mask
+            (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+              (Op.ref .nat [] "cur_batch_end_index")))) u from by
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      BlockState.writeMemTypedR]]
+  simp only [stepStmt, evalOp_ref, hoffo, hav, evalOp_lt, honn, hend, Option.bind_some,
+    Option.bind_eq_bind, Option.map_some, Option.some.injEq, ComparableDType.lt,
+    Broadcast.leftIndex, Broadcast.rightIndex, Tile.cop_data, Tile.scalar_data,
+    Tile.vec, decide_eq_true_eq]
+  rfl
+
+/-- A masked `writeMem` scatter `foldl` leaves every cell not hit by an *active*
+lane untouched. -/
+private theorem llama2IO_foldl_writeMem_frame {α : Type} (region : RegionName)
+    (offFn : α → Nat) (valFn : α → ℝ) (Pb : α → Prop) [DecidablePred Pb] :
+    ∀ (l : List α) (st : BlockState) (r : RegionName) (o : Nat),
+      (r = region → ∀ k ∈ l, Pb k → offFn k ≠ o) →
+      ((l.foldl (fun acc k => if Pb k then acc.writeMem region (offFn k) (valFn k) else acc)
+          st).mem r o = st.mem r o)
+  | [], _, _, _, _ => rfl
+  | k :: rest, st, r, o, h => by
+      rw [List.foldl_cons]
+      by_cases hk : Pb k
+      · rw [if_pos hk,
+          llama2IO_foldl_writeMem_frame region offFn valFn Pb rest _ r o
+            (fun hr k' hk' => h hr k' (List.mem_cons_of_mem _ hk')),
+          BlockState.writeMem_mem,
+          if_neg (fun hro => h hro.1 k List.mem_cons_self hk hro.2.symm)]
+      · rw [if_neg hk]
+        exact llama2IO_foldl_writeMem_frame region offFn valFn Pb rest _ r o
+          (fun hr k' hk' => h hr k' (List.mem_cons_of_mem _ hk'))
+
+/-- The loop body's bound obligations, in the launch state's vocabulary: the
+unmasked `Q` row, the page-table gather and the gather-addressed `K` rows on the
+gather's own window, and the store's active lanes. -/
+private def llama2IOBounds (Q K B_Loc B_Start_Loc B_Seqlen Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat)
+    (s : BlockState) (bounds : RegionBounds) : Prop :=
+  (∀ d : Fin BD, qOffset s sqbs sqh sqd d.val < bounds Q)
+  ∧ (∀ i : Fin BN, active s B_Seqlen mil BN i →
+      sblb * s.pids 0 + sbls * (mil - seqLen s B_Seqlen + (s.pids 2 * BN + i.val))
+        < bounds B_Loc)
+  ∧ (∀ (i : Fin BN) (d : Fin BD), active s B_Seqlen mil BN i →
+      kOffset s B_Loc B_Seqlen mil sblb sbls skbs skh skd kvg BN i d.val < bounds K)
+  ∧ (∀ i : Fin BN, active s B_Seqlen mil BN i →
+      outOffset s B_Start_Loc ash asbs BN i < bounds Att_Out)
+
+set_option maxHeartbeats 1600000 in
+/-- The `q` load's address tree `off_q + start_mark`. -/
+private theorem llama2IO_qAddrR_eval (R : RoundingModel) {BD : Nat} (u : BlockState)
+    (offq : Fin BD → Nat) (c : Nat)
+    (hoffq : u.regs .nat [BD] "off_q" = some (Tile.vec offq))
+    (hsm : u.regs .nat [] "start_mark" = some (Tile.scalar c)) :
+    evalOpR R (Op.add .nat Broadcast.scalarR (Op.ref .nat [BD] "off_q")
+        (Op.ref .nat [] "start_mark")) u
+      = some (⟨fun idx : TileIndex [BD] => offq idx.1 + c⟩ : Tile .nat [BD]) := by
+  rw [show evalOpR R (Op.add .nat Broadcast.scalarR (Op.ref .nat [BD] "off_q")
+        (Op.ref .nat [] "start_mark")) u
+      = evalOp (Op.add .nat Broadcast.scalarR (Op.ref .nat [BD] "off_q")
+          (Op.ref .nat [] "start_mark")) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  simp only [evalOp_add, evalOp_ref, hoffq, hsm, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add]
+
+set_option maxHeartbeats 1600000 in
+/-- The page-table gather's address tree
+`sblb · cur_batch + sbls · offs_n_new`. -/
+private theorem llama2IO_gAddrR_eval (R : RoundingModel) {BN : Nat} (u : BlockState)
+    (onn : Fin BN → Nat) (cb sblb sbls : Nat)
+    (hcb : u.regs .nat [] "cur_batch" = some (Tile.scalar cb))
+    (honn : u.regs .nat [BN] "offs_n_new" = some (Tile.vec onn)) :
+    evalOpR R (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.constNat sblb) (Op.ref .nat [] "cur_batch"))
+        (Op.mul .nat Broadcast.scalarL (Op.constNat sbls)
+          (Op.ref .nat [BN] "offs_n_new"))) u
+      = some (⟨fun idx : TileIndex [BN] => sblb * cb + sbls * onn idx.1⟩
+          : Tile .nat [BN]) := by
+  rw [show evalOpR R (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.constNat sblb) (Op.ref .nat [] "cur_batch"))
+        (Op.mul .nat Broadcast.scalarL (Op.constNat sbls)
+          (Op.ref .nat [BN] "offs_n_new"))) u
+      = evalOp (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.constNat sblb) (Op.ref .nat [] "cur_batch"))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat sbls)
+            (Op.ref .nat [BN] "offs_n_new"))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref, hcb, honn,
+    Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.bop_data, Tile.bop, Tile.vec, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+set_option maxHeartbeats 1600000 in
+/-- The shared window mask `offs_n_new < cur_batch_end_index` — the predicate the
+gather, the gather-addressed `K` load and the store all carry. -/
+private theorem llama2IO_maskR_eval (R : RoundingModel) {BN : Nat} (u : BlockState)
+    (onn : Fin BN → Nat) (mil : Nat)
+    (honn : u.regs .nat [BN] "offs_n_new" = some (Tile.vec onn))
+    (hend : u.regs .nat [] "cur_batch_end_index" = some (Tile.scalar mil)) :
+    evalOpR R (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+        (Op.ref .nat [] "cur_batch_end_index")) u
+      = some (⟨fun idx : TileIndex [BN] => decide (onn idx.1 < mil)⟩
+          : Tile .bool [BN]) := by
+  rw [show evalOpR R (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+        (Op.ref .nat [] "cur_batch_end_index")) u
+      = evalOp (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_n_new")
+          (Op.ref .nat [] "cur_batch_end_index")) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  simp only [evalOp, honn, hend, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  simp only [Tile.cop_data, Tile.vec, Tile.scalar, ComparableDType.lt,
+    Broadcast.leftIndex, Broadcast.rightIndex]
+  rfl
+
+set_option maxHeartbeats 1600000 in
+/-- The gather-addressed `K` load's mask: the `[BN, 1]` window test remapped
+across the head-dim columns. It is the **same predicate** as the gather's mask,
+which is why no dead lane ever dereferences a sentinel address. -/
+private theorem llama2IO_kMaskR_eval (R : RoundingModel) (BN BD : Nat) (u : BlockState)
+    (onn : Fin BN → Nat) (mil : Nat)
+    (honn : u.regs .nat [BN] "offs_n_new" = some (Tile.vec onn))
+    (hend : u.regs .nat [] "cur_batch_end_index" = some (Tile.scalar mil)) :
+    evalOpR R (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n_new"))
+          (Op.ref .nat [] "cur_batch_end_index"))) u
+      = some (⟨fun idx : TileIndex [BN, BD] => decide (onn idx.1 < mil)⟩
+          : Tile .bool [BN, BD]) := by
+  rw [show evalOpR R (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+        (Op.lt .nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n_new"))
+          (Op.ref .nat [] "cur_batch_end_index"))) u
+      = evalOp (Op.remap [BN, BD] Broadcast.nil.consL.consSame.leftIndex
+          (Op.lt .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n_new"))
+            (Op.ref .nat [] "cur_batch_end_index"))) u from by
+    simp only [evalOpR.eq_def, evalOp.eq_def]]
+  have hexpn : @evalOp .nat [BN, 1]
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BN] "offs_n_new")) u
+      = some (Tile.expandDim ⟨1, by simp⟩ (Tile.vec onn)) :=
+    evalOp_expandDim_ref_of_regs .nat [BN] ⟨1, by simp⟩ "offs_n_new" u _ honn
+  simp only [evalOp, hexpn, hend, Option.bind, Option.some.injEq]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨j, d, uu⟩ := idx
+  simp only [Tile.remap, Tile.cop_data, Tile.vec, Tile.scalar, Tile.expandDim_data,
+    TileShape.dropInsertedIndex_succ, TileShape.dropInsertedIndex_nil,
+    TileShape.dropInsertedIndex_zero_cons, ComparableDType.lt, Broadcast.leftIndex,
+    Broadcast.rightIndex]
+  rfl
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The loop-body walk** (single pass, from an `llama2IOInvW` state at counter
+`start_mark = 0`): the 9 body statements step to a state whose `Att_Out` readback
+is the genuine dot score on every store-active lane and the original cell
+elsewhere, whose memory is framed outside the store window, and which is
+trace-safe whenever `llama2IOBounds` holds. -/
+private theorem llama2IO_bodyW (R : RoundingModel) (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat)
+    (s stt : BlockState)
+    (hP : llama2IOInvW B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg BD BN s stt)
+    (hOutInj : Function.Injective
+      (fun i : Fin BN => outOffset s B_Start_Loc ash asbs BN i)) :
+    (∃ sF, stepStmtsR R (llama2LoopBody Q K B_Loc Att_Out sm_scale sblb sbls skbs skh skd
+          ash asbs BD BN) (stt.setReg "start_mark" .nat [] (Tile.scalar 0)) = some sF
+      ∧ (∀ i : Fin BN,
+          sF.readMem Att_Out (outOffset s B_Start_Loc ash asbs BN i)
+            = if active s B_Seqlen mil BN i then
+                tokenAttnLlama2DotScore s Q K sm_scale B_Loc B_Seqlen mil sblb sbls sqbs
+                  sqh sqd skbs skh skd kvg BD BN i
+              else s.readMem Att_Out (outOffset s B_Start_Loc ash asbs BN i))
+      ∧ (∀ r o, (r ≠ Att_Out ∨ ∀ i : Fin BN, active s B_Seqlen mil BN i →
+            o ≠ outOffset s B_Start_Loc ash asbs BN i) → sF.mem r o = s.mem r o))
+    ∧ ∀ bounds : RegionBounds,
+        llama2IOBounds Q K B_Loc B_Start_Loc B_Seqlen Att_Out mil sblb sbls sqbs sqh sqd
+          skbs skh skd ash asbs kvg BD BN s bounds →
+        Stmt.TraceSafeListR R bounds (llama2LoopBody Q K B_Loc Att_Out sm_scale sblb sbls
+            skbs skh skd ash asbs BD BN)
+          (stt.setReg "start_mark" .nat [] (Tile.scalar 0)) := by
+  obtain ⟨hmem, hpids, hcb, hch, hckv, hd, hsi, hend, hSL, hoffq, hoffn, _hmask⟩ := hP
+  set onn : Fin BN → Nat :=
+    fun j => (mil - seqLen s B_Seqlen) + (s.pids 2 * BN + j.val) with honnDef
+  set kloc : Fin BN → Nat :=
+    fun j => if onn j < mil then
+        s.readMemValue .nat B_Loc (sblb * s.pids 0 + sbls * onn j) else 0 with klocDef
+  set offk : Fin BN → Fin BD → Nat :=
+    fun j e => kloc j * skbs + (s.pids 1 / kvg) * skh + e.val * skd with offkDef
+  set kval : Fin BN → Fin BD → ℝ :=
+    fun j e => if onn j < mil then s.readMem K (offk j e) else 0 with kvalDef
+  set qval : Fin BD → ℝ :=
+    fun e => s.readMem Q (qOffset s sqbs sqh sqd e.val) with qvalDef
+  set avraw : Fin BN → ℝ :=
+    fun j => ∑ e : Fin BD, qval e * kval j e with avrawDef
+  -- the shared window predicate, in both vocabularies
+  have hactIff : ∀ j : Fin BN, active s B_Seqlen mil BN j ↔ onn j < mil := by
+    intro j
+    simp only [active, blockOffset, honnDef]
+  unfold llama2LoopBody
+  -- stmt 0: q = tl.load(Q + off_q + start_mark)   [read1 window, unmasked]
+  refine llama2IO_walkCons ?_
+    (stepStmtR_assign_eq_some
+      (llama2IO_qLoadR_eval R Q BD 0 _ s (by exact hmem)
+        (fun e : Fin BD => qOffset s sqbs sqh sqd e.val) qval
+        (by
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            reduceCtorEq]
+          exact hoffq)
+        (by simp only [BlockState.setReg_same])
+        (fun e => by simp only [qvalDef, Nat.add_zero]))) ?_
+  · intro bounds hC
+    obtain ⟨hbQ, _, _, _⟩ := hC
+    simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], trivial, ?_⟩
+    intro offsets hoffs idx _
+    rw [llama2IO_qAddrR_eval R _ (fun e : Fin BD => qOffset s sqbs sqh sqd e.val) 0
+      (by
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          reduceCtorEq]
+        exact hoffq)
+      (by simp only [BlockState.setReg_same])] at hoffs
+    obtain rfl := Option.some.inj hoffs
+    obtain ⟨e, uu⟩ := idx
+    simpa using hbQ e
+  -- stmt 1: offs_n_new = cur_batch_start_index + offs_n
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .nat Broadcast.scalarL
+            (Op.ref .nat [] "cur_batch_start_index") (Op.ref .nat [BN] "offs_n")) _
+          = some (Tile.vec onn) from by
+        simp only [evalOp_add, evalOp_ref, BlockState.setReg_ne_name, ne_eq,
+          String.reduceEq, not_false_eq_true, reduceCtorEq, hsi, hoffn,
+          Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_
+        ext idx
+        simp only [Tile.bop, Tile.vec, Tile.scalar, NumericDType.add, Broadcast.leftIndex,
+          Broadcast.rightIndex, honnDef])) ?_
+  -- stmt 2: k_loc = masked page-table gather   [gread window]
+  refine llama2IO_walkCons ?_
+    (stepStmtR_assign_eq_some
+      (llama2IO_klocR_eval R B_Loc B_Seqlen BN mil sblb sbls _ s (by exact hmem) (by exact hpids) onn kloc
+        (by simp only [BlockState.setReg_same])
+        (by
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            reduceCtorEq]
+          exact hcb)
+        (by
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            reduceCtorEq]
+          exact hend)
+        (fun j => by simp only [klocDef]))) ?_
+  · intro bounds hC
+    obtain ⟨_, hbG, _, _⟩ := hC
+    simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def],
+      ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro offsets hoffs idx hactive
+    rw [llama2IO_gAddrR_eval R _ onn (s.pids 0) sblb sbls
+      (by
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          reduceCtorEq]
+        exact hcb)
+      (by simp only [BlockState.setReg_same])] at hoffs
+    obtain rfl := Option.some.inj hoffs
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [llama2IO_maskR_eval R _ onn mil
+      (by simp only [BlockState.setReg_same])
+      (by
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          reduceCtorEq]
+        exact hend)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨j, uu⟩ := idx
+    have hlive : onn j < mil := by simpa using hactl
+    have h := hbG j ((hactIff j).mpr hlive)
+    simpa only [honnDef] using h
+  -- stmt 3: off_k = k_loc[:, None]·skbs + cur_kv_head·skh + offs_d[None, :]·skd
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (llama2_offk_eval _ BN BD skbs skh skd kloc (s.pids 1 / kvg)
+        (by simp only [BlockState.setReg_same])
+        (by
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            reduceCtorEq]
+          exact hckv)
+        (by
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            reduceCtorEq]
+          exact hd))) ?_
+  -- stmt 4: k = gather-addressed masked K load   [read2 window]
+  refine llama2IO_walkCons ?_
+    (stepStmtR_assign_eq_some
+      (llama2IO_kLoadR_eval R K BN BD mil _ s (by exact hmem) offk onn kval
+        (by simp only [BlockState.setReg_same, offkDef])
+        (by
+          simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq,
+            String.reduceEq, not_false_eq_true, reduceCtorEq])
+        (by
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+            reduceCtorEq]
+          exact hend)
+        (fun j e => by simp only [kvalDef]))) ?_
+  · intro bounds hC
+    obtain ⟨_, _, hbK, _⟩ := hC
+    simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def],
+      ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro offsets hoffs idx hactive
+    rw [evalOpR_ref] at hoffs
+    simp only [BlockState.setReg_same] at hoffs
+    obtain rfl := Option.some.inj hoffs
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [llama2IO_kMaskR_eval R BN BD _ onn mil
+      (by
+        simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq,
+          String.reduceEq, not_false_eq_true, reduceCtorEq])
+      (by
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          reduceCtorEq]
+        exact hend)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨j, e, uu⟩ := idx
+    have hlive : onn j < mil := by simpa using hactl
+    have hlive' : mil - seqLen s B_Seqlen + (s.pids 2 * BN + j.val) < mil := by
+      simpa only [honnDef] using hlive
+    have hklocEq : kloc j = kLoc s B_Loc B_Seqlen mil sblb sbls BN j := by
+      simp only [klocDef, kLoc, blockOffset, honnDef]
+      exact if_pos hlive'
+    have hoffkEq : offk j e
+        = kOffset s B_Loc B_Seqlen mil sblb sbls skbs skh skd kvg BN j e.val := by
+      simp only [offkDef, kOffset, hklocEq]
+    show offk j e < bounds (Region.cast K)
+    rw [hoffkEq]
+    exact hbK j e ((hactIff j).mpr hlive)
+  -- stmt 5: att_value = tl.sum(q[None, :] · k, 1)
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (llama2_attvalue_eval _ BN BD qval kval
+        (by
+          simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq,
+            String.reduceEq, not_false_eq_true, reduceCtorEq])
+        (by simp only [BlockState.setReg_same]))) ?_
+  -- stmt 6: att_value *= sm_scale
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [BN] "att_value")
+            (Op.const sm_scale)) _
+          = some (⟨fun idx : TileIndex [BN] => some (avraw idx.1 * sm_scale)⟩
+              : Tile .real [BN]) from by
+        simp only [evalOp_mul, evalOp_ref, evalOp_const, BlockState.setReg_same,
+          Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_
+        ext idx
+        simp only [Tile.bop, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex]
+        rfl)) ?_
+  -- stmt 7: off_o = cur_head·ash + (cur_batch_in_all_start_index + offs_n)·asbs
+  refine llama2IO_walkCons (fun _ _ => by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (llama2IO_stepR_of_assign (by simp only [evalOpR.eq_def, evalOp.eq_def])
+      (show evalOp (Op.add .nat Broadcast.scalarL
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cur_head") (Op.constNat ash))
+            (Op.mul .nat Broadcast.scalarR
+              (Op.add .nat Broadcast.scalarL
+                (Op.ref .nat [] "cur_batch_in_all_start_index")
+                (Op.ref .nat [BN] "offs_n"))
+              (Op.constNat asbs))) _
+          = some (Tile.vec (fun j : Fin BN => outOffset s B_Start_Loc ash asbs BN j))
+          from by
+        simp only [evalOp_add, evalOp_mul, evalOp_constNat, evalOp_ref,
+          BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          reduceCtorEq, hch, hSL, hoffn, Option.bind_eq_bind, Option.bind_some]
+        refine congrArg some ?_
+        ext idx
+        simp only [Tile.bop, Tile.vec, Tile.scalar, NumericDType.add, NumericDType.mul,
+          Broadcast.leftIndex, Broadcast.rightIndex, outOffset, startLoc,
+          blockOffset])) ?_
+  -- stmt 8: the masked store
+  refine llama2IO_walkCons ?_
+    (llama2IO_storeR_eval R Att_Out BN mil _
+      (fun j : Fin BN => outOffset s B_Start_Loc ash asbs BN j)
+      (fun j => avraw j * sm_scale) onn
+      (by simp only [BlockState.setReg_same])
+      (by
+        simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq,
+          String.reduceEq, not_false_eq_true, reduceCtorEq])
+      (by
+        simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq,
+          String.reduceEq, not_false_eq_true, reduceCtorEq])
+      (by
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          reduceCtorEq]
+        exact hend)) ?_
+  · intro bounds hC
+    obtain ⟨_, _, _, hbO⟩ := hC
+    simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨by simp [MemAccess.SafeAtR, Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def],
+      by simp [MaskOpt.SafeAtR, Op.SafeAtR.eq_def], ?_⟩
+    intro offsets hoffs idx hactive
+    rw [evalOpR_ref] at hoffs
+    simp only [BlockState.setReg_same] at hoffs
+    obtain rfl := Option.some.inj hoffs
+    obtain ⟨masks, hmask, hactl⟩ := hactive
+    rw [llama2IO_maskR_eval R _ onn mil
+      (by
+        simp only [BlockState.setReg_ne_name, BlockState.setReg_same, ne_eq,
+          String.reduceEq, not_false_eq_true, reduceCtorEq])
+      (by
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+          reduceCtorEq]
+        exact hend)] at hmask
+    obtain rfl := Option.some.inj hmask
+    obtain ⟨j, uu⟩ := idx
+    have hlive : onn j < mil := by simpa using hactl
+    show outOffset s B_Start_Loc ash asbs BN j < bounds (Region.cast Att_Out)
+    exact hbO j ((hactIff j).mpr hlive)
+  refine llama2IO_walkNil _ ⟨?_, ?_⟩
+  · -- readback
+    intro i
+    have hooFnInj : Function.Injective
+        (fun k : TileIndex [BN] => outOffset s B_Start_Loc ash asbs BN k.1) := by
+      rintro ⟨a, _⟩ ⟨b, _⟩ hab
+      obtain rfl : a = b := hOutInj hab
+      rfl
+    rw [show outOffset s B_Start_Loc ash asbs BN i
+          = (fun k : TileIndex [BN] => outOffset s B_Start_Loc ash asbs BN k.1)
+              (i, PUnit.unit) from rfl,
+      BlockState.scatter_readback_prop_masked_nd (region := Att_Out) _
+        (fun k : TileIndex [BN] => outOffset s B_Start_Loc ash asbs BN k.1)
+        (fun k : TileIndex [BN] => avraw k.1 * sm_scale)
+        (fun k : TileIndex [BN] => onn k.1 < mil) hooFnInj (i, PUnit.unit)]
+    by_cases hac : active s B_Seqlen mil BN i
+    · have hlive : onn i < mil := (hactIff i).mp hac
+      have hlive' : mil - seqLen s B_Seqlen + (s.pids 2 * BN + i.val) < mil := by
+        simpa only [honnDef] using hlive
+      rw [if_pos hlive, if_pos hac]
+      have hklocEq : kloc i = kLoc s B_Loc B_Seqlen mil sblb sbls BN i := by
+        simp only [klocDef, kLoc, blockOffset, honnDef]
+        exact if_pos hlive'
+      have hoffkEq : ∀ e : Fin BD, offk i e
+          = kOffset s B_Loc B_Seqlen mil sblb sbls skbs skh skd kvg BN i e.val := by
+        intro e
+        simp only [offkDef, kOffset, hklocEq]
+      simp only [avrawDef, qvalDef, kvalDef, tokenAttnLlama2DotScore]
+      refine congrArg (· * sm_scale) (Finset.sum_congr rfl (fun e _ => ?_))
+      rw [if_pos hlive, hoffkEq e]
+    · have hlive : ¬ onn i < mil := fun h => hac ((hactIff i).mpr h)
+      rw [if_neg hlive, if_neg hac]
+      simp only [llama2IO_readMem_setReg, llama2IO_readMem_of_mem stt s hmem]
+  · -- frame
+    intro r o hcond
+    refine (llama2IO_foldl_writeMem_frame Att_Out
+      (fun k : TileIndex [BN] => outOffset s B_Start_Loc ash asbs BN k.1)
+      (fun k : TileIndex [BN] => avraw k.1 * sm_scale)
+      (fun k : TileIndex [BN] => onn k.1 < mil) _ _ r o ?_).trans ?_
+    · intro hr k _ hk
+      rcases hcond with hne | hno
+      · exact absurd hr hne
+      · exact fun heq => hno k.1 ((hactIff k.1).mpr hk) heq.symm
+    · exact congrFun (congrFun hmem r) o
+
+/-! ## The guard loop and the whole-kernel run
+
+`range(0, block_mask, 1)` is an `if` encoded as a loop: the trip count is `0` or
+`1`, so no loop-invariant principle is needed — `stepForRangeAux.step_one_iter` /
+`step_ge` on the run side and two unfoldings of `Stmt.forRangeTraceSafeR` on the
+safety side settle both branches. -/
+
+/-- `stepStmtsR` append chaining. -/
+private theorem llama2IO_stepStmtsR_append_some {R : RoundingModel} :
+    ∀ (l1 : List Stmt) {l2 : List Stmt} {s s' : BlockState},
+      stepStmtsR R l1 s = some s' → stepStmtsR R (l1 ++ l2) s = stepStmtsR R l2 s'
+  | [], _, s, s', h => by
+      simp only [stepStmtsR] at h
+      rw [List.nil_append, Option.some.inj h]
+  | st :: rest, l2, s, s', h => by
+      cases hst : stepStmtR R st s with
+      | none => simp [stepStmtsR, hst] at h
+      | some u =>
+          rw [List.cons_append, stepStmtsR_cons_some hst]
+          rw [stepStmtsR_cons_some hst] at h
+          exact llama2IO_stepStmtsR_append_some rest h
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **The whole-kernel walk**: prelude ++ the guard loop. Yields the framed
+genuine closed-form run (what `hrun` rides) and the trace-safety of the whole
+kernel under `llama2IOPreBounds` + `llama2IOBounds` (what `hts` rides). -/
+private theorem llama2IO_runW (R : RoundingModel) (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BN => outOffset s B_Start_Loc.cast ash asbs BN i)) :
+    (∃ sF, execR R ((token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen
+          Att_Out mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN).toAlgKernel) s
+        = some sF
+      ∧ (∀ i : Fin BN,
+          sF.readMem Att_Out (outOffset s B_Start_Loc.cast ash asbs BN i)
+            = tokenAttnLlama2ClosedForm s Q K sm_scale B_Loc.cast B_Start_Loc.cast
+                B_Seqlen.cast Att_Out mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg
+                BD BN i)
+      ∧ (∀ r o, (r ≠ Att_Out ∨ ∀ i : Fin BN, blockActive s B_Seqlen.cast BN →
+            active s B_Seqlen.cast mil BN i →
+            o ≠ outOffset s B_Start_Loc.cast ash asbs BN i) → sF.mem r o = s.mem r o))
+    ∧ ∀ bounds : RegionBounds,
+        llama2IOPreBounds B_Start_Loc.cast B_Seqlen.cast s bounds →
+        llama2IOBounds Q K B_Loc.cast B_Start_Loc.cast B_Seqlen.cast Att_Out mil sblb sbls
+          sqbs sqh sqd skbs skh skd ash asbs kvg BD BN s bounds →
+        ((token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil
+          sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN).toAlgKernel).TraceSafeR
+            R bounds s := by
+  obtain ⟨⟨s0, hpre, hInv0⟩, hpreSafe⟩ :=
+    llama2IO_preLoopW R B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg BD BN s
+  have hInv0' := hInv0
+  obtain ⟨hmem0, hpids0, _, _, _, _, _, _, _, _, _, hmask0⟩ := hInv0
+  obtain ⟨⟨sB, hbodyRunR, hbodyRead, hbodyFrame⟩, hbodySafe⟩ :=
+    llama2IO_bodyW R Q K sm_scale B_Loc.cast B_Start_Loc.cast B_Seqlen.cast Att_Out mil
+      sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN s s0 hInv0' hOutInj
+  have hbodyRun : stepStmts (llama2LoopBody Q K B_Loc.cast Att_Out sm_scale sblb sbls skbs
+      skh skd ash asbs BD BN) (s0.setReg "start_mark" .nat [] (Tile.scalar 0)) = some sB := by
+    rw [← llama2IO_body_castFree R Q K B_Loc.cast Att_Out sm_scale sblb sbls skbs skh skd
+      ash asbs BD BN]
+    exact hbodyRunR
+  have hstopExact : evalOp (Op.ref .nat [] "block_mask") s0
+      = some (Tile.scalar (if blockActive s B_Seqlen.cast BN then 1 else 0)) := by
+    rw [evalOp_ref]; exact hmask0
+  -- the guard loop's exact successor, by branch
+  have hloop : stepStmt (Stmt.forRangeDyn "start_mark" (Op.constNat 0)
+        (Op.ref .nat [] "block_mask") (Op.constNat 1)
+        (llama2LoopBody Q K B_Loc.cast Att_Out sm_scale sblb sbls skbs skh skd ash asbs
+          BD BN)) s0
+      = some (if blockActive s B_Seqlen.cast BN then sB else s0) := by
+    rw [stepForRangeAux.forRangeDyn_unfold]
+    simp only [evalOp_constNat, hstopExact, Tile.scalar_data, Option.bind_some]
+    by_cases hba : blockActive s B_Seqlen.cast BN
+    · rw [if_pos hba, if_pos hba,
+        stepForRangeAux.step_one_iter (by norm_num) (by norm_num) (by norm_num), hbodyRun]
+    · rw [if_neg hba, if_neg hba, stepForRangeAux.step_ge (by norm_num) (by norm_num)]
+  refine ⟨⟨if blockActive s B_Seqlen.cast BN then sB else s0, ?_, ?_, ?_⟩, ?_⟩
+  · -- termination
+    rw [llama2IO_execR_collapse, llama2IO_body_split,
+      stepStmts.append_some
+        (show stepStmts (llama2IOPrelude B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg BD BN) s
+            = some s0 from by
+          rw [← llama2IO_stepStmtsR_castFree_of_stmts R _
+            (llama2IO_prelude_stmt_castFree R B_Start_Loc B_Seqlen mil sqbs sqh sqd kvg
+              BD BN) s]
+          exact hpre),
+      stepStmts.cons_some hloop, stepStmts.nil]
+  · -- readback
+    intro i
+    by_cases hba : blockActive s B_Seqlen.cast BN
+    · rw [if_pos hba, hbodyRead i]
+      simp only [tokenAttnLlama2ClosedForm, hba, true_and]
+    · rw [if_neg hba]
+      simp only [tokenAttnLlama2ClosedForm, hba, false_and, if_false]
+      exact llama2IO_readMem_of_mem s0 s hmem0 _ _
+  · -- frame
+    intro r o hcond
+    by_cases hba : blockActive s B_Seqlen.cast BN
+    · rw [if_pos hba]
+      refine hbodyFrame r o ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · exact Or.inr (fun i hact => hno i hba hact)
+    · rw [if_neg hba]
+      exact congrFun (congrFun hmem0 r) o
+  · -- the safety walk
+    intro bounds hCpre hC
+    unfold Kernel.TraceSafeR
+    rw [llama2IO_body_split]
+    refine Stmt.TraceSafeListR.append_intro _ s (hpreSafe bounds hCpre) (fun s1 hs1 => ?_)
+    rw [hpre] at hs1
+    obtain rfl := Option.some.inj hs1
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def],
+      by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [llama2IO_evalOpR_constNat, llama2IO_evalOpR_constNat, llama2IO_stopOpR_castFree,
+      hstopExact]
+    simp only [Tile.scalar_data]
+    -- the guard loop runs at most once, so a `c = 0 → · = s0` invariant suffices
+    refine Stmt.forRangeTraceSafeR_inv R bounds "start_mark" _ 1 _
+      (fun c u => c = 0 → u = s0) ?_ 0 s0 (fun _ => rfl)
+    intro c u hc hPc
+    have hc0 : c = 0 := by
+      by_cases hba : blockActive s B_Seqlen.cast BN
+      · rw [if_pos hba] at hc; omega
+      · rw [if_neg hba] at hc; omega
+    subst hc0
+    obtain rfl := hPc rfl
+    exact ⟨hbodySafe bounds hC, sB, hbodyRunR, fun h => absurd h (by omega)⟩
+
+/-! ### ════════ ★ MAIN THEOREM (io face) ★ ════════ -/
+
+set_option maxHeartbeats 1600000 in
+/-- **The `⊨[R]` gather-skin headline** — `token_attn_llama2` on
+`StreamMetaGatherMasked3DKernelIO₂`, at fully symbolic per-axis strides. For
+every rounding model `R`, the faithful surface implements, on its gather-indexed
+signature, the streamed closed form `llama2IOSpec`: every store-active output
+lane `i` holds `(Σ_d q[d] · k[i, d]) · sm_scale`, read off the two pinned
+streams. The kernel has **zero rounding events** (two `.nat` slot loads, a `.nat`
+page-table gather, an unmasked `.real` `Q` load, an `other = 0.0`-defaulted
+`.real` `K` load, `.real` dot arithmetic and an untyped `.real` store — no
+`.to(...)` cast, no `Op.castFloat`), so the skin's boundary quantization
+degenerates: the readback's `R.round .real` is the identity by the model's
+defining `round_real`.
+
+**The gather channel.** `B_Loc` enters as the skin's index channel
+(`gty = .nat`, `gother = 0`), and the `K` window `read2` eats the gathered tile:
+`G t jL · stride_kbs + …`. Like the `token_attn_mistral` sibling — and unlike the
+softmax_reducev exemplar — the Python `K` load carries **the gather's own mask**
+(`mask2 = gmask` on the row coordinate), so a masked-off lane never dereferences
+the substituted `other=` address and this port needs **no hypothesis at all** on
+`gother`; only the gather pin's *active* leg is used.
+
+**The guard loop and `writeMask`.** The kernel's `for start_mark in range(0,
+block_mask, 1)` has trip count `block_mask ∈ {0, 1}`, so `T = 1` and the store —
+though syntactically inside the loop — executes at most once. The `block_mask = 0`
+launches are handled **without any launch restriction**: `writeMask` carries the
+`block_mask = 1` conjunct `pid₂ · BN < m 0`, so an inactive block claims no cell
+and the skin's frame (everything outside the write-active window is untouched) is
+exactly the "nothing was stored" fact. `pre ≡ True`.
+
+**Hypothesis provenance**: `hOutInj` restates the exact headline's **open**
+output-offset injectivity side condition in ∀-pids form (per-axis strides are
+symbolic, so no contiguity discharge is available; it is what makes the masked
+scatter's readback well-defined). The exact headline's `hundef` is **not** a
+hypothesis: the skin's Hoare triple carries the `undef` pin itself, and this
+kernel's only unmasked load never consults it.
+
+Relation to the exact surface: the `Realizes_without_Rounding` headline above is
+retained unchanged; this `⊨[R]` face restates the same genuine closed form on the
+gather skin, for every `R` at once. -/
+specification token_attn_llama2_io_correctness (R : RoundingModel)
+    (Q K : RegionName) (sm_scale : ℝ) (B_Loc B_Start_Loc B_Seqlen : Region .nat)
+    (Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat)
+    (hOutInj : ∀ (pid₁ pid₂ base : Nat), Function.Injective
+      (fun i : Fin BN => pid₁ * ash + (base + (pid₂ * BN + i.val)) * asbs)) :
+    llama2IO Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil sblb sbls sqbs sqh sqd
+        skbs skh skd ash asbs kvg BD BN ⊨[R]
+      fun _ _ _ _ xs ys i => llama2IOSpec BD BN sm_scale xs ys i := by
+  refine StreamMetaGatherMasked3DKernelIO₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact llama2IO_flattenOk Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil sblb sbls
+      sqbs sqh sqd skbs skh skd ash asbs kvg BD BN
+  · -- the safety walk
+    intro bounds s m G xs ys _hpre hm hg _hgo _hx _hy hbm hbrG hbr1 hbr2 hbw
+    simp only [llama2IO, llama2IOMetaBuf] at hm hg hbm hbrG hbr1 hbr2 hbw ⊢
+    have hm0 : seqLen s B_Seqlen.cast = m (⟨0, by omega⟩ : Fin 2) :=
+      hm (⟨0, by omega⟩ : Fin 2)
+    have hm1 : startLoc s B_Start_Loc.cast = m (⟨1, by omega⟩ : Fin 2) :=
+      hm (⟨1, by omega⟩ : Fin 2)
+    have hOInj : Function.Injective
+        (fun i : Fin BN => outOffset s B_Start_Loc.cast ash asbs BN i) := by
+      simpa only [outOffset, startLoc, blockOffset] using
+        hOutInj (s.pids 1) (s.pids 2) (startLoc s B_Start_Loc.cast)
+    refine (llama2IO_runW R Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil sblb sbls
+      sqbs sqh sqd skbs skh skd ash asbs kvg BD BN s hOInj).2 bounds
+      ⟨by simpa using hbm (⟨0, by omega⟩ : Fin 2),
+        by simpa using hbm (⟨1, by omega⟩ : Fin 2)⟩ ⟨?_, ?_, ?_, ?_⟩
+    · -- the unmasked `Q` row
+      intro d
+      have h := hbr1 llama2IOStep d trivial
+      simpa only [qOffset, llama2IOStep, Nat.add_zero] using h
+    · -- the page-table gather's live window
+      intro i hact
+      have hlive : (mil - m (⟨0, by omega⟩ : Fin 2)) + (s.pids 2 * BN + i.val) < mil := by
+        rw [← hm0]
+        simpa only [active, blockOffset] using hact
+      have h := hbrG llama2IOStep i hlive
+      rw [← hm0] at h
+      exact h
+    · -- the gather-addressed `K` rows, on the gather's own window
+      intro i d hact
+      have hlive : (mil - m (⟨0, by omega⟩ : Fin 2)) + (s.pids 2 * BN + i.val) < mil := by
+        rw [← hm0]
+        simpa only [active, blockOffset] using hact
+      have hGeq : kLoc s B_Loc.cast B_Seqlen.cast mil sblb sbls BN i = G llama2IOStep i := by
+        rw [kLoc, hm0, blockOffset]
+        exact hg llama2IOStep i hlive
+      have h := hbr2 llama2IOStep
+        (Lane2D.encode ((i, d, PUnit.unit) : TileIndex [BN, BD]))
+        (by rw [Lane2D.decode_encode]; exact hlive)
+      rw [Lane2D.decode_encode] at h
+      rw [kOffset, hGeq]
+      exact h
+    · -- the store's active lanes
+      intro i hact
+      have hlive : (mil - m (⟨0, by omega⟩ : Fin 2)) + (s.pids 2 * BN + i.val) < mil := by
+        rw [← hm0]
+        simpa only [active, blockOffset] using hact
+      have hba : s.pids 2 * BN < m (⟨0, by omega⟩ : Fin 2) := by
+        rw [← hm0]
+        rw [← hm0] at hlive
+        omega
+      have h := hbw i ⟨hba, hlive⟩
+      simpa only [outOffset, blockOffset, hm1] using h
+  · -- the rounded Hoare triple: the framed run + cast-free collapse
+    intro s₀ m G xs ys _hpre _hu hm hg _hgo hx hy
+    simp only [llama2IO, llama2IOMetaBuf] at hm hg hx hy ⊢
+    have hm0 : seqLen s₀ B_Seqlen.cast = m (⟨0, by omega⟩ : Fin 2) :=
+      hm (⟨0, by omega⟩ : Fin 2)
+    have hm1 : startLoc s₀ B_Start_Loc.cast = m (⟨1, by omega⟩ : Fin 2) :=
+      hm (⟨1, by omega⟩ : Fin 2)
+    have hOInj : Function.Injective
+        (fun i : Fin BN => outOffset s₀ B_Start_Loc.cast ash asbs BN i) := by
+      simpa only [outOffset, startLoc, blockOffset] using
+        hOutInj (s₀.pids 1) (s₀.pids 2) (startLoc s₀ B_Start_Loc.cast)
+    obtain ⟨⟨sF, hexec, hread, hframe⟩, _⟩ :=
+      llama2IO_runW R Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil sblb sbls sqbs
+        sqh sqd skbs skh skd ash asbs kvg BD BN s₀ hOInj
+    refine ⟨sF, hexec, ?_, ?_⟩
+    · -- readback: the genuine closed form = the streamed closed form
+      intro i hwm
+      obtain ⟨hba, hlive⟩ := hwm
+      have hbaS : blockActive s₀ B_Seqlen.cast BN := by
+        rw [blockActive, hm0]; exact hba
+      have hact : active s₀ B_Seqlen.cast mil BN i := by
+        simp only [active, blockOffset, hm0]; exact hlive
+      have hout : sF.readMem Att_Out (outOffset s₀ B_Start_Loc.cast ash asbs BN i)
+          = tokenAttnLlama2DotScore s₀ Q K sm_scale B_Loc.cast B_Seqlen.cast mil sblb sbls
+              sqbs sqh sqd skbs skh skd kvg BD BN i := by
+        rw [hread i]
+        simp only [tokenAttnLlama2ClosedForm, hbaS, hact, and_self, if_true]
+      have haddr : s₀.pids 1 * ash
+            + (startLoc s₀ B_Start_Loc.cast + (s₀.pids 2 * BN + i.val)) * asbs
+          = outOffset s₀ B_Start_Loc.cast ash asbs BN i := by
+        simp only [outOffset, blockOffset]
+      have hval : sF.readMem Att_Out (outOffset s₀ B_Start_Loc.cast ash asbs BN i)
+          = llama2IOSpec BD BN sm_scale xs ys i := by
+        rw [hout]
+        exact llama2IOSpec_eq_genuine Q K sm_scale B_Loc.cast B_Seqlen.cast mil sblb sbls
+          sqbs sqh sqd skbs skh skd kvg BD BN s₀ (m (⟨0, by omega⟩ : Fin 2)) hm0 G xs ys
+          (fun t j h => hg t j h) (fun t d => hx t d trivial) (fun t j h => hy t j h) i hact
+      simp only [BlockState.readMemAs_real, R.round_real_apply, ← hm1, haddr, hval,
+        FloatDType.real_ofReal]
+    · -- the frame
+      intro r o hcond
+      refine hframe r o ?_
+      rcases hcond with hne | hno
+      · exact Or.inl hne
+      · refine Or.inr (fun i hba hact => ?_)
+        have haddr : s₀.pids 1 * ash
+              + (startLoc s₀ B_Start_Loc.cast + (s₀.pids 2 * BN + i.val)) * asbs
+            = outOffset s₀ B_Start_Loc.cast ash asbs BN i := by
+          simp only [outOffset, blockOffset]
+        have h := hno i ⟨by rw [← hm0]; exact hba,
+          by simpa only [active, blockOffset, hm0] using hact⟩
+        rw [← hm1, haddr] at h
+        exact h
+
+end IOFace
+
 end VeriTile.Bench.TritonBenchG.TokenAttnLlama2
