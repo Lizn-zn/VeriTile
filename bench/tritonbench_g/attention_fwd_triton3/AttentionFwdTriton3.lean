@@ -10173,6 +10173,722 @@ specification attention_fwd_triton3_case2_io_correctness (R : RoundingModel)
         have h := h1 (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) trivial hr
         simpa [Lane2D.encode_div, Lane2D.encode_mod] using h
 
+/-! # ══════════ The `⊨[R]` io headline — case 4 (₆ₓ₂ exemplar) ══════════
+
+The `StreamMasked3DKernelIO₆ₓ₂` face of the **case-4**
+(`(END,INIT,SLIDING_WINDOW,COMPLEMENT) = (1,0,1,0)`, cross-launch resume)
+kernel — the corpus's first io face whose **input channels alias its output
+channels**. Everything below is purely additive; the exact surfaces and the
+case-1/2/3 io faces above are untouched.
+
+**Why six channels.** With `INIT=0` the prologue does not seed `m_i`/`l_i`/
+`acc` with `(⊥, 1, 0)`; it *loads* them from the `M`, `L` and `Out` buffers
+(the running state left behind by the previous chunk launch). So the program
+reads six regions — `Q` (static tile), `K`/`V` (per-step tiles), and the
+`M`/`L`/`Out` resume rows — of radically non-uniform per-step widths
+(`BM·ND`, `ND·BN`, `BN·ND`, `BM`, `BM`, `BM·ND`), and writes two of them back.
+
+**Aliasing is honest here.** `out1 = Out = inp6` and `out2 = M = inp4`, so
+`A.regions` repeats two names. That is sound, exactly as the skin's docstring
+argues: `FlatAlloc.base` is a function of the region *name* (not a prefix sum
+over the `regions` list), so a repeated name denotes **one** segment rather
+than two; `A.Disjoint` only constrains pairs `r ≠ r'`, so it imposes nothing
+on a name against itself; and `A.decode` resolves an address by `find?`, i.e.
+by the first matching name, which is the same segment either way. Nothing in
+the obligation set confuses the two roles: the six input pins are stated on
+the **launch** state `s₀` (the incoming running state), while the two
+readbacks are stated on the **final** state `s'` (the outgoing running state).
+The frame clause still says only the two write windows moved, and those
+windows are literally the `inp4`/`inp6` read windows — which is precisely the
+resume semantics.
+
+`L` is **read-only** in case 4: its store sits in the dead `END=0` branch of
+`aft3PostLoopG`, so it appears as `inp5` only.
+
+Window transcription (all bases coincide at `base = pid₁/H·sqz + pid₁%H·sqh`,
+collapsed by the headline's `hskz`/`hskh`/`hsvz`/`hsvh`/`hsoz`/`hsoh`):
+
+* `read1` (`Q`, the **static** stream): lane `j = (i, e)` over `[BM, ND]`
+  reads `base + (pid₀·BM + i)·sqm + e·sqk`.
+* `read2` (`K`, advanced by `BN` columns per step): lane `j = (e, jL)` over
+  `[ND, BN]` reads `base + e·skk + (t·BN + jL)·skn`.
+* `read3` (`V`, advanced by `BN` rows per step): lane `j = (r, d)` over
+  `[BN, ND]` reads `base + (t·BN + r)·svk + d·svn`.
+* `read4` (`M` resume row, static): lane `i` reads `pid₁·ROUND_CTX + pid₀·BM + i`.
+* `read5` (`L` resume row, static): the same offset in `L`.
+* `read6` (`Out` resume tile, static): lane `j = (i, d)` over `[BM, ND]` reads
+  `base + (pid₀·BM + i)·som + d·son`.
+* `write1` (`Out`) = `read6`'s window; `write2` (`M`) = `read4`'s window.
+
+All six loads are unmasked, so every `maskᵢ` is `True`; both stores are
+unmasked too. `pid₂` is unused (2-D grid). `T = NKV_CTX / BN` is pid-free, so
+the skin's `pre` stays at its unconstrained default. Both output grids are the
+`.real` default (the store-side `.to(...)` cast is erased to the identity at
+translation), so no `hfp16` boundary appears. -/
+
+open scoped VeriTile.Triton.StreamMasked3DKernelIO₆ₓ₂
+
+set_option maxHeartbeats 4000000 in
+/-- Every case-4 preLoop statement is cast-free, statement-by-statement — the
+verbatim `aft3PreLoopG_stmt_castFree` walk with the `INIT` constexpr flipped
+`1 → 0`, so the collapse runs on the **load** branch (`m_i`/`l_i`/`acc` read
+back from `M`/`L`/`Out`) instead of the fresh ⊥/1/0 init. Both branches were
+already covered leaf-by-leaf; only which one is reduced changes. -/
+private theorem aft3PreLoopG_init0_stmt_castFree (R : RoundingModel)
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) :
+    ∀ st ∈ aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [aft3PreLoopG_init0, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- Q_block_ptr (`makeBlockPtrDynOffsets`): dedicated `mapM` mirror
+    simp only [stepStmtR, stepStmt,
+      aft3_evalOpR_mbpdo_castFree R Q (Op.ref TileDType.nat [] "q_offset") [N_CTX, ND] [BM, ND] [sqm, sqk]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM), Op.constNat 0] u
+        (by simp only [evalOpR, evalOp])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- O_block_ptr (`makeBlockPtrDynOffsets`): dedicated `mapM` mirror
+    simp only [stepStmtR, stepStmt,
+      aft3_evalOpR_mbpdo_castFree R Out (Op.ref TileDType.nat [] "o_offset") [ROUND_CTX, ND] [BM, ND] [som, son]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m") (Op.constNat BM), Op.constNat 0] u
+        (by simp only [evalOpR, evalOp])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- INIT `ifThenElse` (constexpr-false): collapse on the live resume-load branch
+    rw [aft3_ifThenElse_falseR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_zero_zero_false u),
+      aft3_ifThenElse_false (aft3_ne_zero_zero_false u)]
+    simp only [stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- IS_EVEN_M `ifThenElse` (constexpr-true): collapse on the live q-load only
+    rw [aft3_ifThenElse_trueR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_one_zero_true u),
+      aft3_ifThenElse_true (aft3_ne_one_zero_true u)]
+    simp only [stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+    rfl
+
+/-- The case-4 preLoop is cast-free: it steps identically under `stepStmtsR R`. -/
+private theorem aft3PreLoopG_init0_castFree (R : RoundingModel)
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (t : BlockState) :
+    stepStmtsR R (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN) t
+      = stepStmts (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN) t :=
+  aft3_stepStmtsR_castFree_of_stmts R _
+    (aft3PreLoopG_init0_stmt_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN) t
+
+set_option maxHeartbeats 4000000 in
+/-- The case-4 surface sits inside the flat-memory bridge's covered fragment
+(no `ptrSub`; the block-pointer ops are structurally covered). -/
+theorem aft3_flattenOkG4 (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) :
+    ((attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [aft3_body_splitG4]
+  simp [aft3PreLoopG_init0, aft3LoopBodyG, aft3PostLoopG, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-- **Streaming IO signature** of the case-4 (`(END,INIT,SW,CSW) = (1,0,1,0)`)
+`_attn_fwd` surface on the six-stream two-output attention fold skin. Channels
+4/5/6 are the `M`/`L`/`Out` resume rows; `out1 = Out = inp6` and
+`out2 = M = inp4` (see the section note on aliasing). -/
+def attentionFwdTriton3Case4IO (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) :
+    StreamMasked3DKernelIO₆ₓ₂ where
+  kernel := attention_fwd_triton3_surface Q K V M Out L sm_scale
+    sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+    Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  inp4 := M
+  inp5 := L
+  inp6 := Out
+  out1 := Out
+  out2 := M
+  T := NKV_CTX / BN
+  B1 := BM * ND
+  B2 := ND * BN
+  B3 := BN * ND
+  B4 := BM
+  B5 := BM
+  B6 := BM * ND
+  C1 := BM * ND
+  C2 := BM
+  read1 := fun p₀ p₁ _ _ j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + j.val / ND) * sqm + (j.val % ND) * sqk
+  read2 := fun _ p₁ _ t j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (j.val / BN) * skk + (t.val * BN + j.val % BN) * skn
+  read3 := fun _ p₁ _ t j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (t.val * BN + j.val / ND) * svk + (j.val % ND) * svn
+  read4 := fun p₀ p₁ _ _ j => p₁ * ROUND_CTX + (p₀ * BM + j.val)
+  read5 := fun p₀ p₁ _ _ j => p₁ * ROUND_CTX + (p₀ * BM + j.val)
+  read6 := fun p₀ p₁ _ _ j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + j.val / ND) * som + (j.val % ND) * son
+  write1 := fun p₀ p₁ _ j =>
+    (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + j.val / ND) * som + (j.val % ND) * son
+  write2 := fun p₀ p₁ _ j => p₁ * ROUND_CTX + (p₀ * BM + j.val)
+  mask1 := fun _ _ _ _ _ => True
+  mask2 := fun _ _ _ _ _ => True
+  mask3 := fun _ _ _ _ _ => True
+  mask4 := fun _ _ _ _ _ => True
+  mask5 := fun _ _ _ _ _ => True
+  mask6 := fun _ _ _ _ _ => True
+  writeMask1 := fun _ _ _ _ => True
+  writeMask2 := fun _ _ _ _ => True
+
+/-- The resume seed read off the (static) streams 4/5/6: row `i` takes its
+running max from the `M` stream, its running denominator from the `L` stream,
+and lane `(i, d)` its running accumulator from the `Out` stream. All three
+windows ignore `t`, so the step-`0` slice carries the whole seed. -/
+noncomputable def aft3IOseedT (BM ND T : Nat) (hT : 0 < T)
+    (x4s x5s : Fin T → Fin BM → ℝ) (x6s : Fin T → Fin (BM * ND) → ℝ) :
+    Fin BM → Fin ND → WithBot ℝ × ℝ × ℝ :=
+  fun i d =>
+    (((x4s ⟨0, hT⟩ i : ℝ) : WithBot ℝ), x5s ⟨0, hT⟩ i,
+      x6s ⟨0, hT⟩ (Lane2D.encode (i, d, PUnit.unit)))
+
+/-- `aft3Case4Seed` = the stream-indexed seed, under the `read4`/`read5`/`read6`
+pins. -/
+private theorem aft3IOseedT_eq (s₀ : BlockState) (M Out L : RegionName)
+    (base BM ND som son ROUND_CTX T : Nat) (hT : 0 < T)
+    (x4s x5s : Fin T → Fin BM → ℝ) (x6s : Fin T → Fin (BM * ND) → ℝ)
+    (h4 : ∀ (t : Fin T) (j : Fin BM),
+      s₀.readMem M (s₀.pids 1 * ROUND_CTX + (s₀.pids 0 * BM + j.val)) = x4s t j)
+    (h5 : ∀ (t : Fin T) (j : Fin BM),
+      s₀.readMem L (s₀.pids 1 * ROUND_CTX + (s₀.pids 0 * BM + j.val)) = x5s t j)
+    (h6 : ∀ (t : Fin T) (j : Fin (BM * ND)),
+      s₀.readMem Out (base + (s₀.pids 0 * BM + j.val / ND) * som + (j.val % ND) * son)
+        = x6s t j) :
+    aft3Case4Seed s₀ M Out L base BM ND som son ROUND_CTX
+      = aft3IOseedT BM ND T hT x4s x5s x6s := by
+  funext i d
+  simp only [aft3Case4Seed, aft3IOseedT, mlRow3G, outLane3G]
+  rw [h4 ⟨0, hT⟩ i, h5 ⟨0, hT⟩ i, ← h6 ⟨0, hT⟩ (Lane2D.encode (i, d, PUnit.unit))]
+  simp only [Lane2D.encode_div, Lane2D.encode_mod]
+
+/-- **Case-4 `Out` closed form on the streams**: the resume-seeded
+sliding-window online-softmax fold (exactly the exact headline's
+`attentionFwdTriton3Case4OutSpecG`, keep `natSlidingWindowKeepG`) restated over
+the six streamed tiles, at output lane `j = (i, d)` row-major over `[BM, ND]`.
+The seed is `aft3IOseedT` — the prior running state read off streams 4/5/6. -/
+noncomputable def attentionFwdTriton3Case4IOOutSpec (p₀ BM ND BN NC T : Nat)
+    (hND : 0 < ND) (hT : 0 < T) (hTB : T * BN = NC) (hBN : 0 < BN) (sc : ℝ)
+    (off size : Nat)
+    (x1s : Fin T → Fin (BM * ND) → ℝ) (x2s : Fin T → Fin (ND * BN) → ℝ)
+    (x3s : Fin T → Fin (BN * ND) → ℝ) (x4s x5s : Fin T → Fin BM → ℝ)
+    (x6s : Fin T → Fin (BM * ND) → ℝ) (j : Fin (BM * ND)) : ℝ :=
+  (aft3StateSeededG (aft3IOqT BM ND T hT x1s) (aft3IOkT ND BN NC T hTB hBN x2s)
+      (aft3IOvT ND BN NC T hTB hBN x3s) (keyScale3G sc NC)
+      (fun i j => natSlidingWindowKeepG p₀ BM BN off size i j)
+      (aft3IOseedT BM ND T hT x4s x5s x6s) NC
+      (Lane2D.decode j).1 (Lane2D.decode j).2.1).2.2
+    / (aft3StateSeededG (aft3IOqT BM ND T hT x1s) (aft3IOkT ND BN NC T hTB hBN x2s)
+      (aft3IOvT ND BN NC T hTB hBN x3s) (keyScale3G sc NC)
+      (fun i j => natSlidingWindowKeepG p₀ BM BN off size i j)
+      (aft3IOseedT BM ND T hT x4s x5s x6s) NC
+      (Lane2D.decode j).1 ⟨0, hND⟩).2.1
+
+/-- **Case-4 `M` closed form on the streams**: the raw
+`(m + log2 l).unbotD 0` finalize of the resume-seeded fold (exactly the exact
+headline's `attentionFwdTriton3Case4MSpecG`) restated over the six streamed
+tiles, at output row `i`. -/
+noncomputable def attentionFwdTriton3Case4IOMSpec (p₀ BM ND BN NC T : Nat)
+    (hND : 0 < ND) (hT : 0 < T) (hTB : T * BN = NC) (hBN : 0 < BN) (sc : ℝ)
+    (off size : Nat)
+    (x1s : Fin T → Fin (BM * ND) → ℝ) (x2s : Fin T → Fin (ND * BN) → ℝ)
+    (x3s : Fin T → Fin (BN * ND) → ℝ) (x4s x5s : Fin T → Fin BM → ℝ)
+    (x6s : Fin T → Fin (BM * ND) → ℝ) (i : Fin BM) : ℝ :=
+  (WithBot.realAdd
+      (aft3StateSeededG (aft3IOqT BM ND T hT x1s) (aft3IOkT ND BN NC T hTB hBN x2s)
+        (aft3IOvT ND BN NC T hTB hBN x3s) (keyScale3G sc NC)
+        (fun i j => natSlidingWindowKeepG p₀ BM BN off size i j)
+        (aft3IOseedT BM ND T hT x4s x5s x6s) NC i ⟨0, hND⟩).1
+      (WithBot.realLog2
+        (((aft3StateSeededG (aft3IOqT BM ND T hT x1s) (aft3IOkT ND BN NC T hTB hBN x2s)
+            (aft3IOvT ND BN NC T hTB hBN x3s) (keyScale3G sc NC)
+            (fun i j => natSlidingWindowKeepG p₀ BM BN off size i j)
+            (aft3IOseedT BM ND T hT x4s x5s x6s) NC i ⟨0, hND⟩).2.1 : ℝ)
+          : WithBot ℝ))).unbotD 0
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak case-4 preLoop**: from an **arbitrary** launch state (no
+clean-`undef` hypothesis) the case-4 preLoop steps to a state satisfying
+`aft3SafeInv … 0`. The `aft3PreLoop_evalW` script with the `INIT` branch
+swapped for `aft3_load_stepsG`; only the shape half is kept, so the loaded
+resume values appear as bare register witnesses. -/
+private theorem aft3PreLoop_evalW_init0
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh) :
+    ∃ s', stepStmts (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN) s = some s'
+      ∧ aft3SafeInv K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX 0 s' := by
+  obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp, hOp, hMptr, hLptr⟩ :=
+    aft3PreLoopScalarsG_eval Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+  rw [show aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+      = aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ++ (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16 from by
+    rw [show aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+        = (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).take 16 from rfl]
+    rw [List.take_append_drop]]
+  rw [stepStmts.append_some h11]
+  rw [show (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16
+      = [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)],
+          Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)),
+          Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+          Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") [0, 1]) MaskOpt.none)] ] from by rfl]
+  rw [stepStmts.cons_some
+    (show stepStmt _ s11 = some _ from by
+      rw [aft3_ifThenElse_false (aft3_ne_zero_zero_false s11),
+        aft3_load_stepsG s11 M Out L BM ND (s.pids 1 / H * sqz + s.pids 1 % H * sqh) som son ROUND_CTX
+          (by rw [hpids]; exact hMptr) (by rw [hpids]; exact hLptr) (by rw [hpids]; exact hOp)])]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)) _
+        = some (Tile.scalar (some (sm_scale * 1.0))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)) _
+        = some (Tile.scalar (some (sm_scale * 1.4426950408889634))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, evalOp_const, BlockState.setReg_same, Option.bind_eq_bind,
+        Option.bind_some]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]
+      refine congrArg some ?_; norm_num))]
+  rw [stepStmts.cons_some
+    (show stepStmt _ _ = some _ from by
+      rw [aft3_ifThenElse_true (aft3_ne_one_zero_true _)]
+      rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aft3_load_v_eval Q (s.pids 1 / H * sqz + s.pids 1 % H * sqh) N_CTX ND BM ND sqm sqk (s.pids 0 * BM)
+          (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") _
+          (by rw [evalOp_ref]
+              simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+                BlockState.setReg_same]
+              exact hQp)))]
+      rw [stepStmts.nil])]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by simp, Nat.zero_le _, ?_, ?_,
+    ⟨⟨fun idx : TileIndex [BM, ND] => some (s11.readMem Q
+        (s.pids 1 / H * sqz + s.pids 1 % H * sqh + (s.pids 0 * BM + idx.1.val) * sqm + idx.2.1.val * sqk))⟩, ?_⟩,
+    ⟨sm_scale * 1.4426950408889634, ?_⟩,
+    ⟨⟨fun r : TileIndex [BM] =>
+        some (s11.readMem M (s11.pids 1 * ROUND_CTX + (s11.pids 0 * BM + r.1.val)))⟩, ?_⟩,
+    ⟨⟨fun r : TileIndex [BM] =>
+        some (s11.readMem L (s11.pids 1 * ROUND_CTX + (s11.pids 0 * BM + r.1.val)))⟩, ?_⟩,
+    ⟨⟨fun idx : TileIndex [BM, ND] => some (s11.readMem Out
+        ((s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s11.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son))⟩, ?_⟩,
+    ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hstart]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hoffhz]
+  · simp only [BlockState.setReg_same]
+    refine congrArg some (Tile.ext fun idx => ?_)
+    simp only [BlockState.setReg_readMem]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hKp]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hVp]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hMptr]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hLptr]
+  · simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true,
+      BlockState.setReg_same]
+    rw [hOp]
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `TraceSafeR` walk for the whole case-4 kernel.** The case-1 walk
+(shared loop body `aft3LoopBodyG`, shared postLoop) with the prologue's `INIT`
+branch flipped: instead of a register-only init, the live branch performs the
+three resume **loads**, whose addresses are the `read4` (`M` row), `read5`
+(`L` row) and `read6` (`Out` tile) windows — i.e. literally the two write
+windows plus `L`'s row, so the discharge reuses the same bound groups. -/
+private theorem aft3_traceSafeR_case4 (R : RoundingModel) (bounds : RegionBounds)
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat) (s : BlockState)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hbQ : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (BM * ND)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + j.val / ND) * sqm + (j.val % ND) * sqk < bounds Q)
+    (hbK : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (ND * BN)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (j.val / BN) * skk + (t.val * BN + j.val % BN) * skn < bounds K)
+    (hbV : ∀ (t : Fin (NKV_CTX / BN)) (j : Fin (BN * ND)),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (t.val * BN + j.val / ND) * svk + (j.val % ND) * svn < bounds V)
+    (hbMin : ∀ j : Fin BM, s.pids 1 * ROUND_CTX + (s.pids 0 * BM + j.val) < bounds M)
+    (hbLin : ∀ j : Fin BM, s.pids 1 * ROUND_CTX + (s.pids 0 * BM + j.val) < bounds L)
+    (hbOin : ∀ j : Fin (BM * ND),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + j.val / ND) * som + (j.val % ND) * son < bounds Out)
+    (hbO : ∀ j : Fin (BM * ND),
+      (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + j.val / ND) * som + (j.val % ND) * son < bounds Out)
+    (hbM : ∀ j : Fin BM, s.pids 1 * ROUND_CTX + (s.pids 0 * BM + j.val) < bounds M) :
+    ((attention_fwd_triton3_surface Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0).toAlgKernel).TraceSafeR R bounds s := by
+  have hT : 0 < NKV_CTX / BN := Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN
+  unfold Kernel.TraceSafeR
+  rw [aft3_body_splitG4]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- the preLoop
+    obtain ⟨s11, h11, hpids, hmem, huf, hstart, hoffhz, hQp, hKp, hVp, hOp, hMptr, hLptr⟩ :=
+      aft3PreLoopScalarsG_eval Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+    rw [show aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+        = aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ++ (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16 from by
+      rw [show aft3PreLoopScalarsG Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+          = (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).take 16 from rfl]
+      rw [List.take_append_drop]]
+    refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+    · -- statements 0–15: register-only assigns, safe at every state
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
+      intro st hst u
+      simp only [aft3PreLoopScalarsG, aft3PreLoopG, List.take_succ_cons, List.take_zero,
+        List.mem_cons, List.not_mem_nil, or_false] at hst
+      rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+        rfl | rfl | rfl | rfl <;>
+        simp [Stmt.TraceSafeR, Op.SafeAtR]
+    · intro s1 hs1
+      rw [aft3PreLoopScalarsG_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s, h11] at hs1
+      obtain rfl := Option.some.inj hs1
+      rw [show (aft3PreLoopG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN).drop 16
+          = [ Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 0) (Op.constNat 0)) [Stmt.assign TileDType.real [BM] "m_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) Op.negInf)), Stmt.assign TileDType.real [BM] "l_i" ((Op.add NumericDType.real Broadcast.scalarR (Op.full [BM] (Op.const 0)) (Op.const 1.0))), Stmt.assign TileDType.real [BM, ND] "acc" (Op.full [BM, ND] (Op.const 0))] [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none), Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)],
+              Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.const sm_scale) (Op.const 1.0)),
+              Stmt.assign TileDType.real [] "qk_scale" (Op.mul NumericDType.real Broadcast.nil (Op.ref TileDType.real [] "qk_scale") (Op.const 1.4426950408889634)),
+              Stmt.ifThenElse (Op.ne ComparableDType.nat Broadcast.nil (Op.constNat 1) (Op.constNat 0)) [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") [0, 1]) MaskOpt.none)] ] from by rfl]
+      -- the INIT ifThenElse: the three resume loads (`read4`/`read5`/`read6`)
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun u1 hu1 => ?_)
+      · simp only [Stmt.TraceSafeR]
+        refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+        rw [aft3_evalOpR_ne_const, aft3_ne_zero_zero_false]
+        show Stmt.TraceSafeListR R bounds
+          [Stmt.assign TileDType.real [BM] "m_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "m_ptrs")) MaskOpt.none),
+           Stmt.assign TileDType.real [BM] "l_i" (Op.load TileDType.real (MemAccess.ptr (Op.ref TileDType.ptr [BM] "l_ptrs")) MaskOpt.none),
+           Stmt.assign TileDType.real [BM, ND] "acc" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "O_block_ptr") []) MaskOpt.none)] s11
+        -- `m_i = tl.load(m_ptrs)`: the `read4` window on `M`
+        refine Stmt.TraceSafeListR.cons_intro ?_ (fun v1 hv1 => ?_)
+        · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+            MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+          refine ⟨trivial, trivial, ?_⟩
+          intro ptrs hptrs r _
+          rw [evalOpR_ref, hMptr] at hptrs
+          obtain rfl := Option.some.inj hptrs
+          have hbound := hbMin r.1
+          simpa [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+            Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+            Broadcast.rightIndex_nil, NumericDType.add, Nat.zero_add] using hbound
+        obtain ⟨v1t, -, rfl⟩ := stepStmtR_assign_inv hv1
+        -- `l_i = tl.load(l_ptrs)`: the `read5` window on `L`
+        refine Stmt.TraceSafeListR.cons_intro ?_ (fun v2 hv2 => ?_)
+        · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+            MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+          refine ⟨trivial, trivial, ?_⟩
+          intro ptrs hptrs r _
+          rw [evalOpR_ref] at hptrs
+          simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+          rw [hLptr] at hptrs
+          obtain rfl := Option.some.inj hptrs
+          have hbound := hbLin r.1
+          simpa [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+            Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+            Broadcast.rightIndex_nil, NumericDType.add, Nat.zero_add] using hbound
+        obtain ⟨v2t, -, rfl⟩ := stepStmtR_assign_inv hv2
+        -- `acc = tl.load(O_block_ptr)`: the `read6` window on `Out`
+        refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+        simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+          MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+        refine ⟨trivial, trivial, ?_⟩
+        intro ptrs hptrs idx _
+        rw [evalOpR_ref] at hptrs
+        simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+        rw [hOp] at hptrs
+        obtain rfl := Option.some.inj hptrs
+        intro _
+        have hbound := hbOin (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+        simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+        simpa using hbound
+      rw [aft3_ifThenElse_falseR R (by rw [aft3_evalOpR_ne_const]; exact aft3_ne_zero_zero_false _)] at hu1
+      obtain ⟨w1, hw1, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨va, -, rfl⟩ := stepStmtR_assign_inv hw1
+      obtain ⟨w2, hw2, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨vb, -, rfl⟩ := stepStmtR_assign_inv hw2
+      obtain ⟨w3, hw3, hu1⟩ := aft3_stepStmtsR_cons_inv hu1
+      obtain ⟨vc, -, rfl⟩ := stepStmtR_assign_inv hw3
+      rw [stepStmtsR_nil] at hu1
+      obtain rfl := Option.some.inj hu1
+      -- qk_scale ×2 (register-only)
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u2 hu2 => ?_)
+      obtain ⟨vd, -, rfl⟩ := stepStmtR_assign_inv hu2
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun u3 hu3 => ?_)
+      obtain ⟨ve, -, rfl⟩ := stepStmtR_assign_inv hu3
+      -- the IS_EVEN_M ifThenElse: the live `Q_block_ptr` load (`read1` bound)
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+      rw [aft3_evalOpR_ne_const, aft3_ne_one_zero_true]
+      show Stmt.TraceSafeListR R bounds
+        [Stmt.assign TileDType.real [BM, ND] "q" (Op.load TileDType.real (MemAccess.blockPtr (Op.ref TileDType.blockPtr [BM, ND] "Q_block_ptr") []) MaskOpt.none)] _
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+        MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+      refine ⟨trivial, trivial, ?_⟩
+      intro ptrs hptrs idx _
+      rw [evalOpR_ref] at hptrs
+      simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+      rw [hQp] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      intro _
+      have hbound := hbQ ⟨0, hT⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+      simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+      simpa using hbound
+
+  · -- after the preLoop: the KV loop, then the postLoop
+    intro s2 hs2
+    obtain ⟨spW, hpreW, hinv0⟩ :=
+      aft3PreLoop_evalW_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+    rw [aft3PreLoopG_init0_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s, hpreW] at hs2
+    obtain rfl := Option.some.inj hs2
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 hs3 => ?_)
+    · -- the KV loop is trace-safe (invariant principle over `aft3SafeInv`)
+      simp only [Stmt.TraceSafeR]
+      refine Stmt.forRangeTraceSafeR_inv R bounds "start_n" NKV_CTX BN
+        (aft3LoopBodyG sm_scale off size BM ND BN)
+        (aft3SafeInv K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX) ?_ 0 spW hinv0
+      intro c st hc hP
+      refine ⟨aft3_bodySafeW1 R bounds K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP hbK hbV, ?_⟩
+      obtain ⟨st', hstep, hP'⟩ :=
+        aft3_attn_stepW1 K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP
+      exact ⟨st', by rw [aft3LoopBodyG_castFree]; exact hstep, hP'⟩
+    · -- identify the post-loop state and finish on the postLoop stores
+      obtain ⟨final, sfin, hLoop, hfinal, hPfin⟩ :=
+        forRange_inv (idx := "start_n") (start := 0) (stop := NKV_CTX) (step := BN)
+          (body := aft3LoopBodyG sm_scale off size BM ND BN)
+          (P := aft3SafeInv K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX)
+          (s_init := spW) hBN.ne' hinv0
+          (fun c st hc hP =>
+            aft3_attn_stepW1 K V M Out L s sm_scale (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX off size hBN hBNdvd c st hc hP)
+      rw [show stepStmtR R (Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG sm_scale off size BM ND BN)) spW = some sfin from by
+        rw [stepStmtR_forRange,
+          stepForRangeAuxR_castFree R _ (aft3LoopBodyG_castFree R sm_scale off size BM ND BN) "start_n",
+          ← stepForRangeAux.forRange_unfold]
+        exact hLoop] at hs3
+      obtain rfl := Option.some.inj hs3
+      exact aft3_postSafeW R bounds K V M Out L s (s.pids 1 / H * sqz + s.pids 1 % H * sqh) BM ND NKV_CTX BN skk skn svk svn som son ROUND_CTX final sfin hPfin hbO hbM
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The case-4 `⊨[R]` io headline (`INIT=0` cross-launch resume).** For every
+rounding model `R`, the case-4
+(`(END,INIT,SLIDING_WINDOW,COMPLEMENT) = (1,0,1,0)`) `_attn_fwd` surface
+implements, on its `StreamMasked3DKernelIO₆ₓ₂` signature, the **ideal-ℝ
+resume-seeded sliding-window online-softmax attention fold** over the six
+streamed tiles: output lane `j = (i, d)` of `Out` holds the window-filtered
+base-2 per-key-scale fold started from the loaded running state
+(`attentionFwdTriton3Case4IOOutSpec` = the existing
+`attentionFwdTriton3Case4OutSpecG` closed form restated on the streams, with
+the seed `aft3IOseedT` read off streams 4/5/6), and row `i` of `M` holds the
+raw `(m + log2 l).unbotD 0` finalize of that same fold
+(`attentionFwdTriton3Case4IOMSpec` = `attentionFwdTriton3Case4MSpecG` on the
+streams). Both output grids are the `.real` default, so at every `R` the
+terminal cells carry the exact fold values.
+
+**Aliasing** (the point of this exemplar): `inp6 = out1 = Out` and
+`inp4 = out2 = M`, so the skin's region list repeats two names. See the
+section note above for why that is sound — one name, one segment; the input
+pins read `s₀` while the readbacks read `s'`; the frame still says only the
+two write windows moved. `L` (`inp5`) is read-only in case 4, its store
+living in the dead `END=0` branch.
+
+**Hypothesis provenance** (inherited verbatim from the exact case-4 headline
+`attention_fwd_triton3_python_case4_output_summary_general`, all
+truth-forced): `0 < ND/BM/BN/NKV_CTX` and `BN ∣ NKV_CTX` shape the KV walk
+(`T = NKV_CTX / BN` full blocks); `0 < H`, `H_KV = H` and the six stride
+equalities collapse the four plane offsets onto the shared base
+`pid₁/H·sqz + pid₁%H·sqh`; `M ≠ Out` keeps the `O` store off the `M` row;
+`hinjO`/`hinjM` (∀-pids forms of the exact stack's per-program injectivity)
+make the scatter readbacks well-defined. The exact headline's `hundef` is not
+a hypothesis — the skin's Hoare triple carries the `undef` pin itself.
+
+**Scope**: with this headline all **four** constexpr cases of the file carry
+`⊨[R]` io faces. The port's known fidelity gaps (`IS_EVEN_N = 1` hardwired,
+casts erased to identity, `@triton.heuristics` not modeled) are inherited
+as-is from the surface. -/
+specification attention_fwd_triton3_case4_io_correctness (R : RoundingModel)
+    (Q K V M Out L : RegionName) (sm_scale : ℝ)
+    (sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN : Nat)
+    (hND : 0 < ND) (hBM : 0 < BM) (hBN : 0 < BN) (hNC : 0 < NKV_CTX) (hBNdvd : BN ∣ NKV_CTX)
+    (hH : 0 < H) (hHKV : H_KV = H)
+    (hskz : skz = sqz) (hskh : skh = sqh) (hsvz : svz = sqz) (hsvh : svh = sqh)
+    (hsoz : soz = sqz) (hsoh : soh = sqh)
+    (hMO : M ≠ Out)
+    (hinjO : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BM, ND] =>
+        (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + idx.1.val) * som + idx.2.1.val * son))
+    (hinjM : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun r : TileIndex [BM] => p₁ * ROUND_CTX + (p₀ * BM + r.1.val))) :
+    attentionFwdTriton3Case4IO Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN ⊨[R]
+      fun p₀ _ _ x1s x2s x3s x4s x5s x6s =>
+        (fun j => attentionFwdTriton3Case4IOOutSpec p₀ BM ND BN NKV_CTX (NKV_CTX / BN) hND
+            (Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN) (Nat.div_mul_cancel hBNdvd) hBN
+            (sm_scale * 1.4426950408889634) off size x1s x2s x3s x4s x5s x6s j,
+         fun i => attentionFwdTriton3Case4IOMSpec p₀ BM ND BN NKV_CTX (NKV_CTX / BN) hND
+            (Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN) (Nat.div_mul_cancel hBNdvd) hBN
+            (sm_scale * 1.4426950408889634) off size x1s x2s x3s x4s x5s x6s i) := by
+  have hT : 0 < NKV_CTX / BN := Nat.div_pos (Nat.le_of_dvd hNC hBNdvd) hBN
+  have hTB : NKV_CTX / BN * BN = NKV_CTX := Nat.div_mul_cancel hBNdvd
+  refine StreamMasked3DKernelIO₆ₓ₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact aft3_flattenOkG4 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN
+  · -- the safety walk
+    intro bounds s x1s x2s x3s x4s x5s x6s _hlaunch _hx1 _hx2 _hx3 _hx4 _hx5 _hx6
+      hbr1 hbr2 hbr3 hbr4 hbr5 hbr6 hbw1 hbw2
+    simp only [attentionFwdTriton3Case4IO] at hbr1 hbr2 hbr3 hbr4 hbr5 hbr6 hbw1 hbw2 ⊢
+    exact aft3_traceSafeR_case4 R bounds Q K V M Out L sm_scale
+      sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+      Z H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s hH hHKV hskz hskh hsvz hsvh hsoz hsoh
+      hBN hNC hBNdvd
+      (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial)
+      (fun t j => hbr3 t j trivial) (fun j => hbr4 ⟨0, hT⟩ j trivial)
+      (fun j => hbr5 ⟨0, hT⟩ j trivial) (fun j => hbr6 ⟨0, hT⟩ j trivial)
+      (fun j => hbw1 j trivial) (fun j => hbw2 j trivial)
+  · -- the rounded Hoare triple: exact seeded invariant stack + cast-free collapses
+    intro s₀ x1s x2s x3s x4s x5s x6s _hlaunch hu hx1 hx2 hx3 hx4 hx5 hx6
+    simp only [attentionFwdTriton3Case4IO] at hx1 hx2 hx3 hx4 hx5 hx6 ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
+    set base := s₀.pids 1 / H * sqz + s₀.pids 1 % H * sqh with hbase
+    set sc := sm_scale * 1.4426950408889634 with hsc
+    set seed := aft3Case4Seed s₀ M Out L base BM ND som son ROUND_CTX with hseed
+    have hseednebot : ∀ i d, (seed i d).1 ≠ ⊥ := fun i d => WithBot.coe_ne_bot
+    have hseedfst : ∀ (r : Fin BM) (d d' : Fin ND), (seed r d).1 = (seed r d').1 :=
+      fun r d d' => rfl
+    obtain ⟨sp, hpre, hinv0⟩ :=
+      aft3PreLoop_evalG_init0 Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s₀ hND hH hHKV hskz hskh hsvz hsvh hsoz hsoh (fun i j => natSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) hundef'
+    obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+      forRange_inv (idx := "start_n") (start := 0) (stop := NKV_CTX) (step := BN)
+        (body := aft3LoopBodyG sm_scale off size BM ND BN)
+        (P := fun i st => attnInvariantSeededG Q K V M Out L s₀ base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc (fun i j => natSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) seed i st)
+        (s_init := sp)
+        hBN.ne'
+        hinv0
+        (fun i st hi hP => aft3_attn_step1_seededG Q K V M Out L s₀ base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX off size hND hBM hBN hBNdvd sc seed hseednebot hseedfst i st hi
+          (by obtain ⟨_, hmod, _, _⟩ := hP; exact hmod) hP)
+    have hfinal : final = NKV_CTX := by
+      obtain ⟨_, hmod, hle, _⟩ := hinvL
+      rcases Nat.lt_or_ge final NKV_CTX with h | h
+      · exact absurd h (by simpa using hfin)
+      · exact Nat.le_antisymm hle h
+    subst final
+    obtain ⟨sF, hpost, hO, hM⟩ :=
+      aft3PostLoop_eval_seededG Q K V M Out L s₀ sL base BM ND NKV_CTX BN sqm sqk skn skk svk svn som son ROUND_CTX hND sc hMO (fun i j => natSlidingWindowKeepG (s₀.pids 0) BM BN off size i j) seed
+        (hinjO (s₀.pids 0) (s₀.pids 1)) (hinjM (s₀.pids 0) (s₀.pids 1)) hinvL
+    obtain ⟨hpidsL, _, _, _, _, _, _, _, _, _, _, _, hMptrL, _, hOpL, _, hmemL⟩ := hinvL
+    have hframe := aft3PostLoop_frameW M Out L s₀ base BM ND som son ROUND_CTX sL sF hMptrL hOpL hpost
+    refine ⟨sF, ?_, ?_, ?_, ?_⟩
+    · -- termination under `execR R` (everything cast-free)
+      show execR R (attention_fwd_triton3_surface Q K V M Out L sm_scale
+        sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son
+        Z H H_KV N_CTX ROUND_CTX NKV_CTX off size 1 1 BM ND BN 1 0 1 0).toAlgKernel s₀ = some sF
+      unfold execR
+      rw [aft3_body_splitG4, stepStmtsR_append,
+        aft3PreLoopG_init0_castFree R Q K V M Out L sm_scale sqz sqh sqm sqk skz skh skn skk svz svh svk svn soz soh som son H H_KV N_CTX ROUND_CTX NKV_CTX off size BM ND BN s₀,
+        hpre, Option.bind_some,
+        stepStmtsR_cons_some (show stepStmtR R (Stmt.forRange "start_n" 0 NKV_CTX BN (aft3LoopBodyG sm_scale off size BM ND BN)) sp = some sL from by
+          rw [stepStmtR_forRange,
+            stepForRangeAuxR_castFree R _ (aft3LoopBodyG_castFree R sm_scale off size BM ND BN) "start_n",
+            ← stepForRangeAux.forRange_unfold]
+          exact hloop),
+        aft3PostLoopG_castFree R M Out L BM ND sL]
+      exact hpost
+    · -- Out readback = the streamed resume-seeded closed form
+      intro j _
+      have hOj := hO (Lane2D.decode j)
+      rw [show base + (s₀.pids 0 * BM + (Lane2D.decode j).1.val) * som + (Lane2D.decode j).2.1.val * son
+          = base + (s₀.pids 0 * BM + j.val / ND) * som + (j.val % ND) * son from by
+        simp only [Lane2D.decode_row, Lane2D.decode_col]] at hOj
+      rw [BlockState.readMemAs_real, hOj, hseed,
+        aft3IOqT_eq s₀ Q base sqm sqk BM ND (NKV_CTX / BN) hT x1s (fun t j' => hx1 t j' trivial),
+        aft3IOkT_eq s₀ K base skn skk ND BN NKV_CTX (NKV_CTX / BN) hTB hBN x2s (fun t j' => hx2 t j' trivial),
+        aft3IOvT_eq s₀ V base svk svn ND BN NKV_CTX (NKV_CTX / BN) hTB hBN x3s (fun t j' => hx3 t j' trivial),
+        aft3IOseedT_eq s₀ M Out L base BM ND som son ROUND_CTX (NKV_CTX / BN) hT x4s x5s x6s
+          (fun t j' => hx4 t j' trivial) (fun t j' => hx5 t j' trivial)
+          (fun t j' => hx6 t j' trivial)]
+      unfold attentionFwdTriton3Case4IOOutSpec
+      simp [FloatDType.ofReal]
+    · -- M readback = the streamed raw finalize
+      intro i _
+      rw [BlockState.readMemAs_real, hM i, hseed,
+        aft3IOqT_eq s₀ Q base sqm sqk BM ND (NKV_CTX / BN) hT x1s (fun t j' => hx1 t j' trivial),
+        aft3IOkT_eq s₀ K base skn skk ND BN NKV_CTX (NKV_CTX / BN) hTB hBN x2s (fun t j' => hx2 t j' trivial),
+        aft3IOvT_eq s₀ V base svk svn ND BN NKV_CTX (NKV_CTX / BN) hTB hBN x3s (fun t j' => hx3 t j' trivial),
+        aft3IOseedT_eq s₀ M Out L base BM ND som son ROUND_CTX (NKV_CTX / BN) hT x4s x5s x6s
+          (fun t j' => hx4 t j' trivial) (fun t j' => hx5 t j' trivial)
+          (fun t j' => hx6 t j' trivial)]
+      unfold attentionFwdTriton3Case4IOMSpec
+      simp [FloatDType.ofReal]
+    · -- the frame: cells outside the two write windows are untouched
+      intro r oo hcond
+      obtain ⟨h1, h2⟩ := hcond
+      rw [hframe r oo ?_ ?_, hmemL]
+      · intro hr i
+        exact fun hoo => h2 i trivial hr hoo
+      · intro hr idx
+        have h := h1 (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) trivial hr
+        simpa [Lane2D.encode_div, Lane2D.encode_mod] using h
+
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.AttentionFwdTriton3

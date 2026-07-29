@@ -946,13 +946,16 @@ theorem flashKeysUpto_full_causal
   intro j _
   simp [j.isLt]
 
-/-- The full-window non-causal final state reads off `flashAttnOValueSpec`. -/
+/-- The full-window non-causal final state reads off `flashAttnOValueSpec`.
+The row origin `qS` is a free parameter: at `causal = false` the `qStart` slot of
+`flashKeysUpto` is inert (its guard is `j < hi ∧ (causal → j ≤ qStart + i)`), so
+the statement holds for every block row, not just `qS = 0`. -/
 theorem flashState_full_eq_spec
     (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ)
-    (stride_q_head : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    (stride_q_head qS : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
     (let st := flashState (qTile s Q stride_q_head DIM BLOCK_M)
         (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
-        (sm_scale * log2e) Bool.false 0 SEQLEN i d
+        (sm_scale * log2e) Bool.false qS SEQLEN i d
      st.2.2 / st.2.1)
       = flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
           (i, d, PUnit.unit) := by
@@ -1568,22 +1571,24 @@ theorem flashStateBot_ratio_eq
         mul_div_mul_left _ _ (ne_of_gt (pow2_pos _))]
 
 /-- **The full-window non-causal ⊥-seeded final state reads off the closed-form
-spec.** `flashStateBot.acc / flashStateBot.denom = flashAttnOValueSpec`. -/
+spec.** `flashStateBot.acc / flashStateBot.denom = flashAttnOValueSpec`.
+As with `flashState_full_eq_spec`, the row origin `qS` is a free parameter — the
+non-causal key window does not depend on it. -/
 theorem flashStateBot_full_eq_spec
     (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ)
-    (stride_q_head : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (stride_q_head qS : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
     (hne : flashRunningMax (qTile s Q stride_q_head DIM BLOCK_M)
         (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
-        (sm_scale * log2e) Bool.false 0 SEQLEN i d ≠ ⊥) :
+        (sm_scale * log2e) Bool.false qS SEQLEN i d ≠ ⊥) :
     (let st := flashStateBot (qTile s Q stride_q_head DIM BLOCK_M)
         (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
-        (sm_scale * log2e) Bool.false 0 SEQLEN i d
+        (sm_scale * log2e) Bool.false qS SEQLEN i d
      st.2.2 / st.2.1)
       = flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
           (i, d, PUnit.unit) := by
   simp only
   rw [flashStateBot_ratio_eq _ _ _ _ _ _ _ _ _ hne]
-  exact flashState_full_eq_spec s Q K V sm_scale stride_q_head i d
+  exact flashState_full_eq_spec s Q K V sm_scale stride_q_head qS i d
 
 /-- **The full-window causal ⊥-seeded final state reads off the causal spec.** -/
 theorem flashStateBot_full_eq_spec_causal
@@ -3550,14 +3555,13 @@ theorem flash_vtiles_eq_of_mem_pids (s s' : BlockState) (R : RegionName)
 
 set_option maxHeartbeats 1000000 in
 /-- **Invariant base case at the loop-entry state.** The preLoop output state
-`sp` (program-id grid `start_m = 0`, mem/undef preserved) satisfies
+`sp` (any program-id grid, mem/undef preserved) satisfies
 `attnInvariant … 0 sp` with `sp` as its own anchor `s0`: the `⊥`/`0`/`0`
 running-state inits read off `flashRunningMax/flashStateBot` at the empty window,
 the index vectors / block pointers / scalars are set, all by the `*_zero` lemmas. -/
 theorem flash_attn_invariant_zero
     (Q K V : RegionName) (s sp : BlockState) (sm_scale : ℝ) (IS_CAUSAL : Bool)
     (hDIM : 0 < 64) (hiTotal : Nat) (hhimod : hiTotal % 64 = 0)
-    (hpid0 : sp.pids 0 = 0)
     (hpids : sp.pids = s.pids) (hmem : sp.mem = s.mem) (hundef : ∀ rg o, sp.undef rg o = 0)
     (hbsh : sp.regs .nat [] "off_bs_head" = some (Tile.scalar (s.pids 1)))
     (hqkv : sp.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s.pids 1 * 8192)))
@@ -3582,7 +3586,6 @@ theorem flash_attn_invariant_zero
             blockShape := [128, 64], strides := [64, 1], offsets := [s.pids 0 * 128, 0] }⟩))
     (hsm : sp.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))) :
     attnInvariant Q K V sp sm_scale 8192 128 128 64 64 hiTotal IS_CAUSAL hDIM 0 sp := by
-  have hpid0' : s.pids 0 = 0 := by rw [← hpids]; exact hpid0
   have hbaseEq : flashBaseOffset sp 8192 = sp.pids 1 * 8192 := by simp [flashBaseOffset]
   have hpids1 : sp.pids 1 = s.pids 1 := by rw [hpids]
   unfold attnInvariant
@@ -3604,7 +3607,7 @@ theorem flash_attn_invariant_zero
   · rw [hon]
   · rw [hKp, hbaseEq, hpids1]
   · rw [hVp, hbaseEq, hpids1]
-  · rw [hQp, hbaseEq, hpids1]; rw [show sp.pids 0 = 0 from hpid0, hpid0']
+  · rw [hQp, hbaseEq, hpids1, hpids]
   · rw [hsm, hpids]
   · rw [hbsh, hpids1]
   · rw [hqkv, hpids1]
@@ -3614,12 +3617,14 @@ theorem flash_attn_invariant_zero
 set_option maxHeartbeats 1000000 in
 set_option maxRecDepth 8000 in
 /-- **Full-kernel execution chain.** Running the lowered flash-attn body
-(preLoop 16 + `forRangeDyn` loop + postLoop 5) from a clean state `s` with grid
-`start_m = 0` reaches a final state `sF` whose `O` store holds the genuine
+(preLoop 16 + `forRangeDyn` loop + postLoop 5) from a clean state `s` whose loop
+window covers the whole sequence (`flashHi s IS_CAUSAL = 128`; non-causal this is
+definitional, causal it says `(start_m + 1) · 128 = 128`) reaches a final state
+`sF` whose `O` store holds the genuine
 closed-form attention ratio (`flashAttnOValueSpec{,Causal}`) at every output lane
 and whose `L` store holds the genuine log-sum-exp at every row lane. -/
 theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hHi : flashHi s IS_CAUSAL = 128) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ∃ sF, stepStmts (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
         16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
         2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body s = some sF
@@ -3654,12 +3659,10 @@ theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : B
             (Op.constNat 64) (flashLoopBody IS_CAUSAL) :: flashPostLoop L O from by
     rw [flashLoopBody_check, flashPostLoop_check]]
   -- the loop-entry invariant at counter 0
-  have hflashHi : flashHi s IS_CAUSAL = 128 := by
-    simp only [flashHi, hpid0]; cases IS_CAUSAL <;> simp
   have hinv0 : attnInvariant Q K V sp (1.0 : ℝ) 8192 128 128 64 64 128 IS_CAUSAL
       (by norm_num) 0 sp :=
     flash_attn_invariant_zero Q K V s sp (1.0 : ℝ) IS_CAUSAL (by norm_num) 128
-      (by norm_num) (by rw [hsppids, hpid0]) hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
+      (by norm_num) hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
       hom hon hKp hVp hQp hsm
   -- run the forRangeDyn loop via forRangeDyn_inv with P = attnInvariant
   obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
@@ -3670,7 +3673,7 @@ theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : B
         (by norm_num) i st)
       (s_init := sp)
       (by rw [evalOp_ref, hlo])
-      (by rw [evalOp_ref, hhi, hflashHi])
+      (by rw [evalOp_ref, hhi, hHi])
       (by rw [evalOp_constNat])
       (by norm_num)
       hinv0
@@ -3700,11 +3703,10 @@ theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : B
     cases IS_CAUSAL
     · -- non-causal: qStart irrelevant, window = SEQLEN
       simp only [Bool.false_eq_true, if_false]
-      rw [show s.pids 0 * 128 = 0 from by rw [hpid0]]
       have hne : flashRunningMax (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
-          (vTile s V 8192 64 128) (1.0 * log2e) Bool.false 0 128 idx.1 idx.2.1 ≠ ⊥ :=
+          (vTile s V 8192 64 128) (1.0 * log2e) Bool.false (s.pids 0 * 128) 128 idx.1 idx.2.1 ≠ ⊥ :=
         flashRunningMax_ne_bot (SEQLEN := 128) _ _ _ _ _ _ _ _ _ (by norm_num) (by norm_num)
-      exact flashStateBot_full_eq_spec s Q K V (1.0 : ℝ) 8192 idx.1 idx.2.1 hne
+      exact flashStateBot_full_eq_spec s Q K V (1.0 : ℝ) 8192 (s.pids 0 * 128) idx.1 idx.2.1 hne
     · simp only [if_true]
       have hne : flashRunningMax (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
           (vTile s V 8192 64 128) (1.0 * log2e) Bool.true (s.pids 0 * 128) 128 idx.1 idx.2.1 ≠ ⊥ :=
@@ -3739,7 +3741,8 @@ theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : B
 The whole-kernel `O` store realizes the genuine base-2 attention closed form
 (`flashAttnOValueSpec{,Causal}` — the streaming-softmax output of the loaded
 Q/K/V tiles, NOT the kernel's own executed output) and the `L` store realizes the
-genuine log-sum-exp. For the checked Python grid `start_m = 0`, both causal cases. -/
+genuine log-sum-exp. For any grid whose loop window covers the sequence
+(`flashHi s IS_CAUSAL = 128`), both causal cases. -/
 
 set_option maxHeartbeats 1000000 in
 /-- **Genuine `O`-store correctness** (both causal cases). Every output lane of
@@ -3747,7 +3750,7 @@ the FlashAttention kernel holds the closed-form base-2 attention ratio of the
 loaded tiles. -/
 theorem flash_attn_genuine_output_compute_correct
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hHi : flashHi s IS_CAUSAL = 128) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
         16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
@@ -3766,7 +3769,7 @@ theorem flash_attn_genuine_output_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro idx
-  obtain ⟨sF, hstep, hO, _⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hpid0 hOL hundef
+  obtain ⟨sF, hstep, hO, _⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hHi hOL hundef
   rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_memcell]
@@ -3780,7 +3783,7 @@ FlashAttention kernel holds the closed-form log-sum-exp
 `log2 (Σ_j pow2 (scoreⱼ))` of the (causally filtered) per-key base-2 scores. -/
 theorem flash_attn_genuine_l_compute_correct
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hHi : flashHi s IS_CAUSAL = 128) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
         16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
@@ -3797,7 +3800,7 @@ theorem flash_attn_genuine_l_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro i
-  obtain ⟨sF, hstep, _, hLrb⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hpid0 hOL hundef
+  obtain ⟨sF, hstep, _, hLrb⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hHi hOL hundef
   rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_real]
@@ -4815,7 +4818,6 @@ theorem flash_attn_invariant_zeroG
     (Q K V : RegionName) (s sp : BlockState) (sm_scale : ℝ) (IS_CAUSAL : Bool)
     (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat) (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N)
     (hiTotal : Nat) (hhimod : hiTotal % BLOCK_N = 0)
-    (hpid0 : sp.pids 0 = 0)
     (hpids : sp.pids = s.pids) (hmem : sp.mem = s.mem) (hundef : ∀ rg o, sp.undef rg o = 0)
     (hbsh : sp.regs .nat [] "off_bs_head" = some (Tile.scalar (s.pids 1)))
     (hqkv : sp.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s.pids 1 * stride_q_head)))
@@ -4840,7 +4842,6 @@ theorem flash_attn_invariant_zeroG
             blockShape := [BLOCK_M, DIM], strides := [DIM, 1], offsets := [s.pids 0 * BLOCK_M, 0] }⟩))
     (hsm : sp.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))) :
     attnInvariant Q K V sp sm_scale stride_q_head SEQLEN BLOCK_M DIM BLOCK_N hiTotal IS_CAUSAL hDIM 0 sp := by
-  have hpid0' : s.pids 0 = 0 := by rw [← hpids]; exact hpid0
   have hbaseEq : flashBaseOffset sp stride_q_head = sp.pids 1 * stride_q_head := by simp [flashBaseOffset]
   have hpids1 : sp.pids 1 = s.pids 1 := by rw [hpids]
   unfold attnInvariant
@@ -4862,7 +4863,7 @@ theorem flash_attn_invariant_zeroG
   · rw [hon]
   · rw [hKp, hbaseEq, hpids1]
   · rw [hVp, hbaseEq, hpids1]
-  · rw [hQp, hbaseEq, hpids1]; rw [show sp.pids 0 = 0 from hpid0, hpid0']
+  · rw [hQp, hbaseEq, hpids1, hpids]
   · rw [hsm, hpids]
   · rw [hbsh, hpids1]
   · rw [hqkv, hpids1]
@@ -5402,7 +5403,7 @@ theorem flash_attn_exec_general (Q K V L O : RegionName) (s : BlockState) (IS_CA
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hHi : flashHiG s IS_CAUSAL SEQLEN BLOCK_M = SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ∃ sF, stepStmts (flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
         sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N IS_CAUSAL).toAlgKernel.body s = some sF
@@ -5430,7 +5431,7 @@ theorem flash_attn_exec_general (Q K V L O : RegionName) (s : BlockState) (IS_CA
       hDIM 0 sp :=
     flash_attn_invariant_zeroG Q K V s sp sm_scale IS_CAUSAL stride_q_head SEQLEN BLOCK_M DIM BLOCK_N hDIM hBN SEQLEN
       (by obtain ⟨k, hk⟩ := hdvd; rw [hk, Nat.mul_mod_right])
-      (by rw [hsppids, hpid0]) hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
+      hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
       hom hon hKp hVp hQp hsm
   -- run the forRangeDyn loop via forRangeDyn_inv with P = attnInvariant
   obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
@@ -5468,12 +5469,12 @@ theorem flash_attn_exec_general (Q K V L O : RegionName) (s : BlockState) (IS_CA
         flash_ktiles_eq_of_mem_pids s sp K hspmem hsppids stride_q_head DIM SEQLEN,
         flash_vtiles_eq_of_mem_pids s sp V hspmem hsppids stride_q_head DIM SEQLEN]
     cases IS_CAUSAL
-    · simp only [Bool.false_eq_true, if_false]
-      rw [show s.pids 0 * BLOCK_M = 0 from by rw [hpid0, Nat.zero_mul]]
+    · -- non-causal: the row origin `qStart = pid₀·BLOCK_M` is inert in the key window
+      simp only [Bool.false_eq_true, if_false]
       have hne : flashRunningMax (qTile s Q stride_q_head DIM BLOCK_M) (kTile s K stride_q_head DIM SEQLEN)
-          (vTile s V stride_q_head DIM SEQLEN) (sm_scale * log2e) Bool.false 0 SEQLEN idx.1 idx.2.1 ≠ ⊥ :=
+          (vTile s V stride_q_head DIM SEQLEN) (sm_scale * log2e) Bool.false (s.pids 0 * BLOCK_M) SEQLEN idx.1 idx.2.1 ≠ ⊥ :=
         flashRunningMax_ne_bot _ _ _ _ _ _ _ _ _ hSEQ hSEQ
-      exact flashStateBot_full_eq_spec s Q K V sm_scale stride_q_head idx.1 idx.2.1 hne
+      exact flashStateBot_full_eq_spec s Q K V sm_scale stride_q_head (s.pids 0 * BLOCK_M) idx.1 idx.2.1 hne
     · simp only [if_true]
       have hne : flashRunningMax (qTile s Q stride_q_head DIM BLOCK_M) (kTile s K stride_q_head DIM SEQLEN)
           (vTile s V stride_q_head DIM SEQLEN) (sm_scale * log2e) Bool.true (s.pids 0 * BLOCK_M) SEQLEN idx.1 idx.2.1 ≠ ⊥ :=
@@ -5510,7 +5511,7 @@ specification flash_attn_genuine_output_compute_correct_general
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hHi : flashHiG s IS_CAUSAL SEQLEN BLOCK_M = SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
@@ -5531,7 +5532,7 @@ specification flash_attn_genuine_output_compute_correct_general
   intro idx
   obtain ⟨sF, hstep, hO, _⟩ := flash_attn_exec_general Q K V L O s IS_CAUSAL sm_scale
     stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-    hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+    hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
   rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_memcell]
@@ -5549,7 +5550,7 @@ specification flash_attn_genuine_l_compute_correct_general
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hHi : flashHiG s IS_CAUSAL SEQLEN BLOCK_M = SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
@@ -5568,7 +5569,7 @@ specification flash_attn_genuine_l_compute_correct_general
   intro i
   obtain ⟨sF, hstep, _, hLrb⟩ := flash_attn_exec_general Q K V L O s IS_CAUSAL sm_scale
     stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-    hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+    hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
   rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_real]
@@ -5583,7 +5584,7 @@ specification flash_attn_python_case1_genuine_compute_correct_general
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hAlign : (s.pids 0 + 1) * BLOCK_M = SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
@@ -5609,11 +5610,11 @@ specification flash_attn_python_case1_genuine_compute_correct_general
   refine ⟨?_, ?_⟩
   · have h := flash_attn_genuine_output_compute_correct_general Q K V L O s Bool.true sm_scale
       stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-      hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+      hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
     simpa using h
   · exact flash_attn_genuine_l_compute_correct_general Q K V L O s Bool.true sm_scale
       stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-      hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+      hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
 
 /-- **Python case 2 (non-causal) GENERAL genuine closed-form correctness.** -/
 specification flash_attn_python_case2_genuine_compute_correct_general
@@ -5622,7 +5623,7 @@ specification flash_attn_python_case2_genuine_compute_correct_general
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
@@ -5648,11 +5649,1746 @@ specification flash_attn_python_case2_genuine_compute_correct_general
   refine ⟨?_, ?_⟩
   · have h := flash_attn_genuine_output_compute_correct_general Q K V L O s Bool.false sm_scale
       stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-      hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+      hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
     simpa using h
   · exact flash_attn_genuine_l_compute_correct_general Q K V L O s Bool.false sm_scale
       stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-      hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+      hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
+
+
+/-! # ══════════ The `⊨[R]` io headline — `StreamMasked3DKernelIO₃ₓ₂` (non-causal) ══════════
+
+The three-stream / two-terminal-store face of the FlashAttention forward
+surface at `IS_CAUSAL = false`: a static `Q` tile plus per-step `K`/`V` tiles
+fold into the ⊥-seeded online softmax, and the loop exit writes the fp16 `O`
+tile and the unrounded `L` log-sum-exp row. Everything below is purely
+additive; the exact surfaces above are untouched.
+
+Honest boundaries specific to this kernel:
+
+* **In-loop fp16 round-trips.** Three real `Op.castFloat` sites survive
+  lowering — the preLoop `q = (q * qk_scale).to(tl.float16)`, the loop body's
+  `fp16 → real` re-widening of `q` and the `nume` round-trip inside the second
+  `tl.dot`, and the postLoop `(out_buffer).to(tl.float16)` — plus the terminal
+  `.fp16`-typed `O` store. The headline therefore pins `R.round .fp16 = id`
+  (`hfp16`), exactly the file's declared fp16 modeling boundary, which is what
+  the exact stack already assumes. Under it every rounding site collapses to
+  the identity and the exact `flash_preLoop_evalG → flash_attn_step_general →
+  flash_attn_postLoopG` stack is reused unchanged under `execR R`.
+* **Scope: non-causal only.** `IS_CAUSAL = false` fixes the loop bound at
+  `hi = SEQLEN`, so the trip count `T = SEQLEN / BLOCK_N` is pid-free and the
+  exact stack's `hHi` window hypothesis is definitionally free — the headline
+  below is genuinely ∀-pid₀. The **causal headline is deliberately deferred**:
+  at `IS_CAUSAL = true` the trip count is `(pid₀+1)·BLOCK_M / BLOCK_N`, which
+  needs (a) a causal-window saturation lemma
+  (`flashKeysUpto … Bool.true qStart hi i d = flashKeysUpto … SEQLEN i d`
+  whenever `hi ≥ qStart + BLOCK_M`, a `List.filterMap_congr` structurally like
+  `flashKeysUpto_full_causal`) and (b) rework of the `forRangeDyn_inv` exit
+  reasoning, which currently reads the exit counter off `hHi`. Neither is
+  attempted here; the causal case stays on its exact headline
+  `flash_attn_python_case1_genuine_compute_correct_general`. -/
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamMasked3DKernelIO₃ₓ₂
+
+/-! ## Cast-free collapse under `R.round .fp16 = id` -/
+
+/-- The `R`-cast on the `.real` channel never rounds. -/
+private theorem flashIO_Rcast_real_real (R : RoundingModel) :
+    R.cast .real .real = FloatDType.cast .real .real := by
+  funext x
+  unfold RoundingModel.cast FloatDType.cast
+  rw [show R.roundW .real = id from by
+    funext y; cases y <;> simp [RoundingModel.roundW]]
+  rfl
+
+/-- With `R.round .fp16 = id`, the `R`-cast into the fp16 grid is the exact
+cast (every in-loop rounding-event site collapses). -/
+private theorem flashIO_Rcast_real_fp16 (R : RoundingModel) (hfp16 : R.round .fp16 = id) :
+    R.cast .real .fp16 = FloatDType.cast .real .fp16 := by
+  funext x
+  unfold RoundingModel.cast FloatDType.cast
+  rw [show R.roundW .fp16 = id from by
+    funext y; cases y <;> simp [RoundingModel.roundW, hfp16]]
+  rfl
+
+/-- The `R`-cast out of the fp16 grid lands on the `.real` channel, which
+never rounds. -/
+private theorem flashIO_Rcast_fp16_real (R : RoundingModel) :
+    R.cast .fp16 .real = FloatDType.cast .fp16 .real := by
+  funext x
+  unfold RoundingModel.cast FloatDType.cast
+  rw [show R.roundW .real = id from by
+    funext y; cases y <;> simp [RoundingModel.roundW]]
+  rfl
+
+/-- `.real` stores never round: `writeMemTypedR` delegates to the exact write. -/
+private theorem flashIO_wmtR_real (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (o : Nat) (v : TileCarrier .real) :
+    s.writeMemTypedR R .real region o v = s.writeMemTyped .real region o v := rfl
+
+/-- Under `hfp16` the terminal `.fp16` `O` store does not round either. -/
+private theorem flashIO_wmtR_fp16 (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (s : BlockState) (region : RegionName) (o : Nat) (v : TileCarrier .fp16) :
+    s.writeMemTypedR R .fp16 region o v = s.writeMemTyped .fp16 region o v := by
+  simp only [BlockState.writeMemTypedR, BlockState.writeMemTyped, BlockState.writeMemAsR,
+    BlockState.writeMemAs, RoundingModel.storeValue, hfp16, id_eq]
+
+/-- `evalOpR` mirror of `flash_evalOp_constBool` (the constexpr guard is
+cast-free). -/
+private theorem flashIO_evalOpR_constBool (R : RoundingModel) (b : Bool) (s : BlockState) :
+    evalOpR R (Op.constBool b) s = some (Tile.scalar b) := by
+  unfold evalOpR; rfl
+
+/-- `stepStmtR` mirror of `flash_stepStmt_ifThen_false`. -/
+private theorem flashIO_ifThen_falseR (R : RoundingModel) (body : List Stmt) (s : BlockState) :
+    stepStmtR R (.ifThen (Op.constBool Bool.false) body) s = some s := by
+  unfold stepStmtR; rw [flashIO_evalOpR_constBool]; rfl
+
+/-- Per-statement cast-free collapse lifts to statement lists (walks the
+actual successor chain; a failing step collapses on both sides). -/
+private theorem flashIO_stepStmtsR_castFree_of_stmts (R : RoundingModel) :
+    ∀ (l : List Stmt), (∀ st ∈ l, ∀ u, stepStmtR R st u = stepStmt st u) →
+      ∀ s, stepStmtsR R l s = stepStmts l s
+  | [], _, s => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, s => by
+      simp only [stepStmtsR, stepStmts, h st List.mem_cons_self s]
+      cases stepStmt st s with
+      | none => rfl
+      | some s' =>
+          exact flashIO_stepStmtsR_castFree_of_stmts R rest
+            (fun st' h' u => h st' (List.mem_cons_of_mem _ h') u) s'
+
+/-- `mapM` congruence for cast-free dynamic block-pointer offset lists. -/
+private theorem flashIO_evalOpR_castFree_offsets (R : RoundingModel) :
+    ∀ (offsets : List (Op .nat [])) (s : BlockState),
+      (∀ o ∈ offsets, evalOpR R o s = evalOp o s) →
+      offsets.mapM (fun off => do
+          let v ← evalOpR R off s
+          some (v.data PUnit.unit))
+        = offsets.mapM (fun off => do
+            let v ← evalOp off s
+            some (v.data PUnit.unit))
+  | [], _, _ => rfl
+  | off :: rest, s, h => by
+      simp only [List.mapM_cons, h off List.mem_cons_self,
+        flashIO_evalOpR_castFree_offsets R rest s
+          (fun o ho => h o (List.mem_cons_of_mem _ ho))]
+
+/-- `evalOpR` mirror of `Op.makeBlockPtrDynOffsets` for cast-free base/offset
+ops (the `.nat` channels never round). -/
+private theorem flashIO_evalOpR_mbpdo (R : RoundingModel) (region : RegionName)
+    (base : Op .nat []) (ps : List Nat) (bs : TileShape) (strides : List Nat)
+    (offs : List (Op .nat [])) (s : BlockState)
+    (hb : evalOpR R base s = evalOp base s)
+    (ho : ∀ o ∈ offs, evalOpR R o s = evalOp o s) :
+    evalOpR R (.makeBlockPtrDynOffsets region base ps bs strides offs) s
+      = evalOp (.makeBlockPtrDynOffsets region base ps bs strides offs) s := by
+  simp only [evalOpR, evalOp, hb, flashIO_evalOpR_castFree_offsets R offs s ho]
+
+set_option maxHeartbeats 4000000 in
+/-- Every preLoop statement is cast-free given `hfp16`: the only rounding site
+is statement 13's `(q * qk_scale).to(tl.float16)`; the `Q_block_ptr`
+`makeBlockPtrDynOffsets` assign goes through the dedicated `mapM` mirror. -/
+private theorem flashIO_preLoop_stmt_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (Q K V : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool)
+    (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat) :
+    ∀ st ∈ flashPreLoopG Q K V sm_scale IS_CAUSAL stride_q_head SEQLEN BLOCK_M DIM BLOCK_N,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [flashPreLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl | rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · -- Q_block_ptr (`makeBlockPtrDynOffsets`): dedicated `mapM` mirror
+    simp only [stepStmtR, stepStmt,
+      flashIO_evalOpR_mbpdo R Q (Op.ref TileDType.nat [] "qkv_base_offset") [SEQLEN, DIM]
+        [BLOCK_M, DIM] [DIM, 1]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m")
+          (Op.constNat BLOCK_M), Op.constNat 0] u
+        (by simp only [evalOpR, evalOp])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  all_goals
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      flashIO_Rcast_real_real R, flashIO_Rcast_real_fp16 R hfp16, flashIO_Rcast_fp16_real R]
+
+set_option maxHeartbeats 4000000 in
+/-- Every non-causal loop-body statement is cast-free given `hfp16`: the two
+`castFloat` sites (the `fp16 → real` re-widening of `q` in the first dot and
+the `nume` round-trip in the second) collapse, and the dead causal `ifThen`
+is a constexpr no-op on both steppers. -/
+private theorem flashIO_loopBody_stmt_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (BLOCK_M BLOCK_N DIM : Nat) :
+    ∀ st ∈ flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [flashLoopBodyG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+    rfl | rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · rw [flashIO_ifThen_falseR, flash_stepStmt_ifThen_false]
+  all_goals
+    simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      flashIO_Rcast_real_real R, flashIO_Rcast_real_fp16 R hfp16, flashIO_Rcast_fp16_real R]
+
+set_option maxHeartbeats 4000000 in
+/-- Every postLoop statement is cast-free given `hfp16`: the `L` store is
+`.real`-typed and the `O` store's `castFloat` + `.fp16` write both collapse. -/
+private theorem flashIO_postLoop_stmt_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (L O : RegionName) (SEQLEN BLOCK_M DIM : Nat) :
+    ∀ st ∈ flashPostLoopG L O SEQLEN BLOCK_M DIM,
+      ∀ u, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [flashPostLoopG, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def, flashIO_wmtR_real R]
+  · -- O_block_ptr (`makeBlockPtrDynOffsets`): dedicated `mapM` mirror
+    simp only [stepStmtR, stepStmt,
+      flashIO_evalOpR_mbpdo R O (Op.ref TileDType.nat [] "qkv_base_offset") [SEQLEN, DIM]
+        [BLOCK_M, DIM] [DIM, 1]
+        [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m")
+          (Op.constNat BLOCK_M), Op.constNat 0] u
+        (by simp only [evalOpR, evalOp])
+        (by
+          intro o ho
+          simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+          rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def])]
+  · simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def,
+      flashIO_Rcast_real_real R, flashIO_Rcast_real_fp16 R hfp16, flashIO_Rcast_fp16_real R,
+      flashIO_wmtR_fp16 R hfp16]
+
+/-- The preLoop collapses onto the exact stepper. -/
+private theorem flashIO_preLoop_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (Q K V : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool)
+    (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat) (t : BlockState) :
+    stepStmtsR R (flashPreLoopG Q K V sm_scale IS_CAUSAL stride_q_head SEQLEN BLOCK_M DIM BLOCK_N) t
+      = stepStmts (flashPreLoopG Q K V sm_scale IS_CAUSAL stride_q_head SEQLEN BLOCK_M DIM BLOCK_N) t :=
+  flashIO_stepStmtsR_castFree_of_stmts R _
+    (flashIO_preLoop_stmt_castFree R hfp16 Q K V sm_scale IS_CAUSAL stride_q_head SEQLEN BLOCK_M DIM BLOCK_N) t
+
+/-- The non-causal loop body collapses onto the exact stepper. -/
+private theorem flashIO_loopBody_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (BLOCK_M BLOCK_N DIM : Nat) (t : BlockState) :
+    stepStmtsR R (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM) t
+      = stepStmts (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM) t :=
+  flashIO_stepStmtsR_castFree_of_stmts R _
+    (flashIO_loopBody_stmt_castFree R hfp16 BLOCK_M BLOCK_N DIM) t
+
+/-- The postLoop collapses onto the exact stepper. -/
+private theorem flashIO_postLoop_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (L O : RegionName) (SEQLEN BLOCK_M DIM : Nat) (t : BlockState) :
+    stepStmtsR R (flashPostLoopG L O SEQLEN BLOCK_M DIM) t
+      = stepStmts (flashPostLoopG L O SEQLEN BLOCK_M DIM) t :=
+  flashIO_stepStmtsR_castFree_of_stmts R _
+    (flashIO_postLoop_stmt_castFree R hfp16 L O SEQLEN BLOCK_M DIM) t
+
+/-- The whole dynamic KV loop statement is cast-free: the `lo`/`hi`/step ops
+are `.nat` (never rounded) and the body collapses statement by statement. -/
+private theorem flashIO_loopStmt_castFree (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (BLOCK_M BLOCK_N DIM : Nat) (u : BlockState) :
+    stepStmtR R (Stmt.forRangeDyn "start_n" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+        (Op.constNat BLOCK_N) (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)) u
+      = stepStmt (Stmt.forRangeDyn "start_n" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+        (Op.constNat BLOCK_N) (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)) u := by
+  simp only [stepStmtR, stepStmt, evalOpR_ref, evalOp_ref,
+    show evalOpR R (Op.constNat BLOCK_N) = evalOp (Op.constNat BLOCK_N) from by
+      funext w; simp only [evalOpR, evalOp],
+    Option.bind_eq_bind]
+  cases hlo : u.regs .nat [] "lo" with
+  | none => rfl
+  | some a =>
+    cases hhi : u.regs .nat [] "hi" with
+    | none => rfl
+    | some b =>
+      simp only [evalOp_constNat, Option.bind_some]
+      exact stepForRangeAuxR_castFree R _ (flashIO_loopBody_castFree R hfp16 BLOCK_M BLOCK_N DIM)
+        "start_n" _ _ _ u
+
+set_option maxHeartbeats 4000000 in
+/-- The FlashAttention forward surface sits inside the flat-memory bridge's
+covered fragment (no `ptrSub`; the block-pointer ops are structurally
+covered). -/
+private theorem flashIO_flattenOk (Q K V L O : RegionName) (sm_scale : ℝ)
+    (sqbs skbs svbs sobs BS HEAD SEQLEN BLOCK_M DIM BLOCK_N stride_q_head : Nat) :
+    ((flash_attn_fwd_kernel_surface Q K V L O sm_scale
+      sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
+      sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N Bool.false).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [flash_surface_body_eqG Q K V L O sm_scale Bool.false sqbs skbs svbs sobs DIM 1
+    BS HEAD SEQLEN BLOCK_M DIM BLOCK_N stride_q_head]
+  simp [flashPreLoopG, flashLoopBodyG, flashPostLoopG, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+
+/-! ## IO signature, stream-indexed tiles, and the spec `f`
+
+Window transcription (all four planes share the base `pid₁ · stride_q_head`,
+the Python contiguous layout the exact stack already fixes — row stride `DIM`,
+column stride `1`):
+
+* `read1` (`Q`, the **static** stream — the window ignores `t`): lane
+  `j = (i, e)` row-major over `[BLOCK_M, DIM]` reads
+  `base + (pid₀·BLOCK_M + i)·DIM + e·1` (the `Q_block_ptr` cell).
+* `read2` (`K`, the transposed tile advanced by `BLOCK_N` **columns** per
+  step): lane `j = (e, jL)` over `[DIM, BLOCK_N]` reads
+  `base + e·1 + (t·BLOCK_N + jL)·DIM`.
+* `read3` (`V`, advanced by `BLOCK_N` **rows** per step): lane `j = (r, d)`
+  over `[BLOCK_N, DIM]` reads `base + (t·BLOCK_N + r)·DIM + d·1`.
+* `write1` (`O` tile via `O_block_ptr`, **fp16**): lane `j = (i, d)` writes
+  `base + (pid₀·BLOCK_M + i)·DIM + d·1`.
+* `write2` (`L` row via the plain `l_ptr`, unrounded `.real`): lane `i` writes
+  `pid₁·SEQLEN + pid₀·BLOCK_M + i`.
+
+All five windows are unmasked (every load and both stores are `other=`-free
+and mask-free), so all masks are `True`; `pid₂` is unused (2-D grid); the
+launch precondition `pre` stays at its unconstrained default (at
+`IS_CAUSAL = false` the trip count `T = SEQLEN / BLOCK_N` is pid-free). -/
+
+/-- **Streaming IO signature** of the non-causal (`IS_CAUSAL = false`,
+Python case 2) FlashAttention forward surface on the three-stream
+two-output attention fold skin. -/
+def flashAttnIO (Q K V L O : RegionName) (sm_scale : ℝ)
+    (sqbs skbs svbs sobs BS HEAD SEQLEN BLOCK_M DIM BLOCK_N stride_q_head : Nat) :
+    StreamMasked3DKernelIO₃ₓ₂ where
+  kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
+    sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
+    sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N Bool.false
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  out1 := O
+  out2 := L
+  T := SEQLEN / BLOCK_N
+  B1 := BLOCK_M * DIM
+  B2 := DIM * BLOCK_N
+  B3 := BLOCK_N * DIM
+  C1 := BLOCK_M * DIM
+  C2 := BLOCK_M
+  out1DType := .fp16
+  out2DType := .real
+  read1 := fun p₀ p₁ _ _ j =>
+    p₁ * stride_q_head + (p₀ * BLOCK_M + j.val / DIM) * DIM + (j.val % DIM) * 1
+  read2 := fun _ p₁ _ t j =>
+    p₁ * stride_q_head + (j.val / BLOCK_N) * 1 + (t.val * BLOCK_N + j.val % BLOCK_N) * DIM
+  read3 := fun _ p₁ _ t j =>
+    p₁ * stride_q_head + (t.val * BLOCK_N + j.val / DIM) * DIM + (j.val % DIM) * 1
+  write1 := fun p₀ p₁ _ j =>
+    p₁ * stride_q_head + (p₀ * BLOCK_M + j.val / DIM) * DIM + (j.val % DIM) * 1
+  write2 := fun p₀ p₁ _ i => p₁ * SEQLEN + (p₀ * BLOCK_M + i.val)
+  mask1 := fun _ _ _ _ _ => True
+  mask2 := fun _ _ _ _ _ => True
+  mask3 := fun _ _ _ _ _ => True
+  writeMask1 := fun _ _ _ _ => True
+  writeMask2 := fun _ _ _ _ => True
+
+/-- The `Q` tile read off the (static) first stream: the window ignores `t`,
+so the step-`0` slice carries the whole tile. -/
+noncomputable def flashIOqT (BLOCK_M DIM T : Nat) (hT : 0 < T)
+    (xs : Fin T → Fin (BLOCK_M * DIM) → ℝ) : TileIndex [BLOCK_M, DIM] → ℝ :=
+  fun idx => xs ⟨0, hT⟩ (Lane2D.encode idx)
+
+/-- The global `K` tile read off the second stream: global key `j` lives in
+step `j / BLOCK_N`, block-local column `j % BLOCK_N`, at stream lane
+`(e, j % BLOCK_N)` of the transposed `[DIM, BLOCK_N]` tile. -/
+noncomputable def flashIOkT (DIM BLOCK_N SEQLEN T : Nat)
+    (hTB : T * BLOCK_N = SEQLEN) (hBN : 0 < BLOCK_N)
+    (ys : Fin T → Fin (DIM * BLOCK_N) → ℝ) : TileIndex [SEQLEN, DIM] → ℝ :=
+  fun idx =>
+    ys ⟨idx.1.val / BLOCK_N, (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [hTB]; exact idx.1.isLt)⟩
+      (Lane2D.encode (idx.2.1, ⟨idx.1.val % BLOCK_N, Nat.mod_lt _ hBN⟩, PUnit.unit))
+
+/-- The global `V` tile read off the third stream: global key `j` lives in
+step `j / BLOCK_N`, block-local row `j % BLOCK_N`, at stream lane
+`(j % BLOCK_N, d)` of the `[BLOCK_N, DIM]` tile. -/
+noncomputable def flashIOvT (DIM BLOCK_N SEQLEN T : Nat)
+    (hTB : T * BLOCK_N = SEQLEN) (hBN : 0 < BLOCK_N)
+    (zs : Fin T → Fin (BLOCK_N * DIM) → ℝ) : TileIndex [SEQLEN, DIM] → ℝ :=
+  fun idx =>
+    zs ⟨idx.1.val / BLOCK_N, (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [hTB]; exact idx.1.isLt)⟩
+      (Lane2D.encode (⟨idx.1.val % BLOCK_N, Nat.mod_lt _ hBN⟩, idx.2.1, PUnit.unit))
+
+/-- **`O` closed form on the streams**: the non-causal base-2 attention
+(`attentionRealBase2PerKeyScale`, exactly the existing `flashAttnOValueSpec`)
+restated over the three streamed tiles, at output lane `j = (i, d)` row-major
+over `[BLOCK_M, DIM]`. -/
+noncomputable def flashIOOutSpec (BLOCK_M DIM BLOCK_N SEQLEN T : Nat)
+    (hT : 0 < T) (hTB : T * BLOCK_N = SEQLEN) (hBN : 0 < BLOCK_N) (sm_scale : ℝ)
+    (xs : Fin T → Fin (BLOCK_M * DIM) → ℝ) (ys : Fin T → Fin (DIM * BLOCK_N) → ℝ)
+    (zs : Fin T → Fin (BLOCK_N * DIM) → ℝ) (j : Fin (BLOCK_M * DIM)) : ℝ :=
+  attentionRealBase2PerKeyScale (flashIOqT BLOCK_M DIM T hT xs)
+    (flashIOkT DIM BLOCK_N SEQLEN T hTB hBN ys) (flashIOvT DIM BLOCK_N SEQLEN T hTB hBN zs)
+    (fun _ : Fin SEQLEN => sm_scale * log2e) (Lane2D.decode j)
+
+/-- **`L` closed form on the streams**: the genuine log-sum-exp
+`log₂ (Σⱼ 2^scoreⱼ)` over the full key list, exactly the existing exact
+headline's `L` expectation restated over the three streamed tiles. -/
+noncomputable def flashIOLSpec (BLOCK_M DIM BLOCK_N SEQLEN T : Nat) (hDIM : 0 < DIM)
+    (hT : 0 < T) (hTB : T * BLOCK_N = SEQLEN) (hBN : 0 < BLOCK_N) (sm_scale : ℝ)
+    (xs : Fin T → Fin (BLOCK_M * DIM) → ℝ) (ys : Fin T → Fin (DIM * BLOCK_N) → ℝ)
+    (zs : Fin T → Fin (BLOCK_N * DIM) → ℝ) (i : Fin BLOCK_M) : ℝ :=
+  Real.log (((attnKeyList (flashIOqT BLOCK_M DIM T hT xs)
+      (flashIOkT DIM BLOCK_N SEQLEN T hTB hBN ys) (flashIOvT DIM BLOCK_N SEQLEN T hTB hBN zs)
+      (fun _ : Fin SEQLEN => sm_scale * log2e) i ⟨0, hDIM⟩).map
+    (fun p => pow2 p.1)).sum) / Real.log 2
+
+/-! ### Stream-pin tile bridges: under the skin's input pins the kernel-side
+memory tiles ARE the stream-indexed tiles, pointwise. -/
+
+/-- `qTile` = the static-stream tile, under the `read1` pins. -/
+private theorem flashIOqT_eq (s₀ : BlockState) (Q : RegionName)
+    (stride_q_head DIM BLOCK_M T : Nat) (hT : 0 < T)
+    (xs : Fin T → Fin (BLOCK_M * DIM) → ℝ)
+    (hx : ∀ (t : Fin T) (j : Fin (BLOCK_M * DIM)),
+      s₀.readMem Q (s₀.pids 1 * stride_q_head
+          + (s₀.pids 0 * BLOCK_M + j.val / DIM) * DIM + (j.val % DIM) * 1) = xs t j) :
+    qTile s₀ Q stride_q_head DIM BLOCK_M = flashIOqT BLOCK_M DIM T hT xs := by
+  funext idx
+  obtain ⟨i, e, ⟨⟩⟩ := idx
+  show s₀.readMem Q (flashBaseOffset s₀ stride_q_head + mIndex s₀ BLOCK_M i * DIM + e.val)
+    = xs ⟨0, hT⟩ (Lane2D.encode (i, e, PUnit.unit))
+  rw [← hx ⟨0, hT⟩ (Lane2D.encode (i, e, PUnit.unit))]
+  simp only [Lane2D.encode_div, Lane2D.encode_mod, flashBaseOffset, mIndex, Nat.mul_one]
+
+/-- `kTile` = the `K`-stream tile, under the `read2` pins. -/
+private theorem flashIOkT_eq (s₀ : BlockState) (K : RegionName)
+    (stride_q_head DIM BLOCK_N SEQLEN T : Nat) (hTB : T * BLOCK_N = SEQLEN) (hBN : 0 < BLOCK_N)
+    (ys : Fin T → Fin (DIM * BLOCK_N) → ℝ)
+    (hy : ∀ (t : Fin T) (j : Fin (DIM * BLOCK_N)),
+      s₀.readMem K (s₀.pids 1 * stride_q_head
+          + (j.val / BLOCK_N) * 1 + (t.val * BLOCK_N + j.val % BLOCK_N) * DIM) = ys t j) :
+    kTile s₀ K stride_q_head DIM SEQLEN = flashIOkT DIM BLOCK_N SEQLEN T hTB hBN ys := by
+  funext idx
+  obtain ⟨j, e, ⟨⟩⟩ := idx
+  show s₀.readMem K (flashBaseOffset s₀ stride_q_head + j.val * DIM + e.val) = _
+  unfold flashIOkT
+  rw [← hy ⟨j.val / BLOCK_N, (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [hTB]; exact j.isLt)⟩
+    (Lane2D.encode (e, ⟨j.val % BLOCK_N, Nat.mod_lt _ hBN⟩, PUnit.unit))]
+  simp only [Lane2D.encode_div, Lane2D.encode_mod, flashBaseOffset, Nat.mul_one]
+  refine congrArg (s₀.readMem K) ?_
+  have hdm : j.val / BLOCK_N * BLOCK_N + j.val % BLOCK_N = j.val := Nat.div_add_mod' j.val BLOCK_N
+  rw [hdm]
+  omega
+
+/-- `vTile` = the `V`-stream tile, under the `read3` pins. -/
+private theorem flashIOvT_eq (s₀ : BlockState) (V : RegionName)
+    (stride_q_head DIM BLOCK_N SEQLEN T : Nat) (hTB : T * BLOCK_N = SEQLEN) (hBN : 0 < BLOCK_N)
+    (zs : Fin T → Fin (BLOCK_N * DIM) → ℝ)
+    (hz : ∀ (t : Fin T) (j : Fin (BLOCK_N * DIM)),
+      s₀.readMem V (s₀.pids 1 * stride_q_head
+          + (t.val * BLOCK_N + j.val / DIM) * DIM + (j.val % DIM) * 1) = zs t j) :
+    vTile s₀ V stride_q_head DIM SEQLEN = flashIOvT DIM BLOCK_N SEQLEN T hTB hBN zs := by
+  funext idx
+  obtain ⟨j, d, ⟨⟩⟩ := idx
+  show s₀.readMem V (flashBaseOffset s₀ stride_q_head + j.val * DIM + d.val) = _
+  unfold flashIOvT
+  rw [← hz ⟨j.val / BLOCK_N, (Nat.div_lt_iff_lt_mul hBN).mpr (by rw [hTB]; exact j.isLt)⟩
+    (Lane2D.encode (⟨j.val % BLOCK_N, Nat.mod_lt _ hBN⟩, d, PUnit.unit))]
+  simp only [Lane2D.encode_div, Lane2D.encode_mod, flashBaseOffset, Nat.mul_one]
+  refine congrArg (s₀.readMem V) ?_
+  have hdm : j.val / BLOCK_N * BLOCK_N + j.val % BLOCK_N = j.val := Nat.div_add_mod' j.val BLOCK_N
+  rw [hdm]
+
+/-! ## The safety walk (weak invariant)
+
+The skin's `hts` obligation quantifies over **arbitrary** launch states, so
+the clean-`undef` full stack is unavailable there. The safety walk runs on
+the *shape* half instead: `flashIO_preLoop_evalW` is `flash_preLoop_evalG`
+with the `undef` pin (its only use of `hundef`) dropped, and
+`flashIOSafeInv` keeps exact pins for the two loop-carried block pointers —
+whose addresses are the bound obligations — plus bare existence for the
+value registers, mirroring the `matmul_kernel` / `aft3SafeInv` precedent. -/
+
+set_option maxHeartbeats 1000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak preLoop**: from an **arbitrary** launch state (no clean-`undef`
+hypothesis) the preLoop steps to the same loop-entry state; only the `undef`
+conclusion of `flash_preLoop_evalG` is dropped. -/
+private theorem flashIO_preLoop_evalW
+    (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ) (IS_CAUSAL : Bool)
+    (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat) :
+    ∃ s0, stepStmts (flashPreLoopG Q K V sm_scale IS_CAUSAL stride_q_head SEQLEN BLOCK_M DIM BLOCK_N) s = some s0
+      ∧ s0.pids = s.pids ∧ s0.mem = s.mem
+      ∧ s0.regs .nat [] "off_bs_head" = some (Tile.scalar (s.pids 1))
+      ∧ s0.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s.pids 1 * stride_q_head))
+      ∧ s0.regs .real [BLOCK_M] "max" = some ⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩
+      ∧ s0.regs .real [BLOCK_M] "denom" = some ⟨fun _ : TileIndex [BLOCK_M] => some (0 : ℝ)⟩
+      ∧ s0.regs .real [BLOCK_M, DIM] "out_buffer" = some ⟨fun _ : TileIndex [BLOCK_M, DIM] => some (0 : ℝ)⟩
+      ∧ s0.regs .fp16 [BLOCK_M, DIM] "q" = some ⟨fun idx : TileIndex [BLOCK_M, DIM] =>
+          FloatDType.real.cast FloatDType.fp16
+            (some (sm_scale * log2e * qTile s Q stride_q_head DIM BLOCK_M idx))⟩
+      ∧ s0.regs .nat [BLOCK_M] "off_m" = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 0 * BLOCK_M + r.val))
+      ∧ s0.regs .nat [BLOCK_N] "off_n" = some (Tile.vec (fun j : Fin BLOCK_N => j.val))
+      ∧ s0.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .blockPtr [DIM, BLOCK_N] "K_block_ptr" = some
+          (⟨fun _ : TileIndex [DIM, BLOCK_N] =>
+            { region := K, baseOffset := s.pids 1 * stride_q_head, parentShape := [DIM, SEQLEN],
+              blockShape := [DIM, BLOCK_N], strides := [1, DIM], offsets := [0, 0] }⟩)
+      ∧ s0.regs .blockPtr [BLOCK_N, DIM] "V_block_ptr" = some
+          (⟨fun _ : TileIndex [BLOCK_N, DIM] =>
+            { region := V, baseOffset := s.pids 1 * stride_q_head, parentShape := [SEQLEN, DIM],
+              blockShape := [BLOCK_N, DIM], strides := [DIM, 1], offsets := [0, 0] }⟩)
+      ∧ s0.regs .blockPtr [BLOCK_M, DIM] "Q_block_ptr" = some
+          (⟨fun _ : TileIndex [BLOCK_M, DIM] =>
+            { region := Q, baseOffset := s.pids 1 * stride_q_head, parentShape := [SEQLEN, DIM],
+              blockShape := [BLOCK_M, DIM], strides := [DIM, 1], offsets := [s.pids 0 * BLOCK_M, 0] }⟩)
+      ∧ s0.regs .real [] "qk_scale" = some (Tile.scalar (some (sm_scale * 1.44269504)))
+      ∧ s0.regs .nat [] "lo" = some (Tile.scalar 0)
+      ∧ s0.regs .nat [] "hi" = some (Tile.scalar (flashHiG s IS_CAUSAL SEQLEN BLOCK_M)) := by
+  unfold flashPreLoopG
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat stride_q_head)) _
+        = some (Tile.scalar (s.pids 1 * stride_q_head)) from by
+      rw [evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.makeBlockPtrDynOffsets Q (Op.ref .nat [] "qkv_base_offset") [SEQLEN, DIM] [BLOCK_M, DIM]
+        [DIM, 1] [Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M), Op.constNat 0]) _
+        = some (⟨fun _ : TileIndex [BLOCK_M, DIM] =>
+            { region := Q, baseOffset := s.pids 1 * stride_q_head, parentShape := [SEQLEN, DIM],
+              blockShape := [BLOCK_M, DIM], strides := [DIM, 1], offsets := [s.pids 0 * BLOCK_M, 0] }⟩
+            : Tile .blockPtr [BLOCK_M, DIM]) from by
+      rw [makeBlockPtr2_eval]
+      simp only [evalOp_ref, evalOp_constNat, evalOp_mul, BlockState.setReg_same,
+        BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true, Option.bind_eq_bind,
+        Option.bind_some, List.mapM_cons, List.mapM_nil, BlockState.setReg_pids, flash_scalarBop]
+      refine congrArg some ?_; ext idx; rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_makeBlockPtrDyn_eval K (Op.ref .nat [] "qkv_base_offset") [DIM, SEQLEN] [DIM, BLOCK_N] [1, DIM] [0, 0] _
+      (s.pids 1 * stride_q_head) (by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (flash_makeBlockPtrDyn_eval V (Op.ref .nat [] "qkv_base_offset") [SEQLEN, DIM] [BLOCK_N, DIM] [DIM, 1] [0, 0] _
+      (s.pids 1 * stride_q_head) (by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat BLOCK_M)) (Op.arange BLOCK_M)) _
+        = some (Tile.vec (fun r : Fin BLOCK_M => s.pids 0 * BLOCK_M + r.val)) from by
+      rw [evalOp_add, evalOp_mul]
+      simp only [evalOp_ref, evalOp_constNat, evalOp_arange, BlockState.setReg_ne_name, ne_eq,
+        String.reduceEq, not_false_eq_true, BlockState.setReg_same, BlockState.setReg_pids,
+        Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Tile.vec_data, Broadcast.leftIndex,
+        Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange BLOCK_N) _ = some (Tile.vec (fun j : Fin BLOCK_N => j.val)) from evalOp_arange BLOCK_N _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .real Broadcast.scalarR (Op.full [BLOCK_M] (Op.const 0)) Op.negInf) _
+        = some (⟨fun _ : TileIndex [BLOCK_M] => (⊥ : WithBot ℝ)⟩ : Tile .real [BLOCK_M]) from by
+      rw [evalOp_add]
+      simp only [evalOp_full, evalOp_const, evalOp_negInf, Option.bind_eq_bind, Option.bind_some]
+      refine congrArg some ?_; ext idx
+      simp only [Tile.bop_data, Tile.scalar_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map]
+      rfl))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BLOCK_M] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [BLOCK_M] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M]) from by
+      simp [evalOp_full, evalOp_const]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BLOCK_M, DIM] (Op.const 0)) _
+        = some (⟨fun _ : TileIndex [BLOCK_M, DIM] => some (0 : ℝ)⟩ : Tile .real [BLOCK_M, DIM]) from by
+      simp [evalOp_full, evalOp_const]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .real Broadcast.nil (Op.const sm_scale) (Op.const 1.44269504)) _
+        = some (Tile.scalar (some (sm_scale * 1.44269504))) from by
+      rw [evalOp_mul]
+      simp only [evalOp_const, Option.bind_eq_bind, Option.bind_some, flash_scalarBop]
+      refine congrArg some (congrArg Tile.scalar ?_)
+      simp only [NumericDType.mul, WithBot.realMul, Option.map₂, Option.bind, Option.map]))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.load .real (MemAccess.blockPtr (Op.ref .blockPtr [BLOCK_M, DIM] "Q_block_ptr") [])
+        MaskOpt.none) _
+        = some (⟨fun idx : TileIndex [BLOCK_M, DIM] =>
+            some (s.readMem Q (s.pids 1 * stride_q_head + (s.pids 0 * BLOCK_M + idx.1.val) * DIM + idx.2.1.val * 1))⟩
+            : Tile .real [BLOCK_M, DIM]) from by
+      rw [flash_load_Q_eval Q (s.pids 1 * stride_q_head) SEQLEN DIM BLOCK_M DIM DIM 1 (s.pids 0 * BLOCK_M)
+        (Op.ref .blockPtr [BLOCK_M, DIM] "Q_block_ptr") _ (by rw [evalOp_ref]; simp)]
+      refine congrArg some ?_; ext idx
+      simp [BlockState.readMem, BlockState.setReg_mem]))]
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.castFloat .real .fp16
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [BLOCK_M, DIM] "q") (Op.ref .real [] "qk_scale"))) _
+        = some (⟨fun idx : TileIndex [BLOCK_M, DIM] =>
+            FloatDType.real.cast FloatDType.fp16
+              (some (sm_scale * log2e * qTile s Q stride_q_head DIM BLOCK_M idx))⟩ : Tile .fp16 [BLOCK_M, DIM]) from by
+      rw [flash_qscale_op_evalG _ BLOCK_M DIM
+        (⟨fun idx : TileIndex [BLOCK_M, DIM] =>
+          some (s.readMem Q (s.pids 1 * stride_q_head + (s.pids 0 * BLOCK_M + idx.1.val) * DIM + idx.2.1.val * 1))⟩
+          : Tile .real [BLOCK_M, DIM])
+        (sm_scale * 1.44269504)
+        (by rw [BlockState.setReg_same])
+        (by rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), BlockState.setReg_same])]
+      refine congrArg some ?_; ext idx
+      simp only [Option.bind, Option.map, qTile, flashBaseOffset, mIndex, log2e]
+      ring_nf))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.constNat 0) _ = _ from evalOp_constNat 0 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp ((Op.constBool IS_CAUSAL).ite
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1)) (Op.constNat BLOCK_M))
+        (Op.constNat SEQLEN)) _
+        = some (Tile.scalar (flashHiG s IS_CAUSAL SEQLEN BLOCK_M)) from by
+      conv_lhs => unfold evalOp
+      rw [flash_evalOp_constBool]
+      simp only [Tile.scalar_data, Option.bind_eq_bind, Option.bind_some]
+      cases IS_CAUSAL
+      · simp only [Bool.false_eq_true, if_false, flashHiG]
+        exact evalOp_constNat SEQLEN _
+      · simp only [if_true, flashHiG]
+        rw [evalOp_mul, evalOp_add]
+        simp only [evalOp_ref, evalOp_constNat, BlockState.setReg_same, BlockState.setReg_ne_name,
+          ne_eq, String.reduceEq, not_false_eq_true, BlockState.setReg_pids,
+          Option.bind_eq_bind, Option.bind_some, flash_scalarBop]
+        rfl))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · funext rg o; simp only [BlockState.setReg_mem]
+  all_goals
+    simp only [FloatDType.toTileDType, BlockState.setReg_ne_name, BlockState.setReg_same,
+      BlockState.setReg_pids, ne_eq, String.reduceEq, not_false_eq_true, reduceCtorEq,
+      and_self, and_true, true_and]
+
+
+/-! ### Inversion / frame helpers for the safety walk -/
+
+/-- Cons-level inversion for exact `stepStmts`. -/
+private theorem flashIO_stepStmts_cons_inv {st : Stmt} {rest : List Stmt} {s s' : BlockState}
+    (h : stepStmts (st :: rest) s = some s') :
+    ∃ u, stepStmt st s = some u ∧ stepStmts rest u = some s' := by
+  rw [stepStmts] at h
+  cases hu : stepStmt st s with
+  | none => rw [hu] at h; exact absurd h (by simp)
+  | some u => rw [hu] at h; exact ⟨u, rfl, h⟩
+
+/-- Append-level inversion for exact `stepStmts`. -/
+private theorem flashIO_stepStmts_append_inv :
+    ∀ (l1 l2 : List Stmt) (s s' : BlockState),
+      stepStmts (l1 ++ l2) s = some s' →
+      ∃ u, stepStmts l1 s = some u ∧ stepStmts l2 u = some s'
+  | [], _, s, s', h => ⟨s, by simp only [stepStmts], h⟩
+  | st :: rest, l2, s, s', h => by
+      rw [List.cons_append] at h
+      obtain ⟨u, hu, h⟩ := flashIO_stepStmts_cons_inv h
+      obtain ⟨w, hw, h⟩ := flashIO_stepStmts_append_inv rest l2 u s' h
+      exact ⟨w, (stepStmts.cons_some hu).trans hw, h⟩
+
+/-- Assign-step inversion for exact `stepStmt`. -/
+private theorem flashIO_stepStmt_assign_inv {dtype : TileDType} {shape : TileShape}
+    {name : RegName} {e : Op dtype shape} {s s' : BlockState}
+    (h : stepStmt (.assign dtype shape name e) s = some s') :
+    ∃ v, evalOp e s = some v ∧ s' = s.setReg name dtype shape v := by
+  cases hv : evalOp e s with
+  | none => simp [stepStmt, hv] at h
+  | some v =>
+      simp [stepStmt, hv] at h
+      exact ⟨v, rfl, h.symm⟩
+
+/-- Lift a register readback through a `setReg` to a different name. -/
+private theorem flashIO_regs_chain {d d' : TileDType} {sh sh' : TileShape}
+    {n n' : RegName} {s : BlockState} {v : Tile d sh} {w : Tile d' sh'}
+    (hne : n ≠ n') (h : s.regs d sh n = some v) :
+    (s.setReg n' d' sh' w).regs d sh n = some v := by
+  simp only [BlockState.setReg_ne_name, ne_eq, hne, not_false_eq_true, h]
+
+/-- An `assign` to a different register preserves the named readback. -/
+private theorem flashIO_assign_regs_ne {d d' : TileDType} {sh sh' : TileShape}
+    {name name' : RegName} {e : Op d' sh'} {s s' : BlockState}
+    (hne : name ≠ name') (h : stepStmt (.assign d' sh' name' e) s = some s') :
+    s'.regs d sh name = s.regs d sh name := by
+  cases hev : evalOp e s with
+  | none => rw [show stepStmt (.assign d' sh' name' e) s = none from by simp [stepStmt, hev]] at h
+            exact absurd h.symm (Option.some_ne_none s')
+  | some v =>
+      rw [stepStmt_assign_eq_some hev] at h
+      rw [← Option.some.inj h, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hne]
+
+/-- **Generic register-frame lemma** for a whole exact `stepStmts` run. -/
+private theorem flashIO_stepStmts_regs_preserved {body : List Stmt} {s s' : BlockState}
+    {d : TileDType} {sh : TileShape} {name : RegName}
+    (hpre : ∀ st s1 s2, st ∈ body → stepStmt st s1 = some s2 →
+      s2.regs d sh name = s1.regs d sh name)
+    (h : stepStmts body s = some s') :
+    s'.regs d sh name = s.regs d sh name := by
+  induction body generalizing s with
+  | nil => simp only [stepStmts] at h; rw [← Option.some.inj h]
+  | cons st rest ih =>
+    unfold stepStmts at h
+    cases hst : stepStmt st s with
+    | none => rw [hst] at h; simp at h
+    | some mid =>
+      rw [hst] at h
+      have hmid := hpre st s mid (by simp) hst
+      rw [ih (fun st' s1 s2 hmem hstep => hpre st' s1 s2 (by simp [hmem]) hstep) h, hmid]
+
+/-- **Invariant principle for `forRangeTraceSafeR`, successor form.** Unlike
+the library's `Stmt.forRangeTraceSafeR_inv` this only asks that *whatever*
+successor the body actually produces re-establishes `P` — the safety walk
+never needs to prove that the body steps successfully (a failing step is
+vacuously safe). -/
+private theorem flashIO_forRangeTraceSafeR_inv (R : RoundingModel) (bounds : RegionBounds)
+    (idx : RegName) (stop step : Nat) (body : List Stmt)
+    (P : Nat → BlockState → Prop)
+    (hstep : ∀ c s, c < stop → P c s →
+      Stmt.TraceSafeListR R bounds body (s.setReg idx .nat [] (Tile.scalar c)) ∧
+      ∀ s', stepStmtsR R body (s.setReg idx .nat [] (Tile.scalar c)) = some s' → P (c + step) s') :
+    ∀ cur s, P cur s → Stmt.forRangeTraceSafeR R bounds idx cur stop step body s
+  | cur, s, hP => by
+      rw [Stmt.forRangeTraceSafeR]
+      split
+      · trivial
+      · split
+        · obtain ⟨hsafe, hnext⟩ := hstep cur s ‹cur < stop› hP
+          refine ⟨hsafe, ?_⟩
+          cases hb : stepStmtsR R body (s.setReg idx .nat [] (Tile.scalar cur)) with
+          | none => trivial
+          | some u =>
+              exact flashIO_forRangeTraceSafeR_inv R bounds idx stop step body P hstep
+                (cur + step) u (hnext u hb)
+        · trivial
+  termination_by cur _ _ => stop - cur
+  decreasing_by omega
+
+/-- The same successor-form invariant, transported through the *run* of the
+strided loop: whatever state the loop actually reaches still satisfies `P` at
+some counter. -/
+private theorem flashIO_forRangeAuxR_preserves (R : RoundingModel) (idx : RegName)
+    (stop step : Nat) (body : List Stmt) (P : Nat → BlockState → Prop)
+    (hstep : ∀ c s, c < stop → P c s →
+      ∀ s', stepStmtsR R body (s.setReg idx .nat [] (Tile.scalar c)) = some s' → P (c + step) s') :
+    ∀ cur s, P cur s → ∀ s', stepForRangeAuxR R idx cur stop step body s = some s' → ∃ c', P c' s'
+  | cur, s, hP, s', h => by
+      rw [stepForRangeAuxR] at h
+      split at h
+      · exact ⟨cur, by rw [← Option.some.inj h]; exact hP⟩
+      · split at h
+        · cases hb : stepStmtsR R body (s.setReg idx .nat [] (Tile.scalar cur)) with
+          | none => rw [hb] at h; exact absurd h (by simp)
+          | some u =>
+              rw [hb] at h
+              exact flashIO_forRangeAuxR_preserves R idx stop step body P hstep (cur + step) u
+                (hstep cur s ‹cur < stop› hP u hb) s' h
+        · exact ⟨cur, by rw [← Option.some.inj h]; exact hP⟩
+  termination_by cur _ _ _ _ => stop - cur
+  decreasing_by omega
+
+
+/-- Safety-walk loop invariant: the counter is a `BLOCK_N` multiple, the four
+scalar/index pins the postLoop stores need, and the exact `K`/`V`
+block-pointer shapes at counter `c` (whose addresses are the bound
+obligations). The value registers are deliberately absent — nothing in the
+safety walk reads them. -/
+private def flashIOSafeInv (K V : RegionName) (s0 : BlockState)
+    (base SEQLEN BLOCK_M DIM BLOCK_N : Nat) (c : Nat) (s : BlockState) : Prop :=
+  c % BLOCK_N = 0 ∧
+  s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0)) ∧
+  s.regs .nat [] "off_bs_head" = some (Tile.scalar (s0.pids 1)) ∧
+  s.regs .nat [] "qkv_base_offset" = some (Tile.scalar base) ∧
+  s.regs .nat [BLOCK_M] "off_m"
+    = some (Tile.vec (fun r : Fin BLOCK_M => s0.pids 0 * BLOCK_M + r.val)) ∧
+  s.regs .blockPtr [DIM, BLOCK_N] "K_block_ptr" = some
+    (⟨fun _ : TileIndex [DIM, BLOCK_N] =>
+      { region := K, baseOffset := base, parentShape := [DIM, SEQLEN],
+        blockShape := [DIM, BLOCK_N], strides := [1, DIM], offsets := [0, c] }⟩) ∧
+  s.regs .blockPtr [BLOCK_N, DIM] "V_block_ptr" = some
+    (⟨fun _ : TileIndex [BLOCK_N, DIM] =>
+      { region := V, baseOffset := base, parentShape := [SEQLEN, DIM],
+        blockShape := [BLOCK_N, DIM], strides := [DIM, 1], offsets := [c, 0] }⟩)
+
+set_option maxHeartbeats 2000000 in
+/-- The first thirteen body statements (everything before the two `tl.advance`
+assigns) never touch the invariant's pinned registers. -/
+private theorem flashIO_bodyHead_regs (BLOCK_M BLOCK_N DIM : Nat)
+    {d : TileDType} {sh : TileShape} {name : RegName}
+    (h1 : name ≠ "k") (h2 : name ≠ "v") (h3 : name ≠ "qk") (h4 : name ≠ "max_new")
+    (h5 : name ≠ "alpha") (h6 : name ≠ "nume") (h7 : name ≠ "out_scale")
+    (h8 : name ≠ "out_buffer") (h9 : name ≠ "denom") (h10 : name ≠ "max")
+    {s s' : BlockState}
+    (h : stepStmts ((flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM).take 13) s = some s') :
+    s'.regs d sh name = s.regs d sh name := by
+  refine flashIO_stepStmts_regs_preserved ?_ h
+  intro st s1 s2 hst hstep
+  simp only [flashLoopBodyG, List.take_succ_cons, List.take_zero, List.mem_cons,
+    List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  · exact flashIO_assign_regs_ne h1 hstep
+  · exact flashIO_assign_regs_ne h2 hstep
+  · exact flashIO_assign_regs_ne h3 hstep
+  · rw [flash_stepStmt_ifThen_false] at hstep; rw [← Option.some.inj hstep]
+  · exact flashIO_assign_regs_ne h3 hstep
+  · exact flashIO_assign_regs_ne h4 hstep
+  · exact flashIO_assign_regs_ne h5 hstep
+  · exact flashIO_assign_regs_ne h6 hstep
+  · exact flashIO_assign_regs_ne h7 hstep
+  · exact flashIO_assign_regs_ne h8 hstep
+  · exact flashIO_assign_regs_ne h8 hstep
+  · exact flashIO_assign_regs_ne h9 hstep
+  · exact flashIO_assign_regs_ne h10 hstep
+
+set_option maxHeartbeats 2000000 in
+/-- **Weak body step (successor form)**: whatever state the non-causal body
+actually reaches re-establishes `flashIOSafeInv` at `c + BLOCK_N` — the two
+`tl.advance` assigns bump the `K`/`V` offsets and nothing else in the body
+touches a pinned register. -/
+private theorem flashIO_bodyPreservesInv (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (K V : RegionName) (s0 : BlockState) (base SEQLEN BLOCK_M DIM BLOCK_N : Nat)
+    (c : Nat) (s : BlockState)
+    (hP : flashIOSafeInv K V s0 base SEQLEN BLOCK_M DIM BLOCK_N c s) :
+    ∀ s', stepStmtsR R (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)
+        (s.setReg "start_n" .nat [] (Tile.scalar c)) = some s' →
+      flashIOSafeInv K V s0 base SEQLEN BLOCK_M DIM BLOCK_N (c + BLOCK_N) s' := by
+  obtain ⟨hmod, hsm, hbsh, hqkv, hom, hKp, hVp⟩ := hP
+  intro s' hrun
+  rw [flashIO_loopBody_castFree R hfp16 BLOCK_M BLOCK_N DIM] at hrun
+  set t0 := s.setReg "start_n" .nat [] (Tile.scalar c) with ht0
+  rw [show flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM
+      = (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM).take 13
+        ++ [Stmt.assign .blockPtr [DIM, BLOCK_N] "K_block_ptr"
+              (Op.advanceBlockPtr (Op.ref .blockPtr [DIM, BLOCK_N] "K_block_ptr") [(0:Nat), BLOCK_N]),
+            Stmt.assign .blockPtr [BLOCK_N, DIM] "V_block_ptr"
+              (Op.advanceBlockPtr (Op.ref .blockPtr [BLOCK_N, DIM] "V_block_ptr") [BLOCK_N, (0:Nat)])]
+      from by
+    conv_lhs => rw [← List.take_append_drop 13 (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)]
+    rfl] at hrun
+  obtain ⟨u, hhead, htail⟩ := flashIO_stepStmts_append_inv _ _ _ _ hrun
+  have hsmU : u.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0)) := by
+    rw [flashIO_bodyHead_regs BLOCK_M BLOCK_N DIM (by decide) (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hhead, ht0]
+    exact flashIO_regs_chain (by decide) hsm
+  have hbshU : u.regs .nat [] "off_bs_head" = some (Tile.scalar (s0.pids 1)) := by
+    rw [flashIO_bodyHead_regs BLOCK_M BLOCK_N DIM (by decide) (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hhead, ht0]
+    exact flashIO_regs_chain (by decide) hbsh
+  have hqkvU : u.regs .nat [] "qkv_base_offset" = some (Tile.scalar base) := by
+    rw [flashIO_bodyHead_regs BLOCK_M BLOCK_N DIM (by decide) (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hhead, ht0]
+    exact flashIO_regs_chain (by decide) hqkv
+  have homU : u.regs .nat [BLOCK_M] "off_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => s0.pids 0 * BLOCK_M + r.val)) := by
+    rw [flashIO_bodyHead_regs BLOCK_M BLOCK_N DIM (by decide) (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hhead, ht0]
+    exact flashIO_regs_chain (by decide) hom
+  have hKpU : u.regs .blockPtr [DIM, BLOCK_N] "K_block_ptr" = some
+      (⟨fun _ : TileIndex [DIM, BLOCK_N] =>
+        { region := K, baseOffset := base, parentShape := [DIM, SEQLEN],
+          blockShape := [DIM, BLOCK_N], strides := [1, DIM], offsets := [0, c] }⟩) := by
+    rw [flashIO_bodyHead_regs BLOCK_M BLOCK_N DIM (by decide) (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hhead, ht0]
+    exact flashIO_regs_chain (by decide) hKp
+  have hVpU : u.regs .blockPtr [BLOCK_N, DIM] "V_block_ptr" = some
+      (⟨fun _ : TileIndex [BLOCK_N, DIM] =>
+        { region := V, baseOffset := base, parentShape := [SEQLEN, DIM],
+          blockShape := [BLOCK_N, DIM], strides := [DIM, 1], offsets := [c, 0] }⟩) := by
+    rw [flashIO_bodyHead_regs BLOCK_M BLOCK_N DIM (by decide) (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) (by decide) (by decide) (by decide) hhead, ht0]
+    exact flashIO_regs_chain (by decide) hVp
+  -- the two `tl.advance` assigns
+  obtain ⟨w1, hw1, htail⟩ := flashIO_stepStmts_cons_inv htail
+  rw [stepStmt_assign_eq_some (flash_advance_col_eval u K base DIM SEQLEN DIM BLOCK_N 1 DIM c
+    BLOCK_N "K_block_ptr" hKpU)] at hw1
+  obtain rfl := Option.some.inj hw1
+  obtain ⟨w2, hw2, htail⟩ := flashIO_stepStmts_cons_inv htail
+  rw [stepStmt_assign_eq_some (flash_advance_row_eval _ V base SEQLEN DIM BLOCK_N DIM DIM 1 c
+    BLOCK_N "V_block_ptr" (flashIO_regs_chain (by decide) hVpU))] at hw2
+  obtain rfl := Option.some.inj hw2
+  rw [stepStmts.nil] at htail
+  obtain rfl := Option.some.inj htail
+  refine ⟨by rw [Nat.add_mod_right]; exact hmod, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · exact flashIO_regs_chain (by decide) (flashIO_regs_chain (by decide) hsmU)
+  · exact flashIO_regs_chain (by decide) (flashIO_regs_chain (by decide) hbshU)
+  · exact flashIO_regs_chain (by decide) (flashIO_regs_chain (by decide) hqkvU)
+  · exact flashIO_regs_chain (by decide) (flashIO_regs_chain (by decide) homU)
+  · exact flashIO_regs_chain (by decide) (BlockState.setReg_same _ _ _ _ _)
+  · exact BlockState.setReg_same _ _ _ _ _
+
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **Weak loop-body safety**: from a `flashIOSafeInv` state every statement of
+the non-causal body is trace-safe — the two unmasked block-pointer loads' lanes
+are bounded by the skin's `read2`/`read3` windows, the dead causal `ifThen` is a
+constexpr no-op, and every other statement is register arithmetic. -/
+private theorem flashIO_bodySafeW (R : RoundingModel) (bounds : RegionBounds)
+    (K V : RegionName) (s0 : BlockState) (base SEQLEN BLOCK_M DIM BLOCK_N : Nat)
+    (hBNdvd : BLOCK_N ∣ SEQLEN)
+    (c : Nat) (s : BlockState) (hc : c < SEQLEN)
+    (hP : flashIOSafeInv K V s0 base SEQLEN BLOCK_M DIM BLOCK_N c s)
+    (hbK : ∀ (t : Fin (SEQLEN / BLOCK_N)) (j : Fin (DIM * BLOCK_N)),
+      base + (j.val / BLOCK_N) * 1 + (t.val * BLOCK_N + j.val % BLOCK_N) * DIM < bounds K)
+    (hbV : ∀ (t : Fin (SEQLEN / BLOCK_N)) (j : Fin (BLOCK_N * DIM)),
+      base + (t.val * BLOCK_N + j.val / DIM) * DIM + (j.val % DIM) * 1 < bounds V) :
+    Stmt.TraceSafeListR R bounds (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)
+      (s.setReg "start_n" .nat [] (Tile.scalar c)) := by
+  obtain ⟨hmod, hsm, hbsh, hqkv, hom, hKp, hVp⟩ := hP
+  have hcBN : c / BLOCK_N * BLOCK_N = c := Nat.div_mul_cancel (Nat.dvd_of_mod_eq_zero hmod)
+  have hcdivlt : c / BLOCK_N < SEQLEN / BLOCK_N := by
+    have h1 : c / BLOCK_N * BLOCK_N < SEQLEN / BLOCK_N * BLOCK_N := by
+      rw [hcBN, Nat.div_mul_cancel hBNdvd]; exact hc
+    exact lt_of_mul_lt_mul_right h1 (Nat.zero_le BLOCK_N)
+  have hKp0 : (s.setReg "start_n" .nat [] (Tile.scalar c)).regs .blockPtr [DIM, BLOCK_N]
+      "K_block_ptr" = some
+      (⟨fun _ : TileIndex [DIM, BLOCK_N] =>
+        { region := K, baseOffset := base, parentShape := [DIM, SEQLEN],
+          blockShape := [DIM, BLOCK_N], strides := [1, DIM], offsets := [0, c] }⟩) :=
+    flashIO_regs_chain (by decide) hKp
+  have hVp0 : (s.setReg "start_n" .nat [] (Tile.scalar c)).regs .blockPtr [BLOCK_N, DIM]
+      "V_block_ptr" = some
+      (⟨fun _ : TileIndex [BLOCK_N, DIM] =>
+        { region := V, baseOffset := base, parentShape := [SEQLEN, DIM],
+          blockShape := [BLOCK_N, DIM], strides := [DIM, 1], offsets := [c, 0] }⟩) :=
+    flashIO_regs_chain (by decide) hVp
+  unfold flashLoopBodyG
+  -- (0) k = tl.load(K_block_ptr): the `read2` window bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s1 h1 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref, hKp0] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hbound := hbK ⟨c / BLOCK_N, hcdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+    rw [hcBN] at hbound
+    simpa using hbound
+  obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+  -- (1) v = tl.load(V_block_ptr): the `read3` window bound
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s2 h2 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref] at hptrs
+    simp only [BlockState.setReg_ne_name, ne_eq, String.reduceEq, not_false_eq_true] at hptrs
+    rw [hVp] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro _
+    have hbound := hbV ⟨c / BLOCK_N, hcdivlt⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+    simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+    rw [hcBN] at hbound
+    simpa using hbound
+  obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv h2
+  -- (2) qk = zeros
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s3 h3 => ?_)
+  obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv h3
+  -- (3) the dead causal `ifThen` (constexpr-false)
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s4 h4 => ?_)
+  · simp only [Stmt.TraceSafeR]
+    refine ⟨by simp [Op.SafeAtR.eq_def], ?_⟩
+    rw [flashIO_evalOpR_constBool]
+    exact trivial
+  rw [flashIO_ifThen_falseR] at h4
+  obtain rfl := Option.some.inj h4
+  -- (4)–(14): register-only assigns
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s5 h5 => ?_)
+  obtain ⟨v5, -, rfl⟩ := stepStmtR_assign_inv h5
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s6 h6 => ?_)
+  obtain ⟨v6, -, rfl⟩ := stepStmtR_assign_inv h6
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s7 h7 => ?_)
+  obtain ⟨v7, -, rfl⟩ := stepStmtR_assign_inv h7
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s8 h8 => ?_)
+  obtain ⟨v8, -, rfl⟩ := stepStmtR_assign_inv h8
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s9 h9 => ?_)
+  obtain ⟨v9, -, rfl⟩ := stepStmtR_assign_inv h9
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s10 h10 => ?_)
+  obtain ⟨v10, -, rfl⟩ := stepStmtR_assign_inv h10
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s11 h11 => ?_)
+  obtain ⟨v11, -, rfl⟩ := stepStmtR_assign_inv h11
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s12 h12 => ?_)
+  obtain ⟨v12, -, rfl⟩ := stepStmtR_assign_inv h12
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s13 h13 => ?_)
+  obtain ⟨v13, -, rfl⟩ := stepStmtR_assign_inv h13
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) (fun s14 h14 => ?_)
+  obtain ⟨v14, -, rfl⟩ := stepStmtR_assign_inv h14
+  exact Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def])
+    (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+
+
+/-! ### PostLoop safety -/
+
+/-- A `writeMemTyped` scatter never touches the register file. -/
+private theorem flashIO_foldl_wmt_regs {dtype : TileDType} {α : Type}
+    (rf : α → RegionName) (off : α → Nat) (vf : α → TileCarrier dtype) :
+    ∀ (l : List α) (s : BlockState) (d : TileDType) (sh : TileShape) (n : RegName),
+      ((l.foldl (fun acc a => acc.writeMemTyped dtype (rf a) (off a) (vf a)) s).regs d sh n)
+        = s.regs d sh n
+  | [], _, _, _, _ => rfl
+  | a :: rest, s, d, sh, n => by
+      rw [List.foldl_cons, flashIO_foldl_wmt_regs rf off vf rest _ d sh n]
+      cases dtype <;> rfl
+
+/-- Guarded (`inBounds`-filtered) sibling of `flashIO_foldl_wmt_regs`. -/
+private theorem flashIO_foldl_wmt_regs_guard {dtype : TileDType} {α : Type}
+    (g : α → Bool) (rf : α → RegionName) (off : α → Nat) (vf : α → TileCarrier dtype) :
+    ∀ (l : List α) (s : BlockState) (d : TileDType) (sh : TileShape) (n : RegName),
+      ((l.foldl (fun acc a =>
+          if g a = Bool.true then acc.writeMemTyped dtype (rf a) (off a) (vf a) else acc) s).regs d sh n)
+        = s.regs d sh n
+  | [], _, _, _, _ => rfl
+  | a :: rest, s, d, sh, n => by
+      rw [List.foldl_cons, flashIO_foldl_wmt_regs_guard g rf off vf rest _ d sh n]
+      by_cases hg : g a = Bool.true
+      · rw [if_pos hg]; cases dtype <;> rfl
+      · rw [if_neg hg]
+
+/-- An unmasked store preserves the whole register file. -/
+private theorem flashIO_store_none_regs {dtype : TileDType} {shape : TileShape}
+    {mem : MemAccess dtype shape} {val : Op dtype shape} {u u' : BlockState}
+    (h : stepStmt (Stmt.store dtype shape mem val MaskOpt.none) u = some u')
+    {d : TileDType} {sh : TileShape} {n : RegName} :
+    u'.regs d sh n = u.regs d sh n := by
+  cases mem with
+  | region region off =>
+      simp only [stepStmt, Option.bind_eq_bind, Option.bind_some] at h
+      cases hv : evalOp val u with
+      | none => rw [hv] at h; simp at h
+      | some vs =>
+        cases ho : evalOp off u with
+        | none => rw [hv, ho] at h; simp at h
+        | some offs =>
+            rw [hv, ho] at h
+            simp only [Option.bind_some] at h
+            rw [← Option.some.inj h]
+            exact flashIO_foldl_wmt_regs (fun _ => Region.cast region) (fun i => offs.data i)
+              (fun i => vs.data i) _ u d sh n
+  | ptr p =>
+      simp only [stepStmt, Option.bind_eq_bind, Option.bind_some] at h
+      cases hv : evalOp val u with
+      | none => rw [hv] at h; simp at h
+      | some vs =>
+        cases ho : evalOp p u with
+        | none => rw [hv, ho] at h; simp at h
+        | some pts =>
+            rw [hv, ho] at h
+            simp only [Option.bind_some] at h
+            rw [← Option.some.inj h]
+            exact flashIO_foldl_wmt_regs (fun i => (pts.data i).1) (fun i => (pts.data i).2)
+              (fun i => vs.data i) _ u d sh n
+  | blockPtr p bc =>
+      simp only [stepStmt, Option.bind_eq_bind, Option.bind_some] at h
+      cases hv : evalOp val u with
+      | none => rw [hv] at h; simp at h
+      | some vs =>
+        cases ho : evalOp p u with
+        | none => rw [hv, ho] at h; simp at h
+        | some pts =>
+            rw [hv, ho] at h
+            simp only [Option.bind_some] at h
+            rw [← Option.some.inj h]
+            exact flashIO_foldl_wmt_regs_guard
+              (fun i => Bool.true && BlockPtr.inBounds (pts.data i) (TileShape.indexToList shape i) bc)
+              (fun i => (pts.data i).region)
+              (fun i => (pts.data i).address (TileShape.indexToList shape i))
+              (fun i => vs.data i) _ u d sh n
+
+/-- `evalOpR` value of the `l_ptr` address op under the `off_bs_head`/`off_m`
+pins (the op is `.nat`/`.ptr`-only, so `R` is inert). -/
+private theorem flashIO_lptr_evalR (R : RoundingModel) (u : BlockState) (L : RegionName)
+    (p0 p1 SEQLEN BLOCK_M : Nat)
+    (hbsh : u.regs .nat [] "off_bs_head" = some (Tile.scalar p1))
+    (hom : u.regs .nat [BLOCK_M] "off_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => p0 * BLOCK_M + r.val))) :
+    evalOpR R (Op.ptrAdd Broadcast.scalarL (Op.ptrBase L)
+        (Op.add .nat Broadcast.scalarL
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "off_bs_head") (Op.constNat SEQLEN))
+          (Op.ref .nat [BLOCK_M] "off_m"))) u
+      = some (⟨fun r : TileIndex [BLOCK_M] => (Region.cast L, p1 * SEQLEN + (p0 * BLOCK_M + r.1.val))⟩
+          : Tile .ptr [BLOCK_M]) := by
+  simp only [evalOpR, evalOpR.eq_def, hbsh, hom, Option.bind_eq_bind, Option.bind_some,
+    Option.map_some]
+  refine congrArg some ?_; ext r
+  · rfl
+  · simp only [Tile.ptrAdd_data, Tile.scalar_data, Tile.bop_data, Tile.vec_data,
+      Broadcast.leftIndex_scalarL, Broadcast.rightIndex_scalarL, Broadcast.leftIndex_nil,
+      Broadcast.rightIndex_nil, NumericDType.add, NumericDType.mul, Nat.zero_add]
+
+/-- `Op.SafeAtR` recipe for `expandDim` — shape-indexed, so it must be
+**applied**, never simp'd (the goal carries the reduced type index). -/
+private theorem flashIO_safeAtR_expandDim (R : RoundingModel) (bounds : RegionBounds)
+    (s : BlockState) {dtype : TileDType} {shape : TileShape}
+    (ax : Fin (shape.length + 1)) (a : Op dtype shape) :
+    (Op.expandDim ax a).SafeAtR R bounds s ↔ a.SafeAtR R bounds s := by simp [Op.SafeAtR]
+
+/-- `Op.SafeAtR` recipe for `castFloat` (dtype-indexed; same treatment). -/
+private theorem flashIO_safeAtR_castFloat (R : RoundingModel) (bounds : RegionBounds)
+    (s : BlockState) {shape : TileShape} (src dst : FloatDType) (a : Op src.toTileDType shape) :
+    (Op.castFloat src dst a).SafeAtR R bounds s ↔ a.SafeAtR R bounds s := by simp [Op.SafeAtR]
+
+/-- The `L` store is cast-free (`.real` writes never round). -/
+private theorem flashIO_Lstore_castFree (R : RoundingModel) (BLOCK_M : Nat) (u : BlockState) :
+    stepStmtR R (Stmt.store .real [BLOCK_M] (MemAccess.ptr (Op.ref .ptr [BLOCK_M] "l_ptr"))
+        (Op.add .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BLOCK_M] "max")
+          (Op.log2 (Op.ref .real [BLOCK_M] "denom"))) MaskOpt.none) u
+      = stepStmt (Stmt.store .real [BLOCK_M] (MemAccess.ptr (Op.ref .ptr [BLOCK_M] "l_ptr"))
+        (Op.add .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BLOCK_M] "max")
+          (Op.log2 (Op.ref .real [BLOCK_M] "denom"))) MaskOpt.none) u := by
+  simp only [stepStmtR, stepStmt, evalOpR.eq_def, evalOp.eq_def, flashIO_wmtR_real R]
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop safety**: the two terminal stores' per-lane addresses are the
+pinned `l_ptr` row (`write2` window, bounds on `L`) and the pinned
+`O_block_ptr` tile (`write1` window, bounds on `O`); the three register
+assigns are safe at every state. -/
+private theorem flashIO_postSafeW (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (bounds : RegionBounds) (K V L O : RegionName) (s0 : BlockState)
+    (base SEQLEN BLOCK_M DIM BLOCK_N c : Nat) (s : BlockState)
+    (hP : flashIOSafeInv K V s0 base SEQLEN BLOCK_M DIM BLOCK_N c s)
+    (hbO : ∀ j : Fin (BLOCK_M * DIM),
+      base + (s0.pids 0 * BLOCK_M + j.val / DIM) * DIM + (j.val % DIM) * 1 < bounds O)
+    (hbL : ∀ i : Fin BLOCK_M, s0.pids 1 * SEQLEN + (s0.pids 0 * BLOCK_M + i.val) < bounds L) :
+    Stmt.TraceSafeListR R bounds (flashPostLoopG L O SEQLEN BLOCK_M DIM) s := by
+  obtain ⟨hmod, hsm, hbsh, hqkv, hom, hKp, hVp⟩ := hP
+  unfold flashPostLoopG
+  -- (0) out_buffer /= denom
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s1 h1 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR]
+    exact ⟨trivial, (flashIO_safeAtR_expandDim R bounds _ _ _).mpr (by simp [Op.SafeAtR])⟩
+  obtain ⟨v0, -, rfl⟩ := stepStmtR_assign_inv h1
+  have hbsh1 : (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).regs .nat [] "off_bs_head"
+      = some (Tile.scalar (s0.pids 1)) := flashIO_regs_chain (by decide) hbsh
+  have hom1 : (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).regs .nat [BLOCK_M] "off_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => s0.pids 0 * BLOCK_M + r.val)) :=
+    flashIO_regs_chain (by decide) hom
+  have hsm1 : (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).regs .nat [] "start_m"
+      = some (Tile.scalar (s0.pids 0)) := flashIO_regs_chain (by decide) hsm
+  have hqkv1 : (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).regs .nat [] "qkv_base_offset"
+      = some (Tile.scalar base) := flashIO_regs_chain (by decide) hqkv
+  -- (1) l_ptr = L + off_bs_head * SEQLEN + off_m
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun s2 h2 => ?_)
+  obtain ⟨v1, hv1, rfl⟩ := stepStmtR_assign_inv h2
+  rw [flashIO_lptr_evalR R _ L (s0.pids 0) (s0.pids 1) SEQLEN BLOCK_M hbsh1 hom1] at hv1
+  obtain rfl := Option.some.inj hv1
+  -- (2) the `L` store: `write2` bounds
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 h3 => ?_)
+  · simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, Op.SafeAtR,
+      MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, ⟨trivial, trivial⟩, trivial, ?_⟩
+    intro ptrs hptrs i _
+    rw [evalOpR_ref, BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    exact hbL i.1
+  rw [flashIO_Lstore_castFree R BLOCK_M] at h3
+  have hsm3 : s3.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0)) := by
+    rw [flashIO_store_none_regs h3]
+    exact flashIO_regs_chain (by decide) hsm1
+  have hqkv3 : s3.regs .nat [] "qkv_base_offset" = some (Tile.scalar base) := by
+    rw [flashIO_store_none_regs h3]
+    exact flashIO_regs_chain (by decide) hqkv1
+  -- (3) O_block_ptr
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun s4 h4 => ?_)
+  obtain ⟨v3, hv3, rfl⟩ := stepStmtR_assign_inv h4
+  rw [flashIO_evalOpR_mbpdo R O (Op.ref TileDType.nat [] "qkv_base_offset") [SEQLEN, DIM]
+      [BLOCK_M, DIM] [DIM, 1]
+      [Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m")
+        (Op.constNat BLOCK_M), Op.constNat 0] s3
+      (by simp only [evalOpR, evalOp])
+      (by
+        intro o ho
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at ho
+        rcases ho with rfl | rfl <;> simp only [evalOpR.eq_def, evalOp.eq_def]),
+    flash_makeBlockPtr_rowcol_eval O (Op.ref TileDType.nat [] "qkv_base_offset") [SEQLEN, DIM]
+      [BLOCK_M, DIM] [DIM, 1]
+      (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m")
+        (Op.constNat BLOCK_M)) s3 base (s0.pids 0 * BLOCK_M)
+      (by rw [evalOp_ref, hqkv3])
+      (by rw [evalOp_mul]
+          simp only [evalOp_ref, evalOp_constNat, hsm3, Option.bind_eq_bind, Option.bind_some,
+            flash_scalarBop]
+          rfl)] at hv3
+  obtain rfl := Option.some.inj hv3
+  -- (4) the `O` store: `write1` bounds
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, Op.SafeAtR,
+    MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+  refine ⟨trivial, (flashIO_safeAtR_castFloat R bounds _ _ _ _).mpr (by simp [Op.SafeAtR]),
+    trivial, ?_⟩
+  intro ptrs hptrs idx _
+  rw [evalOpR_ref, BlockState.setReg_same] at hptrs
+  obtain rfl := Option.some.inj hptrs
+  intro _
+  have hbound := hbO (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+  simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+  simpa using hbound
+
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The `TraceSafeR` walk for the whole non-causal kernel**: the twelve
+scalar/pointer prologue assigns are safe at every state, the `Q_block_ptr`
+load is bounded by the skin's `read1` window, the KV loop runs the
+successor-form invariant principle over `flashIOSafeInv`, and the postLoop
+stores are bounded by the `write1`/`write2` windows. -/
+private theorem flashIO_traceSafeR (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (bounds : RegionBounds) (Q K V L O : RegionName) (sm_scale : ℝ)
+    (sqbs skbs svbs sobs BS HEAD SEQLEN BLOCK_M DIM BLOCK_N stride_q_head : Nat)
+    (hBN : 0 < BLOCK_N) (hSEQ : 0 < SEQLEN) (hBNdvd : BLOCK_N ∣ SEQLEN) (s : BlockState)
+    (hbQ : ∀ (t : Fin (SEQLEN / BLOCK_N)) (j : Fin (BLOCK_M * DIM)),
+      s.pids 1 * stride_q_head + (s.pids 0 * BLOCK_M + j.val / DIM) * DIM + (j.val % DIM) * 1
+        < bounds Q)
+    (hbK : ∀ (t : Fin (SEQLEN / BLOCK_N)) (j : Fin (DIM * BLOCK_N)),
+      s.pids 1 * stride_q_head + (j.val / BLOCK_N) * 1
+        + (t.val * BLOCK_N + j.val % BLOCK_N) * DIM < bounds K)
+    (hbV : ∀ (t : Fin (SEQLEN / BLOCK_N)) (j : Fin (BLOCK_N * DIM)),
+      s.pids 1 * stride_q_head + (t.val * BLOCK_N + j.val / DIM) * DIM
+        + (j.val % DIM) * 1 < bounds V)
+    (hbO : ∀ j : Fin (BLOCK_M * DIM),
+      s.pids 1 * stride_q_head + (s.pids 0 * BLOCK_M + j.val / DIM) * DIM
+        + (j.val % DIM) * 1 < bounds O)
+    (hbL : ∀ i : Fin BLOCK_M, s.pids 1 * SEQLEN + (s.pids 0 * BLOCK_M + i.val) < bounds L) :
+    ((flash_attn_fwd_kernel_surface Q K V L O sm_scale
+      sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
+      sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N
+      Bool.false).toAlgKernel).TraceSafeR R bounds s := by
+  have hT : 0 < SEQLEN / BLOCK_N := Nat.div_pos (Nat.le_of_dvd hSEQ hBNdvd) hBN
+  obtain ⟨spW, hpreW, hpids, hmem, hbsh, hqkv, hmax, hden, hob, hqreg, hom, hon, hsm,
+      hKp, hVp, hQp, hqks, hlo, hhi⟩ :=
+    flashIO_preLoop_evalW s Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM BLOCK_N
+  unfold Kernel.TraceSafeR
+  rw [flash_surface_body_eqG Q K V L O sm_scale Bool.false sqbs skbs svbs sobs DIM 1
+    BS HEAD SEQLEN BLOCK_M DIM BLOCK_N stride_q_head]
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- the preLoop
+    rw [show flashPreLoopG Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM BLOCK_N
+        = (flashPreLoopG Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM BLOCK_N).take 12
+          ++ (flashPreLoopG Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM BLOCK_N).drop 12
+      from (List.take_append_drop 12 _).symm]
+    refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+    · -- statements 0–11: register-only assigns, safe at every state
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
+      intro st hst u
+      simp only [flashPreLoopG, List.take_succ_cons, List.take_zero, List.mem_cons,
+        List.not_mem_nil, or_false] at hst
+      rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl <;>
+        simp [Stmt.TraceSafeR, Op.SafeAtR]
+    · intro s1 hs1
+      rw [flashIO_stepStmtsR_castFree_of_stmts R _
+        (fun st hst => flashIO_preLoop_stmt_castFree R hfp16 Q K V sm_scale Bool.false
+          stride_q_head SEQLEN BLOCK_M DIM BLOCK_N st (List.mem_of_mem_take hst)) s] at hs1
+      obtain ⟨u, hu1, hu2⟩ := flashIO_stepStmts_append_inv
+        ((flashPreLoopG Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM BLOCK_N).take 12)
+        ((flashPreLoopG Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM BLOCK_N).drop 12)
+        s spW (by rw [List.take_append_drop]; exact hpreW)
+      have hs1u : s1 = u := Option.some.inj (hs1.symm.trans hu1)
+      rw [show (flashPreLoopG Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM BLOCK_N).drop 12
+          = [ Stmt.assign .real [BLOCK_M, DIM] "q"
+                (Op.load .real (MemAccess.blockPtr
+                  (Op.ref .blockPtr [BLOCK_M, DIM] "Q_block_ptr") []) MaskOpt.none),
+              Stmt.assign .fp16 [BLOCK_M, DIM] "q"
+                (Op.castFloat .real .fp16
+                  (Op.mul .real Broadcast.scalarR (Op.ref .real [BLOCK_M, DIM] "q")
+                    (Op.ref .real [] "qk_scale"))),
+              Stmt.assign .nat [] "lo" (Op.constNat 0),
+              Stmt.assign .nat [] "hi"
+                ((Op.constBool Bool.false).ite
+                  (Op.mul .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil (Op.ref .nat [] "start_m") (Op.constNat 1))
+                    (Op.constNat BLOCK_M))
+                  (Op.constNat SEQLEN)) ] from rfl] at hu2 ⊢
+      have hframeQ : spW.regs .blockPtr [BLOCK_M, DIM] "Q_block_ptr"
+          = u.regs .blockPtr [BLOCK_M, DIM] "Q_block_ptr" := by
+        refine flashIO_stepStmts_regs_preserved ?_ hu2
+        intro st s2 s3 hst hstep
+        simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+        rcases hst with rfl | rfl | rfl | rfl <;> exact flashIO_assign_regs_ne (by decide) hstep
+      have hQp1 : s1.regs .blockPtr [BLOCK_M, DIM] "Q_block_ptr" = some
+          (⟨fun _ : TileIndex [BLOCK_M, DIM] =>
+            { region := Q, baseOffset := s.pids 1 * stride_q_head, parentShape := [SEQLEN, DIM],
+              blockShape := [BLOCK_M, DIM], strides := [DIM, 1],
+              offsets := [s.pids 0 * BLOCK_M, 0] }⟩) := by
+        rw [hs1u, ← hframeQ]; exact hQp
+      -- statement 12: the unmasked `Q_block_ptr` load (`read1` bound)
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun w1 hw1 => ?_)
+      · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR,
+          MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+        refine ⟨trivial, trivial, ?_⟩
+        intro ptrs hptrs idx _
+        rw [evalOpR_ref, hQp1] at hptrs
+        obtain rfl := Option.some.inj hptrs
+        intro _
+        have hbound := hbQ ⟨0, hT⟩ (Lane2D.encode (idx.1, idx.2.1, PUnit.unit))
+        simp only [Lane2D.encode_div, Lane2D.encode_mod] at hbound
+        simpa using hbound
+      obtain ⟨w1v, -, rfl⟩ := stepStmtR_assign_inv hw1
+      refine Stmt.TraceSafeListR.cons_intro ?_ (fun w2 hw2 => ?_)
+      · simp only [Stmt.TraceSafeR]
+        exact (flashIO_safeAtR_castFloat R bounds _ _ _ _).mpr (by simp [Op.SafeAtR])
+      obtain ⟨w2v, -, rfl⟩ := stepStmtR_assign_inv hw2
+      refine Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR]) (fun w3 hw3 => ?_)
+      obtain ⟨w3v, -, rfl⟩ := stepStmtR_assign_inv hw3
+      exact Stmt.TraceSafeListR.cons_intro
+        (by simp [Stmt.TraceSafeR, Op.SafeAtR])
+        (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  · -- after the preLoop: the KV loop, then the postLoop
+    intro s2 hs2
+    rw [flashIO_preLoop_castFree R hfp16 Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M
+      DIM BLOCK_N s, hpreW] at hs2
+    obtain rfl := Option.some.inj hs2
+    have hinv0 : flashIOSafeInv K V s (s.pids 1 * stride_q_head) SEQLEN BLOCK_M DIM BLOCK_N 0 spW :=
+      ⟨Nat.zero_mod _, hsm, hbsh, hqkv, hom, hKp, hVp⟩
+    have hhiSEQ : spW.regs .nat [] "hi" = some (Tile.scalar SEQLEN) := by
+      rw [hhi]; simp only [flashHiG, Bool.false_eq_true, if_false]
+    have hstepInv : ∀ c st, c < SEQLEN →
+        flashIOSafeInv K V s (s.pids 1 * stride_q_head) SEQLEN BLOCK_M DIM BLOCK_N c st →
+        ∀ st', stepStmtsR R (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)
+            (st.setReg "start_n" .nat [] (Tile.scalar c)) = some st' →
+          flashIOSafeInv K V s (s.pids 1 * stride_q_head) SEQLEN BLOCK_M DIM BLOCK_N (c + BLOCK_N) st' :=
+      fun c st _ hP => flashIO_bodyPreservesInv R hfp16 K V s (s.pids 1 * stride_q_head) SEQLEN
+        BLOCK_M DIM BLOCK_N c st hP
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun s3 hs3 => ?_)
+    · -- the KV loop is trace-safe
+      simp only [Stmt.TraceSafeR]
+      refine ⟨by simp [Op.SafeAtR], by simp [Op.SafeAtR], by simp [Op.SafeAtR], ?_⟩
+      rw [evalOpR_ref, evalOpR_ref, hlo, hhiSEQ,
+        show evalOpR R (Op.constNat BLOCK_N) spW = some (Tile.scalar BLOCK_N) from by
+          simp only [evalOpR]]
+      refine flashIO_forRangeTraceSafeR_inv R bounds "start_n" SEQLEN BLOCK_N
+        (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)
+        (flashIOSafeInv K V s (s.pids 1 * stride_q_head) SEQLEN BLOCK_M DIM BLOCK_N)
+        (fun c st hc hP =>
+          ⟨flashIO_bodySafeW R bounds K V s (s.pids 1 * stride_q_head) SEQLEN BLOCK_M DIM BLOCK_N
+            hBNdvd c st hc hP hbK hbV, hstepInv c st hc hP⟩)
+        0 spW hinv0
+    · -- identify the post-loop state and finish on the two terminal stores
+      rw [show stepStmtR R (Stmt.forRangeDyn "start_n" (Op.ref .nat [] "lo") (Op.ref .nat [] "hi")
+            (Op.constNat BLOCK_N) (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)) spW
+          = stepForRangeAuxR R "start_n" 0 SEQLEN BLOCK_N
+              (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM) spW from by
+        simp only [stepStmtR, evalOpR_ref, hlo, hhiSEQ,
+          show evalOpR R (Op.constNat BLOCK_N) spW = some (Tile.scalar BLOCK_N) from by
+            simp only [evalOpR],
+          Option.bind_eq_bind, Option.bind_some]
+        rfl] at hs3
+      obtain ⟨cF, hPF⟩ := flashIO_forRangeAuxR_preserves R "start_n" SEQLEN BLOCK_N
+        (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)
+        (flashIOSafeInv K V s (s.pids 1 * stride_q_head) SEQLEN BLOCK_M DIM BLOCK_N)
+        hstepInv 0 spW hinv0 s3 hs3
+      exact flashIO_postSafeW R hfp16 bounds K V L O s (s.pids 1 * stride_q_head) SEQLEN
+        BLOCK_M DIM BLOCK_N cF s3 hPF hbO hbL
+
+
+/-! ## The postLoop frame
+
+`flash_attn_postLoopG` delivers the two readback values; the skin additionally
+needs the per-cell frame (every cell outside the two write windows is
+untouched). Derived from the invariant's register pins plus the deterministic
+exact walk. -/
+
+/-- A `writeMemTyped` scatter preserves every cell it does not hit. -/
+private theorem flashIO_foldl_mem_frame {dtype : TileDType} {α : Type}
+    (rf : α → RegionName) (off : α → Nat) (vf : α → TileCarrier dtype) (r : RegionName) (o : Nat) :
+    ∀ (l : List α) (s : BlockState),
+      (∀ k ∈ l, ¬ (rf k = r ∧ off k = o)) →
+      ((l.foldl (fun acc k => acc.writeMemTyped dtype (rf k) (off k) (vf k)) s).mem r o
+        = s.mem r o)
+  | [], _, _ => rfl
+  | k :: rest, s, h => by
+      rw [List.foldl_cons, flashIO_foldl_mem_frame rf off vf r o rest _
+        (fun k' hk' => h k' (List.mem_cons_of_mem _ hk'))]
+      have hne : ¬ (r = rf k ∧ o = off k) :=
+        fun hro => h k List.mem_cons_self ⟨hro.1.symm, hro.2.symm⟩
+      cases dtype <;>
+        (simp only [BlockState.writeMemTyped, BlockState.writeMemAs]; rw [if_neg hne])
+
+/-- Guarded (`inBounds`-filtered) sibling of `flashIO_foldl_mem_frame`. -/
+private theorem flashIO_foldl_mem_frame_guard {dtype : TileDType} {α : Type}
+    (g : α → Bool) (rf : α → RegionName) (off : α → Nat) (vf : α → TileCarrier dtype)
+    (r : RegionName) (o : Nat) :
+    ∀ (l : List α) (s : BlockState),
+      (∀ k ∈ l, ¬ (rf k = r ∧ off k = o)) →
+      ((l.foldl (fun acc k =>
+          if g k = Bool.true then acc.writeMemTyped dtype (rf k) (off k) (vf k) else acc) s).mem r o
+        = s.mem r o)
+  | [], _, _ => rfl
+  | k :: rest, s, h => by
+      rw [List.foldl_cons, flashIO_foldl_mem_frame_guard g rf off vf r o rest _
+        (fun k' hk' => h k' (List.mem_cons_of_mem _ hk'))]
+      by_cases hg : g k = Bool.true
+      · rw [if_pos hg]
+        have hne : ¬ (r = rf k ∧ o = off k) :=
+          fun hro => h k List.mem_cons_self ⟨hro.1.symm, hro.2.symm⟩
+        cases dtype <;>
+          (simp only [BlockState.writeMemTyped, BlockState.writeMemAs]; rw [if_neg hne])
+      · rw [if_neg hg]
+
+/-- Cell frame for an unmasked `.ptr` store with a known pointer tile. -/
+private theorem flashIO_store_ptr_mem_frame {dtype : TileDType} {shape : TileShape}
+    {ptr : Op .ptr shape} {val : Op dtype shape} {u u' : BlockState} {pt : Tile .ptr shape}
+    (hp : evalOp ptr u = some pt)
+    (h : stepStmt (Stmt.store dtype shape (MemAccess.ptr ptr) val MaskOpt.none) u = some u')
+    (r : RegionName) (o : Nat)
+    (hne : ∀ i : TileIndex shape, ¬ ((pt.data i).1 = r ∧ (pt.data i).2 = o)) :
+    u'.mem r o = u.mem r o := by
+  simp only [stepStmt, Option.bind_eq_bind, Option.bind_some] at h
+  cases hv : evalOp val u with
+  | none => rw [hv] at h; simp at h
+  | some vs =>
+      rw [hv, hp] at h
+      simp only [Option.bind_some] at h
+      rw [← Option.some.inj h]
+      exact flashIO_foldl_mem_frame (fun i => (pt.data i).1) (fun i => (pt.data i).2)
+        (fun i => vs.data i) r o _ u (fun k _ => hne k)
+
+/-- Cell frame for an unmasked block-pointer store with a known pointer tile. -/
+private theorem flashIO_store_bp_mem_frame {dtype : TileDType} {shape : TileShape}
+    {ptr : Op .blockPtr shape} {bc : List Nat} {val : Op dtype shape} {u u' : BlockState}
+    {pt : Tile .blockPtr shape}
+    (hp : evalOp ptr u = some pt)
+    (h : stepStmt (Stmt.store dtype shape (MemAccess.blockPtr ptr bc) val MaskOpt.none) u = some u')
+    (r : RegionName) (o : Nat)
+    (hne : ∀ i : TileIndex shape,
+      ¬ ((pt.data i).region = r ∧ (pt.data i).address (TileShape.indexToList shape i) = o)) :
+    u'.mem r o = u.mem r o := by
+  simp only [stepStmt, Option.bind_eq_bind, Option.bind_some] at h
+  cases hv : evalOp val u with
+  | none => rw [hv] at h; simp at h
+  | some vs =>
+      rw [hv, hp] at h
+      simp only [Option.bind_some] at h
+      rw [← Option.some.inj h]
+      exact flashIO_foldl_mem_frame_guard
+        (fun i => Bool.true && BlockPtr.inBounds (pt.data i) (TileShape.indexToList shape i) bc)
+        (fun i => (pt.data i).region)
+        (fun i => (pt.data i).address (TileShape.indexToList shape i))
+        (fun i => vs.data i) r o _ u (fun k _ => hne k)
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **PostLoop frame**: whatever the postLoop writes, every cell outside the
+`L`-row window (`write2`) and the `O`-tile window (`write1`) is untouched. -/
+private theorem flashIO_postLoop_frameW (L O : RegionName) (s0 : BlockState)
+    (base SEQLEN BLOCK_M DIM : Nat) (s sP : BlockState)
+    (hbsh : s.regs .nat [] "off_bs_head" = some (Tile.scalar (s0.pids 1)))
+    (hom : s.regs .nat [BLOCK_M] "off_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => s0.pids 0 * BLOCK_M + r.val)))
+    (hsm : s.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0)))
+    (hqkv : s.regs .nat [] "qkv_base_offset" = some (Tile.scalar base))
+    (h : stepStmts (flashPostLoopG L O SEQLEN BLOCK_M DIM) s = some sP) :
+    ∀ r o,
+      (r = L → ∀ i : Fin BLOCK_M, o ≠ s0.pids 1 * SEQLEN + (s0.pids 0 * BLOCK_M + i.val)) →
+      (r = O → ∀ idx : TileIndex [BLOCK_M, DIM],
+        o ≠ base + (s0.pids 0 * BLOCK_M + idx.1.val) * DIM + idx.2.1.val * 1) →
+      sP.mem r o = s.mem r o := by
+  unfold flashPostLoopG at h
+  -- (0) out_buffer /= denom
+  obtain ⟨u1, ha0, h⟩ := flashIO_stepStmts_cons_inv h
+  obtain ⟨v0, -, rfl⟩ := flashIO_stepStmt_assign_inv ha0
+  have hbsh1 : (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).regs .nat [] "off_bs_head"
+      = some (Tile.scalar (s0.pids 1)) := flashIO_regs_chain (by decide) hbsh
+  have hom1 : (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).regs .nat [BLOCK_M] "off_m"
+      = some (Tile.vec (fun r : Fin BLOCK_M => s0.pids 0 * BLOCK_M + r.val)) :=
+    flashIO_regs_chain (by decide) hom
+  have hsm1 : (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).regs .nat [] "start_m"
+      = some (Tile.scalar (s0.pids 0)) := flashIO_regs_chain (by decide) hsm
+  have hqkv1 : (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).regs .nat [] "qkv_base_offset"
+      = some (Tile.scalar base) := flashIO_regs_chain (by decide) hqkv
+  -- (1) l_ptr
+  obtain ⟨u2, ha1, h⟩ := flashIO_stepStmts_cons_inv h
+  obtain ⟨v1, hv1, rfl⟩ := flashIO_stepStmt_assign_inv ha1
+  rw [← evalOpR_triv, flashIO_lptr_evalR RoundingModel.triv _ L (s0.pids 0) (s0.pids 1)
+    SEQLEN BLOCK_M hbsh1 hom1] at hv1
+  obtain rfl := Option.some.inj hv1
+  set s18 := (s.setReg "out_buffer" .real [BLOCK_M, DIM] v0).setReg "l_ptr" .ptr [BLOCK_M]
+      (⟨fun r : TileIndex [BLOCK_M] =>
+        (Region.cast L, s0.pids 1 * SEQLEN + (s0.pids 0 * BLOCK_M + r.1.val))⟩
+        : Tile .ptr [BLOCK_M]) with hs18
+  have hlptr18 : evalOp (Op.ref .ptr [BLOCK_M] "l_ptr") s18
+      = some (⟨fun r : TileIndex [BLOCK_M] =>
+          (Region.cast L, s0.pids 1 * SEQLEN + (s0.pids 0 * BLOCK_M + r.1.val))⟩
+          : Tile .ptr [BLOCK_M]) := by
+    rw [evalOp_ref, hs18, BlockState.setReg_same]
+  -- (2) the `L` store
+  obtain ⟨u3, ha2, h⟩ := flashIO_stepStmts_cons_inv h
+  have hsm3 : u3.regs .nat [] "start_m" = some (Tile.scalar (s0.pids 0)) := by
+    rw [flashIO_store_none_regs ha2, hs18]
+    exact flashIO_regs_chain (by decide) hsm1
+  have hqkv3 : u3.regs .nat [] "qkv_base_offset" = some (Tile.scalar base) := by
+    rw [flashIO_store_none_regs ha2, hs18]
+    exact flashIO_regs_chain (by decide) hqkv1
+  -- (3) O_block_ptr
+  obtain ⟨u4, ha3, h⟩ := flashIO_stepStmts_cons_inv h
+  obtain ⟨v3, hv3, rfl⟩ := flashIO_stepStmt_assign_inv ha3
+  rw [flash_makeBlockPtr_rowcol_eval O (Op.ref TileDType.nat [] "qkv_base_offset") [SEQLEN, DIM]
+    [BLOCK_M, DIM] [DIM, 1]
+    (Op.mul NumericDType.nat Broadcast.nil (Op.ref TileDType.nat [] "start_m")
+      (Op.constNat BLOCK_M)) u3 base (s0.pids 0 * BLOCK_M)
+    (by rw [evalOp_ref, hqkv3])
+    (by rw [evalOp_mul]
+        simp only [evalOp_ref, evalOp_constNat, hsm3, Option.bind_eq_bind, Option.bind_some,
+          flash_scalarBop]
+        rfl)] at hv3
+  obtain rfl := Option.some.inj hv3
+  set s20 := u3.setReg "O_block_ptr" .blockPtr [BLOCK_M, DIM]
+      (⟨fun _ : TileIndex [BLOCK_M, DIM] =>
+        { region := O, baseOffset := base, parentShape := [SEQLEN, DIM],
+          blockShape := [BLOCK_M, DIM], strides := [DIM, 1],
+          offsets := [s0.pids 0 * BLOCK_M, 0] }⟩ : Tile .blockPtr [BLOCK_M, DIM]) with hs20
+  have hObp20 : evalOp (Op.ref .blockPtr [BLOCK_M, DIM] "O_block_ptr") s20
+      = some (⟨fun _ : TileIndex [BLOCK_M, DIM] =>
+          { region := O, baseOffset := base, parentShape := [SEQLEN, DIM],
+            blockShape := [BLOCK_M, DIM], strides := [DIM, 1],
+            offsets := [s0.pids 0 * BLOCK_M, 0] }⟩ : Tile .blockPtr [BLOCK_M, DIM]) := by
+    rw [evalOp_ref, hs20, BlockState.setReg_same]
+  -- (4) the `O` store
+  obtain ⟨u5, ha4, h⟩ := flashIO_stepStmts_cons_inv h
+  rw [stepStmts.nil] at h
+  obtain rfl := Option.some.inj h
+  intro r o hL hO
+  rw [flashIO_store_bp_mem_frame hObp20 ha4 r o ?_, hs20, BlockState.setReg_mem,
+    flashIO_store_ptr_mem_frame hlptr18 ha2 r o ?_, hs18, BlockState.setReg_mem,
+    BlockState.setReg_mem]
+  · intro i hcon
+    refine hL hcon.1.symm i.1 ?_
+    exact hcon.2.symm
+  · intro idx hcon
+    refine hO hcon.1.symm idx ?_
+    rw [← hcon.2]
+    show base + ((s0.pids 0 * BLOCK_M + idx.1.val) * DIM + (0 + idx.2.1.val) * 1)
+      = base + (s0.pids 0 * BLOCK_M + idx.1.val) * DIM + idx.2.1.val * 1
+    rw [Nat.zero_add]; ring
+
+
+/-- `readMemAs .real` is `ofReal` of the operational `readMem`. -/
+private theorem flashIO_readMemAs_real (s : BlockState) (r : RegionName) (o : Nat) :
+    s.readMemAs .real r o = FloatDType.real.ofReal (s.readMem r o) := by
+  unfold BlockState.readMemAs BlockState.readMem
+  cases h : (s.mem r o).readAs TileDType.real with
+  | none => simp [h]
+  | some value =>
+      cases value with
+      | none =>
+          simp [h, FloatDType.storeValue, FloatDType.ofReal]
+          try rfl
+      | some v => simp [h, FloatDType.storeValue, FloatDType.ofReal]
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The non-causal `⊨[R]` io headline.** For every rounding model `R` with
+`R.round .fp16 = id`, the FlashAttention forward surface at
+`IS_CAUSAL = false` implements, on its `StreamMasked3DKernelIO₃ₓ₂` signature,
+the **ideal-ℝ online-softmax attention fold** over the three streamed tiles:
+output lane `j = (i, d)` of `O` holds the base-2 attention ratio
+(`flashIOOutSpec` = the existing `flashAttnOValueSpec` closed form restated on
+the streams), and row `i` of `L` holds the genuine log-sum-exp
+`log₂ (Σⱼ 2^scoreⱼ)` (`flashIOLSpec`). `O` is quantized on the `.fp16` grid
+(`out1DType := .fp16`) and `L` is the unrounded `.real` statistics row.
+
+**Hypothesis provenance** (all inherited from the exact non-causal headline
+`flash_attn_python_case2_genuine_compute_correct_general`):
+
+* `hfp16 : R.round .fp16 = id` — the file's declared fp16 modeling boundary
+  (three in-body `Op.castFloat` sites plus the `.fp16` terminal store); the
+  exact stack already treats these casts as the identity.
+* `hDIM`/`hBN`/`hSEQ` (`0 < DIM`, `0 < BLOCK_N`, `0 < SEQLEN`) and
+  `hdvd : BLOCK_N ∣ SEQLEN` shape the KV walk — `T = SEQLEN / BLOCK_N` full
+  blocks, exactly the exact stack's side conditions.
+* `hOL : O ≠ L` keeps the `O` tile store from clobbering the `L` row.
+
+The exact headline's `hundef` is **not** a hypothesis here — the skin's Hoare
+triple carries the `undef` pin itself — and `hpid₀ = 0` is gone (the Phase-1
+generalization), so this holds at every program id.
+
+**Scope disclosed**: the **causal** (`IS_CAUSAL = true`) io face is
+deliberately deferred (see the section header); it stays on its exact
+headline `flash_attn_python_case1_genuine_compute_correct_general`. -/
+specification flash_attn_io_correctness (R : RoundingModel) (hfp16 : R.round .fp16 = id)
+    (Q K V L O : RegionName) (sm_scale : ℝ)
+    (sqbs skbs svbs sobs BS HEAD SEQLEN BLOCK_M DIM BLOCK_N stride_q_head : Nat)
+    (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hSEQ : 0 < SEQLEN) (hdvd : BLOCK_N ∣ SEQLEN)
+    (hOL : O ≠ L) :
+    flashAttnIO Q K V L O sm_scale sqbs skbs svbs sobs BS HEAD SEQLEN BLOCK_M DIM BLOCK_N
+        stride_q_head ⊨[R]
+      fun _ _ _ xs ys zs =>
+        (fun j => flashIOOutSpec BLOCK_M DIM BLOCK_N SEQLEN (SEQLEN / BLOCK_N)
+            (Nat.div_pos (Nat.le_of_dvd hSEQ hdvd) hBN) (Nat.div_mul_cancel hdvd) hBN
+            sm_scale xs ys zs j,
+         fun i => flashIOLSpec BLOCK_M DIM BLOCK_N SEQLEN (SEQLEN / BLOCK_N) hDIM
+            (Nat.div_pos (Nat.le_of_dvd hSEQ hdvd) hBN) (Nat.div_mul_cancel hdvd) hBN
+            sm_scale xs ys zs i) := by
+  have hT : 0 < SEQLEN / BLOCK_N := Nat.div_pos (Nat.le_of_dvd hSEQ hdvd) hBN
+  have hTB : SEQLEN / BLOCK_N * BLOCK_N = SEQLEN := Nat.div_mul_cancel hdvd
+  refine StreamMasked3DKernelIO₃ₓ₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact flashIO_flattenOk Q K V L O sm_scale sqbs skbs svbs sobs BS HEAD SEQLEN BLOCK_M DIM
+      BLOCK_N stride_q_head
+  · -- the safety walk
+    intro bounds s xs ys zs _hlaunch _hx _hy _hz hbr1 hbr2 hbr3 hbw1 hbw2
+    simp only [flashAttnIO] at hbr1 hbr2 hbr3 hbw1 hbw2 ⊢
+    exact flashIO_traceSafeR R hfp16 bounds Q K V L O sm_scale sqbs skbs svbs sobs BS HEAD
+      SEQLEN BLOCK_M DIM BLOCK_N stride_q_head hBN hSEQ hdvd s
+      (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial) (fun t j => hbr3 t j trivial)
+      (fun j => hbw1 j trivial) (fun j => hbw2 j trivial)
+  · -- the rounded Hoare triple: the exact invariant stack + the cast-free collapses
+    intro s₀ xs ys zs _hlaunch hu hx hy hz
+    simp only [flashAttnIO] at hx hy hz ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hu]
+    obtain ⟨sp, hpre, hsppids, hspmem, hspundef, hbsh, hqkv, hmax, hden, hob, hq, hom, hon,
+        hsm, hKp, hVp, hQp, hqks, hlo, hhi⟩ :=
+      flash_preLoop_evalG s₀ Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM BLOCK_N
+        hundef'
+    have hHiSEQ : flashHiG s₀ Bool.false SEQLEN BLOCK_M = SEQLEN := by
+      simp only [flashHiG, Bool.false_eq_true, if_false]
+    have hinv0 : attnInvariant Q K V sp sm_scale stride_q_head SEQLEN BLOCK_M DIM BLOCK_N SEQLEN
+        Bool.false hDIM 0 sp :=
+      flash_attn_invariant_zeroG Q K V s₀ sp sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM
+        BLOCK_N hDIM hBN SEQLEN
+        (by obtain ⟨k, hk⟩ := hdvd; rw [hk, Nat.mul_mod_right])
+        hsppids hspmem hspundef hbsh hqkv hmax hden hob hq hom hon hKp hVp hQp hsm
+    obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
+      forRangeDyn_inv (idx := "start_n")
+        (startOp := Op.ref .nat [] "lo") (stopOp := Op.ref .nat [] "hi")
+        (stepOp := Op.constNat BLOCK_N)
+        (P := fun i st => attnInvariant Q K V sp sm_scale stride_q_head SEQLEN BLOCK_M DIM
+          BLOCK_N SEQLEN Bool.false hDIM i st)
+        (s_init := sp)
+        (by rw [evalOp_ref, hlo])
+        (by rw [evalOp_ref, hhi, hHiSEQ])
+        (by rw [evalOp_constNat])
+        (by omega)
+        hinv0
+        (fun i st hi hP => flash_attn_step_general Q K V sp sm_scale Bool.false stride_q_head
+          SEQLEN BLOCK_M DIM BLOCK_N hDIM hBN (by norm_num) i st SEQLEN hi (le_refl _)
+          (by obtain ⟨k, hk⟩ := hdvd; rw [hk, Nat.mul_mod_right]) hP)
+    have hfinal : final = SEQLEN := by
+      obtain ⟨_, hmod, hle, _⟩ := hinvL
+      omega
+    rw [hfinal] at hinvL
+    obtain ⟨sF, hpostStep, hO, hLrb⟩ :=
+      flash_attn_postLoopG Q K V L O sp sm_scale Bool.false stride_q_head SEQLEN BLOCK_M DIM
+        BLOCK_N hDIM hBN hSEQ sL hOL hinvL
+    obtain ⟨hpidsL, -, -, -, -, -, -, homL, -, -, -, -, hsmL, hbshL, hqkvL, -, hmemL⟩ := hinvL
+    have hframe := flashIO_postLoop_frameW L O sp (sp.pids 1 * stride_q_head) SEQLEN BLOCK_M DIM
+      sL sF hbshL homL hsmL hqkvL hpostStep
+    refine ⟨sF, ?_, ?_, ?_, ?_⟩
+    · -- termination under `execR R` (every rounding site collapses under `hfp16`)
+      show execR R (flash_attn_fwd_kernel_surface Q K V L O sm_scale
+        sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
+        sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N Bool.false).toAlgKernel s₀
+          = some sF
+      unfold execR
+      rw [flash_surface_body_eqG Q K V L O sm_scale Bool.false sqbs skbs svbs sobs DIM 1
+          BS HEAD SEQLEN BLOCK_M DIM BLOCK_N stride_q_head,
+        stepStmtsR_append,
+        flashIO_preLoop_castFree R hfp16 Q K V sm_scale Bool.false stride_q_head SEQLEN BLOCK_M
+          DIM BLOCK_N s₀,
+        hpre, Option.bind_some,
+        stepStmtsR_cons_some (show stepStmtR R (Stmt.forRangeDyn "start_n"
+            (Op.ref .nat [] "lo") (Op.ref .nat [] "hi") (Op.constNat BLOCK_N)
+            (flashLoopBodyG Bool.false BLOCK_M BLOCK_N DIM)) sp = some sL from by
+          rw [flashIO_loopStmt_castFree R hfp16 BLOCK_M BLOCK_N DIM]; exact hloop),
+        flashIO_postLoop_castFree R hfp16 L O SEQLEN BLOCK_M DIM sL]
+      exact hpostStep
+    · -- `O` readback: the fp16-quantized streamed closed form
+      intro j _
+      have hOj := hO (Lane2D.decode j)
+      rw [hsppids] at hOj
+      simp only [Lane2D.decode_row, Lane2D.decode_col] at hOj
+      rw [BlockState.readMemAs_fp16_of_cell
+        (x := flashAttnOValueSpec s₀ Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
+          (Lane2D.decode j))
+        (by
+          rw [hOj]
+          refine congrArg (MemCell.of FloatDType.fp16.toTileDType) ?_
+          refine congrArg (FloatDType.real.cast FloatDType.fp16) ?_
+          refine congrArg some ?_
+          rw [flash_tiles_eq_of_mem_pids s₀ sp Q hspmem hsppids stride_q_head DIM BLOCK_M,
+            flash_ktiles_eq_of_mem_pids s₀ sp K hspmem hsppids stride_q_head DIM SEQLEN,
+            flash_vtiles_eq_of_mem_pids s₀ sp V hspmem hsppids stride_q_head DIM SEQLEN]
+          have hne : flashRunningMax (qTile s₀ Q stride_q_head DIM BLOCK_M)
+              (kTile s₀ K stride_q_head DIM SEQLEN) (vTile s₀ V stride_q_head DIM SEQLEN)
+              (sm_scale * log2e) Bool.false (s₀.pids 0 * BLOCK_M) SEQLEN
+              (Lane2D.decode j).1 (Lane2D.decode j).2.1 ≠ ⊥ :=
+            flashRunningMax_ne_bot _ _ _ _ _ _ _ _ _ hSEQ hSEQ
+          exact flashStateBot_full_eq_spec s₀ Q K V sm_scale stride_q_head (s₀.pids 0 * BLOCK_M)
+            (Lane2D.decode j).1 (Lane2D.decode j).2.1 hne)]
+      rw [hfp16]
+      simp only [id_eq]
+      refine congrArg _ ?_
+      unfold flashAttnOValueSpec flashIOOutSpec
+      rw [flashIOqT_eq s₀ Q stride_q_head DIM BLOCK_M (SEQLEN / BLOCK_N) hT xs
+          (fun t j' => hx t j' trivial),
+        flashIOkT_eq s₀ K stride_q_head DIM BLOCK_N SEQLEN (SEQLEN / BLOCK_N) hTB hBN ys
+          (fun t j' => hy t j' trivial),
+        flashIOvT_eq s₀ V stride_q_head DIM BLOCK_N SEQLEN (SEQLEN / BLOCK_N) hTB hBN zs
+          (fun t j' => hz t j' trivial)]
+    · -- `L` readback: the unrounded streamed log-sum-exp
+      intro i _
+      have hLi := hLrb i
+      rw [hsppids] at hLi
+      rw [flashIO_readMemAs_real, hLi]
+      simp only [RoundingModel.round_real_apply]
+      refine congrArg _ ?_
+      rw [flash_tiles_eq_of_mem_pids s₀ sp Q hspmem hsppids stride_q_head DIM BLOCK_M,
+        flash_ktiles_eq_of_mem_pids s₀ sp K hspmem hsppids stride_q_head DIM SEQLEN,
+        flash_vtiles_eq_of_mem_pids s₀ sp V hspmem hsppids stride_q_head DIM SEQLEN]
+      set mr := (flashRunningMax (qTile s₀ Q stride_q_head DIM BLOCK_M)
+          (kTile s₀ K stride_q_head DIM SEQLEN) (vTile s₀ V stride_q_head DIM SEQLEN)
+          (sm_scale * log2e) Bool.false (s₀.pids 0 * BLOCK_M) SEQLEN i ⟨0, hDIM⟩).unbotD 0
+        with hmrdef
+      have hM : flashRunningMax (qTile s₀ Q stride_q_head DIM BLOCK_M)
+          (kTile s₀ K stride_q_head DIM SEQLEN) (vTile s₀ V stride_q_head DIM SEQLEN)
+          (sm_scale * log2e) Bool.false (s₀.pids 0 * BLOCK_M) SEQLEN i ⟨0, hDIM⟩
+            = (mr : WithBot ℝ) := by
+        obtain ⟨q, hq⟩ := WithBot.ne_bot_iff_exists.mp
+          (flashRunningMax_ne_bot (qTile s₀ Q stride_q_head DIM BLOCK_M)
+            (kTile s₀ K stride_q_head DIM SEQLEN) (vTile s₀ V stride_q_head DIM SEQLEN)
+            (sm_scale * log2e) Bool.false (s₀.pids 0 * BLOCK_M) SEQLEN i ⟨0, hDIM⟩ hSEQ hSEQ)
+        rw [hmrdef, ← hq]; rfl
+      rw [flashStateBot_logsumexp (qTile s₀ Q stride_q_head DIM BLOCK_M)
+        (kTile s₀ K stride_q_head DIM SEQLEN) (vTile s₀ V stride_q_head DIM SEQLEN)
+        (sm_scale * log2e) Bool.false (s₀.pids 0 * BLOCK_M) SEQLEN i ⟨0, hDIM⟩ mr hM]
+      unfold flashIOLSpec
+      rw [flashKeysUpto_full]
+      rw [flashIOqT_eq s₀ Q stride_q_head DIM BLOCK_M (SEQLEN / BLOCK_N) hT xs
+          (fun t j' => hx t j' trivial),
+        flashIOkT_eq s₀ K stride_q_head DIM BLOCK_N SEQLEN (SEQLEN / BLOCK_N) hTB hBN ys
+          (fun t j' => hy t j' trivial),
+        flashIOvT_eq s₀ V stride_q_head DIM BLOCK_N SEQLEN (SEQLEN / BLOCK_N) hTB hBN zs
+          (fun t j' => hz t j' trivial)]
+    · -- the frame: cells outside the two write windows are untouched
+      intro r oo hcond
+      obtain ⟨h1, h2⟩ := hcond
+      rw [hframe r oo ?_ ?_, hmemL, hspmem]
+      · intro hr i
+        rw [hsppids]
+        exact fun hoo => h2 i trivial hr hoo
+      · intro hr idx
+        have hg := h1 (Lane2D.encode (idx.1, idx.2.1, PUnit.unit)) trivial hr
+        rw [hsppids]
+        simpa [Lane2D.encode_div, Lane2D.encode_mod] using hg
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
 
