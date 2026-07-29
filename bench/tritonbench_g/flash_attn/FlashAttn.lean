@@ -946,13 +946,16 @@ theorem flashKeysUpto_full_causal
   intro j _
   simp [j.isLt]
 
-/-- The full-window non-causal final state reads off `flashAttnOValueSpec`. -/
+/-- The full-window non-causal final state reads off `flashAttnOValueSpec`.
+The row origin `qS` is a free parameter: at `causal = false` the `qStart` slot of
+`flashKeysUpto` is inert (its guard is `j < hi ∧ (causal → j ≤ qStart + i)`), so
+the statement holds for every block row, not just `qS = 0`. -/
 theorem flashState_full_eq_spec
     (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ)
-    (stride_q_head : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
+    (stride_q_head qS : Nat) (i : Fin BLOCK_M) (d : Fin DIM) :
     (let st := flashState (qTile s Q stride_q_head DIM BLOCK_M)
         (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
-        (sm_scale * log2e) Bool.false 0 SEQLEN i d
+        (sm_scale * log2e) Bool.false qS SEQLEN i d
      st.2.2 / st.2.1)
       = flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
           (i, d, PUnit.unit) := by
@@ -1568,22 +1571,24 @@ theorem flashStateBot_ratio_eq
         mul_div_mul_left _ _ (ne_of_gt (pow2_pos _))]
 
 /-- **The full-window non-causal ⊥-seeded final state reads off the closed-form
-spec.** `flashStateBot.acc / flashStateBot.denom = flashAttnOValueSpec`. -/
+spec.** `flashStateBot.acc / flashStateBot.denom = flashAttnOValueSpec`.
+As with `flashState_full_eq_spec`, the row origin `qS` is a free parameter — the
+non-causal key window does not depend on it. -/
 theorem flashStateBot_full_eq_spec
     (s : BlockState) (Q K V : RegionName) (sm_scale : ℝ)
-    (stride_q_head : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
+    (stride_q_head qS : Nat) (i : Fin BLOCK_M) (d : Fin DIM)
     (hne : flashRunningMax (qTile s Q stride_q_head DIM BLOCK_M)
         (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
-        (sm_scale * log2e) Bool.false 0 SEQLEN i d ≠ ⊥) :
+        (sm_scale * log2e) Bool.false qS SEQLEN i d ≠ ⊥) :
     (let st := flashStateBot (qTile s Q stride_q_head DIM BLOCK_M)
         (kTile s K stride_q_head DIM SEQLEN) (vTile s V stride_q_head DIM SEQLEN)
-        (sm_scale * log2e) Bool.false 0 SEQLEN i d
+        (sm_scale * log2e) Bool.false qS SEQLEN i d
      st.2.2 / st.2.1)
       = flashAttnOValueSpec s Q K V sm_scale stride_q_head DIM SEQLEN BLOCK_M
           (i, d, PUnit.unit) := by
   simp only
   rw [flashStateBot_ratio_eq _ _ _ _ _ _ _ _ _ hne]
-  exact flashState_full_eq_spec s Q K V sm_scale stride_q_head i d
+  exact flashState_full_eq_spec s Q K V sm_scale stride_q_head qS i d
 
 /-- **The full-window causal ⊥-seeded final state reads off the causal spec.** -/
 theorem flashStateBot_full_eq_spec_causal
@@ -3550,14 +3555,13 @@ theorem flash_vtiles_eq_of_mem_pids (s s' : BlockState) (R : RegionName)
 
 set_option maxHeartbeats 1000000 in
 /-- **Invariant base case at the loop-entry state.** The preLoop output state
-`sp` (program-id grid `start_m = 0`, mem/undef preserved) satisfies
+`sp` (any program-id grid, mem/undef preserved) satisfies
 `attnInvariant … 0 sp` with `sp` as its own anchor `s0`: the `⊥`/`0`/`0`
 running-state inits read off `flashRunningMax/flashStateBot` at the empty window,
 the index vectors / block pointers / scalars are set, all by the `*_zero` lemmas. -/
 theorem flash_attn_invariant_zero
     (Q K V : RegionName) (s sp : BlockState) (sm_scale : ℝ) (IS_CAUSAL : Bool)
     (hDIM : 0 < 64) (hiTotal : Nat) (hhimod : hiTotal % 64 = 0)
-    (hpid0 : sp.pids 0 = 0)
     (hpids : sp.pids = s.pids) (hmem : sp.mem = s.mem) (hundef : ∀ rg o, sp.undef rg o = 0)
     (hbsh : sp.regs .nat [] "off_bs_head" = some (Tile.scalar (s.pids 1)))
     (hqkv : sp.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s.pids 1 * 8192)))
@@ -3582,7 +3586,6 @@ theorem flash_attn_invariant_zero
             blockShape := [128, 64], strides := [64, 1], offsets := [s.pids 0 * 128, 0] }⟩))
     (hsm : sp.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))) :
     attnInvariant Q K V sp sm_scale 8192 128 128 64 64 hiTotal IS_CAUSAL hDIM 0 sp := by
-  have hpid0' : s.pids 0 = 0 := by rw [← hpids]; exact hpid0
   have hbaseEq : flashBaseOffset sp 8192 = sp.pids 1 * 8192 := by simp [flashBaseOffset]
   have hpids1 : sp.pids 1 = s.pids 1 := by rw [hpids]
   unfold attnInvariant
@@ -3604,7 +3607,7 @@ theorem flash_attn_invariant_zero
   · rw [hon]
   · rw [hKp, hbaseEq, hpids1]
   · rw [hVp, hbaseEq, hpids1]
-  · rw [hQp, hbaseEq, hpids1]; rw [show sp.pids 0 = 0 from hpid0, hpid0']
+  · rw [hQp, hbaseEq, hpids1, hpids]
   · rw [hsm, hpids]
   · rw [hbsh, hpids1]
   · rw [hqkv, hpids1]
@@ -3614,12 +3617,14 @@ theorem flash_attn_invariant_zero
 set_option maxHeartbeats 1000000 in
 set_option maxRecDepth 8000 in
 /-- **Full-kernel execution chain.** Running the lowered flash-attn body
-(preLoop 16 + `forRangeDyn` loop + postLoop 5) from a clean state `s` with grid
-`start_m = 0` reaches a final state `sF` whose `O` store holds the genuine
+(preLoop 16 + `forRangeDyn` loop + postLoop 5) from a clean state `s` whose loop
+window covers the whole sequence (`flashHi s IS_CAUSAL = 128`; non-causal this is
+definitional, causal it says `(start_m + 1) · 128 = 128`) reaches a final state
+`sF` whose `O` store holds the genuine
 closed-form attention ratio (`flashAttnOValueSpec{,Causal}`) at every output lane
 and whose `L` store holds the genuine log-sum-exp at every row lane. -/
 theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hHi : flashHi s IS_CAUSAL = 128) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ∃ sF, stepStmts (flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
         16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
         2 2 128 128 64 64 IS_CAUSAL).toAlgKernel.body s = some sF
@@ -3654,12 +3659,10 @@ theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : B
             (Op.constNat 64) (flashLoopBody IS_CAUSAL) :: flashPostLoop L O from by
     rw [flashLoopBody_check, flashPostLoop_check]]
   -- the loop-entry invariant at counter 0
-  have hflashHi : flashHi s IS_CAUSAL = 128 := by
-    simp only [flashHi, hpid0]; cases IS_CAUSAL <;> simp
   have hinv0 : attnInvariant Q K V sp (1.0 : ℝ) 8192 128 128 64 64 128 IS_CAUSAL
       (by norm_num) 0 sp :=
     flash_attn_invariant_zero Q K V s sp (1.0 : ℝ) IS_CAUSAL (by norm_num) 128
-      (by norm_num) (by rw [hsppids, hpid0]) hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
+      (by norm_num) hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
       hom hon hKp hVp hQp hsm
   -- run the forRangeDyn loop via forRangeDyn_inv with P = attnInvariant
   obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
@@ -3670,7 +3673,7 @@ theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : B
         (by norm_num) i st)
       (s_init := sp)
       (by rw [evalOp_ref, hlo])
-      (by rw [evalOp_ref, hhi, hflashHi])
+      (by rw [evalOp_ref, hhi, hHi])
       (by rw [evalOp_constNat])
       (by norm_num)
       hinv0
@@ -3700,11 +3703,10 @@ theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : B
     cases IS_CAUSAL
     · -- non-causal: qStart irrelevant, window = SEQLEN
       simp only [Bool.false_eq_true, if_false]
-      rw [show s.pids 0 * 128 = 0 from by rw [hpid0]]
       have hne : flashRunningMax (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
-          (vTile s V 8192 64 128) (1.0 * log2e) Bool.false 0 128 idx.1 idx.2.1 ≠ ⊥ :=
+          (vTile s V 8192 64 128) (1.0 * log2e) Bool.false (s.pids 0 * 128) 128 idx.1 idx.2.1 ≠ ⊥ :=
         flashRunningMax_ne_bot (SEQLEN := 128) _ _ _ _ _ _ _ _ _ (by norm_num) (by norm_num)
-      exact flashStateBot_full_eq_spec s Q K V (1.0 : ℝ) 8192 idx.1 idx.2.1 hne
+      exact flashStateBot_full_eq_spec s Q K V (1.0 : ℝ) 8192 (s.pids 0 * 128) idx.1 idx.2.1 hne
     · simp only [if_true]
       have hne : flashRunningMax (qTile s Q 8192 64 128) (kTile s K 8192 64 128)
           (vTile s V 8192 64 128) (1.0 * log2e) Bool.true (s.pids 0 * 128) 128 idx.1 idx.2.1 ≠ ⊥ :=
@@ -3739,7 +3741,8 @@ theorem flash_attn_exec (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : B
 The whole-kernel `O` store realizes the genuine base-2 attention closed form
 (`flashAttnOValueSpec{,Causal}` — the streaming-softmax output of the loaded
 Q/K/V tiles, NOT the kernel's own executed output) and the `L` store realizes the
-genuine log-sum-exp. For the checked Python grid `start_m = 0`, both causal cases. -/
+genuine log-sum-exp. For any grid whose loop window covers the sequence
+(`flashHi s IS_CAUSAL = 128`), both causal cases. -/
 
 set_option maxHeartbeats 1000000 in
 /-- **Genuine `O`-store correctness** (both causal cases). Every output lane of
@@ -3747,7 +3750,7 @@ the FlashAttention kernel holds the closed-form base-2 attention ratio of the
 loaded tiles. -/
 theorem flash_attn_genuine_output_compute_correct
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hHi : flashHi s IS_CAUSAL = 128) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
         16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
@@ -3766,7 +3769,7 @@ theorem flash_attn_genuine_output_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro idx
-  obtain ⟨sF, hstep, hO, _⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hpid0 hOL hundef
+  obtain ⟨sF, hstep, hO, _⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hHi hOL hundef
   rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_memcell]
@@ -3780,7 +3783,7 @@ FlashAttention kernel holds the closed-form log-sum-exp
 `log2 (Σ_j pow2 (scoreⱼ))` of the (causally filtered) per-key base-2 scores. -/
 theorem flash_attn_genuine_l_compute_correct
     (Q K V L O : RegionName) (s : BlockState) (IS_CAUSAL : Bool)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hHi : flashHi s IS_CAUSAL = 128) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O (1.0 : ℝ)
         16384 8192 64 1 16384 8192 64 1 16384 8192 64 1 16384 8192 64 1
@@ -3797,7 +3800,7 @@ theorem flash_attn_genuine_l_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro i
-  obtain ⟨sF, hstep, _, hLrb⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hpid0 hOL hundef
+  obtain ⟨sF, hstep, _, hLrb⟩ := flash_attn_exec Q K V L O s IS_CAUSAL hHi hOL hundef
   rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_real]
@@ -4815,7 +4818,6 @@ theorem flash_attn_invariant_zeroG
     (Q K V : RegionName) (s sp : BlockState) (sm_scale : ℝ) (IS_CAUSAL : Bool)
     (stride_q_head SEQLEN BLOCK_M DIM BLOCK_N : Nat) (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N)
     (hiTotal : Nat) (hhimod : hiTotal % BLOCK_N = 0)
-    (hpid0 : sp.pids 0 = 0)
     (hpids : sp.pids = s.pids) (hmem : sp.mem = s.mem) (hundef : ∀ rg o, sp.undef rg o = 0)
     (hbsh : sp.regs .nat [] "off_bs_head" = some (Tile.scalar (s.pids 1)))
     (hqkv : sp.regs .nat [] "qkv_base_offset" = some (Tile.scalar (s.pids 1 * stride_q_head)))
@@ -4840,7 +4842,6 @@ theorem flash_attn_invariant_zeroG
             blockShape := [BLOCK_M, DIM], strides := [DIM, 1], offsets := [s.pids 0 * BLOCK_M, 0] }⟩))
     (hsm : sp.regs .nat [] "start_m" = some (Tile.scalar (s.pids 0))) :
     attnInvariant Q K V sp sm_scale stride_q_head SEQLEN BLOCK_M DIM BLOCK_N hiTotal IS_CAUSAL hDIM 0 sp := by
-  have hpid0' : s.pids 0 = 0 := by rw [← hpids]; exact hpid0
   have hbaseEq : flashBaseOffset sp stride_q_head = sp.pids 1 * stride_q_head := by simp [flashBaseOffset]
   have hpids1 : sp.pids 1 = s.pids 1 := by rw [hpids]
   unfold attnInvariant
@@ -4862,7 +4863,7 @@ theorem flash_attn_invariant_zeroG
   · rw [hon]
   · rw [hKp, hbaseEq, hpids1]
   · rw [hVp, hbaseEq, hpids1]
-  · rw [hQp, hbaseEq, hpids1]; rw [show sp.pids 0 = 0 from hpid0, hpid0']
+  · rw [hQp, hbaseEq, hpids1, hpids]
   · rw [hsm, hpids]
   · rw [hbsh, hpids1]
   · rw [hqkv, hpids1]
@@ -5402,7 +5403,7 @@ theorem flash_attn_exec_general (Q K V L O : RegionName) (s : BlockState) (IS_CA
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hHi : flashHiG s IS_CAUSAL SEQLEN BLOCK_M = SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ∃ sF, stepStmts (flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
         sobs stride_q_head DIM 1 BS HEAD SEQLEN BLOCK_M DIM BLOCK_N IS_CAUSAL).toAlgKernel.body s = some sF
@@ -5430,7 +5431,7 @@ theorem flash_attn_exec_general (Q K V L O : RegionName) (s : BlockState) (IS_CA
       hDIM 0 sp :=
     flash_attn_invariant_zeroG Q K V s sp sm_scale IS_CAUSAL stride_q_head SEQLEN BLOCK_M DIM BLOCK_N hDIM hBN SEQLEN
       (by obtain ⟨k, hk⟩ := hdvd; rw [hk, Nat.mul_mod_right])
-      (by rw [hsppids, hpid0]) hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
+      hsppids hspmem hspundef hbsh hqkv hmax hden hob hq
       hom hon hKp hVp hQp hsm
   -- run the forRangeDyn loop via forRangeDyn_inv with P = attnInvariant
   obtain ⟨final, sL, hloop, hfin, hinvL⟩ :=
@@ -5468,12 +5469,12 @@ theorem flash_attn_exec_general (Q K V L O : RegionName) (s : BlockState) (IS_CA
         flash_ktiles_eq_of_mem_pids s sp K hspmem hsppids stride_q_head DIM SEQLEN,
         flash_vtiles_eq_of_mem_pids s sp V hspmem hsppids stride_q_head DIM SEQLEN]
     cases IS_CAUSAL
-    · simp only [Bool.false_eq_true, if_false]
-      rw [show s.pids 0 * BLOCK_M = 0 from by rw [hpid0, Nat.zero_mul]]
+    · -- non-causal: the row origin `qStart = pid₀·BLOCK_M` is inert in the key window
+      simp only [Bool.false_eq_true, if_false]
       have hne : flashRunningMax (qTile s Q stride_q_head DIM BLOCK_M) (kTile s K stride_q_head DIM SEQLEN)
-          (vTile s V stride_q_head DIM SEQLEN) (sm_scale * log2e) Bool.false 0 SEQLEN idx.1 idx.2.1 ≠ ⊥ :=
+          (vTile s V stride_q_head DIM SEQLEN) (sm_scale * log2e) Bool.false (s.pids 0 * BLOCK_M) SEQLEN idx.1 idx.2.1 ≠ ⊥ :=
         flashRunningMax_ne_bot _ _ _ _ _ _ _ _ _ hSEQ hSEQ
-      exact flashStateBot_full_eq_spec s Q K V sm_scale stride_q_head idx.1 idx.2.1 hne
+      exact flashStateBot_full_eq_spec s Q K V sm_scale stride_q_head (s.pids 0 * BLOCK_M) idx.1 idx.2.1 hne
     · simp only [if_true]
       have hne : flashRunningMax (qTile s Q stride_q_head DIM BLOCK_M) (kTile s K stride_q_head DIM SEQLEN)
           (vTile s V stride_q_head DIM SEQLEN) (sm_scale * log2e) Bool.true (s.pids 0 * BLOCK_M) SEQLEN idx.1 idx.2.1 ≠ ⊥ :=
@@ -5510,7 +5511,7 @@ specification flash_attn_genuine_output_compute_correct_general
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hHi : flashHiG s IS_CAUSAL SEQLEN BLOCK_M = SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
@@ -5531,7 +5532,7 @@ specification flash_attn_genuine_output_compute_correct_general
   intro idx
   obtain ⟨sF, hstep, hO, _⟩ := flash_attn_exec_general Q K V L O s IS_CAUSAL sm_scale
     stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-    hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+    hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
   rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_memcell]
@@ -5549,7 +5550,7 @@ specification flash_attn_genuine_l_compute_correct_general
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hHi : flashHiG s IS_CAUSAL SEQLEN BLOCK_M = SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
@@ -5568,7 +5569,7 @@ specification flash_attn_genuine_l_compute_correct_general
   intro i
   obtain ⟨sF, hstep, _, hLrb⟩ := flash_attn_exec_general Q K V L O s IS_CAUSAL sm_scale
     stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-    hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+    hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
   rw [show exec _ s = stepStmts _ s from rfl, hstep] at hExec
   obtain rfl : sF = s' := Option.some.inj hExec
   simp only [ComputeCorrect.OutputReadable.read_real]
@@ -5583,7 +5584,7 @@ specification flash_attn_python_case1_genuine_compute_correct_general
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
     (hAlign : (s.pids 0 + 1) * BLOCK_M = SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
@@ -5609,11 +5610,11 @@ specification flash_attn_python_case1_genuine_compute_correct_general
   refine ⟨?_, ?_⟩
   · have h := flash_attn_genuine_output_compute_correct_general Q K V L O s Bool.true sm_scale
       stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-      hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+      hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
     simpa using h
   · exact flash_attn_genuine_l_compute_correct_general Q K V L O s Bool.true sm_scale
       stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-      hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+      hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
 
 /-- **Python case 2 (non-causal) GENERAL genuine closed-form correctness.** -/
 specification flash_attn_python_case2_genuine_compute_correct_general
@@ -5622,7 +5623,7 @@ specification flash_attn_python_case2_genuine_compute_correct_general
     (sqbs skbs svbs sobs sosl sod BS HEAD : Nat)
     (hDIM : 0 < DIM) (hBN : 0 < BLOCK_N) (hBM : 0 < BLOCK_M) (hBMlen : 1 < [BLOCK_M].length.succ)
     (hdvd : BLOCK_N ∣ SEQLEN) (hSEQ : 0 < SEQLEN)
-    (hpid0 : s.pids 0 = 0) (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
+    (hOL : O ≠ L) (hundef : ∀ rg o, s.undef rg o = 0) :
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := flash_attn_fwd_kernel_surface Q K V L O sm_scale
         sqbs stride_q_head DIM 1 skbs stride_q_head DIM 1 svbs stride_q_head DIM 1
@@ -5648,11 +5649,11 @@ specification flash_attn_python_case2_genuine_compute_correct_general
   refine ⟨?_, ?_⟩
   · have h := flash_attn_genuine_output_compute_correct_general Q K V L O s Bool.false sm_scale
       stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-      hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+      hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
     simpa using h
   · exact flash_attn_genuine_l_compute_correct_general Q K V L O s Bool.false sm_scale
       stride_q_head SEQLEN BLOCK_M DIM BLOCK_N sqbs skbs svbs sobs sosl sod BS HEAD
-      hDIM hBN hBM hBMlen hdvd hSEQ hHi hpid0 hOL hundef
+      hDIM hBN hBM hBMlen hdvd hSEQ hHi hOL hundef
 
 end VeriTile.Bench.TritonBenchG.FlashAttn
 
