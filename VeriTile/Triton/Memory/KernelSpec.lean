@@ -65,6 +65,179 @@ import VeriTile.Triton.Memory.KernelCore
 
 namespace VeriTile.Triton
 
+namespace UKernelIO
+
+/-! ### The unified core's rounding sibling
+
+`UKernelIO.Implements` (KernelCore) is the exact-ℝ Hoare triple that every
+**single-shot** skin in this file assembles through. `ImplementsR` below is
+its `execR R` sibling, standing to it exactly as the `Stream*` family's
+`ImplementsR` stands to their `Implements`: the kernel runs under the
+rounding model, the safety obligation becomes `Kernel.TraceSafeR R`, and
+each output cell is read back through `readMemAs` at a declared
+`FloatDType` grid holding the *ideal* real value quantized **once**.
+
+Two deliberate restrictions, both stated rather than worked around:
+
+* **Float outputs only.** `f`'s codomain is plain `ℝ` and the readback goes
+  through `readMemAs (od o)`, so this relation serves skins whose output
+  channels are `ChanTy.float`. Skins that write an integer channel (the
+  value-plus-index pair genre) keep the exact `Implements` surface — a
+  rounding grid is meaningless there, and faking one would be worse than
+  not offering it.
+* **The output grid is a parameter, not a field.** Passing `od` here keeps
+  `UKernelIO` itself unchanged, so all existing `toU` embeddings and their
+  exact `Implements` proofs are untouched.
+
+It lives in this file rather than beside the structure because it needs the
+`FlattenR` bridge, which `KernelCore` does not import. -/
+def ImplementsR (io : UKernelIO) (R : RoundingModel)
+    (od : Fin io.nOut → FloatDType)
+    (f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) → ℝ) :
+    Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = io.bufs →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ pid₂ : Nat,
+  ∀ (vals : io.Ctx) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.pids 2 = pid₂ →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+      io.imask i vals pid₀ pid₁ pid₂ j →
+      io.iwin i vals pid₀ pid₁ pid₂ j < A.extent (io.ibuf i)) →
+    (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+      io.omask o vals pid₀ pid₁ pid₂ j →
+      io.owin o vals pid₀ pid₁ pid₂ j < A.extent (io.obuf o)) →
+    (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+      io.smask t vals pid₀ pid₁ pid₂ j →
+      io.swin t vals pid₀ pid₁ pid₂ j < A.extent (io.sbuf t)) →
+    (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+      io.imask i vals pid₀ pid₁ pid₂ j →
+      (io.ity i).read s₀ (io.ibuf i)
+          (io.iwin i vals pid₀ pid₁ pid₂ j) = vals i j) →
+    ∃ s',
+      execR R (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+          io.omask o vals pid₀ pid₁ pid₂ j →
+          s'.readMemAs (od o) A.flat
+              (A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ pid₂ j))
+            = (od o).ofReal (R.round (od o) (f pid₀ pid₁ vals o j)))
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+                io.omask o vals pid₀ pid₁ pid₂ j →
+                o' ≠ A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ pid₂ j)) ∧
+             (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+                io.smask t vals pid₀ pid₁ pid₂ j →
+                o' ≠ A.addr (io.sbuf t) (io.swin t vals pid₀ pid₁ pid₂ j)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+/-- Assembly lemma — the rounding sibling of `UKernelIO.Implements.intro`,
+and **the** flattening bridge for every single-shot skin's `⊨[R]` face.
+Obligations are the family's usual three: `FlattenOk`, the `TraceSafeR R`
+safety walk, and the region-model rounded Hoare triple. -/
+theorem ImplementsR.intro (io : UKernelIO) {R : RoundingModel}
+    {od : Fin io.nOut → FloatDType}
+    {f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (vals : io.Ctx),
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        (io.ity i).read s (io.ibuf i)
+            (io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j) = vals i j) →
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j
+          < bounds (io.ibuf i)) →
+      (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+        io.omask o vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.owin o vals (s.pids 0) (s.pids 1) (s.pids 2) j
+          < bounds (io.obuf o)) →
+      (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+        io.smask t vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.swin t vals (s.pids 0) (s.pids 1) (s.pids 2) j
+          < bounds (io.sbuf t)) →
+      Kernel.TraceSafeR R bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (vals : io.Ctx),
+      s₀.undef = (fun _ _ => 0) →
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        (io.ity i).read s₀ (io.ibuf i)
+            (io.iwin i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
+          = vals i j) →
+      ∃ s1, execR R (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+            io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+            s1.readMemAs (od o) (io.obuf o)
+                (io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
+              = (od o).ofReal
+                  (R.round (od o) (f (s₀.pids 0) (s₀.pids 1) vals o j)))
+        ∧ (∀ r o',
+            (∀ (oc : Fin io.nOut) (j : Fin (io.oarity oc)),
+              io.omask oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+              r ≠ io.obuf oc ∨
+                o' ≠ io.owin oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
+            (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+              io.smask t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+              r ≠ io.sbuf t ∨
+                o' ≠ io.swin t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
+            s1.mem r o' = s₀.mem r o')) :
+    io.ImplementsR R od f := by
+  intro A hd hregs hcov pid₀ pid₁ pid₂ vals s₀ hpid₀ hpid₁ hpid₂ hu
+    hib hob hsb hpins
+  subst hpid₀
+  subst hpid₁
+  subst hpid₂
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ vals hu hpins
+  have hts' : Kernel.TraceSafeR R A.extent (io.kernel.toAlgKernel) s₀ :=
+    hts A.extent s₀ vals hpins hib hob hsb
+  have hbridge := A.execR_flatten hd hcov R _ s₀ hts' hok hu
+  refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
+  · rw [hbridge, hexec, Option.map_some]
+  · intro o j hj
+    have hmem : io.obuf o ∈ A.regions := by
+      rw [hregs]; exact io.obuf_mem o
+    have hlt : io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j
+        < A.extent (io.obuf o) := hob o j hj
+    rw [A.flattenState_readMemAs hd s1 hmem hlt (od o)]
+    exact hval o j hj
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o'
+          = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨hrmem, hoeq, holt⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell
+            (hframe r o (fun oc j hj => ?_) (fun t j hj => ?_))
+          · by_cases hro : r = io.obuf oc
+            · subst hro
+              refine Or.inr fun hoj => ?_
+              rcases hcond with hflat | hn
+              · exact hflat rfl
+              · exact hn.1 oc j hj (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · by_cases hrs : r = io.sbuf t
+            · subst hrs
+              refine Or.inr fun hoj => ?_
+              rcases hcond with hflat | hn
+              · exact hflat rfl
+              · exact hn.2 t j hj (by rw [hoeq, hoj])
+            · exact Or.inl hrs
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+end UKernelIO
+
 /-- IO signature of a two-input / one-output kernel with uniform tile length
 `B`: which buffer is which argument, where each program instance **reads**
 its two input tiles, and where it **writes** its output tile. The read
@@ -951,6 +1124,147 @@ theorem Implements.intro (io : MaskedKernelIO₁)
       (fun _p₀ _p₁ vals _o j =>
         f (fun j' => vals (⟨0, by decide⟩ : Fin 1) j') j) := by
     refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob hsb
+      refine hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 1) j hj)
+        (fun j hj => hob (⟨0, by decide⟩ : Fin 1) j hj) ?_
+      intro q hq j hj
+      obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+      have h : (io.scratch.get u).2 (s.pids 0) + j.val
+          < bounds (io.scratch.get u).1 := hsb u j hj
+      rw [hu] at h
+      exact h
+    · intro s₀ vals _hundef hpins
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun j => vals (⟨0, by decide⟩ : Fin 1) j)
+          (fun j hj => hpins (⟨0, by decide⟩ : Fin 1) j hj)
+      refine ⟨s1, hexec, fun _o j hj => hval j hj, ?_⟩
+      intro r o' hoc hsc'
+      refine hframe r o' ?_ ?_
+      · by_cases hro : r = io.out
+        · subst hro
+          refine Or.inr fun j hj => ?_
+          rcases hoc (⟨0, by decide⟩ : Fin 1) j hj with hne | hno
+          · exact absurd rfl hne
+          · exact hno
+        · exact Or.inl hro
+      · intro q hq hrq j hj
+        obtain ⟨u, hu⟩ := List.mem_iff_get.mp hq
+        have h : r ≠ (io.scratch.get u).1 ∨
+            o' ≠ (io.scratch.get u).2 (s₀.pids 0) + j.val :=
+          hsc' u j hj
+        rw [hu] at h
+        rcases h with hne | hno
+        · exact absurd hrq hne
+        · exact hno
+  intro A hd hregs hcov pid h1 h2 hsc xs s₀ hpid hu hx
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2) (fun _ => xs) s₀ hpid rfl rfl hu
+      (fun _i j hj => h1 j hj) (fun _o j hj => h2 j hj)
+      (fun t j hj => hsc (io.scratch.get t) (io.scratch.get_mem t) j hj)
+      (fun _i j hj => hx j hj)
+  refine ⟨s', hexec, fun j hj => hval (⟨0, by decide⟩ : Fin 1) j hj, ?_⟩
+  intro r' o' hcond
+  refine hframe r' o' ?_
+  rcases hcond with hflat | ⟨hout, hscr⟩
+  · exact Or.inl hflat
+  · exact Or.inr ⟨fun _o j hj => hout j hj,
+      fun t j hj => hscr (io.scratch.get t) (io.scratch.get_mem t) j hj⟩
+
+/-- `io.ImplementsR R outDType f` — the **rounding-correctness** relation
+for the masked one-input family, written `io ⊨[R, outDType] f`. Verbatim
+`Implements`, with two changes: the kernel runs under the rounding model
+(`execR R`), and each **write-active** lane of the output window is read
+back as an `outDType`-typed cell holding the ideal real value quantized
+**once**, `outDType.ofReal (R.round outDType (f xs j))`. Inputs stay exact
+ℝ — the rounding model acts at the kernel's cast/store sites, not at
+loads. Everything else (the allocation contract, the three in-bounds
+obligations, the scratch channels, the `pid`/`undef` pins, the frame) is
+unchanged; at `outDType := .real` the store is exact and this degenerates
+to the exact surface.
+
+Unlike the `Stream*` family — where `outDType` is a *field* of the
+signature, so `io ⊨[R] f` can read the grid off `io` — `MaskedKernelIO₁`'s
+grid is an **argument**, chosen per headline. The notation therefore has
+four holes and names it: hiding it behind a three-hole `io ⊨[R] f` would
+make two different quantization grids print identically. -/
+def ImplementsR (io : MaskedKernelIO₁) (R : RoundingModel)
+    (outDType : FloatDType) (f : (Fin io.B → ℝ) → Fin io.B → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.inp, io.out] ++ io.scratch.map Prod.fst →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    (∀ j : Fin io.B, io.mask pid j → io.read pid + j.val < A.extent io.inp) →
+    (∀ j : Fin io.B, io.writeMask pid j →
+      io.write pid + j.val < A.extent io.out) →
+    (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid j →
+      p.2 pid + j.val < A.extent p.1) →
+  ∀ (xs : Fin io.B → ℝ) (s₀ : BlockState),
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.B, io.mask pid j →
+      s₀.readMem io.inp (io.read pid + j.val) = xs j) →
+    ∃ s',
+      execR R (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ j : Fin io.B, io.writeMask pid j →
+          s'.readMemAs outDType A.flat
+              (A.addr io.out (io.write pid + j.val))
+            = outDType.ofReal (R.round outDType (f xs j)))
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.B, io.writeMask pid j →
+                o' ≠ A.addr io.out (io.write pid + j.val)) ∧
+             (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask pid j →
+                o' ≠ A.addr p.1 (p.2 pid + j.val)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped notation:25 io " ⊨[" R ", " outDType "] " f =>
+  MaskedKernelIO₁.ImplementsR io R outDType f
+
+/-- Assembly lemma for `⊨[R, outDType]` — the rounding sibling of
+`MaskedKernelIO₁.Implements.intro`, riding the single-shot family's
+rounding core `UKernelIO.ImplementsR.intro` through the same `toU`
+embedding (at the constant output grid `fun _ => outDType`). The
+obligations are the family's usual three, with the safety walk at
+`Kernel.TraceSafeR R` and `hrun` returning a rounded region-model triple:
+termination under `execR R`, the `readMemAs outDType` per-lane readback,
+and the frame. -/
+theorem ImplementsR.intro (io : MaskedKernelIO₁) {R : RoundingModel}
+    {outDType : FloatDType} {f : (Fin io.B → ℝ) → Fin io.B → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ j : Fin io.B, io.mask s.pid j →
+        io.read s.pid + j.val < bounds io.inp) →
+      (∀ j : Fin io.B, io.writeMask s.pid j →
+        io.write s.pid + j.val < bounds io.out) →
+      (∀ p ∈ io.scratch, ∀ j : Fin io.B, io.writeMask s.pid j →
+        p.2 s.pid + j.val < bounds p.1) →
+      Kernel.TraceSafeR R bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs : Fin io.B → ℝ),
+      (∀ j : Fin io.B, io.mask s₀.pid j →
+        s₀.readMem io.inp (io.read s₀.pid + j.val) = xs j) →
+      ∃ s1, execR R (io.kernel.toAlgKernel) s₀
+          = some s1
+        ∧ (∀ j : Fin io.B, io.writeMask s₀.pid j →
+            s1.readMemAs outDType io.out (io.write s₀.pid + j.val)
+              = outDType.ofReal (R.round outDType (f xs j)))
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ j : Fin io.B, io.writeMask s₀.pid j →
+                o ≠ io.write s₀.pid + j.val) →
+            (∀ p ∈ io.scratch, r = p.1 →
+              ∀ j : Fin io.B, io.writeMask s₀.pid j →
+                o ≠ p.2 s₀.pid + j.val) →
+            s1.mem r o = s₀.mem r o)) :
+    io.ImplementsR R outDType f := by
+  -- assemble the unified-core rounded triple once, then convert it back
+  -- into the family statement; the flattening bridge lives in
+  -- `UKernelIO.ImplementsR.intro`
+  have hcore : io.toU.ImplementsR R (fun _ => outDType)
+      (fun _p₀ _p₁ vals _o j =>
+        f (fun j' => vals (⟨0, by decide⟩ : Fin 1) j') j) := by
+    refine UKernelIO.ImplementsR.intro _ hok ?_ ?_
     · intro bounds s vals _hpins hib hob hsb
       refine hts bounds s (fun j hj => hib (⟨0, by decide⟩ : Fin 1) j hj)
         (fun j hj => hob (⟨0, by decide⟩ : Fin 1) j hj) ?_
