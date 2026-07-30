@@ -2193,7 +2193,7 @@ existing `attnPreLoopTailG`, the `forRangeDyn` streaming loop over
 `attnLoopBodyG`, and the existing `attnPostLoopG`. -/
 
 /-- The 10-statement deterministic prologue prefix, explicit (the pinned
-instance of `preLoop_prefix`'s statement list). -/
+instantiation of `preLoop_prefix`'s statement list). -/
 private def akPreLoop10G (Q K V : RegionName)
     (stride_qh stride_kh BLOCK_M BLOCK_N HEAD nB : Nat) : List Stmt :=
   [ Stmt.assign .nat [] "start_m" (Op.programId 0),

@@ -2332,7 +2332,7 @@ deterministic prologue prefix, the existing `attnPreLoopTailG`, the
 `attnPostLoopG`. -/
 
 /-- The 10-statement deterministic prologue prefix, explicit (the pinned
-instance of `preLoop_prefix`'s statement list; `kv_offset` rides the same
+instantiation of `preLoop_prefix`'s statement list; `kv_offset` rides the same
 `stride_qh`). -/
 private def akaPreLoop10G (Q K V : RegionName)
     (stride_qh BLOCK_M BLOCK_N HEAD nB : Nat) : List Stmt :=
