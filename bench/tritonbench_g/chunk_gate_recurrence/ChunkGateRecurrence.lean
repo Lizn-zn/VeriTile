@@ -39,18 +39,22 @@ chunk_gate_recurrence_forward_output_summary_general          ← TOP (forward)
 chunk_gate_recurrence_backward_output_summary_general         ← TOP (backward)
   ├─ chunk_gate_recurrence_bwd_surface_toAlgorithm_supported   full surface lowers
   ├─ chunk_gate_recurrence_bwd_dacc_step_DI_store_slice_compute_correct  (Dacc·d_i + DS_i)
-  ├─ chunk_gate_recurrence_bwd_dg_step_store_slice_compute_correct       (Σ Dacc·S_i)
-  └─ chunk_gate_recurrence_bwd_DL_store_slice_compute_correct            (post-loop acc)
+  └─ chunk_gate_recurrence_bwd_dg_step_store_slice_compute_correct       (Σ Dacc·S_i)
 
 per-store slice lemmas (modeled exactly, fed materialized state buffers):
   forward:  forward_store_slice / initial_last_kv_store_slice /
             initial_zero_store_slice / forward_step_store_slice
-  backward: bwd_dacc_step_DI_store_slice / bwd_dg_step_store_slice /
-            bwd_DI_store_slice / bwd_DG_store_slice / bwd_DL_store_slice
+  backward: bwd_dacc_step_DI_store_slice / bwd_dg_step_store_slice
 each with a `*_correct` (algorithm-layer readback) and
 `*_compute_correct` (ComputeCorrect) face (except `initial_last_kv_store_slice`,
 which has only a `*_compute_correct` face).
 ```
+
+**The `DL` boundary-gradient store has no face.** Its former conjunct used a
+slice whose load and store addresses were character-identical, with
+`expected := bwdDLStoreSpec = s.readMem DaccPre ⟨that same address⟩` — a memcpy
+compared against its own source, over a *fiction* region. It has been deleted
+rather than presented as a result about `DL`.
 
 ## Modeling boundary
 
@@ -65,16 +69,22 @@ forward `range(NUM_BLOCK-1)` loop threading `acc`, and the reverse
 `range(NUM_BLOCK-1)` loop threading `Dacc` from the last chunk plus the
 post-loop `DL` step — is the trusted boundary: the carried state is presented to
 each step slice as a materialized previous-state buffer
-(`AccPrev` / `DaccPrev` / `DaccPre`). Under the carry invariant
+(`AccPrev` / `DaccPrev`). Under the *assumed* carry invariant
 `AccPrev = fwdClosed(m)`, the forward loop body realizes the genuine
 `(m+1)`-step folded closed form `fwdClosed(m+1)` (theorem
 `forwardStepSpec_eq_fwdClosed_succ`, whose algebraic core is `fwdClosed_succ`),
 closing the forward recurrence per-statement against a standalone specification.
-The backward step faces realize the genuine arithmetic closed forms
-`bwdDaccStepSpec` / `bwdDGStepSpec` / `bwdDLStoreSpec` over the inputs. There is
-no `@triton.autotune` on these kernels. Output offset injectivity / non-collision
-is a side condition
-(discharged for the test shape).
+The two backward step faces realize the arithmetic forms `bwdDaccStepSpec`
+(`Dacc·d_i + DS_i`) and `bwdDGStepSpec` (`Σ Dacc·S_i`). Note these read the
+carried gradient state from the **fiction** region `DaccPrev`, not from a Python
+input: only the `D`/`DS`/`S` factors are genuine input reads, and the `DaccPrev`
+factor is whatever the reverse fold is assumed to have put there. There is no
+`@triton.autotune` on these kernels. Output offset injectivity / non-collision is
+a hypothesis of each headline, not a lemma.
+
+Region distinctness: no `≠` hypotheses are stated and none are needed — every
+slice performs all of its loads before its single store and every `expected` is a
+function of the *initial* state, so aliasing cannot falsify a face.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkGateRecurrence
@@ -83,7 +93,9 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems (dimension-general):** `chunk_gate_recurrence_forward_output_summary_general`, `chunk_gate_recurrence_backward_output_summary_general`. -/
+/-! **★ Main theorems:** `chunk_gate_recurrence_forward_output_summary_general`
+and `chunk_gate_recurrence_backward_output_summary_general` — shape-general, but
+each scoped to hand-cut store/step **slices**, not to a launched kernel. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -529,8 +541,10 @@ O[m][idx] = seed[idx] · ∏_{j<m} d_j  +  Σ_{t<m} S_t[idx] · ∏_{t<j<m} d_j
 ```
 
 where `seed[idx] = last_kv[idx]` if `HAS_LAST_KV` else `0`. This is a standalone
-specification over the *input* regions `S`, `D`, `last_kv` — never a read-back of
-the kernel's own output `O`.
+spec over the *input* regions `S`, `D`, `last_kv` — never a read-back of the
+kernel's own output `O`. (No docstring line may begin at column 0 with a
+declaration keyword such as `theorem` or `specification`: `scripts/spec_sheet.py`
+matches those at column 0 and would report a phantom headline.)
 
 `fwdGate s D NUM_BLOCK j := D[offset_bh·NUM_BLOCK + j]` is the scalar gate at
 chunk `j`; `fwdSeed` is the seeded initial state; `fwdClosed` is the closed form
@@ -969,99 +983,6 @@ theorem chunk_gate_recurrence_bwd_dg_step_store_slice_compute_correct
     DG t_rel NUM_BLOCK NUM_K NUM_V D_MODEL_K D_MODEL_V BLOCK_MODEL_K
     BLOCK_MODEL_V s s' hExec
 
-/-- Proof-oriented DL final-state store slice of
-`chunk_gate_recurrence.py`'s `_bwd_recurrence`. Takes a precomputed `DaccPre`
-[BLOCK_MODEL_K, BLOCK_MODEL_V] tile (the post-loop accumulator) and proves
-the writeback into `DL` at the canonical `(offset_bh, offset_d, offset_s)`
-layout. -/
-def chunk_gate_recurrence_bwd_DL_store_slice
-    (DaccPre DL : RegionName)
-    (D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat) :
-    ComputeKernel := triton {
-  offset_bh = tl.program_id(0)
-  offset_d = tl.program_id(1)
-  offset_s = tl.program_id(2)
-  k_off = tl.arange(0, $(BLOCK_MODEL_K))
-  v_off = tl.arange(0, $(BLOCK_MODEL_V))
-  base = offset_bh * $(D_MODEL_K) * $(D_MODEL_V) +
-    offset_d * $(D_MODEL_V) * $(BLOCK_MODEL_K) +
-    offset_s * $(BLOCK_MODEL_V)
-  dacc = tl.load(DaccPre + base +
-    k_off[:, None] * $(D_MODEL_V) + v_off[None, :])
-  tl.store(DL + base +
-    k_off[:, None] * $(D_MODEL_V) + v_off[None, :], dacc)
-}
-
-def bwdDLOffset
-    (s : BlockState)
-    (D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
-    (idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V]) : Nat :=
-  s.pids 0 * D_MODEL_K * D_MODEL_V +
-    s.pids 1 * D_MODEL_V * BLOCK_MODEL_K +
-    s.pids 2 * BLOCK_MODEL_V +
-    idx.1.val * D_MODEL_V + idx.2.1.val
-
-noncomputable def bwdDLStoreSpec
-    (s : BlockState) (DaccPre : RegionName)
-    (D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
-    (idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V]) : ℝ :=
-  s.readMem DaccPre
-    (bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx)
-
-theorem chunk_gate_recurrence_bwd_DL_store_slice_correct
-    (DaccPre DL : RegionName)
-    (D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
-    (s s' : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx))
-    (hExec : exec (chunk_gate_recurrence_bwd_DL_store_slice DaccPre DL
-        D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V) s = some s') :
-    ∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
-      s'.readMem DL
-          (bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx) =
-        bwdDLStoreSpec s DaccPre D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx := by
-  intro idx
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        s.pids 0 * D_MODEL_K * D_MODEL_V +
-          s.pids 1 * D_MODEL_V * BLOCK_MODEL_K +
-          s.pids 2 * BLOCK_MODEL_V +
-          idx.1.val * D_MODEL_V + idx.2.1.val) := by
-    simpa [bwdDLOffset] using hOutInj
-  simp [exec, chunk_gate_recurrence_bwd_DL_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul,
-        TileShape.dropInsertedIndex] at hExec
-  rw [← hExec]
-  simp only [bwdDLOffset]
-  rw [BlockState.scatter_readback_nd _ _ _ hRawInj idx]
-  simp [bwdDLStoreSpec, bwdDLOffset]
-
-theorem chunk_gate_recurrence_bwd_DL_store_slice_compute_correct
-    (DaccPre DL : RegionName)
-    (D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := chunk_gate_recurrence_bwd_DL_store_slice DaccPre DL
-        D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V)
-      (initialState := s)
-      (write := fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        some (DL, bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx))
-      (expected := fun idx =>
-        bwdDLStoreSpec s DaccPre D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx) := by
-  unfold ComputeCorrect.Realizes_without_Rounding
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [chunk_gate_recurrence_bwd_DL_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx
-  exact chunk_gate_recurrence_bwd_DL_store_slice_correct DaccPre DL
-    D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V s s' hOutInj hExec idx
-
 /-! ## Genuine dimension-general closed-form realizations
 
 The per-statement step slices above are already dimension-parameterized
@@ -1134,7 +1055,12 @@ theorem chunk_gate_recurrence_fwd_initial_zero_closed_form_general
   rwa [hcong] at h
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- **Genuine dimension-general forward output summary** for
+/-- **SCOPE — this is a claim about three hand-cut store slices, not about the
+launched kernel.** The launched surfaces appear only in the two lowering clauses.
+The `range(NUM_BLOCK-1)` fold is not modeled: `hAcc` is an assumption, and no
+clause chains one step's output into the next step's `AccPrev`.
+
+**Genuine shape-general forward output summary** for
 `chunk_gate_recurrence.py`'s `_fwd_recurrence`.
 
 Both public forward surfaces (`last_kv` present/absent) lower to the algorithm
@@ -1220,22 +1146,27 @@ specification chunk_gate_recurrence_forward_output_summary_general
       BLOCK_MODEL_K BLOCK_MODEL_V s hOutInjStep hAcc
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
-/-- **Genuine dimension-general backward output summary** for
+/-- **SCOPE — this is a claim about two hand-cut step slices, not about the
+launched kernel.** The launched surface appears only in the lowering clause; the
+reverse `range(NUM_BLOCK-1)` fold is not modeled, the carried gradient state is
+the fiction region `DaccPrev` with nothing constraining its contents, and the
+`DL` boundary store has no face at all (see the module docstring).
+
+**Shape-general backward step summary** for
 `chunk_gate_recurrence.py`'s `_bwd_recurrence`.
 
 The reverse-loop backward surface lowers to the algorithm layer for arbitrary
-symbolic dimensions, and each backward step face realizes a genuine arithmetic
-closed form over the *input* regions: `DI` realizes `Dacc·d_i + DS_i`
-(`bwdDaccStepSpec`), `DG` realizes the reduction `Σ Dacc·S_i` (`bwdDGStepSpec`),
-and the boundary `DL` realizes the post-loop accumulator (`bwdDLStoreSpec`), all
-under the materialized previous-state buffers `DaccPrev`/`DaccPre`. None is a
-read-back of the kernel's own outputs.
+symbolic dimensions, and the two backward step faces realize the arithmetic forms
+`DI = Dacc·d_i + DS_i` (`bwdDaccStepSpec`) and `DG = Σ Dacc·S_i`
+(`bwdDGStepSpec`). Neither is a read-back of the kernel's own outputs; but note
+that the `Dacc` factor in both is read from the **fiction** carry region
+`DaccPrev`, so only the `D`/`DS`/`S` factors are genuine input reads.
 
-Side conditions are honest: per-store output-offset injectivity
-(`hDIInj` for `DI`, `hDLInj` for `DL`; the scalar `DG` store needs none). The
-cross-chunk reverse fold over `range(NUM_BLOCK-1)` is the trusted boundary. -/
+Side conditions are honest: output-offset injectivity `hDIInj` for `DI` (the
+scalar `DG` store needs none). The cross-chunk reverse fold over
+`range(NUM_BLOCK-1)` is **not modeled**. -/
 specification chunk_gate_recurrence_backward_output_summary_general
-    (DaccPrev DaccPre DS S D DI DG DL : RegionName) (t_rel : Nat)
+    (DaccPrev DS S D DI DG DL : RegionName) (t_rel : Nat)
     (NUM_HEAD NUM_BLOCK NUM_K NUM_V D_MODEL_K D_MODEL_V BLOCK_MODEL_K
       BLOCK_MODEL_V : Nat)
     (s : BlockState)
@@ -1243,9 +1174,7 @@ specification chunk_gate_recurrence_backward_output_summary_general
       (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
         timeTileOffset s t_rel NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
           BLOCK_MODEL_V idx))
-    (hDLInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx)) :
+ :
     ((chunk_gate_recurrence_bwd_surface S D DI DG DL DS
       NUM_HEAD NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
       BLOCK_MODEL_V).toAlgorithm? =
@@ -1273,18 +1202,8 @@ specification chunk_gate_recurrence_backward_output_summary_general
         some (DG, bwdDGOffset s t_rel NUM_BLOCK NUM_K NUM_V))
       (expected := fun _ =>
         bwdDGStepSpec s DaccPrev DS S D t_rel NUM_BLOCK D_MODEL_K D_MODEL_V
-          BLOCK_MODEL_K BLOCK_MODEL_V)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := chunk_gate_recurrence_bwd_DL_store_slice DaccPre DL
-        D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V)
-      (initialState := s)
-      (write := fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        some (DL, bwdDLOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K
-          BLOCK_MODEL_V idx))
-      (expected := fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        bwdDLStoreSpec s DaccPre D_MODEL_K D_MODEL_V BLOCK_MODEL_K
-          BLOCK_MODEL_V idx)) := by
-  refine ⟨?_, ?_, ?_, ?_⟩
+          BLOCK_MODEL_K BLOCK_MODEL_V)) := by
+  refine ⟨?_, ?_, ?_⟩
   · exact chunk_gate_recurrence_bwd_surface_toAlgorithm_supported S D DI DG DL DS
       NUM_HEAD NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V
   · exact chunk_gate_recurrence_bwd_dacc_step_DI_store_slice_compute_correct
@@ -1293,9 +1212,8 @@ specification chunk_gate_recurrence_backward_output_summary_general
   · exact chunk_gate_recurrence_bwd_dg_step_store_slice_compute_correct
       DaccPrev DS S D DG t_rel NUM_BLOCK NUM_K NUM_V D_MODEL_K D_MODEL_V
       BLOCK_MODEL_K BLOCK_MODEL_V s
-  · exact chunk_gate_recurrence_bwd_DL_store_slice_compute_correct
-      DaccPre DL D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V s hDLInj
 
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkGateRecurrence
+
