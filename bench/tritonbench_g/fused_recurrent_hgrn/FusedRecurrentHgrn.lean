@@ -11,37 +11,59 @@ companion backward kernel performs the reverse-time gradient scan.
 
 ## Scope
 
-This file verifies **the Triton kernels themselves** — the per-program
-`@triton.jit` bodies (forward and backward). The host launch (grid shape,
+This file verifies **three hand-cut single-step slices** of the two
+`@triton.jit` bodies: one forward loop body and the backward loop body's `dx`
+and `dg` writebacks. It does **not** verify the launched kernels: the forward
+surface `fused_recurrent_hgrn_fwd_surface` is only shown to lower to the
+algorithm layer, and the backward surface `fused_recurrent_hgrn_bwd_surface`
+appears in no correctness face at all. The host launch (grid shape,
 `@triton.autotune` config selection over `BD`, and how the runtime composes
-per-program writes into one buffer) is the *trusted boundary*, not a proof
-obligation here. Because the program ids are universally quantified, each
-per-program statement covers every program of the grid.
+per-program writes into one buffer) is the *trusted boundary*. Because the
+program ids are universally quantified, each per-program statement covers every
+program of the grid.
 
 ## Proof architecture
 
 ```
-fused_recurrent_hgrn_output_summary_general               ← TOP THEOREM (dimension-general)
-  ├─ (surface lowers to algorithm layer)
-  ├─ fused_recurrent_hgrn_forward_step_closed_form                 (hgrnStateClosed forward)
-  ├─ fused_recurrent_hgrn_final_state_closed_form
+fused_recurrent_hgrn_output_summary_general               ← TOP THEOREM
+  ├─ fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported       (lowering only)
+  ├─ fused_recurrent_hgrn_forward_step_closed_form                (hgrnStateClosed forward)
   ├─ fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
   └─ fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
 ```
 
-## Modeling boundary
+## Modeling boundary — read before trusting anything below
 
 Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype `.to(...)` casts
 erase to the identity post-erasure. `@triton.autotune` (the `BD` config sweep)
-is not modeled — `BD` is a free parameter. The recurrent state-carry: each
-verified store-slice lemma proves the per-step / per-output **masked face**
-(one time step's writeback) against its precomputed-row spec; the full `0..T`
-loop fold that threads `b_h` across steps is exercised by the surface
-lowering (`toAlgorithm_supported`) but the cross-step state recurrence itself
-is the trusted loop boundary. The optional `USE_INITIAL_STATE` and
-`STORE_FINAL_STATE` branches and the reverse-time backward indexing are both
-modeled. Side conditions: store-offset injectivity and region-distinctness
-hypotheses where outputs must not alias.
+is not modeled — `BD` is a free parameter. The step slices reproduce Python's
+`mask = o_d < D` / `other = 0` loads faithfully, so no full-tile side condition
+is needed. What is **outside** every claim in this file:
+
+* **The cross-step folds.** Neither the forward `range(0, T)` fold threading
+  `b_h` nor the backward reverse-time fold threading `b_dh` is modeled. Each
+  carry is presented to its slice as a materialized fiction region (`BHPrev`,
+  `DHPrev`) and constrained — where constrained at all — by an *assumed*
+  hypothesis. In particular the forward carry invariant
+  `BHPrev = hgrnStateClosed(i_t)` is **not** propagated by any clause: clause 2
+  writes `O` at the time-indexed `outOffset s i_t`, while the hypothesis is
+  about `BHPrev` at the time-free `bhOffset` — a different region at a different
+  offset. There is no bridging lemma and no base case.
+* **The `STORE_FINAL_STATE` writeback.** No correctness face. The former
+  `final_state_store_slice` face was a masked memcpy (load address
+  `BHFinal + i_bh·D + offs_d`, store address `Ht + i_bh·D + offs_d` — identical
+  under the same mask) whose only content was the assumption
+  `BHFinal = hgrnStateClosed(T)`; it has been deleted rather than presented as a
+  result about `ht`.
+* **The backward `b_o` re-indexing.** Python reads `b_o` from the *previous*
+  output row (`p_o` starts at row `T-2`, so at reverse step `i` it reads row
+  `i-1`) and from `h0` at `i = 0`. The `dg` slice reads the fiction region `BO`
+  at row `i_t`; that region is *defined* to present the previous row, and no
+  theorem connects it to `O` or `h0`. The `i = 0` / `h0` branch is unmodelled.
+* **Region distinctness.** No `≠` hypotheses are stated, and none are needed:
+  each slice performs all of its loads before its single store, and every
+  `expected` is a function of the *initial* state, so aliasing cannot falsify
+  any face below.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn
@@ -50,7 +72,10 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorem:** `fused_recurrent_hgrn_output_summary_general` (dimension-general, genuine closed form `hgrnStateClosed` over the input regions). -/
+/-! **★ Main theorem:** `fused_recurrent_hgrn_output_summary_general` — shape-general,
+genuine closed form `hgrnStateClosed` over the input regions, but scoped to three
+single-step **slices** (one forward body, the backward `dx`/`dg` writebacks), not
+to the launched kernels. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -162,23 +187,6 @@ theorem fused_recurrent_hgrn_bwd_surface_toAlgorithm_supported
   simp [fused_recurrent_hgrn_bwd_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
 
-/-- Proof-oriented per-step output-store slice of
-`fused_recurrent_hgrn.py`'s `fused_recurrent_hgrn_fwd_kernel`.
-
-The full kernel updates `b_h` recurrently over `T`. This slice models one
-iteration's `p_o` writeback from a precomputed `BH` vector into `O`. -/
-def fused_recurrent_hgrn_output_store_slice
-    (BH O : RegionName) (i_t T D BD : Nat) :
-    ComputeKernel := triton {
-  i_d = tl.program_id(0)
-  i_bh = tl.program_id(1)
-  offs_d = i_d * $(BD) + tl.arange(0, $(BD))
-  mask = offs_d < $(D)
-  b_h = tl.load(BH + i_bh * $(D) + offs_d, mask=mask, other=0.0)
-  tl.store(O + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
-    (b_h).to(O.dtype.element_ty), mask=mask)
-}
-
 def dIndex (s : BlockState) (BD : Nat) (i : Fin BD) : Nat :=
   s.pids 0 * BD + i.val
 
@@ -195,71 +203,6 @@ def bhOffset (s : BlockState) (D BD : Nat) (i : Fin BD) : Nat :=
 
 def outOffset (s : BlockState) (i_t T D BD : Nat) (i : Fin BD) : Nat :=
   (s.pids 1 * T + i_t) * D + dIndex s BD i
-
-noncomputable def storeValue (s : BlockState) (BH : RegionName) (D BD : Nat)
-    (i : Fin BD) : ℝ :=
-  WithBot.unbotD 0
-    (if active s D BD i then some (s.readMem BH (bhOffset s D BD i))
-    else some (0.0 : ℝ))
-
-theorem fused_recurrent_hgrn_output_store_slice_correct
-    (BH O : RegionName) (i_t T D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ∀ i : Fin BD,
-      let outAddr := outOffset s i_t T D BD i
-      (exec (fused_recurrent_hgrn_output_store_slice BH O i_t T D BD) s).map
-          (·.readMem O outAddr)
-        = some (if active s D BD i then storeValue s BH D BD i
-          else s.readMem O outAddr) := by
-  intro i
-  simp [exec, fused_recurrent_hgrn_output_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul, ComparableDType.lt, dIndex,
-        active, bhOffset, outOffset]
-  let offsetFn : TileIndex [BD] → Nat :=
-    fun idx => (s.pids 1 * T + i_t) * D + (s.pids 0 * BD + idx.1.val)
-  let valueFn : TileIndex [BD] → ℝ :=
-    fun idx => WithBot.unbotD 0
-      (if s.pids 0 * BD + idx.1.val < D then
-        some (s.readMem BH (s.pids 1 * D + (s.pids 0 * BD + idx.1.val)))
-      else some (0.0 : ℝ))
-  let P : TileIndex [BD] → Prop := fun idx => s.pids 0 * BD + idx.1.val < D
-  have hOffsetInj : Function.Injective offsetFn := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    have habFin : outOffset s i_t T D BD a = outOffset s i_t T D BD b := by
-      simpa [offsetFn, outOffset, dIndex] using hab
-    obtain rfl : a = b := hOutInj habFin
-    rfl
-  change (List.foldl
-      (fun (acc : BlockState) idx =>
-        if P idx then acc.writeMem O (offsetFn idx) (valueFn idx) else acc)
-      _ (TileShape.allIndices [BD])).readMem O (offsetFn (i, PUnit.unit)) =
-    if active s D BD i then storeValue s BH D BD i
-    else s.readMem O (offsetFn (i, PUnit.unit))
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (i, PUnit.unit)]
-  by_cases hi : s.pids 0 * BD + i.val < D
-  · simp [P, valueFn, active, storeValue, bhOffset, dIndex, hi]
-  · simp [P, active, storeValue, dIndex, hi]
-
-theorem fused_recurrent_hgrn_output_store_slice_compute_correct
-    (BH O : RegionName) (i_t T D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_output_store_slice BH O i_t T D BD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BD => active s D BD i)
-        (fun i => (O, outOffset s i_t T D BD i)))
-      (expected := fun i : Fin BD => storeValue s BH D BD i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [fused_recurrent_hgrn_output_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := fused_recurrent_hgrn_output_store_slice_correct BH O i_t T D BD s hOutInj i
-  rw [hExec] at h
-  simpa [hActive] using Option.some.inj h
 
 /-- One forward recurrence step:
 `b_h = b_g * b_h + b_x`, then masked store to the current output row. -/
@@ -479,199 +422,6 @@ theorem fused_recurrent_hgrn_out_offset_injective_general
   simp [outOffset, dIndex] at h
   omega
 
-/-- Proof-oriented final-state store slice of `fused_recurrent_hgrn.py`'s
-`fused_recurrent_hgrn_fwd_kernel`. Companion to the per-iteration output store
-slice: writes a precomputed final-state `BHFinal` vector into `Ht` after the
-loop completes (STORE_FINAL_STATE=True branch). -/
-def fused_recurrent_hgrn_final_state_store_slice
-    (BHFinal Ht : RegionName) (D BD : Nat) :
-    ComputeKernel := triton {
-  i_d = tl.program_id(0)
-  i_bh = tl.program_id(1)
-  offs_d = i_d * $(BD) + tl.arange(0, $(BD))
-  mask = offs_d < $(D)
-  b_h = tl.load(BHFinal + i_bh * $(D) + offs_d, mask=mask, other=0.0)
-  tl.store(Ht + i_bh * $(D) + offs_d,
-    (b_h).to(Ht.dtype.element_ty), mask=mask)
-}
-
-def finalStateOffset (s : BlockState) (D BD : Nat) (i : Fin BD) : Nat :=
-  s.pids 1 * D + dIndex s BD i
-
-noncomputable def finalStateStoreValue (s : BlockState) (BHFinal : RegionName)
-    (D BD : Nat) (i : Fin BD) : ℝ :=
-  WithBot.unbotD 0
-    (if active s D BD i then some (s.readMem BHFinal (finalStateOffset s D BD i))
-    else some (0.0 : ℝ))
-
-theorem fused_recurrent_hgrn_final_state_store_slice_correct
-    (BHFinal Ht : RegionName) (D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BD => finalStateOffset s D BD i)) :
-    ∀ i : Fin BD,
-      let outAddr := finalStateOffset s D BD i
-      (exec (fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD) s).map
-          (·.readMem Ht outAddr)
-        = some (if active s D BD i then
-            finalStateStoreValue s BHFinal D BD i
-          else s.readMem Ht outAddr) := by
-  intro i
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [BD] =>
-        s.pids 1 * D + (s.pids 0 * BD + idx.1.val)) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    have habFin : finalStateOffset s D BD a = finalStateOffset s D BD b := by
-      simpa [finalStateOffset, dIndex, Nat.add_assoc] using hab
-    obtain rfl : a = b := hOutInj habFin
-    rfl
-  simp [exec, fused_recurrent_hgrn_final_state_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul, ComparableDType.lt]
-  simp only [finalStateOffset, dIndex, Nat.add_assoc]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
-  by_cases hi : s.pids 0 * BD + i.val < D
-  · simp [active, dIndex, finalStateStoreValue, finalStateOffset,
-      Nat.add_assoc, hi]
-  · simp [active, dIndex, finalStateOffset, Nat.add_assoc, hi]
-
-theorem fused_recurrent_hgrn_final_state_store_slice_compute_correct
-    (BHFinal Ht : RegionName) (D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BD => finalStateOffset s D BD i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s D BD)
-        (fun i => (Ht, finalStateOffset s D BD i)))
-      (expected := fun i => finalStateStoreValue s BHFinal D BD i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [fused_recurrent_hgrn_final_state_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := fused_recurrent_hgrn_final_state_store_slice_correct BHFinal Ht D BD s hOutInj i
-  rw [hExec] at h
-  simpa [hActive] using Option.some.inj h
-
-/-- **Dimension-general** final-state address injectivity, given `0 < BD`. -/
-theorem fused_recurrent_hgrn_final_state_offset_injective_general
-    (s : BlockState) (D BD : Nat) (_hBD : 0 < BD) :
-    Function.Injective (fun i : Fin BD => finalStateOffset s D BD i) := by
-  intro a b h
-  apply Fin.ext
-  simp [finalStateOffset, dIndex] at h
-  omega
-
-/-- **Genuine final-state store.** When the post-loop materialized state buffer
-`BHFinal` holds the genuine `T`-step folded state `hgrnStateClosed(T)`, the
-`STORE_FINAL_STATE` writeback realizes `hgrnStateClosed(T)` (masked) into `ht`,
-a closed form over the input regions `x, g, h0`. -/
-theorem fused_recurrent_hgrn_final_state_closed_form
-    (BHFinal Ht X G h0 : RegionName) (USE_INITIAL_STATE : Bool)
-    (T D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective (fun i : Fin BD => finalStateOffset s D BD i))
-    (hFinal : ∀ i : Fin BD,
-      s.readMem BHFinal (finalStateOffset s D BD i)
-        = hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD T i) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s D BD)
-        (fun i => (Ht, finalStateOffset s D BD i)))
-      (expected := fun i =>
-        if active s D BD i then
-          hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD T i
-        else 0) := by
-  have h := fused_recurrent_hgrn_final_state_store_slice_compute_correct
-    BHFinal Ht D BD s hOutInj
-  have hcong : (fun i => finalStateStoreValue s BHFinal D BD i)
-      = (fun i =>
-        if active s D BD i then
-          hgrnStateClosed s X G h0 USE_INITIAL_STATE T D BD T i
-        else 0) := by
-    funext i
-    by_cases hA : active s D BD i
-    · simp only [finalStateStoreValue, hA, if_true, hFinal i, WithBot.unbotD_some]
-    · simp only [finalStateStoreValue, hA, if_false, WithBot.unbotD_some]; norm_num
-  rwa [hcong] at h
-
-/-- Proof-oriented backward gradient-store slice of
-`fused_recurrent_hgrn.py`'s `fused_recurrent_hgrn_bwd_kernel`.
-
-The full backward surface above records the reverse-time loop and pointer
-decrements. This slice fixes one time row and proves the masked writeback used
-for either `dx` or `dg` from a precomputed gradient vector. -/
-def fused_recurrent_hgrn_bwd_grad_store_slice
-    (GradPre Out : RegionName) (i_t T D BD : Nat) :
-    ComputeKernel := triton {
-  i_d = tl.program_id(0)
-  i_bh = tl.program_id(1)
-  offs_d = i_d * $(BD) + tl.arange(0, $(BD))
-  mask = offs_d < $(D)
-  grad = tl.load(GradPre + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
-    mask=mask, other=0.0)
-  tl.store(Out + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
-    (grad).to(Out.dtype.element_ty), mask=mask)
-}
-
-noncomputable def bwdGradStoreValue (s : BlockState) (GradPre : RegionName)
-    (i_t T D BD : Nat) (i : Fin BD) : ℝ :=
-  WithBot.unbotD 0
-    (if active s D BD i then some (s.readMem GradPre (outOffset s i_t T D BD i))
-    else some (0.0 : ℝ))
-
-theorem fused_recurrent_hgrn_bwd_grad_store_slice_correct
-    (GradPre Out : RegionName) (i_t T D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ∀ i : Fin BD,
-      let outAddr := outOffset s i_t T D BD i
-      (exec (fused_recurrent_hgrn_bwd_grad_store_slice GradPre Out i_t T D BD) s).map
-          (·.readMem Out outAddr)
-        = some (if active s D BD i then
-            bwdGradStoreValue s GradPre i_t T D BD i
-          else s.readMem Out outAddr) := by
-  intro i
-  have hRawInj : Function.Injective
-      (fun idx : TileIndex [BD] =>
-        (s.pids 1 * T + i_t) * D + (s.pids 0 * BD + idx.1.val)) := by
-    rintro ⟨a, _⟩ ⟨b, _⟩ hab
-    have habFin : outOffset s i_t T D BD a = outOffset s i_t T D BD b := by
-      simpa [outOffset, dIndex] using hab
-    obtain rfl : a = b := hOutInj habFin
-    rfl
-  simp [exec, fused_recurrent_hgrn_bwd_grad_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul, ComparableDType.lt, outOffset,
-        dIndex]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
-  by_cases hi : s.pids 0 * BD + i.val < D
-  · simp [active, bwdGradStoreValue, outOffset, dIndex, hi]
-  · simp [active, outOffset, dIndex, hi]
-
-theorem fused_recurrent_hgrn_bwd_grad_store_slice_compute_correct
-    (GradPre Out : RegionName) (i_t T D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_bwd_grad_store_slice GradPre Out i_t T D BD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s D BD)
-        (fun i => (Out, outOffset s i_t T D BD i)))
-      (expected := fun i => bwdGradStoreValue s GradPre i_t T D BD i) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [fused_recurrent_hgrn_bwd_grad_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro i hActive
-  have h := fused_recurrent_hgrn_bwd_grad_store_slice_correct GradPre Out
-    i_t T D BD s hOutInj i
-  rw [hExec] at h
-  simpa [hActive] using Option.some.inj h
-
 /-- Backward one-step `dx` formula:
 `b_dh = b_dh_prev + b_do`, `b_dx = b_dh`, then masked store to `DX`. -/
 def fused_recurrent_hgrn_bwd_dx_step_store_slice
@@ -829,103 +579,48 @@ theorem fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-- Named `dx` writeback correctness for the backward kernel. The Python
-backward loop writes `b_dx = b_dh` to `dx` at each reverse-time step; this
-specializes the generic gradient-store slice to the observed `dx` output. -/
-theorem fused_recurrent_hgrn_bwd_dx_store_slice_compute_correct
-    (DxPre DX : RegionName) (i_t T D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_bwd_grad_store_slice DxPre DX i_t T D BD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s D BD)
-        (fun i => (DX, outOffset s i_t T D BD i)))
-      (expected := fun i => bwdGradStoreValue s DxPre i_t T D BD i) := by
-  exact fused_recurrent_hgrn_bwd_grad_store_slice_compute_correct DxPre DX
-    i_t T D BD s hOutInj
-
-/-- Named `dg` writeback correctness for the backward kernel. The Python
-backward loop writes `b_dg = b_dh * b_o` to `dg` at each reverse-time step;
-this specializes the generic gradient-store slice to the observed `dg` output. -/
-theorem fused_recurrent_hgrn_bwd_dg_store_slice_compute_correct
-    (DgPre DG : RegionName) (i_t T D BD : Nat) (s : BlockState)
-    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_bwd_grad_store_slice DgPre DG i_t T D BD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s D BD)
-        (fun i => (DG, outOffset s i_t T D BD i)))
-      (expected := fun i => bwdGradStoreValue s DgPre i_t T D BD i) := by
-  exact fused_recurrent_hgrn_bwd_grad_store_slice_compute_correct DgPre DG
-    i_t T D BD s hOutInj
-
-/-! ## Python test-case surface wrappers
-
-The Python regression keeps `B = 1`, `H = 2`, `T = 2`, `D = 2` and varies
-only `initial_state`/`output_final_state`. These wrappers pin the four forward
-entry points and the two backward `USE_INITIAL_STATE` paths used by autograd. -/
-
-theorem fused_recurrent_hgrn_test_no_initial_state_bwd_surface_toAlgorithm_supported
-    (G O H0 DX DG DO : RegionName) :
-    (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-      Bool.false).toAlgorithm? =
-      Except.ok
-        (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-          Bool.false).toAlgKernel := by
-  exact fused_recurrent_hgrn_bwd_surface_toAlgorithm_supported G O H0 DX DG DO
-    2 2 32 Bool.false
-
-theorem fused_recurrent_hgrn_test_with_initial_state_bwd_surface_toAlgorithm_supported
-    (G O H0 DX DG DO : RegionName) :
-    (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-      Bool.true).toAlgorithm? =
-      Except.ok
-        (fused_recurrent_hgrn_bwd_surface G O H0 DX DG DO 2 2 32
-          Bool.true).toAlgKernel := by
-  exact fused_recurrent_hgrn_bwd_surface_toAlgorithm_supported G O H0 DX DG DO
-    2 2 32 Bool.true
-
 /-! ### ════════ ★ MAIN THEOREM ★ ════════
 
-**Genuine, dimension-general HGRN compute-correctness.** Parameterized over the
-symbolic time/feature/tile sizes `T D BD`, the step index `i_t`, the final time
-`T`, and **both** flags `USE_INITIAL_STATE STORE_FINAL_STATE`. It bundles the
-genuine forward faces, each realized against the closed form `hgrnStateClosed`
-over the *input* regions `x, g, h0` (never a read-back of the kernel's own
-output), plus the genuine per-step backward `dx`/`dg` writebacks:
+**SCOPE — this is a claim about three hand-cut single-step slices, not about the
+launched kernels.** Clauses 2–4 are `Realizes` facts about
+`fused_recurrent_hgrn_forward_step_store_slice`,
+`fused_recurrent_hgrn_bwd_dx_step_store_slice` and
+`fused_recurrent_hgrn_bwd_dg_step_store_slice`; the launched forward surface
+appears only in clause 1, which says nothing more than "it lowers to the
+algorithm layer", and the launched backward surface does not appear at all. The
+`STORE_FINAL_STATE` writeback has **no** correctness face here (see the module
+docstring).
+
+Parameterized over the symbolic time/feature/tile sizes `T D BD`, the step index
+`i_t`, and both flags `USE_INITIAL_STATE STORE_FINAL_STATE`. The forward face is
+realized against the closed form `hgrnStateClosed` over the *input* regions
+`x, g, h0` (never a read-back of the kernel's own output):
 
 1. the full HGRN forward surface lowers to the algorithm layer;
 2. one forward **output** body realizes `hgrnStateClosed(i_t + 1)` — the unrolled
-   recurrence `b_h = g·b_h + x` — given the carry invariant
+   recurrence `b_h = g·b_h + x` — given the *assumed* carry invariant
    `BHPrev = hgrnStateClosed(i_t)`;
-3. the **final-state** writeback realizes `hgrnStateClosed(T)` (masked), given
-   `BHFinal = hgrnStateClosed(T)`;
-4. one backward `dx` body realizes the genuine `bwdDxStepValue` (`dh_prev + do`);
-5. one backward `dg` body realizes the genuine `bwdDgStepValue` (`(dh_prev+do)·o`).
+3. one backward `dx` body realizes the genuine `bwdDxStepValue` (`dh_prev + do`);
+4. one backward `dg` body realizes the genuine `bwdDgStepValue` (`(dh_prev+do)·o`).
 
 Honest structural side condition: `0 < BD` (contiguous lanes, giving offset
-injectivity for every face). The flags flow through verbatim; clauses 2–5 hold
-for every flag setting, and each Python case is recovered by projecting the
-subset of clauses its `STORE_FINAL_STATE` / `USE_INITIAL_STATE` configuration
-exercises.
+injectivity for every face). The flags flow through verbatim; clauses 2–4 hold
+for every flag setting.
 
-The cross-step fold over `range(0, T)` threading `b_h` (forward) and `b_dh`
-(backward) is the trusted loop boundary: the carried state is presented to each
-step slice as a materialized buffer, and the forward carry invariant
-`BHPrev = hgrnStateClosed(m)` is propagated by clause 2 itself
-(`forwardStepValue_eq_hgrnStateClosed_succ`). -/
+**The carry invariant `hPrev` is an assumption, not a conclusion.** Nothing in
+this file propagates it: clause 2 writes `O` at the time-indexed
+`outOffset s i_t`, whereas `hPrev` constrains `BHPrev` at the time-free
+`bhOffset` — a different region at a different offset, with no bridging lemma.
+Likewise nothing proves the base case `hgrnStateClosed(0) = seed`. The same holds
+for the backward `b_dh` carry, which is presented as the fiction region `DHPrev`
+and never chained. -/
 specification fused_recurrent_hgrn_output_summary_general
-    (X G O H0 Ht DX DG DO BHPrev BHFinal DHPrev BO : RegionName)
+    (X G O H0 Ht DX DG DO BHPrev DHPrev BO : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
     (i_t T D BD : Nat) (s : BlockState) (hBD : 0 < BD)
     (hPrev : ∀ i : Fin BD,
       s.readMem BHPrev (bhOffset s D BD i)
-        = hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD i_t i)
-    (hFinal : ∀ i : Fin BD,
-      s.readMem BHFinal (finalStateOffset s D BD i)
-        = hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD T i) :
+        = hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD i_t i) :
     -- (1) the full forward surface lowers to the algorithm layer
     (∃ alg, (fused_recurrent_hgrn_fwd_surface X G O H0 Ht T D BD
       USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm? = Except.ok alg) ∧
@@ -939,18 +634,7 @@ specification fused_recurrent_hgrn_output_summary_general
         (fun i => (O, outOffset s i_t T D BD i)))
       (expected := fun i =>
         hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD (i_t + 1) i)) ∧
-    -- (3) the final-state writeback realizes the genuine `hgrnStateClosed(T)`
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_final_state_store_slice BHFinal Ht D BD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s D BD)
-        (fun i => (Ht, finalStateOffset s D BD i)))
-      (expected := fun i =>
-        if active s D BD i then
-          hgrnStateClosed s X G H0 USE_INITIAL_STATE T D BD T i
-        else 0)) ∧
-    -- (4) the backward `dx` body realizes the genuine `dh_prev + do`
+    -- (3) the backward `dx` body realizes the genuine `dh_prev + do`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX
         i_t T D BD)
@@ -959,7 +643,7 @@ specification fused_recurrent_hgrn_output_summary_general
         (active s D BD)
         (fun i => (DX, outOffset s i_t T D BD i)))
       (expected := fun i => bwdDxStepValue s DHPrev DO i_t T D BD i)) ∧
-    -- (5) the backward `dg` body realizes the genuine `(dh_prev+do)·o`
+    -- (4) the backward `dg` body realizes the genuine `(dh_prev+do)·o`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
         i_t T D BD)
@@ -969,13 +653,10 @@ specification fused_recurrent_hgrn_output_summary_general
         (fun i => (DG, outOffset s i_t T D BD i)))
       (expected := fun i => bwdDgStepValue s DHPrev DO BO i_t T D BD i)) := by
   have hOutInj := fused_recurrent_hgrn_out_offset_injective_general s i_t T D BD hBD
-  have hFinalInj := fused_recurrent_hgrn_final_state_offset_injective_general s D BD hBD
   refine ⟨fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported _ _ _ _ _ _ _ _ _ _,
-      ?_, ?_, ?_, ?_⟩
+      ?_, ?_, ?_⟩
   · exact fused_recurrent_hgrn_forward_step_closed_form BHPrev X G H0 O
       USE_INITIAL_STATE i_t T D BD s hOutInj hPrev
-  · exact fused_recurrent_hgrn_final_state_closed_form BHFinal Ht X G H0
-      USE_INITIAL_STATE T D BD s hFinalInj hFinal
   · exact fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
       DHPrev DO DX i_t T D BD s hOutInj
   · exact fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
@@ -984,3 +665,4 @@ specification fused_recurrent_hgrn_output_summary_general
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn
+

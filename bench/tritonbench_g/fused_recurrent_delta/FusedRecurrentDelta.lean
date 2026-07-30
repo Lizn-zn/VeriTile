@@ -49,20 +49,28 @@ recurrence-valued specs). The per-step faces below are each realized against
 
 ## Proof architecture
 
+The headline is a flat 11-way conjunction; its `refine` has eleven independent
+goals and there is **no implication chain between them** — in particular no
+clause discharges another clause's carry hypothesis. Each line below is one
+conjunct, in order:
+
 ```
-fused_recurrent_delta_output_summary_general          ← TOP THEOREM (dimension-general)
-  ├─ fused_recurrent_delta_fwd_surface_toAlgorithm_supported     fwd surface lowers
-  ├─ fused_recurrent_delta_bwd_surface_toAlgorithm_supported     bwd surface lowers
-  ├─ fused_recurrent_delta_vnew_step_closed_form         v ← v_m − h·k_m   (vNewClosed m)
-  ├─ fused_recurrent_delta_state_step_closed_form        h ← deltaState(m+1)
-  │      └─ stateStepSpec_eq_deltaState_succ  (carry-fold; core deltaState_succ)
-  ├─ fused_recurrent_delta_output_step_closed_form       o ← outputClosed m
-  ├─ fused_recurrent_delta_final_state_closed_form       ht ← deltaState(T) (masked)
-  ├─ fused_recurrent_delta_bwd_dk_step_slice_compute_correct      dk row (loop 1)
-  ├─ fused_recurrent_delta_bwd_dv_step_slice_compute_correct      dv row (loop 1)
-  ├─ fused_recurrent_delta_bwd_dbeta_step_slice_compute_correct   dbeta row / scalar
-  ├─ fused_recurrent_delta_bwd_dk_correction_step_slice_compute_correct  dk fixup (loop 2)
-  └─ fused_recurrent_delta_bwd_dq_step_slice_compute_correct      dq row (loop 2)
+fused_recurrent_delta_output_summary_general          ← TOP THEOREM
+  1  fused_recurrent_delta_fwd_surface_toAlgorithm_supported     fwd surface lowers
+  2  fused_recurrent_delta_bwd_surface_toAlgorithm_supported     bwd surface lowers
+  3  fused_recurrent_delta_vnew_step_closed_form         v ← v_m − h·k_m  (vNewClosed m)
+  4  fused_recurrent_delta_state_step_closed_form        HOut ← deltaState(m+1)
+  5  fused_recurrent_delta_output_step_closed_form       o ← outputClosed m
+  6  fused_recurrent_delta_bwd_dk_step_slice_compute_correct              dk row (loop 1)
+  7  fused_recurrent_delta_bwd_dv_step_slice_compute_correct              dv row (loop 1)
+  8  fused_recurrent_delta_bwd_dbeta_step_slice_headwise_compute_correct  dbeta row
+  9  fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta_compute_correct dbeta scalar
+ 10  fused_recurrent_delta_bwd_dk_correction_step_slice_compute_correct   dk fixup (loop 2)
+ 11  fused_recurrent_delta_bwd_dq_step_slice_compute_correct              dq row (loop 2)
+
+supporting algebra (used INSIDE clauses 3–5, not extra conjuncts):
+  deltaState / deltaState_succ            the standalone recurrence
+  stateStepSpec_eq_deltaState_succ        one body advances it, given `hPrev`
 ```
 
 ## Modeling boundary
@@ -77,11 +85,12 @@ through the surfaces verbatim as `Bool` parameters.
 The cross-step folds threading `h` (forward), `d_h` (backward loop 1) and the
 recomputed `h` (backward loop 2) are the **trusted loop boundary**, exactly as
 in `fused_recurrent_hgrn` / `fused_rwkv6_kernel`: the carried state is
-presented to each step face as a materialized buffer (`HPrev`/`HNext`/
-`DHPrev`), and under the carry invariant `HPrev = deltaState(m)` the forward
-loop-body faces realize `vNewClosed(m)`, `deltaState(m+1)` and
-`outputClosed(m)` (theorem `stateStepSpec_eq_deltaState_succ`, algebraic core
-`deltaState_succ`). Two boundary consequences are stated plainly:
+presented to each step face as a materialized buffer (`HPrev`/`HOut`/`DHPrev`),
+and under the *assumed* carry invariant `HPrev = deltaState(m)` the forward
+loop-body faces realize `vNewClosed(m)`, `deltaState(m+1)` and `outputClosed(m)`
+(theorem `stateStepSpec_eq_deltaState_succ`, algebraic core `deltaState_succ`).
+No clause discharges another clause's carry invariant, and there is no proven
+chaining from one step's output buffer to the next step's input buffer. Two boundary consequences are stated plainly:
 
 * the forward kernel **overwrites `v` in place** (row `t` is rewritten to
   `v_new` at step `t`, after being read); every face's recurrence hypothesis
@@ -135,7 +144,10 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-! **★ Main theorem:** `fused_recurrent_delta_output_summary_general` (dimension-general). -/
+/-! **★ Main theorem:** `fused_recurrent_delta_output_summary_general` —
+shape-general, but scoped to eight single-step **slices** (one of which writes the
+internal carry register `HOut`, not a Python tensor), not to the launched
+kernels. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -418,16 +430,6 @@ def activeK (s : BlockState) (K BK : Nat) (jk : Fin BK) : Prop :=
 instance activeKDecidable (s : BlockState) (K BK : Nat) (jk : Fin BK) :
     Decidable (activeK s K BK jk) := by
   unfold activeK; infer_instance
-
-/-- Active predicate of the `[BV, BK]` final-state mask
-`mask_bk[None,:] & mask_bv[:,None]` (operand order as in the Python). -/
-def finalActive (s : BlockState) (K V BK BV : Nat)
-    (idx : TileIndex [BV, BK]) : Prop :=
-  kIndex s BK idx.2.1 < K ∧ vIndex s BV idx.1 < V
-
-instance finalActiveDecidable (s : BlockState) (K V BK BV : Nat)
-    (idx : TileIndex [BV, BK]) : Decidable (finalActive s K V BK BV idx) := by
-  unfold finalActive; infer_instance
 
 /-! ## Genuine input readers (over the *input* regions)
 
@@ -892,11 +894,14 @@ theorem fused_recurrent_delta_state_step_slice_scalarbeta_compute_correct
 /-! ## Output-readout step slice (the per-step `o_t` store)
 
 One loop body's output store, isolated from the cross-step loop. The delta
-rule reads out the **post-update** state, so this face consumes the
-materialized post-update tile `HNext` (which the state face above realizes as
-`deltaState(m+1)` from `HPrev = deltaState(m)`): it loads `HNext` and the
-scaled `q_t` row, reduces over the key axis and masked-stores the `[BV]` row
-into `o` at time row `t`. -/
+rule reads out the **post-update** state, so this face consumes a materialized
+post-update tile `HNext`: it loads `HNext` and the scaled `q_t` row, reduces
+over the key axis and masked-stores the `[BV]` row into `o` at time row `t`.
+
+`HNext` holding `deltaState(m+1)` is an *assumption* wherever this face is used
+(the headline's `hNext`). The state-update face proves `deltaState(m+1)` about
+the state *after executing* its own slice; nothing in this file sequences that
+post-state into this face's pre-state. -/
 
 def fused_recurrent_delta_output_step_slice
     (HNext q o : RegionName) (t s_qk_h s_vo_h B H K V BK BV : Nat) (scale : ℝ) :
@@ -1001,104 +1006,6 @@ theorem fused_recurrent_delta_output_step_slice_compute_correct
   intro jv hActive
   have h := fused_recurrent_delta_output_step_slice_correct HNext q o
     t s_qk_h s_vo_h B H K V BK BV scale s hOutInj jv
-  rw [hExec] at h
-  simpa [hActive] using Option.some.inj h
-
-/-! ## Final-state store slice (the `STORE_FINAL_STATE` branch)
-
-After the loop, the kernel masked-stores the final state tile `h` into `ht`.
-This slice models that writeback exactly, reading the materialized final-state
-tile `HFinal` and writing the masked `[BV,BK]` face into `Ht` (mask operand
-order `mask_bk[None,:] & mask_bv[:,None]` as in the Python). -/
-
-def fused_recurrent_delta_final_state_store_slice
-    (HFinal Ht : RegionName) (K V BK BV : Nat) :
-    ComputeKernel := triton {
-  i_v = tl.program_id(0)
-  i_k = tl.program_id(1)
-  i_bh = tl.program_id(2)
-  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
-  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
-  mask_kv = (offs_k[None, :] < $(K)) & (offs_v[:, None] < $(V))
-  b_h = tl.load(HFinal + i_bh * $(K) * $(V) +
-      offs_k[None, :] * $(V) + offs_v[:, None],
-    mask=mask_kv, other=0.0)
-  tl.store(Ht + i_bh * $(K) * $(V) +
-      offs_k[None, :] * $(V) + offs_v[:, None],
-    b_h, mask=mask_kv)
-}
-
-noncomputable def finalStateStoreValue (s : BlockState) (HFinal : RegionName)
-    (K V BK BV : Nat) (idx : TileIndex [BV, BK]) : ℝ :=
-  WithBot.unbotD 0
-    (if finalActive s K V BK BV idx then
-      some (s.readMem HFinal (stateOffset s K V BK BV idx))
-    else some (0.0 : ℝ))
-
-set_option maxHeartbeats 1000000 in
-theorem fused_recurrent_delta_final_state_store_slice_correct
-    (HFinal Ht : RegionName) (K V BK BV : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BV, BK] => stateOffset s K V BK BV idx)) :
-    ∀ idx : TileIndex [BV, BK],
-      let outAddr := stateOffset s K V BK BV idx
-      (exec (fused_recurrent_delta_final_state_store_slice HFinal Ht K V BK BV) s).map
-          (·.readMem Ht outAddr)
-        = some (if finalActive s K V BK BV idx then
-            finalStateStoreValue s HFinal K V BK BV idx
-          else s.readMem Ht outAddr) := by
-  intro idx
-  simp [exec, fused_recurrent_delta_final_state_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
-        Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
-        ComparableDType.lt, vIndex, kIndex, finalActive, stateOffset,
-        TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BV, BK] → Nat :=
-    fun idx => s.pids 2 * K * V +
-      (s.pids 1 * BK + idx.2.1.val) * V +
-      (s.pids 0 * BV + idx.1.val)
-  let valueFn : TileIndex [BV, BK] → ℝ :=
-    fun idx => WithBot.unbotD 0
-      (if s.pids 1 * BK + idx.2.1.val < K ∧
-          s.pids 0 * BV + idx.1.val < V then
-        some (s.readMem HFinal (offsetFn idx))
-      else some (0.0 : ℝ))
-  let P : TileIndex [BV, BK] → Prop :=
-    fun idx => s.pids 1 * BK + idx.2.1.val < K ∧
-      s.pids 0 * BV + idx.1.val < V
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, stateOffset, vIndex, kIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i =>
-        if P i then acc.writeMem Ht (offsetFn i) (valueFn i) else acc)
-      _ (TileShape.allIndices [BV, BK])).readMem Ht (offsetFn idx) =
-    if P idx then finalStateStoreValue s HFinal K V BK BV idx
-    else s.readMem Ht (offsetFn idx)
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
-  by_cases hActive : s.pids 1 * BK + idx.2.1.val < K ∧ s.pids 0 * BV + idx.1.val < V
-  · rfl
-  · rfl
-
-theorem fused_recurrent_delta_final_state_store_slice_compute_correct
-    (HFinal Ht : RegionName) (K V BK BV : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BV, BK] => stateOffset s K V BK BV idx)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_delta_final_state_store_slice HFinal Ht K V BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BV, BK] => finalActive s K V BK BV idx)
-        (fun idx : TileIndex [BV, BK] => (Ht, stateOffset s K V BK BV idx)))
-      (expected := fun idx : TileIndex [BV, BK] =>
-        finalStateStoreValue s HFinal K V BK BV idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [fused_recurrent_delta_final_state_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := fused_recurrent_delta_final_state_store_slice_correct HFinal Ht K V BK BV
-    s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
@@ -1297,45 +1204,6 @@ theorem fused_recurrent_delta_output_step_closed_form
     funext jv
     exact outputStepSpec_eq_outputClosed s HNext q k v beta h0 IS_HEADWISE_BETA
       USE_INITIAL_STATE m s_qk_h s_vo_h T K V BK BV scale hNext jv
-  rwa [hcong] at h
-
-/-- **Genuine final-state store.** When the post-loop materialized state
-buffer `HFinal` holds the genuine `T`-step folded state `deltaState(T)`, the
-`STORE_FINAL_STATE` writeback realizes `deltaState(T)` (masked) into `ht`. -/
-theorem fused_recurrent_delta_final_state_closed_form
-    (HFinal Ht k v beta h0 : RegionName)
-    (IS_HEADWISE_BETA USE_INITIAL_STATE : Bool)
-    (s_qk_h s_vo_h T K V BK BV : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BV, BK] => stateOffset s K V BK BV idx))
-    (hFinal : ∀ idx : TileIndex [BV, BK],
-      s.readMem HFinal (stateOffset s K V BK BV idx)
-        = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV T idx) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_delta_final_state_store_slice HFinal Ht K V BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BV, BK] => finalActive s K V BK BV idx)
-        (fun idx : TileIndex [BV, BK] => (Ht, stateOffset s K V BK BV idx)))
-      (expected := fun idx : TileIndex [BV, BK] =>
-        if finalActive s K V BK BV idx then
-          deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV T idx
-        else 0) := by
-  have h := fused_recurrent_delta_final_state_store_slice_compute_correct HFinal Ht
-    K V BK BV s hOutInj
-  have hcong : (fun idx : TileIndex [BV, BK] =>
-      finalStateStoreValue s HFinal K V BK BV idx)
-      = (fun idx : TileIndex [BV, BK] =>
-        if finalActive s K V BK BV idx then
-          deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV T idx
-        else 0) := by
-    funext idx
-    by_cases hA : finalActive s K V BK BV idx
-    · simp only [finalStateStoreValue, hA, if_true, hFinal idx, WithBot.unbotD_some]
-    · simp only [finalStateStoreValue, hA, if_false, WithBot.unbotD_some]; norm_num
   rwa [hcong] at h
 
 /-! ## Backward per-step gradient faces (loop 1 / loop 2 bodies)
@@ -2467,7 +2335,14 @@ theorem fused_recurrent_delta_dbeta_row_offset_injective_general
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════
 
-**Genuine, dimension-general delta-rule compute-correctness.** Parameterized
+**SCOPE — this is a claim about eight hand-cut single-step slices, not about the
+launched kernels.** The launched surfaces appear only in clauses 1 and 2, which
+say nothing more than "they lower to the algorithm layer". Clause 4 writes `HOut`,
+a **fiction region** modelling the carried state register `h`, not a Python
+tensor. Neither cross-step fold is modeled, and the `STORE_FINAL_STATE` writeback
+has no face.
+
+**Genuine, shape-general delta-rule step summary.** Parameterized
 over the symbolic head strides `s_qk_h s_vo_h`, grid extents `NK B H T`,
 key/value extents `K V`, tile sizes `BK BV`, the real `scale`, the step index
 `m`, the final time `T`, and **all** compile-time flags (`IS_HEADWISE_BETA`,
@@ -2487,32 +2362,46 @@ never a read-back of the kernel's own output:
    carry-fold — given `HPrev = deltaState(m)`;
 5. one forward **output** body realizes `outputClosed(m)` (the key-axis
    readout of the *post-update* state), given `HNext = deltaState(m+1)`;
-6. the **final-state** writeback realizes `deltaState(T)` (masked), given
-   `HFinal = deltaState(T)`;
-7. one backward loop-1 **`dk`** body (flag-selected) realizes the genuine
+6. one backward loop-1 **`dk`** body (flag-selected) realizes the genuine
    `dkStepSpec` over the materialized reverse-carry `DHPrev` and input rows;
-8. one backward loop-1 **`dv`** body (flag-selected) realizes `dvStepSpec`;
-9. one backward loop-1 headwise **`dbeta`** body realizes `dbetaStepSpec`;
-10. one backward loop-1 scalar **`dbeta`** body realizes the full-reduction
-    `dbetaScalarStepSpec` (scalar cell);
-11. one backward loop-2 **`dk` correction** body realizes `dkCorrStepSpec`
+7. one backward loop-1 **`dv`** body (flag-selected) realizes `dvStepSpec`;
+8. one backward loop-1 headwise **`dbeta`** body realizes `dbetaStepSpec`;
+9. one backward loop-1 scalar **`dbeta`** body realizes the full-reduction
+   `dbetaScalarStepSpec` (scalar cell);
+10. one backward loop-2 **`dk` correction** body realizes `dkCorrStepSpec`
     (the in-place fixup — the final memory value of the `dk` row) over the
     materialized recomputed state `HRec`;
-12. one backward loop-2 **`dq`** body (flag-selected) realizes `dqStepSpec`.
+11. one backward loop-2 **`dq`** body (flag-selected) realizes `dqStepSpec`.
 
-Honest structural side conditions only: `BV ≤ V`, `BK ≤ K` (the state tile
-fits the logical extents, giving state-address injectivity); all row-address
-injectivities are unconditional. The cross-step folds threading `h`, `d_h`
-and the recomputed `h` are the trusted loop boundary (carried state presented
-as materialized buffers; see the module docstring, including the in-place-`v`
-consequence), and the forward carry invariant `HPrev = deltaState(m)` is
-propagated by clause 4 itself (`stateStepSpec_eq_deltaState_succ`). By the
-time the backward kernel runs, region `v` holds the forward pass's stored
-deltas `v_new` — the backward faces are genuine over the backward launch's
-actual inputs. -/
+The `STORE_FINAL_STATE` writeback has **no** conjunct: its face was a masked
+memcpy (load address `HFinal + i_bh·K·V + offs_k·V + offs_v`, store address
+`ht + …` — identical under the same mask) whose entire content was the
+assumption `HFinal = deltaState(T)`, so it has been deleted rather than
+presented as a result about `ht`.
+
+Side conditions. Structural: `BV ≤ V`, `BK ≤ K` (the state tile fits the logical
+extents, giving state-address injectivity); all row-address injectivities are
+unconditional. **Load-bearing:** `hPrev` and `hNext` are *assumptions* and they
+carry the entire forward recurrence; every clause mentioning `deltaState`,
+`vNewClosed` or `outputClosed` holds only under them.
+
+**They are not self-propagating, and clause 4 does not discharge `hNext`.**
+Clause 4 concludes about the state *after executing* the state-step slice, while
+`hNext` constrains region `HOut` in the *initial* state `s` of the output slice;
+sequencing one slice's post-state into the next slice's pre-state is not modeled.
+(`HOut` is at least now the same region in both clauses — previously clause 4
+wrote `HOut` while clause 5 read a separate `HNext` with nothing relating them, so
+`deltaState(m+1)` was proved into a region nothing read and independently assumed
+for the region that was read.) The cross-step folds threading `h`, `d_h` and the
+recomputed `h` are not modeled (carried state presented as materialized buffers;
+see the module docstring, including the in-place-`v` consequence).
+
+By the time the backward kernel runs, region `v` holds the forward pass's stored
+deltas `v_new` — the backward faces are genuine over the backward launch's actual
+inputs. -/
 specification fused_recurrent_delta_output_summary_general
     (q k v beta o h0 ht dht dh0 do_ dq dk dv dbeta : RegionName)
-    (HPrev HNext HOut HFinal DHPrev HRec : RegionName)
+    (HPrev HOut DHPrev HRec : RegionName)
     (IS_HEADWISE_BETA USE_INITIAL_STATE STORE_FINAL_STATE USE_DH0 USE_DHT : Bool)
     (m s_qk_h s_vo_h NK B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hBV : BV ≤ V) (hBK : BK ≤ K)
@@ -2520,14 +2409,12 @@ specification fused_recurrent_delta_output_summary_general
       s.readMem HPrev (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV m idx)
+    -- the post-update carry buffer is the SAME region clause 4 stores into;
+    -- this hypothesis is NOT discharged by clause 4 (see the docstring)
     (hNext : ∀ idx : TileIndex [BV, BK],
-      s.readMem HNext (stateOffset s K V BK BV idx)
+      s.readMem HOut (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV (m + 1) idx)
-    (hFinal : ∀ idx : TileIndex [BV, BK],
-      s.readMem HFinal (stateOffset s K V BK BV idx)
-        = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV T idx) :
+            s_qk_h s_vo_h T K V BK BV (m + 1) idx) :
     -- (1) the full forward surface lowers to the algorithm layer
     (∃ alg, (fused_recurrent_delta_fwd_surface q k v beta o h0 ht s_qk_h s_vo_h
       B H T K V BK BV scale USE_INITIAL_STATE STORE_FINAL_STATE
@@ -2563,7 +2450,7 @@ specification fused_recurrent_delta_output_summary_general
           s_qk_h s_vo_h T K V BK BV (m + 1) idx)) ∧
     -- (5) the output body realizes the genuine `outputClosed(m)`
     (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_delta_output_step_slice HNext q o
+      (kernel := fused_recurrent_delta_output_step_slice HOut q o
         m s_qk_h s_vo_h B H K V BK BV scale)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -2572,19 +2459,7 @@ specification fused_recurrent_delta_output_summary_general
       (expected := fun jv : Fin BV =>
         outputClosed s q k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV scale m jv)) ∧
-    -- (6) the final-state writeback realizes the genuine `deltaState(T)` (masked)
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_delta_final_state_store_slice HFinal ht K V BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BV, BK] => finalActive s K V BK BV idx)
-        (fun idx : TileIndex [BV, BK] => (ht, stateOffset s K V BK BV idx)))
-      (expected := fun idx : TileIndex [BV, BK] =>
-        if finalActive s K V BK BV idx then
-          deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV T idx
-        else 0)) ∧
-    -- (7) the backward loop-1 `dk` body realizes the genuine `dkStepSpec`
+    -- (6) the backward loop-1 `dk` body realizes the genuine `dkStepSpec`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dk_step_slice_headwise DHPrev q do_ v beta dk
@@ -2599,7 +2474,7 @@ specification fused_recurrent_delta_output_summary_general
       (expected := fun jk : Fin BK =>
         dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
           m s_qk_h s_vo_h T K V BK BV scale jk)) ∧
-    -- (8) the backward loop-1 `dv` body realizes the genuine `dvStepSpec`
+    -- (7) the backward loop-1 `dv` body realizes the genuine `dvStepSpec`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dv_step_slice_headwise DHPrev q do_ k beta dv
@@ -2614,7 +2489,7 @@ specification fused_recurrent_delta_output_summary_general
       (expected := fun jv : Fin BV =>
         dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
           m s_qk_h s_vo_h T K V BK BV scale jv)) ∧
-    -- (9) the backward loop-1 headwise `dbeta` body realizes `dbetaStepSpec`
+    -- (8) the backward loop-1 headwise `dbeta` body realizes `dbetaStepSpec`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_headwise DHPrev q do_ k v
         dbeta m s_qk_h s_vo_h NK B H T K V BK BV scale)
@@ -2624,7 +2499,7 @@ specification fused_recurrent_delta_output_summary_general
         (fun jv => (dbeta, dbetaRowOffset s m s_vo_h B H NK V BV jv)))
       (expected := fun jv : Fin BV =>
         dbetaStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale jv)) ∧
-    -- (10) the backward loop-1 scalar `dbeta` body realizes `dbetaScalarStepSpec`
+    -- (9) the backward loop-1 scalar `dbeta` body realizes `dbetaScalarStepSpec`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta DHPrev q do_ k v
         dbeta m s_qk_h s_vo_h B H T K V BK BV scale)
@@ -2632,7 +2507,7 @@ specification fused_recurrent_delta_output_summary_general
       (write := fun _ : PUnit => some (dbeta, dbetaScalarOffset s m T B H))
       (expected := fun _ =>
         dbetaScalarStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale)) ∧
-    -- (11) the backward loop-2 `dk` correction body realizes `dkCorrStepSpec`
+    -- (10) the backward loop-2 `dk` correction body realizes `dkCorrStepSpec`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dk_correction_step_slice HRec dv dk
         m s_qk_h s_vo_h B H K V BK BV)
@@ -2642,7 +2517,7 @@ specification fused_recurrent_delta_output_summary_general
         (fun jk => (dk, dkRowOffset s m s_qk_h B H K BK jk)))
       (expected := fun jk : Fin BK =>
         dkCorrStepSpec s HRec dv dk m s_qk_h s_vo_h B H K V BK BV jk)) ∧
-    -- (12) the backward loop-2 `dq` body realizes the genuine `dqStepSpec`
+    -- (11) the backward loop-2 `dq` body realizes the genuine `dqStepSpec`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dq_step_slice_headwise HRec k v beta do_ dq
@@ -2667,7 +2542,7 @@ specification fused_recurrent_delta_output_summary_general
     s m s_qk_h B H K BK
   have hDbetaInj := fused_recurrent_delta_dbeta_row_offset_injective_general
     s m s_vo_h B H NK V BV
-  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  refine ⟨?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · exact fused_recurrent_delta_fwd_surface_toAlgorithm_supported q k v beta o
       h0 ht s_qk_h s_vo_h B H T K V BK BV scale USE_INITIAL_STATE
       STORE_FINAL_STATE IS_HEADWISE_BETA
@@ -2680,12 +2555,9 @@ specification fused_recurrent_delta_output_summary_general
   · exact fused_recurrent_delta_state_step_closed_form HPrev k v beta h0 HOut
       IS_HEADWISE_BETA USE_INITIAL_STATE m s_qk_h s_vo_h T K V BK BV s
       hStateInj hPrev
-  · exact fused_recurrent_delta_output_step_closed_form HNext q k v beta h0 o
+  · exact fused_recurrent_delta_output_step_closed_form HOut q k v beta h0 o
       IS_HEADWISE_BETA USE_INITIAL_STATE m s_qk_h s_vo_h B H T K V BK BV scale
       s hOutInj hNext
-  · exact fused_recurrent_delta_final_state_closed_form HFinal ht k v beta h0
-      IS_HEADWISE_BETA USE_INITIAL_STATE s_qk_h s_vo_h T K V BK BV s
-      hStateInj hFinal
   · exact fused_recurrent_delta_bwd_dk_step_slice_compute_correct DHPrev q do_
       v beta dk IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s hDkInj
   · exact fused_recurrent_delta_bwd_dv_step_slice_compute_correct DHPrev q do_
@@ -2702,3 +2574,4 @@ specification fused_recurrent_delta_output_summary_general
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentDelta
+

@@ -43,10 +43,10 @@ bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cac
 bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_fwd_output_summary_general	full_value_candidate	none		end-to-end
+bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_fwd_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_recurrence_forward_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_recurrence_backward_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_cum_slice_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context

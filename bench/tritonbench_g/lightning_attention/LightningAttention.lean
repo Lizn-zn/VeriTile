@@ -10,45 +10,75 @@ attention term with an inter-block term `q · kv` to produce the output tile.
 The backward kernels (`_bwd_intra`, `_bwd_inter`) compute the `dq`/`dk`/`dv`
 gradients with the matching reverse recurrence.
 
-## Scope
+## Scope — what is and is not verified
 
-This file verifies **the Triton kernels themselves** — the per-program
-`@triton.jit` bodies (forward, backward-intra, backward-inter). The host
-launch (grid shape, block-model tiling, and how the runtime composes
-per-program tile writes) is the *trusted boundary*. Because the program ids
-are universally quantified, each per-program statement covers every program.
+Verified, and only this: two **hand-cut single-block slices** of `_fwd_kernel`'s
+loop body — the `kv += tl.dot(k_trans, v)` carry update and the
+`o_inter = tl.dot(q, kv)` inter-block product — plus the algebraic fact that,
+under an *assumed* carry invariant, the first of them advances the genuine closed
+form `kvClosed` by one block. All three `@triton.jit` bodies are additionally
+shown to *lower* to the algorithm layer, which is well-formedness, not
+correctness.
+
+The host launch (grid shape, block-model tiling, and how the runtime composes
+per-program tile writes) is the *trusted boundary*. Because the program ids are
+universally quantified, each per-program statement covers every program.
 
 ## Proof architecture
 
 ```
-lightning_attention_output_summary_general               ← TOP THEOREM (dimension-general)
+lightning_attention_output_summary_general               ← TOP THEOREM
   ├─ lightning_attention_{forward,bwd_intra,bwd_inter}_surface_toAlgorithm_supported
-  ├─ lightning_attention_forward_store_slice_compute_correct  (Out writeback)
-  └─ lightning_attention_bwd_{dq,dk,dv}_store_slice_compute_correct
+  ├─ lightning_attention_forward_kv_step_slice_compute_correct   kv += dot(k_trans, v) body
+  ├─ kvStepSpec_eq_kvClosed_succ                  carry invariant: body advances kvClosed
+  │    └─ kvClosed / kvClosed_succ                kv carry-fold over K·V (genuine closed form)
+  └─ lightning_attention_forward_o_inter_dot_slice_compute_correct  o_inter = dot(q, kv) body
 
-Genuine forward closed form (NOT self-referential):
-  kvClosed / kvClosed_succ                          kv carry-fold over K·V
-  kvStepSpec_eq_kvClosed_succ                       carry invariant: body advances kvClosed
-  lightning_attention_forward_kv_step_slice_compute_correct      kv += dot(k_trans, v) body
-  lightning_attention_forward_o_inter_dot_slice_compute_correct  o_inter = dot(q, kv) body
+-- present in this file but NOT reachable from the headline (backward writebacks):
+lightning_attention_bwd_{dq,dk,dv}_store_slice_compute_correct
+lightning_attention_bwd_dq_{accum_store,inter_dot}_slice_compute_correct
 ```
 
-## Modeling boundary
+## Modeling boundary — read before trusting anything below
 
 Arithmetic is over `ℝ`, not bit-accurate IEEE float; dtype `.to(...)` casts
 erase to the identity. **Genuine closed form (forward):** `kvClosed m` is a
-standalone specification over the input regions `K,V` — the running `kᵀ·v` sum
+standalone specification over the input regions `K, V` — the running `kᵀ·v` sum
 over the first `m` key blocks — and `kvClosed_succ` is the exact closed-form
-counterpart of the Python `kv += tl.dot(k_trans, v)`. The carry-fold step lemma
-`kvStepSpec_eq_kvClosed_succ` shows one loop body advances `kvClosed` by one
-block under the carry invariant `KVPrev = kvClosed m`; the genuine causal
-linear-attention output row is `Σ_{s≤t}(q_t·k_s)·v_s`. The remaining
-boundary is the cross-block `NUM_BLOCK` loop *driver* threading the invariant
-(the carry hypotheses `hPrev`/`hK`/`hV` of `kvStepSpec_eq_kvClosed_succ`, the
-documented loop boundary as in #290/#291), and the host launch (grid/block-model
-tiling). The store-slice lemmas prove the per-tile **masked face** (the `Out` /
-`DQ` / `DK` / `DV` writeback). The `dot` tile products are modeled. Side
-conditions: tile-offset injectivity hypotheses where required.
+counterpart of the Python `kv += tl.dot(k_trans, v)`.
+
+What is **outside** every claim in this file:
+
+* **`o_intra` and the causal mask.** The Python body computes
+  `qk = tl.dot(q, k_trans)`, applies the causal mask
+  `qk = tl.where(index >= 0, qk, 0)`, and forms `o_intra = tl.dot(qk, v)`.
+  **None of that is modeled anywhere.** Only `o_inter = tl.dot(q, kv)` has a
+  face. Consequently the causal linear-attention output row
+  `o[t,c] = Σ_{s≤t}(Σ_a q[t,a]·k[s,a])·v[s,c]` — the thing the kernel actually
+  computes — is **not** proven; the `o_inter` face is one of its two halves.
+* **The `Out` writeback.** No correctness face. The two former forward
+  store-slice families were deleted: both read a phantom
+  `tl.program_id(2) * BLOCK` block index while `_fwd_kernel`'s launch grid is
+  two-dimensional (`grid = (b*h, cdiv(e, BLOCK_MODEL))`,
+  `lightning_attention.py:381`) and the block index is the *loop* variable, not
+  a program id. One of them was additionally a pure memcpy.
+* **The cross-block loop.** The `NUM_BLOCK` driver threading the carry is not
+  modeled. `hPrev`/`hK`/`hV` are *assumed*: nothing proves `kvClosed 0 = 0`, and
+  nothing chains block `m`'s output buffer into block `m+1`'s input buffer.
+* **Staging vs. launched regions.** The step slices exchange per-block
+  materialized tiles (`KTrans`, `VTile`, `KVPrev`, `KVOut`) in a flat
+  `[rows, width]` layout. The `hK`/`hV` hypotheses are exactly the bridge
+  asserting those tiles hold block `m` of the launched `K`/`V` tensors; they are
+  assumptions, not lemmas.
+* **The backward kernels.** Only lowering. The `DQ`/`DK`/`DV` writeback lemmas
+  present below are not headline conjuncts and their gradient inputs are fiction
+  regions.
+* **Region distinctness.** No `≠` hypotheses are stated and none are needed:
+  each slice performs all of its loads before its single store and every
+  `expected` reads the *initial* state, so aliasing cannot falsify a face.
+
+Side conditions: tile-offset injectivity, which here holds unconditionally from
+the `Fin` bounds (`kvOffset_injective`, `oInterOffset_injective`).
 -/
 
 namespace VeriTile.Bench.TritonBenchG.LightningAttention
@@ -58,8 +88,9 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-! **★ Main theorem:** `lightning_attention_output_summary_general`
-(dimension-general genuine launched-surface summary). -/
+/-! **★ Main theorem:** `lightning_attention_output_summary_general` —
+shape-general, but scoped to two single-block **slices** of the forward loop
+body. Neither `o_intra`/the causal mask nor the `Out` writeback has a face. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -280,32 +311,39 @@ theorem lightning_attention_forward_kv_step_slice_compute_correct
   exact Option.some.inj h
 
 /-- **`kv` carry-fold step (genuine).** If the materialized previous-state buffer
-`KVPrev` holds the genuine `m`-block folded state `kvClosed m`, and the block's
-`k_trans`/`v` tiles read the genuine block-`m` key/value entries, then one loop
-body — `kvStepSpec`, i.e. `KVPrev + tl.dot(k_trans, v)` — produces exactly the
-genuine `(m+1)`-block folded state `kvClosed (m+1)`. -/
+`KVPrev` holds the genuine `m`-block folded state `kvClosed m`, and the staged
+per-block tiles `KTrans`/`VTile` read the genuine block-`m` entries of the
+**launched** `K`/`V` tensors, then one loop body — `kvStepSpec`, i.e.
+`KVPrev + tl.dot(k_trans, v)` — produces exactly the genuine `(m+1)`-block folded
+state `kvClosed (m+1)`.
+
+Note the two distinct roles: `VTile` is the flat per-block staging tile the slice
+loads, while `V` is the launched value tensor the closed form `kvClosed` reads
+through `fwdVVal`. They must **not** be instantiated with the same region — doing
+so makes `hV` read the same region on both sides and drops `V` out of the
+advertised "closed form over `K`, `V`" entirely. -/
 theorem kvStepSpec_eq_kvClosed_succ
-    (s : BlockState) (KVPrev KTrans V K Vreg : RegionName)
+    (s : BlockState) (KVPrev KTrans VTile K V : RegionName)
     (n d e BLOCK BLOCK_MODEL m : Nat)
     (hPrev : ∀ idx : TileIndex [d, BLOCK_MODEL],
       s.readMem KVPrev (kvOffset BLOCK_MODEL idx)
-        = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL m idx.1.val idx.2.1.val)
+        = kvClosed s K V n d e BLOCK BLOCK_MODEL m idx.1.val idx.2.1.val)
     (hK : ∀ (idx : TileIndex [d, BLOCK_MODEL]) (j : Fin BLOCK),
       s.readMem KTrans (idx.1.val * BLOCK + j.val)
         = fwdKVal s K n d idx.1.val (m * BLOCK + j.val))
     (hV : ∀ (idx : TileIndex [d, BLOCK_MODEL]) (j : Fin BLOCK),
-      s.readMem V (j.val * BLOCK_MODEL + idx.2.1.val)
-        = fwdVVal s Vreg n e BLOCK_MODEL idx.2.1.val (m * BLOCK + j.val))
+      s.readMem VTile (j.val * BLOCK_MODEL + idx.2.1.val)
+        = fwdVVal s V n e BLOCK_MODEL idx.2.1.val (m * BLOCK + j.val))
     (idx : TileIndex [d, BLOCK_MODEL]) :
-    kvStepSpec s KVPrev KTrans V d BLOCK BLOCK_MODEL idx
-      = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val := by
+    kvStepSpec s KVPrev KTrans VTile d BLOCK BLOCK_MODEL idx
+      = kvClosed s K V n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val := by
   rw [kvClosed_succ]
   unfold kvStepSpec tileElem
   rw [hPrev idx]
   congr 1
   rw [Fin.sum_univ_eq_sum_range
     (fun j => s.readMem KTrans (idx.1.val * BLOCK + j) *
-      s.readMem V (j * BLOCK_MODEL + idx.2.1.val)) BLOCK]
+      s.readMem VTile (j * BLOCK_MODEL + idx.2.1.val)) BLOCK]
   apply Finset.sum_congr rfl
   intro j hj
   simp only [Finset.mem_range] at hj
@@ -589,239 +627,6 @@ theorem lightning_attention_bwd_inter_surface_toAlgorithm_supported
         Except.ok alg := by
   simp [lightning_attention_bwd_inter_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
-
-/-- Surface transcription/proof-oriented forward output-store slice of
-`lightning_attention.py`'s `_fwd_kernel`.
-
-The full kernel computes a recurrent attention tile `o`. This slice starts from
-a precomputed `OAcc` tile and proves the masked writeback into `Out`. The full forward recurrent `kv` loop is represented above by
-`lightning_attention_forward_surface`; the backward kernels' negative-step loops
-remain separate modeling work. -/
-def lightning_attention_forward_store_slice
-    (OAcc Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat) :
-    ComputeKernel := triton {
-  off_bh = tl.program_id(0)
-  off_e = tl.program_id(1)
-  off_block = tl.program_id(2) * $(BLOCK) + tl.arange(0, $(BLOCK))
-  offs_e = tl.arange(0, $(BLOCK_MODEL))
-  mask = off_block[:, None] < $(n)
-  o = tl.load(OAcc + off_bh * $(n) * $(e) +
-      off_block[:, None] * $(e) + off_e * $(BLOCK_MODEL) + offs_e[None, :],
-      mask=mask, other=0.0)
-  tl.store(Out + off_bh * $(n) * $(e) +
-      off_block[:, None] * $(e) + off_e * $(BLOCK_MODEL) + offs_e[None, :],
-      o, mask=mask)
-}
-
-def rowIndex (s : BlockState) (BLOCK : Nat) (i : Fin BLOCK) : Nat :=
-  s.pids 2 * BLOCK + i.val
-
-def colIndex (idx : TileIndex [BLOCK, BLOCK_MODEL]) : Nat :=
-  idx.2.1.val
-
-def active (s : BlockState) (n BLOCK : Nat) (idx : TileIndex [BLOCK, BLOCK_MODEL]) :
-    Prop :=
-  rowIndex s BLOCK idx.1 < n
-
-instance activeDecidable (s : BlockState) (n BLOCK BLOCK_MODEL : Nat)
-    (idx : TileIndex [BLOCK, BLOCK_MODEL]) :
-    Decidable (active s n BLOCK idx) := by
-  unfold active
-  infer_instance
-
-def tileOffset (s : BlockState) (n e BLOCK BLOCK_MODEL : Nat)
-    (idx : TileIndex [BLOCK, BLOCK_MODEL]) : Nat :=
-  s.pids 0 * n * e + rowIndex s BLOCK idx.1 * e +
-    s.pids 1 * BLOCK_MODEL + colIndex idx
-
-noncomputable def storeValue (s : BlockState) (OAcc : RegionName)
-    (n e BLOCK BLOCK_MODEL : Nat) (idx : TileIndex [BLOCK, BLOCK_MODEL]) : ℝ :=
-  WithBot.unbotD 0
-    (if active s n BLOCK idx then
-      some (s.readMem OAcc (tileOffset s n e BLOCK BLOCK_MODEL idx))
-    else some (0.0 : ℝ))
-
-theorem lightning_attention_forward_store_slice_correct
-    (OAcc Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        tileOffset s n e BLOCK BLOCK_MODEL idx)) :
-    ∀ idx : TileIndex [BLOCK, BLOCK_MODEL],
-      let outAddr := tileOffset s n e BLOCK BLOCK_MODEL idx
-      (exec (lightning_attention_forward_store_slice OAcc Out n e BLOCK BLOCK_MODEL) s).map
-          (·.readMem Out outAddr)
-        = some (if active s n BLOCK idx then
-            storeValue s OAcc n e BLOCK BLOCK_MODEL idx
-          else s.readMem Out outAddr) := by
-  intro idx
-  simp [exec, lightning_attention_forward_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.remap,
-        Tile.expandDim, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        rowIndex, colIndex, active, tileOffset, TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BLOCK, BLOCK_MODEL] → Nat :=
-    fun idx =>
-      s.pids 0 * n * e + (s.pids 2 * BLOCK + idx.1.val) * e +
-        s.pids 1 * BLOCK_MODEL + idx.2.1.val
-  let valueFn : TileIndex [BLOCK, BLOCK_MODEL] → ℝ :=
-    fun idx =>
-      WithBot.unbotD 0
-        (if s.pids 2 * BLOCK + idx.1.val < n then
-          some (s.readMem OAcc
-            (s.pids 0 * n * e + (s.pids 2 * BLOCK + idx.1.val) * e +
-              s.pids 1 * BLOCK_MODEL + idx.2.1.val))
-        else some (0.0 : ℝ))
-  let P : TileIndex [BLOCK, BLOCK_MODEL] → Prop :=
-    fun idx => s.pids 2 * BLOCK + idx.1.val < n
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, tileOffset, rowIndex, colIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i =>
-        if P i then acc.writeMem Out (offsetFn i) (valueFn i) else acc)
-      _ (TileShape.allIndices [BLOCK, BLOCK_MODEL])).readMem Out
-        (offsetFn idx) =
-    if P idx then storeValue s OAcc n e BLOCK BLOCK_MODEL idx
-    else s.readMem Out (offsetFn idx)
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
-  by_cases hActive : s.pids 2 * BLOCK + idx.1.val < n
-  · simp [offsetFn, valueFn, P, storeValue, active, tileOffset, rowIndex,
-      colIndex, hActive]
-  · simp [offsetFn, valueFn, P, storeValue, active, tileOffset, rowIndex,
-      colIndex, hActive]
-
-theorem lightning_attention_forward_store_slice_compute_correct
-    (OAcc Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        tileOffset s n e BLOCK BLOCK_MODEL idx)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := lightning_attention_forward_store_slice OAcc Out n e BLOCK BLOCK_MODEL)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK, BLOCK_MODEL] => active s n BLOCK idx)
-        (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-          (Out, tileOffset s n e BLOCK BLOCK_MODEL idx)))
-      (expected := fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        storeValue s OAcc n e BLOCK BLOCK_MODEL idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [lightning_attention_forward_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := lightning_attention_forward_store_slice_correct OAcc Out n e
-    BLOCK BLOCK_MODEL s hOutInj idx
-  rw [hExec] at h
-  simpa [hActive] using Option.some.inj h
-
-/-- Forward output store slice that includes the Python arithmetic
-`o = o_intra + o_inter` before the masked writeback. -/
-def lightning_attention_forward_sum_store_slice
-    (OIntra OInter Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat) :
-    ComputeKernel := triton {
-  off_bh = tl.program_id(0)
-  off_e = tl.program_id(1)
-  off_block = tl.program_id(2) * $(BLOCK) + tl.arange(0, $(BLOCK))
-  offs_e = tl.arange(0, $(BLOCK_MODEL))
-  mask = off_block[:, None] < $(n)
-  o_intra = tl.load(OIntra + off_bh * $(n) * $(e) +
-      off_block[:, None] * $(e) + off_e * $(BLOCK_MODEL) + offs_e[None, :],
-      mask=mask, other=0.0)
-  o_inter = tl.load(OInter + off_bh * $(n) * $(e) +
-      off_block[:, None] * $(e) + off_e * $(BLOCK_MODEL) + offs_e[None, :],
-      mask=mask, other=0.0)
-  o = o_intra + o_inter
-  tl.store(Out + off_bh * $(n) * $(e) +
-      off_block[:, None] * $(e) + off_e * $(BLOCK_MODEL) + offs_e[None, :],
-      o, mask=mask)
-}
-
-noncomputable def sumStoreValue
-    (s : BlockState) (OIntra OInter : RegionName)
-    (n e BLOCK BLOCK_MODEL : Nat) (idx : TileIndex [BLOCK, BLOCK_MODEL]) : ℝ :=
-  WithBot.unbotD 0
-    (if active s n BLOCK idx then
-      some (s.readMem OIntra (tileOffset s n e BLOCK BLOCK_MODEL idx) +
-        s.readMem OInter (tileOffset s n e BLOCK BLOCK_MODEL idx))
-    else some (0.0 : ℝ))
-
-theorem lightning_attention_forward_sum_store_slice_correct
-    (OIntra OInter Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        tileOffset s n e BLOCK BLOCK_MODEL idx)) :
-    ∀ idx : TileIndex [BLOCK, BLOCK_MODEL],
-      let outAddr := tileOffset s n e BLOCK BLOCK_MODEL idx
-      (exec (lightning_attention_forward_sum_store_slice OIntra OInter Out
-          n e BLOCK BLOCK_MODEL) s).map (·.readMem Out outAddr)
-        = some (if active s n BLOCK idx then
-            sumStoreValue s OIntra OInter n e BLOCK BLOCK_MODEL idx
-          else s.readMem Out outAddr) := by
-  intro idx
-  simp [exec, lightning_attention_forward_sum_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.remap,
-        Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
-        ComparableDType.lt, rowIndex, colIndex, active, tileOffset,
-        TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BLOCK, BLOCK_MODEL] → Nat :=
-    fun idx =>
-      s.pids 0 * n * e + (s.pids 2 * BLOCK + idx.1.val) * e +
-        s.pids 1 * BLOCK_MODEL + idx.2.1.val
-  let valueFn : TileIndex [BLOCK, BLOCK_MODEL] → ℝ :=
-    fun idx =>
-      WithBot.unbotD 0
-        (Option.map₂ (fun a b => a + b)
-          (if s.pids 2 * BLOCK + idx.1.val < n then
-            some (s.readMem OIntra (offsetFn idx))
-          else some (0.0 : ℝ))
-          (if s.pids 2 * BLOCK + idx.1.val < n then
-            some (s.readMem OInter (offsetFn idx))
-          else some (0.0 : ℝ)))
-  let P : TileIndex [BLOCK, BLOCK_MODEL] → Prop :=
-    fun idx => s.pids 2 * BLOCK + idx.1.val < n
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, tileOffset, rowIndex, colIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i =>
-        if P i then acc.writeMem Out (offsetFn i) (valueFn i) else acc)
-      _ (TileShape.allIndices [BLOCK, BLOCK_MODEL])).readMem Out
-        (offsetFn idx) =
-    if P idx then sumStoreValue s OIntra OInter n e BLOCK BLOCK_MODEL idx
-    else s.readMem Out (offsetFn idx)
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
-  by_cases hActive : s.pids 2 * BLOCK + idx.1.val < n
-  · simp [offsetFn, valueFn, P, sumStoreValue, active, tileOffset, rowIndex,
-      colIndex, hActive]
-  · simp [offsetFn, valueFn, P, sumStoreValue, active, tileOffset, rowIndex,
-      colIndex, hActive]
-
-theorem lightning_attention_forward_sum_store_slice_compute_correct
-    (OIntra OInter Out : RegionName) (n e BLOCK BLOCK_MODEL : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        tileOffset s n e BLOCK BLOCK_MODEL idx)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := lightning_attention_forward_sum_store_slice OIntra OInter Out
-        n e BLOCK BLOCK_MODEL)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK, BLOCK_MODEL] => active s n BLOCK idx)
-        (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-          (Out, tileOffset s n e BLOCK BLOCK_MODEL idx)))
-      (expected := fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        sumStoreValue s OIntra OInter n e BLOCK BLOCK_MODEL idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [lightning_attention_forward_sum_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := lightning_attention_forward_sum_store_slice_correct OIntra OInter
-    Out n e BLOCK BLOCK_MODEL s hOutInj idx
-  rw [hExec] at h
-  simpa [hActive] using Option.some.inj h
 
 /-- Proof-oriented backward gradient tile-store slice of
 `lightning_attention.py`.
@@ -1229,40 +1034,49 @@ theorem oInterOffset_injective (BLOCK BLOCK_MODEL : Nat) :
 
 /-! ### ════════ ★ MAIN THEOREM (dimension-general) ★ ════════ -/
 
-/-- **Genuine, dimension-general forward compute-correctness summary** for the
-lightning-attention kernel. Symbolic in every dimension
-(`d e BLOCK NUM_BLOCK BLOCK_MODEL`) and over an arbitrary loop index `m` and
-materialized carry buffer; no dimension is pinned. Exposes:
+/-- **SCOPE — this is a claim about two hand-cut single-block slices of the
+forward loop body, not about the launched kernel.** The launched surfaces appear
+only in the lowering clauses. `o_intra`, the causal mask, the `Out` writeback and
+the `NUM_BLOCK` fold are all outside it.
+
+**Genuine, shape-general forward step summary** for the lightning-attention
+kernel. Symbolic in every dimension (`d e BLOCK NUM_BLOCK BLOCK_MODEL`) and over
+an arbitrary loop index `m` and materialized carry buffer; no dimension is
+pinned. Exposes:
 
 1. **Surface lowering** of the forward and both backward kernels (every
-   dimension symbolic).
+   dimension symbolic). Lowering is well-formedness, not correctness.
 2. **`kv` carry-fold body — genuine closed form.** One `kv += tl.dot(k_trans,
-   v)` body realizes its spec `kvStepSpec`, and under the loop-carry invariant
-   (`KVPrev = kvClosed m`, `k_trans`/`v` reading the genuine block-`m` entries)
-   that spec equals exactly `kvClosed (m+1)` — the running `Σ kᵀ·v` over the
-   first `m+1` key blocks. This is the genuine standalone closed form over the
-   input regions `K`, `V`, never an `exec` read-back.
-3. **`o_inter = tl.dot(q, kv)` inter-block producer.** Realizes_without_Rounding its genuine spec
+   v)` body realizes its spec `kvStepSpec`, and under the *assumed* loop-carry
+   invariant (`KVPrev = kvClosed m`, and `KTrans`/`VTile` staging block `m` of the
+   launched `K`/`V`) that spec equals exactly `kvClosed (m+1)` — the running
+   `Σ kᵀ·v` over the first `m+1` key blocks. This is a genuine standalone closed
+   form over the launched input regions `K` and `V`, never an `exec` read-back.
+3. **`o_inter = tl.dot(q, kv)` inter-block producer** realizes its spec
    `oInterDotSpec` — `Σ_a q[r,a]·kv[a,c]` against the carried state — which is
-   the inter-block half of the causal linear-attention output row.
+   **one of the two halves** of the causal linear-attention output row.
 
-Honest side-conditions only: `0 < BLOCK_MODEL` (column tiling is nonempty) is
-not even needed here because injectivity holds unconditionally from the `Fin`
-bounds; the carry hypotheses `hPrev`/`hK`/`hV` are the documented loop-carry
-invariant of the `NUM_BLOCK` driver. -/
+What this theorem does **not** say: nothing about `o_intra`, nothing about the
+causal `tl.where` mask, nothing about the `Out` store, nothing about the
+`NUM_BLOCK` loop that threads the carry, and nothing about the backward
+gradients beyond lowering. See the module docstring's modeling boundary.
+
+Side conditions: tile-offset injectivity is discharged unconditionally from the
+`Fin` bounds, so no dimension positivity is needed; `hPrev`/`hK`/`hV` are
+assumed loop-carry / staging hypotheses, not lemmas. -/
 specification lightning_attention_output_summary_general
-    (Q K V Out DO DQ DK DV KVPrev KTrans Vreg KVOut OInter : RegionName)
+    (Q K V Out DO DQ DK DV KVPrev KTrans VTile KVOut OInter : RegionName)
     (s : BlockState)
     (_b h n d e BLOCK NUM_BLOCK BLOCK_MODEL m : Nat)
     (hPrev : ∀ idx : TileIndex [d, BLOCK_MODEL],
       s.readMem KVPrev (kvOffset BLOCK_MODEL idx)
-        = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL m idx.1.val idx.2.1.val)
+        = kvClosed s K V n d e BLOCK BLOCK_MODEL m idx.1.val idx.2.1.val)
     (hK : ∀ (idx : TileIndex [d, BLOCK_MODEL]) (j : Fin BLOCK),
       s.readMem KTrans (idx.1.val * BLOCK + j.val)
         = fwdKVal s K n d idx.1.val (m * BLOCK + j.val))
     (hV : ∀ (idx : TileIndex [d, BLOCK_MODEL]) (j : Fin BLOCK),
-      s.readMem Vreg (j.val * BLOCK_MODEL + idx.2.1.val)
-        = fwdVVal s Vreg n e BLOCK_MODEL idx.2.1.val (m * BLOCK + j.val)) :
+      s.readMem VTile (j.val * BLOCK_MODEL + idx.2.1.val)
+        = fwdVVal s V n e BLOCK_MODEL idx.2.1.val (m * BLOCK + j.val)) :
     -- (1) surface lowering of forward + both backward kernels (symbolic dims)
     (∃ alg, (lightning_attention_forward_surface Q K V Out _b h n d e BLOCK
       NUM_BLOCK BLOCK_MODEL).toAlgorithm? = Except.ok alg) ∧
@@ -1272,17 +1086,17 @@ specification lightning_attention_output_summary_general
       _b h n d e BLOCK NUM_BLOCK BLOCK NUM_BLOCK).toAlgorithm? = Except.ok alg) ∧
     -- (2) kv carry-fold body realizes kvStepSpec ...
     (ComputeCorrect.Realizes_without_Rounding
-      (kernel := lightning_attention_forward_kv_step_slice KVPrev KTrans Vreg KVOut
+      (kernel := lightning_attention_forward_kv_step_slice KVPrev KTrans VTile KVOut
         d BLOCK BLOCK_MODEL)
       (initialState := s)
       (write := fun idx : TileIndex [d, BLOCK_MODEL] =>
         some (KVOut, kvOffset BLOCK_MODEL idx))
       (expected := fun idx : TileIndex [d, BLOCK_MODEL] =>
-        kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx)) ∧
+        kvStepSpec s KVPrev KTrans VTile d BLOCK BLOCK_MODEL idx)) ∧
     -- ... and that spec is the genuine closed-form kvClosed (m+1) under the carry invariant
     (∀ idx : TileIndex [d, BLOCK_MODEL],
-      kvStepSpec s KVPrev KTrans Vreg d BLOCK BLOCK_MODEL idx
-        = kvClosed s K Vreg n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val) ∧
+      kvStepSpec s KVPrev KTrans VTile d BLOCK BLOCK_MODEL idx
+        = kvClosed s K V n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val) ∧
     -- (3) o_inter producer realizes its genuine spec oInterDotSpec
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := lightning_attention_forward_o_inter_dot_slice Q KVPrev OInter
@@ -1300,23 +1114,14 @@ specification lightning_attention_output_summary_general
   · exact lightning_attention_bwd_inter_surface_toAlgorithm_supported Q K V
       DO DQ DK DV _b h n d e BLOCK NUM_BLOCK BLOCK NUM_BLOCK
   · exact lightning_attention_forward_kv_step_slice_compute_correct KVPrev KTrans
-      Vreg KVOut d BLOCK BLOCK_MODEL s (kvOffset_injective d BLOCK_MODEL)
+      VTile KVOut d BLOCK BLOCK_MODEL s (kvOffset_injective d BLOCK_MODEL)
   · intro idx
-    exact kvStepSpec_eq_kvClosed_succ s KVPrev KTrans Vreg K Vreg
+    exact kvStepSpec_eq_kvClosed_succ s KVPrev KTrans VTile K V
       n d e BLOCK BLOCK_MODEL m hPrev hK hV idx
   · exact lightning_attention_forward_o_inter_dot_slice_compute_correct Q KVPrev
       OInter BLOCK d BLOCK_MODEL s (oInterOffset_injective BLOCK BLOCK_MODEL)
 
-/-! ## Python test-shape wrappers
-
-The checked Python test uses `b = 2`, `h = 8`, `n = 128`, `d = 64`, and
-`e = 128`. The forward launcher fixes `BLOCK = 64`, `NUM_BLOCK = 2`, and
-`BLOCK_MODEL = 32`, so each forward output tile has shape `[64, 32]`. The
-backward launcher uses `BLOCK = 64`; DQ/DK row tiles have width `64`, and DV
-row tiles have width `128`. The pinned summaries below are now thin
-corollaries of the dimension-general headline
-`lightning_attention_output_summary_general`. -/
-
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.LightningAttention
+
