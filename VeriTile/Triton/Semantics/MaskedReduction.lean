@@ -222,4 +222,147 @@ theorem reduceSum_masked_dot_eq_some_sum
 
 end TiledL2Norm
 
+namespace TileShape
+
+/-! ## `Fin`-literal axes of `insertAxisIndex`
+
+`Tile.reduceSumDrop` presents the reduced lane of a `tl.sum(_, axis = j)` as
+`TileShape.insertAxisIndex shape axis outIdx k`. The structural lemmas in
+`Core/Shape.lean` (`insertAxisIndex_head` / `insertAxisIndex_succ`) match the
+`Fin.mk` patterns `⟨0, _⟩` / `⟨k + 1, _⟩`, so they do **not** fire on the axis
+terms that actually reach kernel proofs. Two different spellings occur, often
+in one and the same goal:
+
+* **Kernel (exec) side.** The DSL emits `⟨j, by simp⟩`; Mathlib's `Fin.mk_zero`
+  / `Fin.mk_one` then rewrite that to an `OfNat` literal whose `Fin` type index
+  is left in `?n + k` form, because it sits in a type argument of
+  `OfNat.ofNat` that `simp` does not descend into. For a rank-2 tile this is
+  `(0 : Fin (1 + 1))` at axis 0 and `(1 : Fin (0 + 2))` at axis 1.
+* **Specification side.** A port's own spec writes
+  `TileShape.insertAxisIndex [d₀, d₁] 1 …` in source, which elaborates at
+  `Fin (d₀ :: d₁ :: rest).length`.
+
+These `rfl` lemmas normalize every one of those spellings to plain lane
+variables; they mirror the `Fin`-literal `dropInsertedIndex` lemmas in
+`Core/Shape.lean`. They are deliberately **not** `@[simp]`: nothing can
+currently simplify a literal-axis `insertAxisIndex`, so turning them on
+globally would change the simp normal form of every reduction goal in the
+library and in all bench ports. Consumers name them in their own simp set. -/
+
+/-- Axis 0, source spelling `(0 : Fin (d :: rest).length)`. -/
+theorem insertAxisIndex_zero_length {d : Nat} {rest : TileShape}
+    (outIdx : TileIndex rest) (r : Fin d) :
+    insertAxisIndex (d :: rest) (0 : Fin (d :: rest).length) outIdx r
+      = (r, outIdx) := rfl
+
+/-- Axis 1, source spelling `(1 : Fin (d₀ :: d₁ :: rest).length)`. -/
+theorem insertAxisIndex_one_length {d₀ d₁ : Nat} {rest : TileShape}
+    (outIdx : TileIndex (d₀ :: rest)) (r : Fin d₁) :
+    insertAxisIndex (d₀ :: d₁ :: rest)
+        (1 : Fin (d₀ :: d₁ :: rest).length) outIdx r
+      = (outIdx.1, r, outIdx.2) := rfl
+
+/-- Axis 0 of a rank-2 tile, post-`Fin.mk_zero` spelling `(0 : Fin (1 + 1))`.
+This is the form `tl.sum(_, axis = 0)` on a `[d₀, d₁]` tile leaves behind. -/
+theorem insertAxisIndex_zero_rank2 {d₀ d₁ : Nat}
+    (outIdx : TileIndex [d₁]) (r : Fin d₀) :
+    insertAxisIndex [d₀, d₁] (0 : Fin (1 + 1)) outIdx r = (r, outIdx) := rfl
+
+/-- Axis 1 of a rank-2 tile, post-`Fin.mk_one` spelling `(1 : Fin (0 + 2))`.
+This is the form `tl.sum(_, axis = 1)` on a `[d₀, d₁]` tile leaves behind. -/
+theorem insertAxisIndex_one_rank2 {d₀ d₁ : Nat}
+    (outIdx : TileIndex [d₀]) (r : Fin d₁) :
+    insertAxisIndex [d₀, d₁] (1 : Fin (0 + 2)) outIdx r
+      = (outIdx.1, r, outIdx.2) := rfl
+
+end TileShape
+
+namespace MaskedReduction
+
+/-! ## Guarded multi-factor reductions
+
+The bridges in `TiledLogSumExp` / `TiledL2Norm` above are shaped for the tiles
+they were extracted from: one or two factors over a 1-D lane index, with the
+mask spelled as a concrete `validLanes` / `active` predicate. A masked
+*multi-factor 2-D* reduction — `tl.sum(prev * b_k[None, :] * …, axis = 1)`
+where every operand is a `tl.load(…, mask = …, other = 0)` — does not fit
+them: each factor contributes its own guard, the guards are on different axes,
+and the reduced lane index is `TileShape.insertAxisIndex`-projected.
+
+Two independent facts close that gap, and they compose with the existing
+`@[simp]` `WithBot ℝ` helpers in `Semantics/TileOps.lean`
+(`Option.map₂_some_some`, `WithBot.sum_someTerm_eq_some`,
+`WithBot.unbotD_some`):
+
+* `ite_some_some` pushes the `some` of a `other = 0` guarded load *outward*,
+  which turns an arbitrarily deep tower of `Option.map₂` factors into
+  `some` of a plain real — no matter how many factors, or what rank the tile
+  has. This is what makes the multi-factor 2-D case behave like the
+  two-factor 1-D one.
+* `sum_guarded_eq_coe` and its `unbotD` forms transfer a `WithBot ℝ`
+  reduction to a real reduction from a purely **lane-local** hypothesis, so
+  the shape of the lane carrier is irrelevant to the bridge and the guard
+  bookkeeping is discharged one lane at a time. -/
+
+/-- A `tl.load(…, mask = m, other = z)` lane carrier is `some` of a plain
+real: `if p then some a else some z = some (if p then a else z)`.
+
+Pushing the `some` outward is what lets the existing `@[simp]` lemmas
+`Option.map₂_some_some` / `WithBot.sum_someTerm_eq_some` /
+`WithBot.unbotD_some` collapse a whole guarded factor tower, of any depth and
+any tile rank, down to a real-valued expression.
+
+Two spelling traps, both load-bearing:
+
+* the `@ite (WithBot ℝ)` must be written **explicitly**. Writing
+  `(if p then (some a : WithBot ℝ) else some z)` elaborates the `ite` at
+  `Option ℝ` instead, and `simp` will then never match the `WithBot ℝ`-typed
+  `ite` that kernel goals actually contain (`TileCarrier .real` reduces to
+  `WithBot ℝ`, not to `Option ℝ`);
+* this is not `@[simp]`, because masked-load carriers currently normalize to
+  the `if … then some … else some …` form and every existing proof over a
+  masked load is written against it. Consumers name it in their own simp set. -/
+theorem ite_some_some {p : Prop} [inst : Decidable p] (a z : ℝ) :
+    @ite (WithBot ℝ) p inst (some a) (some z)
+      = (some (if p then a else z) : WithBot ℝ) := by
+  split_ifs <;> rfl
+
+/-- **Guarded reduction bridge.** A `WithBot ℝ` reduction whose lanes are
+each (pointwise) a `some` of a real equals the coercion of the real reduction.
+
+Unlike the bridges above this says nothing about the *shape* of the lane
+carrier: `hlane` is a lane-local obligation, so it serves guarded
+multi-factor 2-D tiles — including ones whose lane index is
+`TileShape.insertAxisIndex`-projected and whose factors carry masks on
+different axes — exactly as well as the two-factor 1-D case. -/
+theorem sum_guarded_eq_coe {ι : Type*} [Fintype ι]
+    (F : ι → WithBot ℝ) (g : ι → ℝ)
+    (hlane : ∀ i, F i = (some (g i) : WithBot ℝ)) :
+    @Finset.sum ι (WithBot ℝ) _ Finset.univ F = ((∑ i, g i : ℝ) : WithBot ℝ) := by
+  rw [Finset.sum_congr rfl (fun i _ => hlane i)]
+  exact WithBot.sum_someTerm_eq_some Finset.univ g
+
+/-- `WithBot.unbotD`-facing form of `sum_guarded_eq_coe` — the shape a
+`tl.sum` whose result is stored directly lands in. Stated so that
+`refine unbotD_sum_guarded_eq _ _ ?_` reads `g` off the goal's own
+right-hand side (which is the specification's `∑`), leaving only the
+lane-local obligation. -/
+theorem unbotD_sum_guarded_eq {ι : Type*} [Fintype ι]
+    (F : ι → WithBot ℝ) (g : ι → ℝ)
+    (hlane : ∀ i, F i = (some (g i) : WithBot ℝ)) :
+    WithBot.unbotD 0 (@Finset.sum ι (WithBot ℝ) _ Finset.univ F) = ∑ i, g i := by
+  rw [sum_guarded_eq_coe F g hlane]; rfl
+
+/-- `unbotD` form for a reduction that is combined with a lane-wise scalar
+before being stored — the `b_v -= tl.sum(…)` / `b_v *= …` shape. -/
+theorem unbotD_map₂_sum_guarded_eq {ι : Type*} [Fintype ι]
+    (op : ℝ → ℝ → ℝ) (c : ℝ) (F : ι → WithBot ℝ) (g : ι → ℝ)
+    (hlane : ∀ i, F i = (some (g i) : WithBot ℝ)) :
+    WithBot.unbotD 0 (Option.map₂ op (some c : WithBot ℝ)
+        (@Finset.sum ι (WithBot ℝ) _ Finset.univ F))
+      = op c (∑ i, g i) := by
+  rw [sum_guarded_eq_coe F g hlane]; rfl
+
+end MaskedReduction
+
 end VeriTile.Triton
