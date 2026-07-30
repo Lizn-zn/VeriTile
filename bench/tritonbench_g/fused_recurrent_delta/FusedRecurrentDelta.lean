@@ -65,12 +65,15 @@ fused_recurrent_delta_output_summary_general          ← TOP THEOREM
   7  fused_recurrent_delta_bwd_dv_step_slice_compute_correct              dv row (loop 1)
   8  fused_recurrent_delta_bwd_dbeta_step_slice_headwise_compute_correct  dbeta row
   9  fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta_compute_correct dbeta scalar
- 10  fused_recurrent_delta_bwd_dk_correction_step_slice_compute_correct   dk fixup (loop 2)
+ 10  fused_recurrent_delta_bwd_dk_correction_step_sequenced               dk fixup (loop 2)
  11  fused_recurrent_delta_bwd_dq_step_slice_compute_correct              dq row (loop 2)
 
 supporting algebra (used INSIDE clauses 3–5, not extra conjuncts):
   deltaState / deltaState_succ            the standalone recurrence
   stateStepSpec_eq_deltaState_succ        one body advances it, given `hPrev`
+  dkCorrClosed                            loop-1 `dk`/`dv` values, sequenced into
+                                          clause 10 (via the slice face
+                                          `..._dk_correction_step_slice_compute_correct`)
 ```
 
 ## Modeling boundary
@@ -108,6 +111,24 @@ chaining from one step's output buffer to the next step's input buffer. Two boun
 Output-offset injectivity side conditions (`BK ≤ K`, `BV ≤ V` for the
 `[BV,BK]`/`[BK,BV]` state tiles) are honest structural hypotheses; the Python
 regression (`K = BK = 16`, `V = 32`, `BV ∈ {8, 32}`) satisfies them.
+
+**The load masks — a disclosed gap, scoped by `hFullK` / `hFullV`.** Every
+Python load in both kernels is guarded (`mask_bk` / `mask_bv`, `other = 0`); the
+step slices in this file load *unmasked* (their masked *stores* are transcribed
+faithfully). For a partial tile Python reads `0` where these slices read live
+memory, so the headline pins the full-tile regime with the two explicit
+hypotheses `hFullK` / `hFullV` rather than pretending to cover partial tiles.
+Why the masks are not simply put back: every face here observes a value produced
+by a `tl.sum` over the *other* axis, so masking the loads turns each executed
+lane into an `if mask then some … else some 0` carrier inside a `WithBot ℝ`
+reduction, whose lane index is a `TileShape.insertAxisIndex`-projected index that
+`simp`/`rw` cannot normalize (the generic `insertAxisIndex_succ` simp lemma does
+not fire on the `Fin 2` literal `1`); `Semantics/MaskedReduction.lean` carries
+carrier bridges only for two-factor 1-D shapes, not for these 2-D multi-factor
+ones. Closing the gap needs that library-level bridge first — the sibling port
+`fused_rwkv6_kernel` shows the shape of the fix where a face is *elementwise*
+(its state-update slice is now fully masked and needs no full-tile hypothesis),
+and every face in this file is a reduction face.
 
 ## DSL-forced transcription notes (all mechanical, documented per
 `review_criteria.md`)
@@ -2010,6 +2031,79 @@ theorem fused_recurrent_delta_bwd_dk_correction_step_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-! ### Sequencing the loop-2 `dk` correction onto the loop-1 stores
+
+`dkCorrStepSpec` above is stated *relative to whatever the `dk`/`dv` rows hold*
+when the correction body runs. In the Python kernel those rows hold exactly what
+loop 1 stored: after the `tl.debug_barrier()` the pointers `p_dk`/`p_dv` are
+re-initialized to row `0` of the same `dk`/`dv` layouts loop 1 wrote (loop 1
+walked them backwards from row `T-1`), so at time row `t` loop 2 reloads loop 1's
+`d_k`/`d_v` cells — `dkRowOffset s t` and `outOffset s t` in both loops. The
+face below states that sequencing explicitly instead of leaving the two reads
+unconstrained: given loop 1's stored values, the final memory value of the `dk`
+row is a formula over the backward inputs and the two materialized carries. -/
+
+/-- **The sequenced loop-2 `dk` correction**: loop 1's `dk` row minus the
+recomputed-state readout of loop 1's `dv` row,
+`dkStepSpec_t[j_k] − Σ_{j_v} dvStepSpec_t[j_v] · HRec[j_k,j_v]`. A formula over
+the backward-launch inputs and the two materialized carries (`DHPrev`, `HRec`) —
+no unconstrained read of the kernel's own output rows. -/
+noncomputable def dkCorrClosed (s : BlockState)
+    (DHPrev HRec q do_ k v beta : RegionName) (IS_HEADWISE_BETA : Bool)
+    (t s_qk_h s_vo_h T K V BK BV : Nat) (scale : ℝ) (jk : Fin BK) : ℝ :=
+  dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
+      t s_qk_h s_vo_h T K V BK BV scale jk
+    - ∑ jv : Fin BV,
+        dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
+            t s_qk_h s_vo_h T K V BK BV scale jv
+          * s.readMem HRec (dhOffset s K V BK BV (jk, jv, PUnit.unit))
+
+/-- **Genuine sequenced loop-2 `dk` correction step.** Under the two
+loop-1-stored-value hypotheses (Python's two-loop structure: loop 2 reloads the
+rows loop 1 wrote — see the section note), the correction body realizes
+`dkCorrClosed`, i.e. the *final* memory value of the `dk` row expressed through
+the loop-1 `dk`/`dv` step formulas rather than through unconstrained reads. -/
+theorem fused_recurrent_delta_bwd_dk_correction_step_sequenced
+    (DHPrev HRec q do_ k v beta dk dv : RegionName) (IS_HEADWISE_BETA : Bool)
+    (t s_qk_h s_vo_h B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun jk : Fin BK => dkRowOffset s t s_qk_h B H K BK jk))
+    -- forced by loop 1's `tl.store(p_dk, d_k, mask=mask_bk)` at this very row
+    (hDk : ∀ jk : Fin BK,
+      s.readMem dk (dkRowOffset s t s_qk_h B H K BK jk)
+        = dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
+            t s_qk_h s_vo_h T K V BK BV scale jk)
+    -- forced by loop 1's `tl.store(p_dv, d_v, mask=mask_bv)` at this very row
+    (hDv : ∀ jv : Fin BV,
+      s.readMem dv (outOffset s t s_vo_h B H V BV jv)
+        = dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
+            t s_qk_h s_vo_h T K V BK BV scale jv) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := fused_recurrent_delta_bwd_dk_correction_step_slice HRec dv dk
+        t s_qk_h s_vo_h B H K V BK BV)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun jk : Fin BK => activeK s K BK jk)
+        (fun jk => (dk, dkRowOffset s t s_qk_h B H K BK jk)))
+      (expected := fun jk : Fin BK =>
+        dkCorrClosed s DHPrev HRec q do_ k v beta IS_HEADWISE_BETA
+          t s_qk_h s_vo_h T K V BK BV scale jk) := by
+  have h := fused_recurrent_delta_bwd_dk_correction_step_slice_compute_correct
+    HRec dv dk t s_qk_h s_vo_h B H K V BK BV s hOutInj
+  have hcong : (fun jk : Fin BK =>
+      dkCorrStepSpec s HRec dv dk t s_qk_h s_vo_h B H K V BK BV jk)
+      = (fun jk : Fin BK =>
+        dkCorrClosed s DHPrev HRec q do_ k v beta IS_HEADWISE_BETA
+          t s_qk_h s_vo_h T K V BK BV scale jk) := by
+    funext jk
+    unfold dkCorrStepSpec dkCorrClosed
+    rw [hDk jk]
+    congr 1
+    apply Finset.sum_congr rfl
+    intro jv _
+    rw [hDv jv]
+  rwa [hcong] at h
+
 def fused_recurrent_delta_bwd_dq_step_slice_headwise
     (HPrev k v beta do_ dq : RegionName)
     (t s_qk_h s_vo_h B H T K V BK BV : Nat) (scale : ℝ) :
@@ -2368,10 +2462,21 @@ never a read-back of the kernel's own output:
 8. one backward loop-1 headwise **`dbeta`** body realizes `dbetaStepSpec`;
 9. one backward loop-1 scalar **`dbeta`** body realizes the full-reduction
    `dbetaScalarStepSpec` (scalar cell);
-10. one backward loop-2 **`dk` correction** body realizes `dkCorrStepSpec`
-    (the in-place fixup — the final memory value of the `dk` row) over the
-    materialized recomputed state `HRec`;
+10. one backward loop-2 **`dk` correction** body, *sequenced onto the loop-1
+    stores*: under the two clause-local hypotheses that the `dk`/`dv` rows still
+    hold clause 6's and clause 7's values (which is what Python's two-loop
+    structure does — loop 2 re-walks the same `dk`/`dv` addresses forward after
+    the `tl.debug_barrier()`), the in-place fixup realizes `dkCorrClosed`
+    = `dkStepSpec − Σ_{j_v} dvStepSpec · HRec`, the final memory value of the
+    `dk` row expressed through the loop-1 formulas rather than through
+    unconstrained reads of the kernel's own output rows;
 11. one backward loop-2 **`dq`** body (flag-selected) realizes `dqStepSpec`.
+
+Clause 10 is why clause 6 and clause 10 are consistent rather than two
+unrelated values for one `dk` cell: they are `Realizes` facts about *different*
+slices run from the same initial state (loop 1's body and loop 2's body), and
+clause 10 now names the loop-1 value it starts from instead of reading `dk` at
+its own write address with nothing said about it.
 
 The `STORE_FINAL_STATE` writeback has **no** conjunct: its face was a masked
 memcpy (load address `HFinal + i_bh·K·V + offs_k·V + offs_v`, store address
@@ -2381,7 +2486,12 @@ presented as a result about `ht`.
 
 Side conditions. Structural: `BV ≤ V`, `BK ≤ K` (the state tile fits the logical
 extents, giving state-address injectivity); all row-address injectivities are
-unconditional. **Load-bearing:** `hPrev` and `hNext` are *assumptions* and they
+unconditional. **Scope-fixing:** `hFullK` / `hFullV` pin the **full-tile
+regime** — every step slice in this file loads *unmasked* where every Python
+load carries `mask_bk` / `mask_bv` with `other = 0`, so outside that regime the
+slices are not the kernel Python runs. They are not used by the proofs; they
+scope the statements (see the module docstring for why the masks cannot yet be
+put back). **Load-bearing:** `hPrev` and `hNext` are *assumptions* and they
 carry the entire forward recurrence; every clause mentioning `deltaState`,
 `vNewClosed` or `outputClosed` holds only under them.
 
@@ -2405,6 +2515,12 @@ specification fused_recurrent_delta_output_summary_general
     (IS_HEADWISE_BETA USE_INITIAL_STATE STORE_FINAL_STATE USE_DH0 USE_DHT : Bool)
     (m s_qk_h s_vo_h NK B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hBV : BV ≤ V) (hBK : BK ≤ K)
+    -- **the full-tile regime**, forced by the step slices loading *unmasked*
+    -- where every Python load carries `mask_bk` / `mask_bv` with `other = 0`;
+    -- outside this regime the slices are not the kernel Python runs (see the
+    -- module docstring for why masking them is currently blocked)
+    (hFullK : ∀ jk : Fin BK, activeK s K BK jk)
+    (hFullV : ∀ jv : Fin BV, activeV s V BV jv)
     (hPrev : ∀ idx : TileIndex [BV, BK],
       s.readMem HPrev (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
@@ -2507,16 +2623,27 @@ specification fused_recurrent_delta_output_summary_general
       (write := fun _ : PUnit => some (dbeta, dbetaScalarOffset s m T B H))
       (expected := fun _ =>
         dbetaScalarStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale)) ∧
-    -- (10) the backward loop-2 `dk` correction body realizes `dkCorrStepSpec`
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_delta_bwd_dk_correction_step_slice HRec dv dk
-        m s_qk_h s_vo_h B H K V BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun jk : Fin BK => activeK s K BK jk)
-        (fun jk => (dk, dkRowOffset s m s_qk_h B H K BK jk)))
-      (expected := fun jk : Fin BK =>
-        dkCorrStepSpec s HRec dv dk m s_qk_h s_vo_h B H K V BK BV jk)) ∧
+    -- (10) the backward loop-2 `dk` correction body, **sequenced onto the loop-1
+    --      stores**: given that the `dk`/`dv` rows still hold what clauses 6 and 7
+    --      put there, the final `dk` row is `dkCorrClosed`
+    ((∀ jk : Fin BK,
+        s.readMem dk (dkRowOffset s m s_qk_h B H K BK jk)
+          = dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
+              m s_qk_h s_vo_h T K V BK BV scale jk) →
+      (∀ jv : Fin BV,
+        s.readMem dv (outOffset s m s_vo_h B H V BV jv)
+          = dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
+              m s_qk_h s_vo_h T K V BK BV scale jv) →
+      ComputeCorrect.Realizes_without_Rounding
+        (kernel := fused_recurrent_delta_bwd_dk_correction_step_slice HRec dv dk
+          m s_qk_h s_vo_h B H K V BK BV)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (fun jk : Fin BK => activeK s K BK jk)
+          (fun jk => (dk, dkRowOffset s m s_qk_h B H K BK jk)))
+        (expected := fun jk : Fin BK =>
+          dkCorrClosed s DHPrev HRec q do_ k v beta IS_HEADWISE_BETA
+            m s_qk_h s_vo_h T K V BK BV scale jk)) ∧
     -- (11) the backward loop-2 `dq` body realizes the genuine `dqStepSpec`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
@@ -2566,8 +2693,10 @@ specification fused_recurrent_delta_output_summary_general
       DHPrev q do_ k v dbeta m s_qk_h s_vo_h NK B H T K V BK BV scale s hDbetaInj
   · exact fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta_compute_correct
       DHPrev q do_ k v dbeta m s_qk_h s_vo_h B H T K V BK BV scale s
-  · exact fused_recurrent_delta_bwd_dk_correction_step_slice_compute_correct
-      HRec dv dk m s_qk_h s_vo_h B H K V BK BV s hDkInj
+  · intro hDkRow hDvRow
+    exact fused_recurrent_delta_bwd_dk_correction_step_sequenced DHPrev HRec q do_
+      k v beta dk dv IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s
+      hDkInj hDkRow hDvRow
   · exact fused_recurrent_delta_bwd_dq_step_slice_compute_correct HRec k v
       beta do_ dq IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s hDkInj
 
