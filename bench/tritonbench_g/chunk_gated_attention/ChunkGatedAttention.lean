@@ -15,54 +15,61 @@ linear attention (`fla`-style):
   `exp(b_gn ...)` (the `GATEK` branch selects K-side vs V-side gating), and
   accumulates `b_h += b_k @ b_v`; the final state is optionally written to `ht`.
 
-## Scope
+## Scope — what is and is not verified
 
-This file verifies **the Triton kernels themselves** — the per-program
-`@triton.jit` bodies. The host launch (`fwd_pre` / `fwd_inner` grids over
-`(cdiv(S,BS), NT, B*H)` and `(NV, NK, B*H)`, the `@triton.autotune` `BS`/warps
-selection, block scheduling, and how the runtime composes per-program writes into
-`o`/`h`/`ht`) is the *trusted boundary*, not a proof obligation here. Because the
-program ids `i_s`/`i_t`/`i_bh` (and `i_v`/`i_k`) are universally quantified (via
-`BlockState`), the per-program statements cover every program of the grid.
+Verified: **one hand-cut slice of `chunk_gated_abc_fwd_kernel_cum`**
+(`chunk_gated_attention_cum_compute_slice`), which reproduces that kernel's whole
+body — masked tile load, lower-triangular `tl.dot`, masked store — at symbolic
+dimensions and strides.
 
-## Proof architecture (genuine closed forms — no self-referential read-back)
+**Not** verified: `chunk_gated_abc_fwd_kernel_h`, the gated chunk recurrence that
+is the substance of this benchmark. Nothing in this file models its gating
+(`b_h *= exp(b_gn)`), its `b_k`/`b_v` pre-gating, or its `b_k @ b_v`
+accumulation. Both `@triton.jit` bodies are shown to *lower* to the algorithm
+layer (`*_toAlgorithm_supported`), which is a well-formedness fact, not
+correctness.
+
+The host launch (`fwd_pre` / `fwd_inner` grids over `(cdiv(S,BS), NT, B*H)` and
+`(NV, NK, B*H)`, the `@triton.autotune` `BS`/warps selection, block scheduling,
+and how the runtime composes per-program writes into `o`/`h`/`ht`) is the
+*trusted boundary*. Because the program ids are universally quantified (via
+`BlockState`), the per-program statement covers every program of the grid.
+
+## Proof architecture
 
 ```
-chunk_gated_attention_output_summary_general                  ← TOP THEOREM (dimension-general)
-  ├─ chunk_gated_attention_cum_compute_slice_closed_form_general (cumulative-normalizer store)
-  ├─ chunk_gated_attention_h_state_store_slice_closed_form_general (per-chunk h-state store)
-  └─ chunk_gated_attention_final_state_store_slice_closed_form_general (final ht store)
-       (+ `*_offset_injective` side lemmas)
+chunk_gated_attention_cum_slice_output_summary_general        ← TOP THEOREM
+  └─ chunk_gated_attention_cum_compute_slice_closed_form_general
+       └─ chunk_gated_attention_cum_compute_slice_compute_correct
+            (expected := cumComputeStoreValue = lowerTri @ source)
 
-`hClosed` captures the gated carry-fold as a standalone closed form (the
-`hSeed`·∏`hGate` + Σ`hStepTerm`·∏`hGate` fold over chunks).
+-- not reachable from the headline, and deliberately so:
+chunk_gated_attention_h_state_memcpy_transports_hClosed       (masked memcpy)
+chunk_gated_attention_final_state_memcpy_transports_hClosed   (masked memcpy)
 ```
 
-The four `(GATEK, USE_INITIAL_STATE, STORE_FINAL_STATE)` flag combinations in the
-summary match the four Python `fwd_inner` test cases. Offset-injectivity side
-lemmas (`*_offset_injective`) underpin the store readbacks.
+Offset injectivity is a *hypothesis* of the headline (`hCumInj`), not a lemma:
+this file contains no `*_offset_injective` declarations, and earlier revisions of
+this docstring that named such lemmas were referring to nothing.
 
-The expected values are **genuine standalone closed forms over the input
-regions**, never read-backs of the kernel's own output:
+`cumComputeStoreValue` — the causal intra-chunk cumsum `lowerTri @ b_s` — is a
+genuine standalone closed form over the input region, never a read-back of the
+kernel's own output.
 
-* `cumComputeStoreValue` — the causal intra-chunk cumsum `lowerTri @ b_s`.
-* `hClosed m` — the folded gated chunk-recurrence state at chunk `m`:
-  `seed ⊙ ∏_{j<m} G_j + Σ_{t<m} S_t ⊙ ∏_{t<j<m} G_j`, where `G_m` is the per-chunk
-  matrix gate (`exp(b_gn_m[k])` per key-row under `GATEK`, else `exp(b_gn_m[v])`
-  per value-column) and `S_m = (gated b_k) @ (gated b_v)` is the per-chunk gated
-  matmul. `producedChunkGatedAttentionHStateValue := hClosed i_t` (loop-row store),
-  `producedChunkGatedAttentionFinalStateValue := hClosed 4` (final state).
+## The gated recurrence: an unproved specification
 
-All closed-form input reads go through named element accessors (`ktElem`,
-`tvElem`, `gnkElem`, `gnvElem`, `h0Elem`) that state the logical tensor
-indexing and the block-pointer footprint they mirror.
-
-The carry-fold satisfied by `hClosed` — `hClosed (m+1) = hClosed m ⊙ G_m + S_m`
-with base case `hClosed 0 = hSeed` — is the exact closed-form counterpart of the
-Python loop body `b_h = b_h * exp(b_gn) [gate] ; b_h += b_k @ b_v`. This generalizes the scalar
-gated carry-fold of `chunk_gate_recurrence` (#290) and the per-channel decay
-outer-product of `fused_rwkv6` (#291) to a chunk-level matrix gate plus a full
-gated `b_k @ b_v` accumulation.
+`hClosed m = seed ⊙ ∏_{j<m} G_j + Σ_{t<m} S_t ⊙ ∏_{t<j<m} G_j` (with `G_m` the
+per-chunk matrix gate — `exp(b_gn_m[k])` per key-row under `GATEK`, else
+`exp(b_gn_m[v])` per value-column — and `S_m = (gated b_k) @ (gated b_v)`) is the
+intended closed form of the carried `b_h`. It is defined below, with input reads
+routed through named element accessors (`ktElem`, `tvElem`, `gnkElem`, `gnvElem`,
+`h0Elem`) that state the logical indexing and the block-pointer footprint they
+mirror. **No theorem in this file proves the kernel computes it.** The two
+lemmas that mention it are masked memcpys whose load and store addresses are
+character-identical: they *assume* a staging buffer already holds `hClosed` and
+conclude that copying it delivers `hClosed`. The carry-fold
+`hClosed (m+1) = hClosed m ⊙ G_m + S_m` and its base case `hClosed 0 = hSeed`
+are **not** stated or proven here.
 
 ## Modeling boundary
 
@@ -70,19 +77,13 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float; `allow_tf32=False` is moo
 `@triton.autotune` (the `BS ∈ {16,32,64}` × `num_warps` configs) and
 `num_warps`/`num_stages` are not modeled. The `.to(...)` casts reduce to the
 identity at the algorithm layer (post-erasure all dtypes unify to `ℝ`). The
-verification is scoped to the **boundary-checked stores** modeled as the
-`*Active` write predicates over `TileIndex [BT, BS]` / `TileIndex [BK, BV]`
-footprints at the bench shape
-(`B=2, H=4, T=128, S=64, K=32, V=32, BT=32, BK=BV=16`). Out-of-boundary tile
-lanes are preserved (mask=false ⇒ no store).
+`boundary_check=(0, 1)` store is modeled as the `cumSurfaceActive` write
+predicate over the `TileIndex [BT, BS]` footprint at symbolic dimensions;
+out-of-boundary tile lanes are preserved (mask = false ⇒ no store).
 
-The **cross-chunk loop scheduling** that threads the carried `b_h` register from
-chunk `m` to `m+1` — i.e. that the materialized previous-state buffer holds
-`hClosed m` so that the body advances it to `hClosed (m+1)` — is the *trusted
-runtime boundary* (the recurrence is presented to the store faces via the carried
-register, exactly as in #290). Its algebraic content is captured by the
-`hClosed` closed form; the store faces are stated relative to a buffer
-hypothesis `buffer = hClosed m`.
+Region distinctness: no `≠` hypotheses are stated and none are needed — every
+slice here performs all of its loads before its single store and every `expected`
+is a function of the *initial* state, so aliasing cannot falsify a face.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkGatedAttention
@@ -91,10 +92,11 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorem:** `chunk_gated_attention_output_summary_general`
-(dimension-general). -/
+/-! **★ Main theorem:** `chunk_gated_attention_cum_slice_output_summary_general` —
+shape-general, and scoped to the `fwd_pre` cumsum kernel's slice. The gated
+`chunk_gated_abc_fwd_kernel_h` recurrence has no correctness face here. -/
 
-/-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
+/-! # ══════════ CORRECT — genuine / shape-general (review this) ══════════ -/
 
 section Correct_without_Rounding
 
@@ -218,119 +220,40 @@ theorem chunk_gated_attention_h_surface_toAlgorithm_supported
   simp [chunk_gated_attention_h_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
 
-/-- Proof-oriented block store slice of `chunk_gated_attention.py`'s
-`chunk_gated_abc_fwd_kernel_cum`.
+/-! ## Cumulative-normalizer index accessors
 
-The full kernel computes a per-feature gated-ABC cumsum tile. This slice starts from
-a precomputed `BC` tile for one `(i_s, i_bh, i_t)` block and proves the
-boundary-checked writeback into `Z`. -/
-def chunk_gated_attention_store_slice
-    (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
-    ComputeKernel := triton {
-  i_s = tl.program_id(0)
-  i_bh = tl.program_id(1)
-  i_t = tl.program_id(2)
-  offs_t = i_t * $(BT) + tl.arange(0, $(BT))
-  offs_s = i_s * $(BS) + tl.arange(0, $(BS))
-  mask = (offs_t[:, None] < $(T)) & (offs_s[None, :] < $(S))
-  b_c = tl.load(BC + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
-      offs_s[None, :] * $(s_s_d), mask=mask, other=0.0)
-  tl.store(Z + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
-      offs_s[None, :] * $(s_s_d), b_c, mask=mask)
-}
+`chunk_gated_abc_fwd_kernel_cum` is launched on the grid
+`(cdiv(S, BS), NT, B*H)` and reads `i_s, i_t, i_bh = pid 0, pid 1, pid 2`
+(`chunk_gated_attention.py:32`), which `chunk_gated_attention_cum_surface`
+transcribes verbatim. These accessors are the single source of truth for that
+pid assignment; the slice below uses them, so a pid mix-up cannot hide in the
+offset arithmetic. -/
 
-def tIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
-  s.pids 2 * BT + i.val
+/-- Global time row of tile lane `i`: `i_t * BT + i` with `i_t = pid 1`. -/
+def cumSurfaceTIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
+  s.pids 1 * BT + i.val
 
-def sIndex (s : BlockState) (BS : Nat) (j : Fin BS) : Nat :=
+/-- Global feature column of tile lane `j`: `i_s * BS + j` with `i_s = pid 0`. -/
+def cumSurfaceSIndex (s : BlockState) (BS : Nat) (j : Fin BS) : Nat :=
   s.pids 0 * BS + j.val
 
-def active (s : BlockState) (T S BT BS : Nat) (idx : TileIndex [BT, BS]) : Prop :=
-  tIndex s BT idx.1 < T ∧ sIndex s BS idx.2.1 < S
+/-- The `boundary_check=(0, 1)` in-range predicate of the `[BT, BS]` tile. -/
+def cumSurfaceActive (s : BlockState) (T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) : Prop :=
+  cumSurfaceTIndex s BT idx.1 < T ∧ cumSurfaceSIndex s BS idx.2.1 < S
 
-instance activeDecidable (s : BlockState) (T S BT BS : Nat)
-    (idx : TileIndex [BT, BS]) : Decidable (active s T S BT BS idx) := by
-  unfold active
+instance cumSurfaceActiveDecidable (s : BlockState) (T S BT BS : Nat)
+    (idx : TileIndex [BT, BS]) :
+    Decidable (cumSurfaceActive s T S BT BS idx) := by
+  unfold cumSurfaceActive
   infer_instance
 
+/-- Flat address of tile lane `idx` in the `[T, S]` block-pointer footprint
+`base = R + i_bh * s_s_h`, `strides = (s_s_t, s_s_d)`, with `i_bh = pid 2`. -/
 def tileOffset (s : BlockState) (s_s_h s_s_t s_s_d BT BS : Nat)
     (idx : TileIndex [BT, BS]) : Nat :=
-  s.pids 1 * s_s_h + tIndex s BT idx.1 * s_s_t +
-    sIndex s BS idx.2.1 * s_s_d
-
-noncomputable def storeValue (s : BlockState) (BC : RegionName)
-    (s_s_h s_s_t s_s_d T S BT BS : Nat) (idx : TileIndex [BT, BS]) : ℝ :=
-  WithBot.unbotD 0
-    (if active s T S BT BS idx then
-      some (s.readMem BC (tileOffset s s_s_h s_s_t s_s_d BT BS idx))
-    else some (0.0 : ℝ))
-
-theorem chunk_gated_attention_store_slice_correct
-    (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BT, BS] => tileOffset s s_s_h s_s_t s_s_d BT BS idx)) :
-    ∀ idx : TileIndex [BT, BS],
-      let outAddr := tileOffset s s_s_h s_s_t s_s_d BT BS idx
-      (exec (chunk_gated_attention_store_slice BC Z s_s_h s_s_t s_s_d T S BT BS)
-          s).map (·.readMem Z outAddr)
-        = some (if active s T S BT BS idx then
-            storeValue s BC s_s_h s_s_t s_s_d T S BT BS idx
-          else s.readMem Z outAddr) := by
-  intro idx
-  simp [exec, chunk_gated_attention_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        tIndex, sIndex, active, tileOffset, TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BT, BS] → Nat :=
-    fun idx => s.pids 1 * s_s_h + (s.pids 2 * BT + idx.1.val) * s_s_t +
-      (s.pids 0 * BS + idx.2.1.val) * s_s_d
-  let valueFn : TileIndex [BT, BS] → ℝ :=
-    fun idx => WithBot.unbotD 0
-      (if s.pids 2 * BT + idx.1.val < T ∧
-          s.pids 0 * BS + idx.2.1.val < S then
-        some (s.readMem BC (offsetFn idx))
-      else some (0.0 : ℝ))
-  let P : TileIndex [BT, BS] → Prop :=
-    fun idx => s.pids 2 * BT + idx.1.val < T ∧
-      s.pids 0 * BS + idx.2.1.val < S
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, tileOffset, tIndex, sIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i =>
-        if P i then acc.writeMem Z (offsetFn i) (valueFn i) else acc)
-      _ (TileShape.allIndices [BT, BS])).readMem Z (offsetFn idx) =
-    if P idx then storeValue s BC s_s_h s_s_t s_s_d T S BT BS idx
-    else s.readMem Z (offsetFn idx)
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
-  by_cases hActive :
-      s.pids 2 * BT + idx.1.val < T ∧ s.pids 0 * BS + idx.2.1.val < S
-  · rfl
-  · rfl
-
-theorem chunk_gated_attention_store_slice_compute_correct
-    (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BT, BS] => tileOffset s s_s_h s_s_t s_s_d BT BS idx)) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := chunk_gated_attention_store_slice BC Z s_s_h s_s_t s_s_d T S BT BS)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BT, BS] => active s T S BT BS idx)
-        (fun idx : TileIndex [BT, BS] => (Z, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
-      (expected := fun idx : TileIndex [BT, BS] =>
-        storeValue s BC s_s_h s_s_t s_s_d T S BT BS idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [chunk_gated_attention_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := chunk_gated_attention_store_slice_correct BC Z s_s_h s_s_t s_s_d T S BT BS
-    s hOutInj idx
-  rw [hExec] at h
-  simpa [hActive] using Option.some.inj h
+  s.pids 2 * s_s_h + cumSurfaceTIndex s BT idx.1 * s_s_t +
+    cumSurfaceSIndex s BS idx.2.1 * s_s_d
 
 /-! ## Computed cumulative-normalizer slice
 
@@ -342,8 +265,8 @@ def chunk_gated_attention_cum_compute_slice
     (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
     ComputeKernel := triton {
   i_s = tl.program_id(0)
-  i_bh = tl.program_id(1)
-  i_t = tl.program_id(2)
+  i_t = tl.program_id(1)
+  i_bh = tl.program_id(2)
   offs_t = i_t * $(BT) + tl.arange(0, $(BT))
   offs_s = i_s * $(BS) + tl.arange(0, $(BS))
   o_i = tl.arange(0, $(BT))
@@ -365,7 +288,7 @@ noncomputable def sourceTile
     (s_s_h s_s_t s_s_d T S BT BS : Nat) :
     Tile .real [BT, BS] :=
   { data := fun idx =>
-      if active s T S BT BS idx then
+      if cumSurfaceActive s T S BT BS idx then
         some (s.readMem SReg (tileOffset s s_s_h s_s_t s_s_d BT BS idx))
       else some (0.0 : ℝ) }
 
@@ -387,26 +310,26 @@ theorem chunk_gated_attention_cum_compute_slice_correct
       let outAddr := tileOffset s s_s_h s_s_t s_s_d BT BS idx
       (exec (chunk_gated_attention_cum_compute_slice SReg Z s_s_h s_s_t
             s_s_d T S BT BS) s).map (·.readMem Z outAddr)
-        = some (if active s T S BT BS idx then
+        = some (if cumSurfaceActive s T S BT BS idx then
             cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx
           else s.readMem Z outAddr) := by
   intro idx
   simp [exec, chunk_gated_attention_cum_compute_slice, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
         Tile.ptrAdd, Tile.dot, NumericDType.add, NumericDType.mul,
-        ComparableDType.lt, ComparableDType.ge, tIndex, sIndex, active,
+        ComparableDType.lt, ComparableDType.ge, cumSurfaceTIndex, cumSurfaceSIndex, cumSurfaceActive,
         tileOffset, sourceTile, lowerTriTile, TileShape.dropInsertedIndex]
   let offsetFn : TileIndex [BT, BS] → Nat :=
-    fun idx => s.pids 1 * s_s_h + (s.pids 2 * BT + idx.1.val) * s_s_t +
+    fun idx => s.pids 2 * s_s_h + (s.pids 1 * BT + idx.1.val) * s_s_t +
       (s.pids 0 * BS + idx.2.1.val) * s_s_d
   have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, tileOffset, tIndex, sIndex] using hOutInj
+    simpa [offsetFn, tileOffset, cumSurfaceTIndex, cumSurfaceSIndex] using hOutInj
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
   by_cases hActive :
-      s.pids 2 * BT + idx.1.val < T ∧ s.pids 0 * BS + idx.2.1.val < S
-  · simp [offsetFn, active, tIndex, sIndex, tileOffset, cumComputeStoreValue,
+      s.pids 1 * BT + idx.1.val < T ∧ s.pids 0 * BS + idx.2.1.val < S
+  · simp [offsetFn, cumSurfaceActive, cumSurfaceTIndex, cumSurfaceSIndex, tileOffset, cumComputeStoreValue,
       sourceTile, lowerTriTile, Tile.dot, hActive]
-  · simp [offsetFn, active, tIndex, sIndex, tileOffset, hActive]
+  · simp [offsetFn, cumSurfaceActive, cumSurfaceTIndex, cumSurfaceSIndex, tileOffset, hActive]
 
 theorem chunk_gated_attention_cum_compute_slice_compute_correct
     (SReg Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
@@ -418,7 +341,7 @@ theorem chunk_gated_attention_cum_compute_slice_compute_correct
         s_s_d T S BT BS)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BT, BS] => active s T S BT BS idx)
+        (fun idx : TileIndex [BT, BS] => cumSurfaceActive s T S BT BS idx)
         (fun idx : TileIndex [BT, BS] =>
           (Z, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
       (expected := fun idx : TileIndex [BT, BS] =>
@@ -434,12 +357,17 @@ theorem chunk_gated_attention_cum_compute_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-- Proof-oriented intermediate-state store slice of
+/-- **Masked memcpy** modelling the intermediate-state writeback of
 `chunk_gated_abc_fwd_kernel_h`.
 
 At each `i_t`, the Python kernel stores the current recurrent state `b_h` into
-`H + i_bh * s_h_h + i_t * KSize * VSize` before applying the chunk update.
-This slice starts from a precomputed `BH` tile and proves that masked writeback. -/
+`H + i_bh * s_h_h + i_t * KSize * VSize` before applying the chunk update. This
+slice starts from a precomputed `BH` tile — and its **load and store addresses
+are character-identical** under the same mask, so it computes nothing: it
+transports whatever `BH` holds into `H`. The gating and the `b_k @ b_v`
+accumulation that actually produce `b_h` are *not* modeled anywhere in this
+file. Consequently no theorem built on this slice is a claim about the
+recurrence; see the module docstring. -/
 def chunk_gated_attention_h_state_store_slice
     (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat) :
     ComputeKernel := triton {
@@ -559,10 +487,12 @@ theorem chunk_gated_attention_h_state_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-- Proof-oriented final-state store slice of `chunk_gated_attention.py`'s
-`chunk_gated_abc_fwd_kernel_h`. Writes a precomputed final-state `BHFinal`
-[BK, BV] tile into `Ht` after the NT-iteration chunk loop completes
-(STORE_FINAL_STATE=True branch). -/
+/-- **Masked memcpy** modelling the `STORE_FINAL_STATE` writeback of
+`chunk_gated_attention.py`'s `chunk_gated_abc_fwd_kernel_h`: it moves a
+precomputed final-state `BHFinal` `[BK, BV]` tile into `Ht` after the
+`NT`-iteration chunk loop. Load and store addresses are character-identical
+under the same mask, so this slice computes nothing — it transports whatever
+`BHFinal` holds. -/
 def chunk_gated_attention_final_state_store_slice
     (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat) :
     ComputeKernel := triton {
@@ -674,22 +604,6 @@ theorem chunk_gated_attention_final_state_store_slice_compute_correct
     KSize VSize BK BV s hOutInj idx
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
-
-def cumSurfaceTIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
-  s.pids 1 * BT + i.val
-
-def cumSurfaceSIndex (s : BlockState) (BS : Nat) (j : Fin BS) : Nat :=
-  s.pids 0 * BS + j.val
-
-def cumSurfaceActive (s : BlockState) (T S BT BS : Nat)
-    (idx : TileIndex [BT, BS]) : Prop :=
-  cumSurfaceTIndex s BT idx.1 < T ∧ cumSurfaceSIndex s BS idx.2.1 < S
-
-instance cumSurfaceActiveDecidable (s : BlockState) (T S BT BS : Nat)
-    (idx : TileIndex [BT, BS]) :
-    Decidable (cumSurfaceActive s T S BT BS idx) := by
-  unfold cumSurfaceActive
-  infer_instance
 
 /-! ## Genuine closed form for the gated chunk-recurrence state `b_h`
 
@@ -820,33 +734,8 @@ noncomputable def hClosed
         (∏ j ∈ Finset.Ico (t + 1) m,
           hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx)
 
-/-- **Genuine closed form** for the `h` loop-row state store at chunk `i_t`:
-the folded gated state `hClosed i_t`, over the input regions `K`, `V`, `G`, `H0`
-at the bench shape. **Not** a read-back of the kernel's own output. -/
-noncomputable def producedChunkGatedAttentionHStateValue
-    (s : BlockState) (K V G _H H0 _HT : RegionName)
-    (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
-    (i_t : Fin 4) (idx : TileIndex [16, 16]) : ℝ :=
-  hClosed s K V G H0 GATEK USE_INITIAL_STATE
-    (s_k_h := 4096) (s_k_t := 128) (s_k_d := 1)
-    (s_v_h := 4096) (s_v_t := 32) (s_v_d := 1)
-    (KSize := 32) (VSize := 32) (BT := 32) (BK := 16) (BV := 16)
-    (m := i_t.val) idx
-
-/-- **Genuine closed form** for the optional final-state store `ht`: the folded
-gated state after all `NT = 4` chunks, `hClosed 4`. -/
-noncomputable def producedChunkGatedAttentionFinalStateValue
-    (s : BlockState) (K V G _H H0 _HT : RegionName)
-    (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
-    (idx : TileIndex [16, 16]) : ℝ :=
-  hClosed s K V G H0 GATEK USE_INITIAL_STATE
-    (s_k_h := 4096) (s_k_t := 128) (s_k_d := 1)
-    (s_v_h := 4096) (s_v_t := 32) (s_v_d := 1)
-    (KSize := 32) (VSize := 32) (BT := 32) (BK := 16) (BV := 16)
-    (m := 4) idx
-
 /-- Swap the `expected` value of a `writeIf`-`Realizes_without_Rounding` when the two `expected`
-functions agree on every active (`mask`-satisfying) index. -/
+functions agree on every cumSurfaceActive (`mask`-satisfying) index. -/
 theorem realizes_writeIf_expected_congr {ι : Type} {α : Type}
     [ComputeCorrect.OutputReadable α]
     (kernel : ComputeKernel) (s : BlockState)
@@ -872,21 +761,24 @@ theorem realizes_writeIf_expected_congr {ι : Type} {α : Type}
       rw [← hAgree i hi]
       exact hp s0 s' hExec hs0 i hi
 
-/-! ## ════════ Dimension-general closed-form faces (genuine `hClosed`) ════════
+/-! ## ════════ Memcpy transport lemmas — NOT recurrence proofs ════════
 
-These are the symbolic-dimension counterparts of the test-shape closed-form
-faces above. They carry **honest side-conditions only**: offset injectivity of
-each store footprint (a contiguity/aliasing-freedom hypothesis on the strides),
-and the buffer-carries-`hClosed` hypothesis (the cross-chunk loop scheduling that
-threads the carried `b_h` register, whose algebra is the `hClosed` carry-fold,
-is the trusted runtime boundary, exactly as in #290). No dimension is pinned. -/
+The two lemmas below are **not** headline faces and must not be read as
+correctness results for the `h` / `ht` stores. Each is a masked memcpy whose load
+and store addresses are character-identical, so its entire content is its own
+`hBuf` hypothesis: *assume* the staging buffer already holds `hClosed`, and the
+copy delivers `hClosed` to the output region. Nothing here proves that the
+kernel's carried `b_h` register ever equals `hClosed` — that would need the
+gating and `b_k @ b_v` accumulation to be modeled, plus the carry-fold lemmas
+`hClosed_succ` / `hClosed_zero`, none of which exist in this file. They are kept
+only so the intended closed form `hClosed` stays anchored to the store
+footprints for whoever proves the recurrence. -/
 
-/-- Dimension-general `h` loop-row store closed-form face: at chunk `i_t`, the
-store realizes the genuine folded state `hClosed i_t` over the input regions
-`K`, `V`, `G`, `H0`, for **arbitrary** `KSize VSize BK BV` and strides, given
-offset injectivity of the store footprint and that the buffer `BH` carries
-`hClosed i_t`. -/
-theorem chunk_gated_attention_h_state_store_slice_closed_form_general
+/-- **Memcpy transport, not a recurrence proof.** *Assuming* the staging buffer
+`BH` already holds `hClosed i_t` at the store footprint, the masked copy delivers
+`hClosed i_t` into `H`. The assumption is the whole content: the load and store
+addresses of `chunk_gated_attention_h_state_store_slice` are identical. -/
+theorem chunk_gated_attention_h_state_memcpy_transports_hClosed
     (BH H K V G H0 : RegionName) (GATEK USE_INITIAL_STATE : Bool)
     (i_t : Nat)
     (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d s_h_h s_h_t s_h_d
@@ -917,12 +809,10 @@ theorem chunk_gated_attention_h_state_store_slice_closed_form_general
   rw [hBuf idx]
   simp
 
-/-- Dimension-general final `ht` store closed-form face: after all `NT` chunks,
-the store realizes the genuine fully-folded state `hClosed NT` over the input
-regions, for **arbitrary** `KSize VSize BK BV` and strides, given offset
-injectivity of the final-state footprint and that the buffer `BHFinal` carries
-`hClosed NT`. -/
-theorem chunk_gated_attention_final_state_store_slice_closed_form_general
+/-- **Memcpy transport, not a recurrence proof.** *Assuming* the staging buffer
+`BHFinal` already holds `hClosed NT` at the final-state footprint, the masked copy
+delivers `hClosed NT` into `Ht`. As above, the assumption is the whole content. -/
+theorem chunk_gated_attention_final_state_memcpy_transports_hClosed
     (BHFinal Ht K V G H0 : RegionName) (GATEK USE_INITIAL_STATE : Bool)
     (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
       KSize VSize BT BK BV NT : Nat) (s : BlockState)
@@ -965,7 +855,7 @@ theorem chunk_gated_attention_cum_compute_slice_closed_form_general
         s_s_d T S BT BS)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BT, BS] => active s T S BT BS idx)
+        (fun idx : TileIndex [BT, BS] => cumSurfaceActive s T S BT BS idx)
         (fun idx : TileIndex [BT, BS] =>
           (Z, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
       (expected := fun idx : TileIndex [BT, BS] =>
@@ -973,93 +863,49 @@ theorem chunk_gated_attention_cum_compute_slice_closed_form_general
   chunk_gated_attention_cum_compute_slice_compute_correct SReg Z s_s_h s_s_t
     s_s_d T S BT BS s hOutInj
 
-/-! ### ════════ ★ MAIN THEOREM ★ (dimension-general) ════════ -/
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 
-/-- **Dimension-general** correctness summary for `chunk_gated_attention.py`,
-against the **genuine closed forms** (no self-referential read-back), for
-**arbitrary** chunk shapes `T S KSize VSize BT BS BK BV NT` and strides.
+/-- **SCOPE — this covers `chunk_gated_abc_fwd_kernel_cum` only.** The headline
+is a single `Realizes` fact about the hand-cut slice
+`chunk_gated_attention_cum_compute_slice`, which reproduces the whole body of the
+`fwd_pre` cumsum kernel (masked tile load, lower-triangular `tl.dot`, masked
+store) at symbolic `T S BT BS` and strides, with the launch's own pid assignment
+`i_s, i_t, i_bh = pid 0, pid 1, pid 2`.
 
-This is the headline: it packages, for symbolic dimensions,
+`chunk_gated_abc_fwd_kernel_h` — the gated chunk recurrence, which is the
+substance of this benchmark — is **not** covered. Its two former conjuncts were
+masked memcpys (identical load and store addresses) whose entire content was the
+`hBufState` / `hBufFinal` assumptions; they have been removed from the headline
+rather than presented as recurrence results, and what remains of them is labelled
+`*_memcpy_transports_hClosed` above. As a consequence the flags
+`GATEK` / `USE_INITIAL_STATE` / `STORE_FINAL_STATE` are exercised by **no**
+conjunct of this headline; the previous claim that its flag combinations "match
+the four Python `fwd_inner` test cases" was false.
 
-* `fwd_pre` cumulative normalizer: the `b_o = m_s @ b_s` store realizes the
-  genuine causal-cumsum `cumComputeStoreValue` (`lowerTri @ source`);
-* the gated `fwd_inner` recurrence (all `(GATEK, USE_INITIAL_STATE,
-  STORE_FINAL_STATE)` flag settings): each `h` loop-row store at chunk `i_t`
-  realizes the genuine folded gated state `hClosed i_t`, and the final `ht` store
-  realizes the fully-folded `hClosed NT`.
-
-Honest side-conditions only: offset injectivity of each store footprint (a
-contiguity/aliasing-freedom hypothesis on the strides) and the
-buffer-carries-`hClosed` hypotheses (the cross-chunk loop scheduling that threads
-the carried `b_h` register, whose algebra is the `hClosed` carry-fold, is the
-trusted runtime boundary, as in #290). No dimension is pinned. -/
-specification chunk_gated_attention_output_summary_general
-    (SReg GCum K V G H H0 Ht BH BHFinal : RegionName)
-    (GATEK USE_INITIAL_STATE _STORE_FINAL_STATE : Bool)
-    (i_t NT : Nat)
-    (s_s_h s_s_t s_s_d s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-      s_h_h s_h_t s_h_d T S KSize VSize BT BS BK BV : Nat) (s : BlockState)
+The single honest side condition is offset injectivity of the store footprint —
+a no-aliasing hypothesis on the strides, which for the bench strides
+`(s_s_t, s_s_d) = (S, 1)` holds. No dimension is pinned. No region-distinctness
+hypothesis is needed: the slice performs its load before its single store and
+`expected` reads the initial state, so `SReg = GCum` cannot falsify it. -/
+specification chunk_gated_attention_cum_slice_output_summary_general
+    (SReg GCum : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState)
     (hCumInj : Function.Injective
-      (fun idx : TileIndex [BT, BS] => tileOffset s s_s_h s_s_t s_s_d BT BS idx))
-    (hStateInj : Function.Injective
-      (fun idx : TileIndex [BK, BV] =>
-        hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx))
-    (hFinalInj : Function.Injective
-      (fun idx : TileIndex [BK, BV] =>
-        finalStateOffset s KSize VSize BK BV idx))
-    (hBufState : ∀ idx : TileIndex [BK, BV],
-      s.readMem BH (hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx)
-        = hClosed s K V G H0 GATEK USE_INITIAL_STATE
-            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV i_t idx)
-    (hBufFinal : ∀ idx : TileIndex [BK, BV],
-      s.readMem BHFinal (finalStateOffset s KSize VSize BK BV idx)
-        = hClosed s K V G H0 GATEK USE_INITIAL_STATE
-            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV NT idx) :
-    -- (1) `fwd_pre` cumulative normalizer realizes the genuine causal cumsum.
-    (ComputeCorrect.Realizes_without_Rounding
+      (fun idx : TileIndex [BT, BS] => tileOffset s s_s_h s_s_t s_s_d BT BS idx)) :
+    ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gated_attention_cum_compute_slice SReg GCum s_s_h s_s_t
         s_s_d T S BT BS)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BT, BS] => active s T S BT BS idx)
+        (fun idx : TileIndex [BT, BS] => cumSurfaceActive s T S BT BS idx)
         (fun idx : TileIndex [BT, BS] =>
           (GCum, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
       (expected := fun idx : TileIndex [BT, BS] =>
-        cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx)) ∧
-    -- (2) `h` loop-row store at chunk `i_t` realizes the genuine folded state.
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := chunk_gated_attention_h_state_store_slice BH H i_t
-        s_h_h s_h_t s_h_d KSize VSize BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BK, BV] => stateActive s KSize VSize BK BV idx)
-        (fun idx : TileIndex [BK, BV] =>
-          (H, hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx)))
-      (expected := fun idx : TileIndex [BK, BV] =>
-        hClosed s K V G H0 GATEK USE_INITIAL_STATE
-          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV i_t idx)) ∧
-    -- (3) final `ht` store realizes the genuine fully-folded state `hClosed NT`.
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht
-        KSize VSize BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BK, BV] => finalActive s KSize VSize BK BV idx)
-        (fun idx : TileIndex [BK, BV] =>
-          (Ht, finalStateOffset s KSize VSize BK BV idx)))
-      (expected := fun idx : TileIndex [BK, BV] =>
-        hClosed s K V G H0 GATEK USE_INITIAL_STATE
-          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV NT idx)) := by
-  refine ⟨?_, ?_, ?_⟩
-  · exact chunk_gated_attention_cum_compute_slice_closed_form_general SReg GCum
-      s_s_h s_s_t s_s_d T S BT BS s hCumInj
-  · exact chunk_gated_attention_h_state_store_slice_closed_form_general BH H K V G H0
-      GATEK USE_INITIAL_STATE i_t s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-      s_h_h s_h_t s_h_d KSize VSize BT BK BV s hStateInj hBufState
-  · exact chunk_gated_attention_final_state_store_slice_closed_form_general BHFinal Ht
-      K V G H0 GATEK USE_INITIAL_STATE s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
-      KSize VSize BT BK BV NT s hFinalInj hBufFinal
+        cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx) :=
+  chunk_gated_attention_cum_compute_slice_closed_form_general SReg GCum
+    s_s_h s_s_t s_s_d T S BT BS s hCumInj
 
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention
+
