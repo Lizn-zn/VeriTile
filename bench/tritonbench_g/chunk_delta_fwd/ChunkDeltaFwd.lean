@@ -18,7 +18,7 @@ each program owns the full key axis. Per time chunk `i_t`:
 Optionally the state is seeded from `initial_state` and the final state flushed
 to `final_state`.
 
-This file proves the store faces of the kernel against a **genuine
+This file executes the kernel and proves its stored outputs equal a **genuine
 mathematical closed form** for the delta-rule recurrence (NOT the kernel's own
 emitted value):
 
@@ -34,42 +34,61 @@ over `ℝ`, with the kernel's exact block-pointer layouts. The closed form is
 given for the single-inner-chunk regime `BC = BT` (`ceil(BT/BC) = 1`), which is
 exactly the checked Python shape (`BT = BC = 32`).
 
-## Scope
+## Scope — genuine end-to-end, but shape-pinned
 
-This verifies the per-program `@triton.jit` body. The host launch
-(`chunk_delta_rule_fwd_kernel_h[(NK, NV, B*H)]`, the 3-D grid, the autotuned warp
-counts, the host-computed `BK/BV/BC/NT` and the `NK == 1` assertion) is the
-*trusted boundary*. Because the program ids are universally quantified, the
-per-program statements cover every program of the grid.
+The headline `chunk_delta_fwd_exec_genuine` verifies the per-program
+`@triton.jit` body **end-to-end from `exec`**: it runs the whole surface
+(prologue + outer `NT` loop + epilogue) and reads the genuine closed form back
+out of the output buffers, with **no producer hypotheses**. The price is that it
+is pinned to the checked Python shape (all dimensions and strides are concrete
+literals) and to `s.pids 0 = 0` (the `i_k = 0` regime the host's `NK == 1`
+assertion creates). Per `bench/MAIN_THEOREM_CONVENTIONS.md` §6 that trade —
+genuine-but-scoped over general-but-assumed — is the intended one.
+
+The host launch (`chunk_delta_rule_fwd_kernel_h[(NK, NV, B*H)]`, the 3-D grid,
+the autotuned warp counts, the host-computed `BK/BV/BC/NT` and the `NK == 1`
+assertion) is the *trusted boundary*. Program ids 1 and 2 remain universally
+quantified, so the statement covers every program with `i_k = 0`.
 
 ## Proof architecture
 
 ```
-chunk_delta_fwd_output_summary_general                   ← TOP THEOREM (dimension-general headline)
-  ├─ chunk_delta_rule_fwd_h_surface_toAlgorithm_supported   full surface lowers
-  ├─ chunk_delta_fwd_h_store_slice_realizes_state           (state store h)
-  ├─ chunk_delta_fwd_v_new_store_slice_realizes_vNew        (corrected v_new)
-  └─ chunk_delta_fwd_final_state_store_slice_realizes_final  (final_state)
-       └─ chunk_delta_fwd_exec_genuine (per-store exec readback) + genuine recurrence closed form
+chunk_delta_fwd_exec_genuine                       ← TOP THEOREM (exec-level, shape-pinned)
+  ├─ cdfPrologue_run          seed / block-ptr prologue
+  ├─ cdfOuterLoop_run         the NT-chunk carry fold, derived — not assumed
+  │    ├─ cdfCarry_active     concrete carry cell = genuine `stateValue`
+  │    └─ cdfBvNew_eq_vNewValue   concrete corrected value = genuine `vNewValue`
+  └─ cdfEpilogue_run          the `STORE_FINAL_STATE` flush
 ```
 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune`
-(`num_warps`) is not modeled — proofs fix the two checked Python shapes
-(`B,H,T,K,V = 2,4,128,64,64`, `BT = 32`, derived `BK = BV = BC = 64`/`32`,
-`NT = 4`), case 1 without and case 2 with initial/final state. The dynamic
-`.to(...)` casts erase to the identity at the algorithm layer. Each masked block
-store is modeled exactly per face. The cross-chunk state-carry fold (the outer
-`NT` loop threading `b_h`, the inner `ceil(BT/BC)` loop accumulating
-`b_h_cumsum`) is summarized by a *producer hypothesis* `hBH`/`hBVN`/`hBHF`
-asserting that the within-kernel accumulation materialized the genuine closed
-form into the producer buffer — analogous to the `chunk_cumsum` carry invariant
-and the `chunk_gla_simple` producer hypothesis. The masked store faces then
-realize the genuine recurrence end-to-end. Output offset injectivity is a side
-condition (discharged for the test shapes). The full `exec`-driven derivation of
-the producer hypotheses from `k`/`v`/`d`/`initial_state` is the stall point
-recorded for the chunk-delta-forward sub-family.
+(`num_warps`) is not modeled. The headline fixes the checked Python shape
+(`B,H,T,K,V = 2,4,128,64,64`, `BT = BC = 32`, `BK = BV = 64`, `NT = 4`) and
+covers both flag settings symbolically, so the benchmark's case 1 (no
+initial/final state) and case 2 (with) are both instances. The dynamic `.to(...)`
+casts erase to the identity at the algorithm layer.
+
+Region distinctness is a **real** precondition here and is stated as twelve
+explicit `≠` hypotheses: the fold performs many stores interleaved with loads, so
+`v_new`, `h` and `final_state` must not alias each other or the inputs. Three
+output-offset injectivity hypotheses complete the side conditions.
+
+Deleted rather than kept: three `*_store_slice_realizes_*` faces and the
+dimension-general `chunk_delta_fwd_output_summary_general` headline built on them.
+Each of those slices was a masked memcpy whose load and store addresses were
+character-identical, so each face's entire content was its own producer
+hypothesis `hBH`/`hBVN`/`hBHF`. The old prose claimed those hypotheses were
+"discharged end-to-end from the kernel `exec` … by `chunk_delta_fwd_exec_genuine`";
+they were not, and could not be — `exec_genuine` concludes about `sF.readMem h`
+(final state, real region) while `hBH` constrains `s.readMem BH` (initial state,
+fiction region), and it is additionally shape-pinned and needs `pids 0 = 0`.
+There was no Lean term linking them.
+
+Still not covered: the multi-inner-chunk regime `BC < BT` (the benchmark has
+`BC = BT = 32`, hence `ceil(BT/BC) = 1`), and any shape other than the checked
+one.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
@@ -79,11 +98,9 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-! **★ Main theorem (dimension-general):** `chunk_delta_fwd_output_summary_general`
-— arbitrary symbolic `T BT BC BK BV NT` + strides; the full surface lowers and the
-three masked store faces realize the genuine delta-rule recurrence under honest
-symbolic-dim producer hypotheses + offset injectivity (producer hypotheses
-discharged end-to-end from `exec` via `chunk_delta_fwd_exec_genuine`). -/
+/-! **★ Main theorem:** `chunk_delta_fwd_exec_genuine` — exec-level and genuine
+end-to-end (no producer hypotheses), scoped to the checked Python shape and to
+`s.pids 0 = 0`. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -474,142 +491,10 @@ noncomputable def finalValue (s : BlockState)
   stateValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
     K V BT BV BK USE_INITIAL_STATE NT (kIndex s BK idx.1) idx.2.1.val
 
-/-! ## State (`h`) store face -/
-
-/-- Proof-oriented state-store slice of `chunk_delta_fwd.py`'s
-`chunk_delta_rule_fwd_kernel_h`. Models one `i_t` store from a precomputed `BH`
-tile into `HOut`, preserving the source K/V block offsets and boundary checks. -/
-def chunk_delta_fwd_h_store_slice
-    (BH HOut : RegionName)
-    (i_t s_h_h s_h_t K V BK BV : Nat) :
-    ComputeKernel := triton {
-  i_k = tl.program_id(0)
-  i_v = tl.program_id(1)
-  i_bh = tl.program_id(2)
-  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
-  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
-  mask = (offs_k[:, None] < $(K)) & (offs_v[None, :] < $(V))
-  b_h = tl.load(BH + i_bh * $(s_h_h) + $(i_t) * $(K) * $(V) +
-      offs_k[:, None] * $(s_h_t) + offs_v[None, :], mask=mask, other=0.0)
-  tl.store(HOut + i_bh * $(s_h_h) + $(i_t) * $(K) * $(V) +
-      offs_k[:, None] * $(s_h_t) + offs_v[None, :], b_h, mask=mask)
-}
-
 def hOffset (s : BlockState) (i_t s_h_h s_h_t K V BK BV : Nat)
     (idx : TileIndex [BK, BV]) : Nat :=
   s.pids 2 * s_h_h + i_t * K * V +
     kIndex s BK idx.1 * s_h_t + vIndex s BV idx.2.1
-
-noncomputable def storeValue (s : BlockState) (BH : RegionName)
-    (i_t s_h_h s_h_t K V BK BV : Nat) (idx : TileIndex [BK, BV]) : ℝ :=
-  WithBot.unbotD 0
-    (if active s K V BK BV idx then
-      some (s.readMem BH (hOffset s i_t s_h_h s_h_t K V BK BV idx))
-    else some (0.0 : ℝ))
-
-theorem chunk_delta_fwd_h_store_slice_correct
-    (BH HOut : RegionName) (i_t s_h_h s_h_t K V BK BV : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BK, BV] => hOffset s i_t s_h_h s_h_t K V BK BV idx)) :
-    ∀ idx : TileIndex [BK, BV],
-      let outAddr := hOffset s i_t s_h_h s_h_t K V BK BV idx
-      (exec (chunk_delta_fwd_h_store_slice BH HOut i_t s_h_h s_h_t K V BK BV)
-          s).map (·.readMem HOut outAddr)
-        = some (if active s K V BK BV idx then
-            storeValue s BH i_t s_h_h s_h_t K V BK BV idx
-          else s.readMem HOut outAddr) := by
-  intro idx
-  simp [exec, chunk_delta_fwd_h_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        kIndex, vIndex, active, hOffset, TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BK, BV] → Nat :=
-    fun idx => s.pids 2 * s_h_h + i_t * K * V +
-      (s.pids 0 * BK + idx.1.val) * s_h_t +
-      (s.pids 1 * BV + idx.2.1.val)
-  let valueFn : TileIndex [BK, BV] → ℝ :=
-    fun idx => WithBot.unbotD 0
-      (if s.pids 0 * BK + idx.1.val < K ∧
-          s.pids 1 * BV + idx.2.1.val < V then
-        some (s.readMem BH (offsetFn idx))
-      else some (0.0 : ℝ))
-  let P : TileIndex [BK, BV] → Prop :=
-    fun idx => s.pids 0 * BK + idx.1.val < K ∧
-      s.pids 1 * BV + idx.2.1.val < V
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, hOffset, kIndex, vIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i =>
-        if P i then acc.writeMem HOut (offsetFn i) (valueFn i) else acc)
-      _ (TileShape.allIndices [BK, BV])).readMem HOut (offsetFn idx) =
-    if P idx then storeValue s BH i_t s_h_h s_h_t K V BK BV idx
-    else s.readMem HOut (offsetFn idx)
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
-  by_cases hActive : s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V
-  · rfl
-  · rfl
-
-/-- **State store face realizes the genuine recurrence.** Under `hBH` (the
-producer materialized `hValue` into `BH`) and offset injectivity, the kernel's
-`h[i_t]` store realizes the genuine state recurrence `stateValue i_t` at every
-active lane. -/
-theorem chunk_delta_fwd_h_store_slice_realizes_state
-    (BH HOut k v d initial_state : RegionName)
-    (i_t s_h_h s_h_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-      K V BT BV BK : Nat) (USE_INITIAL_STATE : Bool)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BK, BV] => hOffset s i_t s_h_h s_h_t K V BK BV idx))
-    (hBH : ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
-        s.readMem BH (hOffset s i_t s_h_h s_h_t K V BK BV idx)
-          = hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-              K V BT BV BK USE_INITIAL_STATE i_t idx) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := chunk_delta_fwd_h_store_slice BH HOut i_t s_h_h s_h_t K V BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
-        (fun idx : TileIndex [BK, BV] => (HOut, hOffset s i_t s_h_h s_h_t K V BK BV idx)))
-      (expected := fun idx : TileIndex [BK, BV] =>
-        hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-          K V BT BV BK USE_INITIAL_STATE i_t idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [chunk_delta_fwd_h_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := chunk_delta_fwd_h_store_slice_correct BH HOut i_t s_h_h s_h_t K V BK BV
-    s hOutInj idx
-  rw [hExec] at h
-  have h2 := Option.some.inj h
-  rw [if_pos hActive] at h2
-  simp only at h2
-  show s'.readMem HOut (hOffset s i_t s_h_h s_h_t K V BK BV idx) = _
-  rw [h2, storeValue, if_pos hActive, WithBot.unbotD_some]
-  exact hBH idx hActive
-
-/-! ## Corrected-value (`v_new`) store face -/
-
-/-- Proof-oriented v_new-store slice. Writes a precomputed `BVN` tile into `VNew`
-at the per-iteration `(i_t, i_c)` chunk offsets. -/
-def chunk_delta_fwd_v_new_store_slice
-    (BVN VNew : RegionName)
-    (i_t i_c s_vo_h s_vo_t s_vo_d T V BT BC BV : Nat) :
-    ComputeKernel := triton {
-  i_k = tl.program_id(0)
-  i_v = tl.program_id(1)
-  i_bh = tl.program_id(2)
-  offs_c = tl.arange(0, $(BC))
-  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
-  c_pos = $(i_t) * $(BT) + $(i_c) * $(BC) + offs_c[:, None]
-  mask = (c_pos < $(T)) & (offs_v[None, :] < $(V))
-  b_v = tl.load(BVN + i_bh * $(s_vo_h) + c_pos * $(s_vo_t) +
-      offs_v[None, :] * $(s_vo_d), mask=mask, other=0.0)
-  tl.store(VNew + i_bh * $(s_vo_h) + c_pos * $(s_vo_t) +
-      offs_v[None, :] * $(s_vo_d), b_v, mask=mask)
-}
 
 def cIndex (BC : Nat) (i : Fin BC) : Nat :=
   i.val
@@ -624,67 +509,6 @@ instance vNewActiveDecidable (s : BlockState) (i_t i_c T V BT BC BV : Nat)
   unfold vNewActive
   infer_instance
 
-def vNewOffset (s : BlockState) (i_t i_c s_vo_h s_vo_t s_vo_d BT BC BV : Nat)
-    (idx : TileIndex [BC, BV]) : Nat :=
-  s.pids 2 * s_vo_h +
-    (i_t * BT + i_c * BC + cIndex BC idx.1) * s_vo_t +
-    vIndex s BV idx.2.1 * s_vo_d
-
-noncomputable def vNewStoreValue (s : BlockState) (BVN : RegionName)
-    (i_t i_c s_vo_h s_vo_t s_vo_d T V BT BC BV : Nat)
-    (idx : TileIndex [BC, BV]) : ℝ :=
-  WithBot.unbotD 0
-    (if vNewActive s i_t i_c T V BT BC BV idx then
-      some (s.readMem BVN (vNewOffset s i_t i_c s_vo_h s_vo_t s_vo_d BT BC BV idx))
-    else some (0.0 : ℝ))
-
-theorem chunk_delta_fwd_v_new_store_slice_correct
-    (BVN VNew : RegionName) (i_t i_c s_vo_h s_vo_t s_vo_d T V BT BC BV : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BC, BV] =>
-        vNewOffset s i_t i_c s_vo_h s_vo_t s_vo_d BT BC BV idx)) :
-    ∀ idx : TileIndex [BC, BV],
-      let outAddr := vNewOffset s i_t i_c s_vo_h s_vo_t s_vo_d BT BC BV idx
-      (exec (chunk_delta_fwd_v_new_store_slice BVN VNew i_t i_c
-            s_vo_h s_vo_t s_vo_d T V BT BC BV) s).map (·.readMem VNew outAddr)
-        = some (if vNewActive s i_t i_c T V BT BC BV idx then
-            vNewStoreValue s BVN i_t i_c s_vo_h s_vo_t s_vo_d T V BT BC BV idx
-          else s.readMem VNew outAddr) := by
-  intro idx
-  simp [exec, chunk_delta_fwd_v_new_store_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
-        Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        cIndex, vIndex, vNewActive, vNewOffset, TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BC, BV] → Nat :=
-    fun idx => s.pids 2 * s_vo_h +
-      (i_t * BT + i_c * BC + idx.1.val) * s_vo_t +
-      (s.pids 1 * BV + idx.2.1.val) * s_vo_d
-  let valueFn : TileIndex [BC, BV] → ℝ :=
-    fun idx => WithBot.unbotD 0
-      (if i_t * BT + i_c * BC + idx.1.val < T ∧
-          s.pids 1 * BV + idx.2.1.val < V then
-        some (s.readMem BVN (offsetFn idx))
-      else some (0.0 : ℝ))
-  let P : TileIndex [BC, BV] → Prop :=
-    fun idx => i_t * BT + i_c * BC + idx.1.val < T ∧
-      s.pids 1 * BV + idx.2.1.val < V
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, vNewOffset, cIndex, vIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i =>
-        if P i then acc.writeMem VNew (offsetFn i) (valueFn i) else acc)
-      _ (TileShape.allIndices [BC, BV])).readMem VNew (offsetFn idx) =
-    if P idx then vNewStoreValue s BVN i_t i_c s_vo_h s_vo_t s_vo_d T V BT BC BV idx
-    else s.readMem VNew (offsetFn idx)
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
-  by_cases hActive : i_t * BT + i_c * BC + idx.1.val < T ∧
-      s.pids 1 * BV + idx.2.1.val < V
-  · rfl
-  · rfl
-
-/-- The corrected value tile lane `(c,p)` for inner chunk `i_c = 0` (the
-single-inner-chunk regime `BC = BT`): the genuine `vNewValue`. -/
 noncomputable def vNewSpec (s : BlockState)
     (k v d initial_state : RegionName)
     (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK : Nat)
@@ -697,160 +521,10 @@ noncomputable def vNewSpec (s : BlockState)
 (the producer materialized `vNewValue` into `BVN`) and offset injectivity, the
 kernel's `v_new` store realizes `vNewValue` at every active lane (inner chunk
 `i_c = 0`, `BC = BT`). -/
-theorem chunk_delta_fwd_v_new_store_slice_realizes_vNew
-    (BVN VNew k v d initial_state : RegionName)
-    (i_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-      T K V BT BV BK : Nat) (USE_INITIAL_STATE : Bool)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BT, BV] =>
-        vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx))
-    (hBVN : ∀ idx : TileIndex [BT, BV], vNewActive s i_t 0 T V BT BT BV idx →
-        s.readMem BVN (vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)
-          = vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-              K V BT BV BK USE_INITIAL_STATE i_t idx) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := chunk_delta_fwd_v_new_store_slice BVN VNew i_t 0
-        s_vo_h s_vo_t s_vo_d T V BT BT BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BT, BV] => vNewActive s i_t 0 T V BT BT BV idx)
-        (fun idx : TileIndex [BT, BV] =>
-          (VNew, vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)))
-      (expected := fun idx : TileIndex [BT, BV] =>
-        vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-          K V BT BV BK USE_INITIAL_STATE i_t idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [chunk_delta_fwd_v_new_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := chunk_delta_fwd_v_new_store_slice_correct BVN VNew i_t 0
-    s_vo_h s_vo_t s_vo_d T V BT BT BV s hOutInj idx
-  rw [hExec] at h
-  have h2 := Option.some.inj h
-  rw [if_pos hActive] at h2
-  simp only at h2
-  show s'.readMem VNew (vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx) = _
-  rw [h2, vNewStoreValue, if_pos hActive, WithBot.unbotD_some]
-  exact hBVN idx hActive
-
-/-! ## Final-state store face -/
-
-/-- Proof-oriented final-state store slice. Writes a precomputed final-state
-`BHFinal` tile into `FinalState` after the loop completes
-(`STORE_FINAL_STATE = True`). -/
-def chunk_delta_fwd_final_state_store_slice
-    (BHFinal FinalState : RegionName) (K V BK BV : Nat) :
-    ComputeKernel := triton {
-  i_k = tl.program_id(0)
-  i_v = tl.program_id(1)
-  i_bh = tl.program_id(2)
-  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
-  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
-  mask = (offs_k[:, None] < $(K)) & (offs_v[None, :] < $(V))
-  b_h = tl.load(BHFinal + i_bh * $(K) * $(V) +
-      offs_k[:, None] * $(V) + offs_v[None, :], mask=mask, other=0.0)
-  tl.store(FinalState + i_bh * $(K) * $(V) +
-      offs_k[:, None] * $(V) + offs_v[None, :], b_h, mask=mask)
-}
-
 def finalStateOffset (s : BlockState) (K V BK BV : Nat)
     (idx : TileIndex [BK, BV]) : Nat :=
   s.pids 2 * K * V + kIndex s BK idx.1 * V + vIndex s BV idx.2.1
 
-noncomputable def finalStateStoreValue (s : BlockState) (BHFinal : RegionName)
-    (K V BK BV : Nat) (idx : TileIndex [BK, BV]) : ℝ :=
-  WithBot.unbotD 0
-    (if active s K V BK BV idx then
-      some (s.readMem BHFinal (finalStateOffset s K V BK BV idx))
-    else some (0.0 : ℝ))
-
-theorem chunk_delta_fwd_final_state_store_slice_correct
-    (BHFinal FinalState : RegionName) (K V BK BV : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx)) :
-    ∀ idx : TileIndex [BK, BV],
-      let outAddr := finalStateOffset s K V BK BV idx
-      (exec (chunk_delta_fwd_final_state_store_slice BHFinal FinalState K V BK BV)
-          s).map (·.readMem FinalState outAddr)
-        = some (if active s K V BK BV idx then
-            finalStateStoreValue s BHFinal K V BK BV idx
-          else s.readMem FinalState outAddr) := by
-  intro idx
-  simp [exec, chunk_delta_fwd_final_state_store_slice, stepStmts, stepStmt,
-        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
-        Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        kIndex, vIndex, active, finalStateOffset, TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BK, BV] → Nat :=
-    fun idx => s.pids 2 * K * V +
-      (s.pids 0 * BK + idx.1.val) * V +
-      (s.pids 1 * BV + idx.2.1.val)
-  let valueFn : TileIndex [BK, BV] → ℝ :=
-    fun idx => WithBot.unbotD 0
-      (if s.pids 0 * BK + idx.1.val < K ∧
-          s.pids 1 * BV + idx.2.1.val < V then
-        some (s.readMem BHFinal (offsetFn idx))
-      else some (0.0 : ℝ))
-  let P : TileIndex [BK, BV] → Prop :=
-    fun idx => s.pids 0 * BK + idx.1.val < K ∧
-      s.pids 1 * BV + idx.2.1.val < V
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, finalStateOffset, kIndex, vIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i =>
-        if P i then acc.writeMem FinalState (offsetFn i) (valueFn i) else acc)
-      _ (TileShape.allIndices [BK, BV])).readMem FinalState (offsetFn idx) =
-    if P idx then finalStateStoreValue s BHFinal K V BK BV idx
-    else s.readMem FinalState (offsetFn idx)
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
-  by_cases hActive : s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V
-  · rfl
-  · rfl
-
-/-- **Final-state store face realizes the genuine recurrence.** Under `hBHF`
-(the producer materialized `finalValue` into `BHFinal`) and offset injectivity,
-the kernel's `final_state` store realizes `H_{NT}` at every active lane. -/
-theorem chunk_delta_fwd_final_state_store_slice_realizes_final
-    (BHFinal FinalState k v d initial_state : RegionName)
-    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK NT : Nat)
-    (USE_INITIAL_STATE : Bool)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx))
-    (hBHF : ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
-        s.readMem BHFinal (finalStateOffset s K V BK BV idx)
-          = finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
-              s_vo_d K V BT BV BK USE_INITIAL_STATE NT idx) :
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := chunk_delta_fwd_final_state_store_slice BHFinal FinalState K V BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
-        (fun idx : TileIndex [BK, BV] => (FinalState, finalStateOffset s K V BK BV idx)))
-      (expected := fun idx : TileIndex [BK, BV] =>
-        finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-          K V BT BV BK USE_INITIAL_STATE NT idx) := by
-  rw [ComputeCorrect.realizes_writeIf_iff]
-  apply ComputeKernel.computeCorrect_of_toAlgKernel
-  · simp [chunk_delta_fwd_final_state_store_slice]
-  intro s0 s' hExec hs0
-  subst s0
-  intro idx hActive
-  have h := chunk_delta_fwd_final_state_store_slice_correct BHFinal FinalState K V BK BV
-    s hOutInj idx
-  rw [hExec] at h
-  have h2 := Option.some.inj h
-  rw [if_pos hActive] at h2
-  simp only at h2
-  show s'.readMem FinalState (finalStateOffset s K V BK BV idx) = _
-  rw [h2, finalStateStoreValue, if_pos hActive, WithBot.unbotD_some]
-  exact hBHF idx hActive
-
-/-- The loaded `b_k` tile `[64,32]` of chunk `i_t` (inner chunk `i_c=0`, `i_k=0`).
-Cell `(e,c)` reads `k` at `i_bh·8192 + e·1 + (i_t·32+c)·128 = kElem`. -/
 noncomputable def cdfBkTile (s : BlockState) (k : RegionName) (i_t : Nat) :
     Tile .real [64, 32] :=
   ⟨fun idx => if (idx.1.val < 64 ∧ i_t * 32 + idx.2.1.val < 128) then
@@ -2277,16 +1951,41 @@ theorem cdfBvNew_eq_vNewValue
       e'.isLt hp]
   rfl
 
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
-/-- **Full genuine exec.** Executing the entire `chunk_delta_rule_fwd_h_surface`
-(prologue + outer `forRange` + epilogue) at the checked Python shape writes the
-genuine delta-rule closed form into the output buffers: `h[j]` holds the
-chunk-start state `hValue j`, `v_new[j]` the corrected `vNewSpec j`, and (when
-`STORE_FINAL_STATE`) `final_state` the final state `finalValue 4`, all at every
-active lane. The full carry fold is derived from the kernel `exec`, with **no
-producer hypotheses**. -/
-theorem chunk_delta_fwd_exec_genuine
+/-- **SCOPE — genuine and end-to-end over the launched surface, but pinned to the
+checked Python shape and to `i_k = 0`.** Read the two scope conditions first:
+
+* every dimension and stride is a **concrete literal**
+  (`s_qk_h = 8192, T = 128, K = V = 64, BT = BC = 32, BK = BV = 64, NT = 4`, …),
+  matching the benchmark's `B,H,T,K,V = 2,4,128,64,64`, `BT = 32`;
+* `hpids0 : s.pids 0 = 0` pins the key-axis program id, which the host guarantees
+  via its `NK == 1` assertion but which is *not* proven here.
+
+Per `bench/MAIN_THEOREM_CONVENTIONS.md` §6 this is the blessed trade: genuine and
+scoped beats dimension-general and assumed. What it buys, and what the previous
+headline did not have: **no producer hypotheses at all.** Executing the entire
+`chunk_delta_rule_fwd_h_surface` (prologue + outer `forRange` over `NT = 4` +
+epilogue) writes the genuine delta-rule closed form into the output buffers —
+`h[j]` holds the chunk-start state `hValue j`, `v_new[j]` the corrected
+`vNewSpec j`, and, when `STORE_FINAL_STATE`, `final_state` holds `finalValue 4` —
+at every active lane, with the whole cross-chunk carry fold *derived from the
+kernel `exec`* rather than assumed. The closed forms `hValue` / `vNewSpec` /
+`finalValue` are over the input memory `k`/`v`/`d`/`initial_state`; none is an
+exec read-back.
+
+Honest hypotheses: the two scope pins above, twelve **region-distinctness**
+(`≠`) hypotheses — the outputs `v_new`, `h`, `final_state` must not alias each
+other or the inputs, which the store-order-sensitive multi-store fold genuinely
+needs — and three output-offset injectivity hypotheses. The `USE_INITIAL_STATE`
+and `STORE_FINAL_STATE` flags flow through symbolically.
+
+Not covered: the host launch (the 3-D grid, autotuned warp counts, host-computed
+`BK/BV/BC/NT`, and the `NK == 1` assertion), and the multi-inner-chunk regime
+`BC < BT` (here `BC = BT = 32`, so `ceil(BT/BC) = 1`). -/
+specification chunk_delta_fwd_exec_genuine
     (k v d v_new h initial_state final_state : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) (s : BlockState) (hpids0 : s.pids 0 = 0)
     (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
@@ -2363,111 +2062,7 @@ theorem chunk_delta_fwd_exec_genuine
       e.val p.val e.isLt (by obtain ⟨_, hv⟩ := hact; simpa [vIndex] using hv)]
     rfl
 
-/-! ### ════════ ★ MAIN THEOREM (dimension-general) ★ ════════ -/
-
-/-- **Public dimension-general output summary.** For **arbitrary** symbolic
-dimensions `T BT BC BK BV NT`, key/value strides
-`s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d`, state strides `s_h_h s_h_t`, and
-batch/head counts `_H K V`, the full chunk-delta forward surface
-
-* lowers to the algorithm layer (`(...).toAlgorithm? = Except.ok _`); and
-* under the genuine **producer hypotheses** `hBH`/`hBVN`/`hBHF` — asserting that
-  the within-kernel cross-chunk fold materialized the genuine closed forms
-  `hValue` (chunk-start state `H_{i_t}`), `vNewValue` (the corrected value
-  `v − d·H_{i_t}`) and `finalValue` (`H_{NT}`) into the producer buffers
-  `BH`/`BVN`/`BHFinal` — together with output-offset injectivity, each masked
-  store face **realizes the genuine delta-rule recurrence** at every active lane:
-  the `h[i_t]` store realizes `hValue i_t`, the `v_new[i_t]` store (single inner
-  chunk, `BC = BT`) realizes `vNewValue i_t`, and the `final_state` store realizes
-  `finalValue NT`.
-
-The genuine recurrence specs (`stateValue`, `vNewValue`, `hValue`, `finalValue`)
-are the closed forms over the **input** memory `k`/`v`/`d`/`initial_state`, never
-an exec-readback. The producer hypotheses are honest explicit hypotheses on the
-producer buffers (the same KIND of assumption as the `chunk_cumsum` carry
-invariant); they are *discharged end-to-end from the kernel `exec` with no
-producer hypotheses* by `chunk_delta_fwd_exec_genuine`. This headline statement
-carries **no concrete dimension literals**: it is the genuine
-dimension-generalization of the recurrence store faces. -/
-specification chunk_delta_fwd_output_summary_general
-    (k v d v_new h initial_state final_state BH BVN BHFinal : RegionName)
-    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
-      _H T K V BT BC BK BV NT : Nat)
-    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
-    (s : BlockState)
-    -- offset injectivity (per active store face) — honest side conditions
-    (hInjH : ∀ i_t : Nat, Function.Injective
-      (fun idx : TileIndex [BK, BV] => hOffset s i_t s_h_h s_h_t K V BK BV idx))
-    (hInjV : ∀ i_t : Nat, Function.Injective
-      (fun idx : TileIndex [BT, BV] => vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx))
-    (hInjF : Function.Injective
-      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx))
-    -- genuine producer hypotheses (symbolic dims) — the cross-chunk fold landed
-    -- the genuine closed forms into the producer buffers
-    (hBH : ∀ i_t : Nat, ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
-        s.readMem BH (hOffset s i_t s_h_h s_h_t K V BK BV idx)
-          = hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-              K V BT BV BK USE_INITIAL_STATE i_t idx)
-    (hBVN : ∀ i_t : Nat, ∀ idx : TileIndex [BT, BV], vNewActive s i_t 0 T V BT BT BV idx →
-        s.readMem BVN (vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)
-          = vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-              K V BT BV BK USE_INITIAL_STATE i_t idx)
-    (hBHF : ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
-        s.readMem BHFinal (finalStateOffset s K V BK BV idx)
-          = finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-              K V BT BV BK USE_INITIAL_STATE NT idx) :
-    -- (i) the full surface lowers
-    (∃ alg, (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
-        _H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm?
-          = Except.ok alg)
-    -- (ii) the state-store face realizes the genuine chunk-start state recurrence
-    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes_without_Rounding
-        (kernel := chunk_delta_fwd_h_store_slice BH h i_t s_h_h s_h_t K V BK BV)
-        (initialState := s)
-        (write := ComputeCorrect.WriteMap.writeIf
-          (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
-          (fun idx : TileIndex [BK, BV] => (h, hOffset s i_t s_h_h s_h_t K V BK BV idx)))
-        (expected := fun idx : TileIndex [BK, BV] =>
-          hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-            K V BT BV BK USE_INITIAL_STATE i_t idx))
-    -- (iii) the corrected-value store face realizes the genuine `vNewValue`
-    ∧ (∀ i_t : Nat, ComputeCorrect.Realizes_without_Rounding
-        (kernel := chunk_delta_fwd_v_new_store_slice BVN v_new i_t 0
-          s_vo_h s_vo_t s_vo_d T V BT BT BV)
-        (initialState := s)
-        (write := ComputeCorrect.WriteMap.writeIf
-          (fun idx : TileIndex [BT, BV] => vNewActive s i_t 0 T V BT BT BV idx)
-          (fun idx : TileIndex [BT, BV] =>
-            (v_new, vNewOffset s i_t 0 s_vo_h s_vo_t s_vo_d BT BT BV idx)))
-        (expected := fun idx : TileIndex [BT, BV] =>
-          vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-            K V BT BV BK USE_INITIAL_STATE i_t idx))
-    -- (iv) the final-state store face realizes `H_{NT}`
-    ∧ ComputeCorrect.Realizes_without_Rounding
-        (kernel := chunk_delta_fwd_final_state_store_slice BHFinal final_state K V BK BV)
-        (initialState := s)
-        (write := ComputeCorrect.WriteMap.writeIf
-          (fun idx : TileIndex [BK, BV] => active s K V BK BV idx)
-          (fun idx : TileIndex [BK, BV] => (final_state, finalStateOffset s K V BK BV idx)))
-        (expected := fun idx : TileIndex [BK, BV] =>
-          finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-            K V BT BV BK USE_INITIAL_STATE NT idx) := by
-  refine ⟨chunk_delta_rule_fwd_h_surface_toAlgorithm_supported k v d v_new h
-      initial_state final_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
-      _H T K V BT BC BK BV NT USE_INITIAL_STATE STORE_FINAL_STATE, ?_, ?_, ?_⟩
-  · intro i_t
-    exact chunk_delta_fwd_h_store_slice_realizes_state BH h k v d initial_state
-      i_t s_h_h s_h_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK
-      USE_INITIAL_STATE s (hInjH i_t) (hBH i_t)
-  · intro i_t
-    exact chunk_delta_fwd_v_new_store_slice_realizes_vNew BVN v_new k v d initial_state
-      i_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BV BK
-      USE_INITIAL_STATE s (hInjV i_t) (hBVN i_t)
-  · exact chunk_delta_fwd_final_state_store_slice_realizes_final BHFinal final_state
-      k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK NT
-      USE_INITIAL_STATE s hInjF hBHF
-
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
+
