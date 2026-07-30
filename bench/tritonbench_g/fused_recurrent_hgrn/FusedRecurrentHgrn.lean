@@ -11,16 +11,16 @@ companion backward kernel performs the reverse-time gradient scan.
 
 ## Scope
 
-This file verifies **three hand-cut single-step slices** of the two
-`@triton.jit` bodies: one forward loop body and the backward loop body's `dx`
-and `dg` writebacks. It does **not** verify the launched kernels: the forward
-surface `fused_recurrent_hgrn_fwd_surface` is only shown to lower to the
-algorithm layer, and the backward surface `fused_recurrent_hgrn_bwd_surface`
-appears in no correctness face at all. The host launch (grid shape,
-`@triton.autotune` config selection over `BD`, and how the runtime composes
-per-program writes into one buffer) is the *trusted boundary*. Because the
-program ids are universally quantified, each per-program statement covers every
-program of the grid.
+This file verifies **four hand-cut slices** of the two `@triton.jit` bodies: one
+forward loop body, the backward loop body's `dx` and `dg` writebacks, and a
+two-consecutive-iterations `dx` slice that executes the backward scan's carry
+fold. It does **not** verify the launched kernels: the forward surface
+`fused_recurrent_hgrn_fwd_surface` is only shown to lower to the algorithm
+layer, and the backward surface `fused_recurrent_hgrn_bwd_surface` appears in no
+correctness face at all. The host launch (grid shape, `@triton.autotune` config
+selection over `BD`, and how the runtime composes per-program writes into one
+buffer) is the *trusted boundary*. Because the program ids are universally
+quantified, each per-program statement covers every program of the grid.
 
 ## Proof architecture
 
@@ -29,7 +29,13 @@ fused_recurrent_hgrn_output_summary_general               ← TOP THEOREM
   ├─ fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported       (lowering only)
   ├─ fused_recurrent_hgrn_forward_step_closed_form                (hgrnStateClosed forward)
   ├─ fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
-  └─ fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
+  ├─ fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct (bwdPrevOut branch)
+  ├─ fused_recurrent_hgrn_bwd_dx_two_step_closed_form             (hgrnBwdDx scan)
+  │     └─ bwdDxTwoStepValue_eq_hgrnBwdDx
+  │           ├─ hgrnBwdDx_eq_carry_add_do   (b_dh = b_dh + b_do)
+  │           └─ hgrnBwdCarry_pred           (b_dh = b_dh * b_g  ← the scan)
+  └─ fused_recurrent_hgrn_bwd_dx_two_step_closed_form_init
+        └─ hgrnBwdCarry_init                 (the `tl.zeros` seed)
 ```
 
 ## Modeling boundary — read before trusting anything below
@@ -43,23 +49,30 @@ is needed. What is **outside** every claim in this file:
 * **The cross-step folds.** Neither the forward `range(0, T)` fold threading
   `b_h` nor the backward reverse-time fold threading `b_dh` is modeled. Each
   carry is presented to its slice as a materialized fiction region (`BHPrev`,
-  `DHPrev`) and constrained — where constrained at all — by an *assumed*
-  hypothesis. In particular the forward carry invariant
-  `BHPrev = hgrnStateClosed(i_t)` is **not** propagated by any clause: clause 2
-  writes `O` at the time-indexed `outOffset s i_t`, while the hypothesis is
-  about `BHPrev` at the time-free `bhOffset` — a different region at a different
-  offset. There is no bridging lemma and no base case.
+  `DHPrev`) and constrained by an *assumed* hypothesis. In particular the forward
+  carry invariant `BHPrev = hgrnStateClosed(i_t)` is **not** propagated by any
+  clause: clause 2 writes `O` at the time-indexed `outOffset s i_t`, while the
+  hypothesis is about `BHPrev` at the time-free `bhOffset` — a different region
+  at a different offset. There is no bridging lemma and no base case.
+  On the backward side the carry *value* is pinned down: `hgrnBwdCarry` is the
+  closed form of `b_dh`, `hgrnBwdCarry_pred` proves the `b_dh = b_dh * b_g` fold
+  and `hgrnBwdCarry_init` the `tl.zeros` seed, and the two-step slice executes
+  one fold. What is still assumed is only that the fiction region `DHPrev` holds
+  that value (and at the loop's first fold even that degenerates to "the seed row
+  reads `0`"). Chaining the fold across all `T` reverse steps is not modeled.
 * **The `STORE_FINAL_STATE` writeback.** No correctness face. The former
   `final_state_store_slice` face was a masked memcpy (load address
   `BHFinal + i_bh·D + offs_d`, store address `Ht + i_bh·D + offs_d` — identical
   under the same mask) whose only content was the assumption
   `BHFinal = hgrnStateClosed(T)`; it has been deleted rather than presented as a
   result about `ht`.
-* **The backward `b_o` re-indexing.** Python reads `b_o` from the *previous*
-  output row (`p_o` starts at row `T-2`, so at reverse step `i` it reads row
-  `i-1`) and from `h0` at `i = 0`. The `dg` slice reads the fiction region `BO`
-  at row `i_t`; that region is *defined* to present the previous row, and no
-  theorem connects it to `O` or `h0`. The `i = 0` / `h0` branch is unmodelled.
+* **The `dg` face's `O` row is the forward kernel's output only by the autograd
+  contract.** The `dg` slice now reads Python's actual `b_o` operands — region
+  `O` at the *previous* row `i_t − 1` and region `H0` at `i_bh·D + offs_d`, under
+  Python's three-way branch (`bwdPrevOut`). That `O` in fact holds the forward
+  pass's output rows is `ctx.save_for_backward(g, o, initial_state)`, i.e. the
+  host-side autograd plumbing, which is outside this file; no theorem here
+  connects the two kernels.
 * **Region distinctness.** No `≠` hypotheses are stated, and none are needed:
   each slice performs all of its loads before its single store, and every
   `expected` is a function of the *initial* state, so aliasing cannot falsify
@@ -422,6 +435,97 @@ theorem fused_recurrent_hgrn_out_offset_injective_general
   simp [outOffset, dIndex] at h
   omega
 
+/-! ## Genuine closed-form backward scan (over the *input* regions)
+
+The backward loop body (`fused_recurrent_hgrn_bwd_kernel`, py:105–126) is a
+*reverse-time* scan: `b_dh` is seeded to `0` before the `range(T-1, -1, -1)`
+loop and then, at reverse step `i`,
+
+```
+b_dh  ← b_dh + do_i      (py:115)      b_dx_i = b_dh            (py:116)
+b_dg_i = b_dh · b_o(i)   (py:117)      b_dh  ← b_dh · g_i       (py:118)
+```
+
+The last line — the multiplication by the gate row — is what makes the backward
+pass a scan. Unrolling the carry from the seed, the value of `b_dh` *entering*
+reverse step `i` (before `b_dh += b_do`) is
+
+```
+carry(i)[d] = Σ_{i < t < T} do_t[d] · ∏_{i < j ≤ t} g_j[d]
+```
+
+(`hgrnBwdCarry`), so the row the kernel stores into `dx` is
+
+```
+dx_i[d] = carry(i)[d] + do_i[d] = Σ_{i ≤ t < T} do_t[d] · ∏_{i < j ≤ t} g_j[d]
+```
+
+(`hgrnBwdDx`) — a standalone specification over the *input* regions `do` and
+`g`, never a read-back of the kernel's own output. `hgrnBwdCarry_pred` is the
+exact closed-form counterpart of py:118, `hgrnBwdCarry_init` of the `tl.zeros`
+seed. -/
+
+/-- `do_t[d]` at the kernel's exact time-row layout. -/
+noncomputable def doVal (s : BlockState) (DO : RegionName) (T D BD : Nat)
+    (t : Nat) (i : Fin BD) : ℝ :=
+  s.readMem DO (outOffset s t T D BD i)
+
+/-- **Genuine closed form of the backward carry entering reverse step `i_t`**:
+`Σ_{i_t < t < T} do_t · ∏_{i_t < j ≤ t} g_j`. A specification over the input
+regions `do`, `g` only. -/
+noncomputable def hgrnBwdCarry (s : BlockState) (DO G : RegionName)
+    (T D BD : Nat) (i_t : Nat) (i : Fin BD) : ℝ :=
+  ∑ t ∈ Finset.Ico (i_t + 1) T,
+    doVal s DO T D BD t i *
+      (∏ j ∈ Finset.Ico (i_t + 1) (t + 1), gVal s G T D BD j i)
+
+/-- **Genuine closed form of the `dx` row stored at reverse step `i_t`**:
+`Σ_{i_t ≤ t < T} do_t · ∏_{i_t < j ≤ t} g_j` — the carry plus this step's
+`do`. -/
+noncomputable def hgrnBwdDx (s : BlockState) (DO G : RegionName)
+    (T D BD : Nat) (i_t : Nat) (i : Fin BD) : ℝ :=
+  ∑ t ∈ Finset.Ico i_t T,
+    doVal s DO T D BD t i *
+      (∏ j ∈ Finset.Ico (i_t + 1) (t + 1), gVal s G T D BD j i)
+
+/-- `b_dh = b_dh + b_do` (py:115) at the closed-form level: the stored `dx` row
+is the incoming carry plus this step's `do` row. -/
+theorem hgrnBwdDx_eq_carry_add_do
+    (s : BlockState) (DO G : RegionName) (T D BD i_t : Nat) (i : Fin BD)
+    (hlt : i_t < T) :
+    hgrnBwdDx s DO G T D BD i_t i
+      = hgrnBwdCarry s DO G T D BD i_t i + doVal s DO T D BD i_t i := by
+  unfold hgrnBwdDx hgrnBwdCarry
+  rw [Finset.sum_eq_sum_Ico_succ_bot hlt,
+      show Finset.Ico (i_t + 1) (i_t + 1) = (∅ : Finset Nat) from by simp,
+      Finset.prod_empty, mul_one, add_comm]
+
+/-- **★ The backward scan step (py:118, `b_dh = b_dh * b_g`) at the closed-form
+level.** The carry entering reverse step `i_t` is the *next* step's stored `dx`
+row multiplied by that step's gate row — the multiplication that makes the
+backward pass a scan. -/
+theorem hgrnBwdCarry_pred
+    (s : BlockState) (DO G : RegionName) (T D BD i_t : Nat) (i : Fin BD) :
+    hgrnBwdCarry s DO G T D BD i_t i
+      = hgrnBwdDx s DO G T D BD (i_t + 1) i * gVal s G T D BD (i_t + 1) i := by
+  unfold hgrnBwdCarry hgrnBwdDx
+  rw [Finset.sum_mul]
+  apply Finset.sum_congr rfl
+  intro t ht
+  simp only [Finset.mem_Ico] at ht
+  rw [Finset.prod_eq_prod_Ico_succ_bot (by omega : i_t + 1 < t + 1)]
+  ring
+
+/-- The `b_dh = tl.zeros([BD])` seed (py:104) at the closed-form level: the
+carry entering the loop's *first* reverse step `i = T − 1` is `0`. -/
+theorem hgrnBwdCarry_init
+    (s : BlockState) (DO G : RegionName) (T D BD : Nat) (i : Fin BD)
+    (hT : 0 < T) :
+    hgrnBwdCarry s DO G T D BD (T - 1) i = 0 := by
+  unfold hgrnBwdCarry
+  rw [show T - 1 + 1 = T from by omega, Finset.Ico_self]
+  simp
+
 /-- Backward one-step `dx` formula:
 `b_dh = b_dh_prev + b_do`, `b_dx = b_dh`, then masked store to `DX`. -/
 def fused_recurrent_hgrn_bwd_dx_step_store_slice
@@ -498,10 +602,190 @@ theorem fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
-/-- Backward one-step `dg` formula:
-`b_dh = b_dh_prev + b_do`, `b_dg = b_dh * b_o`, then masked store to `DG`. -/
+/-! ## The backward scan step as an executed slice
+
+The single-step `dx` slice above takes the incoming carry from the fiction
+region `DHPrev` and never touches the gate region, so `b_dh = b_dh * b_g`
+(py:118) is invisible to it. The **two-step** slice below closes that hole: it
+transcribes reverse iteration `i_t + 1`'s carry fold
+(`b_dh = b_dh + b_do`, then `b_dh = b_dh * b_g`, both at row `i_t + 1`) followed
+by iteration `i_t`'s `b_dh = b_dh + b_do` and `dx` store, so the scan
+multiplication is *executed* and the gate region `G` enters the compute face.
+Iteration `i_t + 1`'s own `dx`/`dg` stores are omitted from the slice: they
+write `DX`/`DG`, which the loop never reads back, so their omission cannot
+change the `dx` row this face is about. -/
+
+def fused_recurrent_hgrn_bwd_dx_two_step_store_slice
+    (DHPrev DO G DX : RegionName) (i_t T D BD : Nat) :
+    ComputeKernel := triton {
+  i_d = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  offs_d = i_d * $(BD) + tl.arange(0, $(BD))
+  mask = offs_d < $(D)
+  dh_prev = tl.load(DHPrev + (i_bh * $(T) + $(i_t + 1)) * $(D) + offs_d,
+    mask=mask, other=0.0)
+  b_do_next = tl.load(DO + (i_bh * $(T) + $(i_t + 1)) * $(D) + offs_d,
+    mask=mask, other=0.0).to(tl.float32)
+  b_g_next = tl.load(G + (i_bh * $(T) + $(i_t + 1)) * $(D) + offs_d,
+    mask=mask, other=0.0).to(tl.float32)
+  b_dh = dh_prev + b_do_next
+  b_dh = b_dh * b_g_next
+  b_do = tl.load(DO + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
+    mask=mask, other=0.0).to(tl.float32)
+  b_dh = b_dh + b_do
+  tl.store(DX + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
+    (b_dh).to(DX.dtype.element_ty), mask=mask)
+}
+
+/-- The arithmetic spec of the two-step `dx` body:
+`(carry_{i_t+1} + do_{i_t+1}) · g_{i_t+1} + do_{i_t}`. -/
+noncomputable def bwdDxTwoStepValue
+    (s : BlockState) (DHPrev DO G : RegionName) (i_t T D BD : Nat)
+    (i : Fin BD) : ℝ :=
+  (s.readMem DHPrev (outOffset s (i_t + 1) T D BD i) +
+        doVal s DO T D BD (i_t + 1) i) *
+      gVal s G T D BD (i_t + 1) i
+    + doVal s DO T D BD i_t i
+
+theorem fused_recurrent_hgrn_bwd_dx_two_step_store_slice_correct
+    (DHPrev DO G DX : RegionName) (i_t T D BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
+    ∀ i : Fin BD,
+      let outAddr := outOffset s i_t T D BD i
+      (exec (fused_recurrent_hgrn_bwd_dx_two_step_store_slice DHPrev DO G DX
+          i_t T D BD) s).map (·.readMem DX outAddr)
+        = some (if active s D BD i then
+            bwdDxTwoStepValue s DHPrev DO G i_t T D BD i
+          else s.readMem DX outAddr) := by
+  intro i
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BD] =>
+        (s.pids 1 * T + i_t) * D + (s.pids 0 * BD + idx.1.val)) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    have habFin : outOffset s i_t T D BD a = outOffset s i_t T D BD b := by
+      simpa [outOffset, dIndex] using hab
+    obtain rfl : a = b := hOutInj habFin
+    rfl
+  simp [exec, fused_recurrent_hgrn_bwd_dx_two_step_store_slice, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
+        outOffset, dIndex, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
+  by_cases hi : s.pids 0 * BD + i.val < D
+  · simp [active, bwdDxTwoStepValue, doVal, gVal, outOffset, dIndex, hi,
+      NumericDType.add, NumericDType.mul]
+  · simp [active, outOffset, dIndex, hi]
+
+theorem fused_recurrent_hgrn_bwd_dx_two_step_store_slice_compute_correct
+    (DHPrev DO G DX : RegionName) (i_t T D BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := fused_recurrent_hgrn_bwd_dx_two_step_store_slice DHPrev DO G DX
+        i_t T D BD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s D BD)
+        (fun i => (DX, outOffset s i_t T D BD i)))
+      (expected := fun i => bwdDxTwoStepValue s DHPrev DO G i_t T D BD i) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [fused_recurrent_hgrn_bwd_dx_two_step_store_slice,
+      ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro i hActive
+  have h := fused_recurrent_hgrn_bwd_dx_two_step_store_slice_correct DHPrev DO G
+    DX i_t T D BD s hOutInj i
+  rw [hExec] at h
+  simpa [hActive] using Option.some.inj h
+
+/-- **Backward carry-fold step (genuine).** If the fiction carry region holds the
+genuine carry entering reverse step `i_t + 1`, then executing that step's scan
+fold (`+ do`, then `· g`) and step `i_t`'s `+ do` stores exactly the genuine
+closed form `hgrnBwdDx(i_t)` — `Σ_{i_t ≤ t < T} do_t · ∏_{i_t < j ≤ t} g_j`,
+over the input regions `do`, `g` only. -/
+theorem bwdDxTwoStepValue_eq_hgrnBwdDx
+    (s : BlockState) (DHPrev DO G : RegionName) (i_t T D BD : Nat)
+    (hlt : i_t + 1 < T)
+    (hCarry : ∀ i : Fin BD,
+      s.readMem DHPrev (outOffset s (i_t + 1) T D BD i)
+        = hgrnBwdCarry s DO G T D BD (i_t + 1) i)
+    (i : Fin BD) :
+    bwdDxTwoStepValue s DHPrev DO G i_t T D BD i
+      = hgrnBwdDx s DO G T D BD i_t i := by
+  unfold bwdDxTwoStepValue
+  rw [hCarry i, ← hgrnBwdDx_eq_carry_add_do s DO G T D BD (i_t + 1) i hlt,
+      ← hgrnBwdCarry_pred s DO G T D BD i_t i,
+      hgrnBwdDx_eq_carry_add_do s DO G T D BD i_t i (by omega)]
+
+/-- **Genuine backward `dx` step.** The two-step body, with the fiction carry
+region holding `hgrnBwdCarry(i_t + 1)`, realizes the genuine closed form
+`hgrnBwdDx(i_t)` over the input regions `do`, `g` into the `dx` row. -/
+theorem fused_recurrent_hgrn_bwd_dx_two_step_closed_form
+    (DHPrev DO G DX : RegionName) (i_t T D BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i))
+    (hlt : i_t + 1 < T)
+    (hCarry : ∀ i : Fin BD,
+      s.readMem DHPrev (outOffset s (i_t + 1) T D BD i)
+        = hgrnBwdCarry s DO G T D BD (i_t + 1) i) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := fused_recurrent_hgrn_bwd_dx_two_step_store_slice DHPrev DO G DX
+        i_t T D BD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s D BD)
+        (fun i => (DX, outOffset s i_t T D BD i)))
+      (expected := fun i => hgrnBwdDx s DO G T D BD i_t i) := by
+  have h := fused_recurrent_hgrn_bwd_dx_two_step_store_slice_compute_correct
+    DHPrev DO G DX i_t T D BD s hOutInj
+  have hcong : (fun i => bwdDxTwoStepValue s DHPrev DO G i_t T D BD i)
+      = (fun i => hgrnBwdDx s DO G T D BD i_t i) := by
+    funext i
+    exact bwdDxTwoStepValue_eq_hgrnBwdDx s DHPrev DO G i_t T D BD hlt hCarry i
+  rwa [hcong] at h
+
+/-- **The loop's first fold, with the carry hypothesis discharged to the
+`tl.zeros` seed.** At `i_t = T − 2` the incoming carry is the one entering the
+*first* reverse step `T − 1`, which py:104 sets to `0`; assuming only that (not a
+`hgrnBwdCarry` value), the two-step body realizes `hgrnBwdDx(T − 2) =
+do_{T-2} + do_{T-1}·g_{T-1}` — closed over `do` and `g` with no carry fiction
+left. -/
+theorem fused_recurrent_hgrn_bwd_dx_two_step_closed_form_init
+    (DHPrev DO G DX : RegionName) (T D BD : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BD => outOffset s (T - 2) T D BD i))
+    (hT : 2 ≤ T)
+    (hSeed : ∀ i : Fin BD,
+      s.readMem DHPrev (outOffset s (T - 1) T D BD i) = 0) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := fused_recurrent_hgrn_bwd_dx_two_step_store_slice DHPrev DO G DX
+        (T - 2) T D BD)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s D BD)
+        (fun i => (DX, outOffset s (T - 2) T D BD i)))
+      (expected := fun i => hgrnBwdDx s DO G T D BD (T - 2) i) := by
+  refine fused_recurrent_hgrn_bwd_dx_two_step_closed_form DHPrev DO G DX
+    (T - 2) T D BD s hOutInj (by omega) ?_
+  intro i
+  rw [show T - 2 + 1 = T - 1 from by omega, hSeed i,
+      hgrnBwdCarry_init s DO G T D BD i (by omega)]
+
+/-- Backward one-step `dg` formula: `b_dh = b_dh_prev + b_do`,
+`b_dg = b_dh * b_o`, then masked store to `DG`.
+
+`b_o` is Python's three-way branch (py:99, py:108–113): the pointer `p_o` starts
+at row `T − 2` and is decremented once per iteration, so at reverse step `i_t` it
+addresses the **previous** output row `i_t − 1`; at `i_t = 0` the branch reads
+`h0` instead when `USE_INITIAL_STATE`, else uses `tl.zeros`. The branch is
+transcribed verbatim as a DSL `if`; because the slice fixes the reverse step
+index `i_t`, its condition `i_t > 0` is decided by that index (each concrete
+iteration takes exactly one arm), and the row `i_t - 1` is the ℕ-truncated
+Python row, reached only under `0 < i_t`. -/
 def fused_recurrent_hgrn_bwd_dg_step_store_slice
-    (DHPrev DO BO DG : RegionName) (i_t T D BD : Nat) :
+    (DHPrev DO O H0 DG : RegionName) (USE_INITIAL_STATE : Bool)
+    (i_t T D BD : Nat) :
     ComputeKernel := triton {
   i_d = tl.program_id(0)
   i_bh = tl.program_id(1)
@@ -511,30 +795,48 @@ def fused_recurrent_hgrn_bwd_dg_step_store_slice
     mask=mask, other=0.0)
   b_do = tl.load(DO + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
     mask=mask, other=0.0).to(tl.float32)
-  b_o = tl.load(BO + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
-    mask=mask, other=0.0).to(tl.float32)
+  if $(i_t) > $(0) {
+    b_o = tl.load(O + (i_bh * $(T) + $(i_t - 1)) * $(D) + offs_d,
+      mask=mask, other=0.0).to(tl.float32)
+  } else {
+    if USE_INITIAL_STATE {
+      b_o = tl.load(H0 + i_bh * $(D) + offs_d, mask=mask, other=0.0).to(tl.float32)
+    } else {
+      b_o = tl.zeros([$(BD)], dtype=tl.float32)
+    }
+  }
   b_dh = dh_prev + b_do
   b_dg = b_dh * b_o
   tl.store(DG + (i_bh * $(T) + $(i_t)) * $(D) + offs_d,
     (b_dg).to(DG.dtype.element_ty), mask=mask)
 }
 
+/-- `b_o` at reverse step `i_t` — Python's three-way branch (py:108–113): the
+**previous** output row `i_t − 1` when `i_t > 0`, else `h0` when
+`USE_INITIAL_STATE`, else `0`. -/
+noncomputable def bwdPrevOut (s : BlockState) (O H0 : RegionName)
+    (USE_INITIAL_STATE : Bool) (i_t T D BD : Nat) (i : Fin BD) : ℝ :=
+  if 0 < i_t then s.readMem O (outOffset s (i_t - 1) T D BD i)
+  else if USE_INITIAL_STATE then s.readMem H0 (bhOffset s D BD i) else 0
+
 noncomputable def bwdDgStepValue
-    (s : BlockState) (DHPrev DO BO : RegionName) (i_t T D BD : Nat)
-    (i : Fin BD) : ℝ :=
+    (s : BlockState) (DHPrev DO O H0 : RegionName) (USE_INITIAL_STATE : Bool)
+    (i_t T D BD : Nat) (i : Fin BD) : ℝ :=
   (s.readMem DHPrev (outOffset s i_t T D BD i) +
       s.readMem DO (outOffset s i_t T D BD i)) *
-    s.readMem BO (outOffset s i_t T D BD i)
+    bwdPrevOut s O H0 USE_INITIAL_STATE i_t T D BD i
 
+set_option maxHeartbeats 1000000 in
 theorem fused_recurrent_hgrn_bwd_dg_step_store_slice_correct
-    (DHPrev DO BO DG : RegionName) (i_t T D BD : Nat) (s : BlockState)
+    (DHPrev DO O H0 DG : RegionName) (USE_INITIAL_STATE : Bool)
+    (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
     ∀ i : Fin BD,
       let outAddr := outOffset s i_t T D BD i
-      (exec (fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
-          i_t T D BD) s).map (·.readMem DG outAddr)
+      (exec (fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO O H0 DG
+          USE_INITIAL_STATE i_t T D BD) s).map (·.readMem DG outAddr)
         = some (if active s D BD i then
-            bwdDgStepValue s DHPrev DO BO i_t T D BD i
+            bwdDgStepValue s DHPrev DO O H0 USE_INITIAL_STATE i_t T D BD i
           else s.readMem DG outAddr) := by
   intro i
   have hRawInj : Function.Injective
@@ -545,28 +847,64 @@ theorem fused_recurrent_hgrn_bwd_dg_step_store_slice_correct
       simpa [outOffset, dIndex] using hab
     obtain rfl : a = b := hOutInj habFin
     rfl
-  simp [exec, fused_recurrent_hgrn_bwd_dg_step_store_slice, stepStmts,
+  by_cases hpos : 0 < i_t
+  -- arm 1 (py:109): `b_o` is the previous output row `i_t − 1`
+  · simp [exec, fused_recurrent_hgrn_bwd_dg_step_store_slice, stepStmts,
+      stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+      NumericDType.add, NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+      FloatDType.ofWithBot, FloatDType.toWithBot, outOffset, bhOffset, dIndex,
+      hpos, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
+    by_cases hi : s.pids 0 * BD + i.val < D
+    · simp [active, bwdDgStepValue, bwdPrevOut, outOffset, bhOffset, dIndex, hi,
+        hpos, NumericDType.add, NumericDType.mul]
+    · simp [active, outOffset, dIndex, hi]
+  · obtain rfl : i_t = 0 := by omega
+    have hRawInj0 : Function.Injective
+        (fun idx : TileIndex [BD] =>
+          s.pids 1 * T * D + (s.pids 0 * BD + idx.1.val)) := by
+      rintro ⟨a, _⟩ ⟨b, _⟩ hab
+      have habFin : outOffset s 0 T D BD a = outOffset s 0 T D BD b := by
+        simpa [outOffset, dIndex] using hab
+      obtain rfl : a = b := hOutInj habFin
+      rfl
+    cases USE_INITIAL_STATE
+    -- arm 3 (py:113): `b_o = tl.zeros`
+    · simp [exec, fused_recurrent_hgrn_bwd_dg_step_store_slice, stepStmts,
         stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
-        NumericDType.add, NumericDType.mul, ComparableDType.lt,
-        FloatDType.cast, FloatDType.ofWithBot, FloatDType.toWithBot,
-        outOffset, dIndex, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
-  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj (i, PUnit.unit)]
-  by_cases hi : s.pids 0 * BD + i.val < D
-  · simp [active, bwdDgStepValue, outOffset, dIndex, hi, NumericDType.add,
-      NumericDType.mul]
-  · simp [active, outOffset, dIndex, hi]
+        NumericDType.add, NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot, outOffset, bhOffset, dIndex,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj0 (i, PUnit.unit)]
+      by_cases hi : s.pids 0 * BD + i.val < D
+      · simp [active, bwdDgStepValue, bwdPrevOut, outOffset, bhOffset, dIndex, hi,
+          NumericDType.add, NumericDType.mul]
+      · simp [active, outOffset, dIndex, hi]
+    -- arm 2 (py:111): `b_o` is the `h0` row
+    · simp [exec, fused_recurrent_hgrn_bwd_dg_step_store_slice, stepStmts,
+        stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+        FloatDType.ofWithBot, FloatDType.toWithBot, outOffset, bhOffset, dIndex,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+      rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj0 (i, PUnit.unit)]
+      by_cases hi : s.pids 0 * BD + i.val < D
+      · simp [active, bwdDgStepValue, bwdPrevOut, outOffset, bhOffset, dIndex, hi,
+          NumericDType.add, NumericDType.mul]
+      · simp [active, outOffset, dIndex, hi]
 
 theorem fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
-    (DHPrev DO BO DG : RegionName) (i_t T D BD : Nat) (s : BlockState)
+    (DHPrev DO O H0 DG : RegionName) (USE_INITIAL_STATE : Bool)
+    (i_t T D BD : Nat) (s : BlockState)
     (hOutInj : Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i)) :
     ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
-        i_t T D BD)
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO O H0 DG
+        USE_INITIAL_STATE i_t T D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (active s D BD)
         (fun i => (DG, outOffset s i_t T D BD i)))
-      (expected := fun i => bwdDgStepValue s DHPrev DO BO i_t T D BD i) := by
+      (expected := fun i =>
+        bwdDgStepValue s DHPrev DO O H0 USE_INITIAL_STATE i_t T D BD i) := by
   rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [fused_recurrent_hgrn_bwd_dg_step_store_slice,
@@ -574,18 +912,19 @@ theorem fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
   intro s0 s' hExec hs0
   subst s0
   intro i hActive
-  have h := fused_recurrent_hgrn_bwd_dg_step_store_slice_correct DHPrev DO BO
-    DG i_t T D BD s hOutInj i
+  have h := fused_recurrent_hgrn_bwd_dg_step_store_slice_correct DHPrev DO O H0
+    DG USE_INITIAL_STATE i_t T D BD s hOutInj i
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════
 
-**SCOPE — this is a claim about three hand-cut single-step slices, not about the
-launched kernels.** Clauses 2–4 are `Realizes` facts about
+**SCOPE — this is a claim about four hand-cut slices, not about the launched
+kernels.** Clauses 2–6 are `Realizes` facts about
 `fused_recurrent_hgrn_forward_step_store_slice`,
-`fused_recurrent_hgrn_bwd_dx_step_store_slice` and
-`fused_recurrent_hgrn_bwd_dg_step_store_slice`; the launched forward surface
+`fused_recurrent_hgrn_bwd_dx_step_store_slice`,
+`fused_recurrent_hgrn_bwd_dg_step_store_slice` and
+`fused_recurrent_hgrn_bwd_dx_two_step_store_slice`; the launched forward surface
 appears only in clause 1, which says nothing more than "it lowers to the
 algorithm layer", and the launched backward surface does not appear at all. The
 `STORE_FINAL_STATE` writeback has **no** correctness face here (see the module
@@ -593,29 +932,47 @@ docstring).
 
 Parameterized over the symbolic time/feature/tile sizes `T D BD`, the step index
 `i_t`, and both flags `USE_INITIAL_STATE STORE_FINAL_STATE`. The forward face is
-realized against the closed form `hgrnStateClosed` over the *input* regions
-`x, g, h0` (never a read-back of the kernel's own output):
+realized against the closed form `hgrnStateClosed`, the backward `dx` scan face
+against `hgrnBwdDx`, both over the *input* regions (never a read-back of the
+kernel's own output):
 
 1. the full HGRN forward surface lowers to the algorithm layer;
 2. one forward **output** body realizes `hgrnStateClosed(i_t + 1)` — the unrolled
    recurrence `b_h = g·b_h + x` — given the *assumed* carry invariant
    `BHPrev = hgrnStateClosed(i_t)`;
 3. one backward `dx` body realizes the genuine `bwdDxStepValue` (`dh_prev + do`);
-4. one backward `dg` body realizes the genuine `bwdDgStepValue` (`(dh_prev+do)·o`).
+4. one backward `dg` body realizes the genuine `bwdDgStepValue`
+   `(dh_prev + do) · b_o`, with `b_o` Python's **three-way previous-row branch**
+   (`bwdPrevOut`: output row `i_t − 1`, or `h0` at `i_t = 0` under
+   `USE_INITIAL_STATE`, else `0`) transcribed as a DSL `if`;
+5. **the backward scan step, executed.** Two consecutive reverse iterations —
+   iteration `i_t + 1`'s `b_dh = (b_dh + b_do) · b_g` (py:115+118) then iteration
+   `i_t`'s `b_dh + b_do` and `dx` store — realize the genuine closed form
+   `hgrnBwdDx(i_t) = Σ_{i_t ≤ t < T} do_t · ∏_{i_t < j ≤ t} g_j` over the input
+   regions `do`, `g`, given the *assumed* carry entering step `i_t + 1`
+   (antecedents local to the clause: `i_t + 1 < T` and that carry);
+6. the same two-step body at `i_t = T − 2`, where the assumed carry is only the
+   `tl.zeros` **seed** (`DHPrev` row `T − 1` reads `0`, py:104) — so the `dx` row
+   `do_{T-2} + do_{T-1}·g_{T-1}` is closed over `do`, `g` with no carry-value
+   fiction left (antecedents local to the clause: `2 ≤ T` and the zero seed).
 
 Honest structural side condition: `0 < BD` (contiguous lanes, giving offset
-injectivity for every face). The flags flow through verbatim; clauses 2–4 hold
+injectivity for every face). The flags flow through verbatim; clauses 2–6 hold
 for every flag setting.
 
-**The carry invariant `hPrev` is an assumption, not a conclusion.** Nothing in
-this file propagates it: clause 2 writes `O` at the time-indexed
+**The carry invariants are assumptions, not conclusions.** Nothing in this file
+propagates the forward one: clause 2 writes `O` at the time-indexed
 `outOffset s i_t`, whereas `hPrev` constrains `BHPrev` at the time-free
-`bhOffset` — a different region at a different offset, with no bridging lemma.
-Likewise nothing proves the base case `hgrnStateClosed(0) = seed`. The same holds
-for the backward `b_dh` carry, which is presented as the fiction region `DHPrev`
-and never chained. -/
+`bhOffset` — a different region at a different offset, with no bridging lemma;
+likewise nothing proves the base case `hgrnStateClosed(0) = seed`. On the
+backward side the carry *values* are now pinned to the closed form
+`hgrnBwdCarry` and the fold `hgrnBwdCarry_pred`/`hgrnBwdCarry_init` is proved,
+but the region `DHPrev` still only *holds* that value by hypothesis (clause 5) —
+except at the loop's first fold, where the hypothesis degenerates to the literal
+`tl.zeros` seed (clause 6). Chaining clause 5 across all `T` steps is the
+unmodelled reverse fold. -/
 specification fused_recurrent_hgrn_output_summary_general
-    (X G O H0 Ht DX DG DO BHPrev DHPrev BO : RegionName)
+    (X G O H0 Ht DX DG DO BHPrev DHPrev : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
     (i_t T D BD : Nat) (s : BlockState) (hBD : 0 < BD)
     (hPrev : ∀ i : Fin BD,
@@ -643,24 +1000,60 @@ specification fused_recurrent_hgrn_output_summary_general
         (active s D BD)
         (fun i => (DX, outOffset s i_t T D BD i)))
       (expected := fun i => bwdDxStepValue s DHPrev DO i_t T D BD i)) ∧
-    -- (4) the backward `dg` body realizes the genuine `(dh_prev+do)·o`
+    -- (4) the backward `dg` body realizes the genuine `(dh_prev+do)·b_o`, with
+    --     Python's three-way previous-row `b_o` branch modeled
     (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO BO DG
-        i_t T D BD)
+      (kernel := fused_recurrent_hgrn_bwd_dg_step_store_slice DHPrev DO O H0 DG
+        USE_INITIAL_STATE i_t T D BD)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (active s D BD)
         (fun i => (DG, outOffset s i_t T D BD i)))
-      (expected := fun i => bwdDgStepValue s DHPrev DO BO i_t T D BD i)) := by
+      (expected := fun i =>
+        bwdDgStepValue s DHPrev DO O H0 USE_INITIAL_STATE i_t T D BD i)) ∧
+    -- (5) the backward scan step `b_dh = b_dh * b_g` executed: the two-step body
+    --     realizes the genuine closed form `hgrnBwdDx(i_t)` over `do`, `g`
+    (i_t + 1 < T →
+      (∀ i : Fin BD,
+        s.readMem DHPrev (outOffset s (i_t + 1) T D BD i)
+          = hgrnBwdCarry s DO G T D BD (i_t + 1) i) →
+      ComputeCorrect.Realizes_without_Rounding
+        (kernel := fused_recurrent_hgrn_bwd_dx_two_step_store_slice DHPrev DO G DX
+          i_t T D BD)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (active s D BD)
+          (fun i => (DX, outOffset s i_t T D BD i)))
+        (expected := fun i => hgrnBwdDx s DO G T D BD i_t i)) ∧
+    -- (6) the same body at the loop's first fold, where the assumed carry is
+    --     only the `tl.zeros` seed
+    (2 ≤ T →
+      (∀ i : Fin BD, s.readMem DHPrev (outOffset s (T - 1) T D BD i) = 0) →
+      ComputeCorrect.Realizes_without_Rounding
+        (kernel := fused_recurrent_hgrn_bwd_dx_two_step_store_slice DHPrev DO G DX
+          (T - 2) T D BD)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (active s D BD)
+          (fun i => (DX, outOffset s (T - 2) T D BD i)))
+        (expected := fun i => hgrnBwdDx s DO G T D BD (T - 2) i)) := by
   have hOutInj := fused_recurrent_hgrn_out_offset_injective_general s i_t T D BD hBD
   refine ⟨fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported _ _ _ _ _ _ _ _ _ _,
-      ?_, ?_, ?_⟩
+      ?_, ?_, ?_, ?_, ?_⟩
   · exact fused_recurrent_hgrn_forward_step_closed_form BHPrev X G H0 O
       USE_INITIAL_STATE i_t T D BD s hOutInj hPrev
   · exact fused_recurrent_hgrn_bwd_dx_step_store_slice_compute_correct
       DHPrev DO DX i_t T D BD s hOutInj
   · exact fused_recurrent_hgrn_bwd_dg_step_store_slice_compute_correct
-      DHPrev DO BO DG i_t T D BD s hOutInj
+      DHPrev DO O H0 DG USE_INITIAL_STATE i_t T D BD s hOutInj
+  · intro hlt hCarry
+    exact fused_recurrent_hgrn_bwd_dx_two_step_closed_form DHPrev DO G DX
+      i_t T D BD s hOutInj hlt hCarry
+  · intro hT hSeed
+    exact fused_recurrent_hgrn_bwd_dx_two_step_closed_form_init DHPrev DO G DX
+      T D BD s
+      (fused_recurrent_hgrn_out_offset_injective_general s (T - 2) T D BD hBD)
+      hT hSeed
 
 end Correct_without_Rounding
 

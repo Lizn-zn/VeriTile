@@ -45,6 +45,7 @@ fused_recurrent_rwkv6_output_summary_general                  ← TOP THEOREM
   ├─ fused_recurrent_rwkv6_output_step_closed_form             output reduction
   │      └─ outputStepSpec_eq_outputClosed   (Σ_{j_k} … = o_m)
   └─ fused_recurrent_rwkv6_state_step_closed_form              state carry-fold
+         (masked loads + `mask_kv` store ⇒ `writeIf (activeKV …)`)
          └─ stateStepSpec_eq_stateClosed_succ
               └─ stateClosed_succ  (b_h^(m+1) = b_h^(m)·exp(w_m) + k_m⊗v_m)
 ```
@@ -67,12 +68,30 @@ following are **outside** what any theorem in this file claims:
   `BHPrev = stateClosed(m)` is an *assumed* hypothesis (`hPrev`), not a proved
   induction: nothing here proves `stateClosed(0) = seed`, and nothing chains
   step `m`'s output buffer into step `m+1`'s input buffer.
-* **The load masks.** Python guards every load with `mask_bk` / `mask_bv`
-  (`other=0`); the step slices load *unmasked*. The slices therefore model the
-  Python kernel only when both tiles are full — which is why the headline
-  carries the explicit full-tile hypotheses `hFullK` / `hFullV`. For a partial
-  tile (`i_k·BK + j_k ≥ K`, e.g. `K = 40, BK = 32, i_k = 1`) Python reads `0`
-  where the slice reads live memory, and the faces below say nothing.
+* **The load masks — fixed for the state face, still scoped for the output
+  face.** Python guards every load with `mask_bk` / `mask_bv` (`other=0`) and
+  every store with `mask_kv` / `mask_bv`.
+  - `fused_recurrent_rwkv6_state_step_slice` now reproduces all four masks and
+    the `mask_kv` store faithfully, and its face is a `writeIf (activeKV …)`
+    statement. It needs **no** full-tile hypothesis: on an in-range `(j_v, j_k)`
+    lane every operand of that lane is in range too, so the masked and live
+    reads agree exactly where the face looks.
+  - `fused_recurrent_rwkv6_output_step_slice` still loads *unmasked*. Masking it
+    is not a modeling choice but a *proof-infrastructure* gap: the value that
+    face observes is a `tl.sum` over the key axis, so masking the `prev`/`b_k`/
+    `b_u`/`b_q` loads turns the executed lane values into `if mask then some …
+    else some 0` carriers *inside* a `WithBot ℝ` reduction, and the reduced
+    lane index there is a `TileShape.insertAxisIndex`-projected index that
+    neither `simp` nor `rw` can normalize (the generic
+    `insertAxisIndex_succ` simp lemma does not fire on the `Fin 2` literal `1`).
+    `VeriTile/Triton/Semantics/MaskedReduction.lean` only carries bridges for
+    two-factor 1-D shapes, not for this four-factor 2-D one, so the guarded sum
+    `Σ_{j_k} (if mask_bk j_k then … else 0)` is not provable here without new
+    library-level machinery. The face is therefore **explicitly scoped to the
+    full-tile regime** by the two antecedents of headline clause 2, rather than
+    stated as if it covered partial tiles: for a partial tile
+    (`i_k·BK + j_k ≥ K`, e.g. `K = 40, BK = 32, i_k = 1`) Python reads `0` where
+    that slice reads live memory, and clause 2 says nothing.
 * **The `STORE_FINAL_STATE` writeback.** Not covered by any correctness face.
   The former `final_state_store_slice` face was a masked memcpy (load and store
   addresses character-identical) whose only content was the assumption
@@ -98,8 +117,9 @@ set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
 /-! **★ Main theorem:** `fused_recurrent_rwkv6_output_summary_general` — shape-general,
-but scoped to two single-step **slices** in the full-tile regime, not to the
-launched kernel. -/
+but scoped to two single-step **slices**, not to the launched kernel: the
+state-update face is mask-faithful (any tile), the output face is scoped to the
+full-tile regime by its own antecedents. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -193,12 +213,29 @@ def finalStateOffset (s : BlockState) (K V BK BV : Nat)
     (idx : TileIndex [BV, BK]) : Nat :=
   s.pids 2 * K * V + kIndex s BK idx.2.1 * V + vIndex s BV idx.1
 
+/-- Python's `mask_bv` lane predicate (`i_v·BV + j_v < V`). -/
 def active (s : BlockState) (V BV : Nat) (jv : Fin BV) : Prop :=
   vIndex s BV jv < V
 
 instance activeDecidable (s : BlockState) (V BV : Nat) (jv : Fin BV) :
     Decidable (active s V BV jv) := by
   unfold active; infer_instance
+
+/-- Python's `mask_bk` lane predicate (`i_k·BK + j_k < K`). -/
+def activeK (s : BlockState) (K BK : Nat) (jk : Fin BK) : Prop :=
+  kIndex s BK jk < K
+
+instance activeKDecidable (s : BlockState) (K BK : Nat) (jk : Fin BK) :
+    Decidable (activeK s K BK jk) := by
+  unfold activeK; infer_instance
+
+/-- Python's `mask_kv = mask_bv[:, None] & mask_bk[None, :]` tile predicate. -/
+def activeKV (s : BlockState) (K V BK BV : Nat) (idx : TileIndex [BV, BK]) : Prop :=
+  active s V BV idx.1 ∧ activeK s K BK idx.2.1
+
+instance activeKVDecidable (s : BlockState) (K V BK BV : Nat)
+    (idx : TileIndex [BV, BK]) : Decidable (activeKV s K V BK BV idx) := by
+  unfold activeKV; infer_instance
 
 /-! ## Genuine closed-form data (over the *input* regions)
 
@@ -321,17 +358,24 @@ def fused_recurrent_rwkv6_state_step_slice
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bv[:, None] & mask_bk[None, :]
   prev = tl.load(BHPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_k = tl.load(k + i_bh * $(s_k_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_v_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_w = tl.load(w + i_bh * $(s_k_h) + i_k * $(BK) + offs_k + $(t) * $(K))
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_k_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_v_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_w = tl.load(w + i_bh * $(s_k_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
   b_w = tl.exp(b_w)
   b_kv = b_k[None, :] * b_v[:, None]
   acc = prev * b_w[None, :] + b_kv
   tl.store(BHOut + i_bh * $(K) * $(V) +
     (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
-    (acc).to(BHOut.dtype.element_ty))
+    (acc).to(BHOut.dtype.element_ty), mask=mask_kv)
 }
 
 theorem fused_recurrent_rwkv6_state_step_slice_toAlgorithm_supported
@@ -349,6 +393,7 @@ noncomputable def stateStepSpec
       decay s w s_k_h K BK t idx.2.1
     + kVal s k s_k_h K BK t idx.2.1 * vVal s v s_v_h V BV t idx.1
 
+set_option maxHeartbeats 1000000 in
 theorem fused_recurrent_rwkv6_state_step_slice_correct
     (BHPrev k v w BHOut : RegionName)
     (t s_k_h s_v_h K V BK BV : Nat) (s : BlockState)
@@ -358,33 +403,26 @@ theorem fused_recurrent_rwkv6_state_step_slice_correct
       let outAddr := finalStateOffset s K V BK BV idx
       (exec (fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
             t s_k_h s_v_h K V BK BV) s).map (·.readMem BHOut outAddr)
-        = some (stateStepSpec s BHPrev k v w t s_k_h s_v_h K V BK BV idx) := by
+        = some (if activeKV s K V BK BV idx then
+            stateStepSpec s BHPrev k v w t s_k_h s_v_h K V BK BV idx
+          else s.readMem BHOut outAddr) := by
   intro idx
+  have hRawInj : Function.Injective
+      (fun idx : TileIndex [BV, BK] => s.pids 2 * K * V +
+        (s.pids 1 * BK + idx.2.1.val) * V + (s.pids 0 * BV + idx.1.val)) := by
+    simpa [finalStateOffset, kIndex, vIndex] using hOutInj
   simp [exec, fused_recurrent_rwkv6_state_step_slice, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.uop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
-        finalStateOffset, kIndex, vIndex, TileShape.dropInsertedIndex]
-  let offsetFn : TileIndex [BV, BK] → Nat :=
-    fun idx => s.pids 2 * K * V +
-      (s.pids 1 * BK + idx.2.1.val) * V + (s.pids 0 * BV + idx.1.val)
-  let valueFn : TileIndex [BV, BK] → ℝ :=
-    fun idx =>
-      s.readMem BHPrev
-          (s.pids 2 * K * V + (s.pids 1 * BK + idx.2.1.val) * V +
-            (s.pids 0 * BV + idx.1.val)) *
-        Real.exp (s.readMem w
-          (s.pids 2 * s_k_h + s.pids 1 * BK + idx.2.1.val + t * K))
-      + s.readMem k (s.pids 2 * s_k_h + s.pids 1 * BK + idx.2.1.val + t * K) *
-          s.readMem v (s.pids 2 * s_v_h + s.pids 0 * BV + idx.1.val + t * V)
-  have hOffsetInj : Function.Injective offsetFn := by
-    simpa [offsetFn, finalStateOffset, kIndex, vIndex] using hOutInj
-  change (List.foldl
-      (fun (acc : BlockState) i => acc.writeMem BHOut (offsetFn i) (valueFn i))
-      _ (TileShape.allIndices [BV, BK])).readMem BHOut (offsetFn idx) =
-    stateStepSpec s BHPrev k v w t s_k_h s_v_h K V BK BV idx
-  rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
-  simp [valueFn, stateStepSpec, finalStateOffset, decay, kVal, vVal, kIndex,
-        vIndex, NumericDType.add, NumericDType.mul]
+        ComparableDType.lt, finalStateOffset, kIndex, vIndex,
+        TileShape.dropInsertedIndex]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hRawInj idx]
+  by_cases hjv : s.pids 0 * BV + idx.1.val < V
+  · by_cases hjk : s.pids 1 * BK + idx.2.1.val < K
+    · simp [activeKV, active, activeK, vIndex, kIndex, hjv, hjk, stateStepSpec,
+        finalStateOffset, decay, kVal, vVal, NumericDType.add, NumericDType.mul]
+    · simp [activeKV, active, activeK, vIndex, kIndex, hjv, hjk, finalStateOffset]
+  · simp [activeKV, active, activeK, vIndex, kIndex, hjv, finalStateOffset]
 
 theorem fused_recurrent_rwkv6_state_step_slice_compute_correct
     (BHPrev k v w BHOut : RegionName)
@@ -395,20 +433,22 @@ theorem fused_recurrent_rwkv6_state_step_slice_compute_correct
       (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
         t s_k_h s_v_h K V BK BV)
       (initialState := s)
-      (write := fun idx : TileIndex [BV, BK] =>
-        some (BHOut, finalStateOffset s K V BK BV idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx)
+        (fun idx => (BHOut, finalStateOffset s K V BK BV idx)))
       (expected := fun idx =>
         stateStepSpec s BHPrev k v w t s_k_h s_v_h K V BK BV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [fused_recurrent_rwkv6_state_step_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
-  intro idx
+  intro idx hActive
   have h := fused_recurrent_rwkv6_state_step_slice_correct BHPrev k v w BHOut
     t s_k_h s_v_h K V BK BV s hOutInj idx
   rw [hExec] at h
-  exact Option.some.inj h
+  simpa [hActive] using Option.some.inj h
 
 /-- **State carry-fold step (genuine).** If the materialized previous-state buffer
 `BHPrev` holds the genuine `m`-step folded state `stateClosed(m)`, then one loop
@@ -611,8 +651,9 @@ theorem fused_recurrent_rwkv6_state_step_closed_form
       (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
         m s_k_h s_v_h K V BK BV)
       (initialState := s)
-      (write := fun idx : TileIndex [BV, BK] =>
-        some (BHOut, finalStateOffset s K V BK BV idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx)
+        (fun idx => (BHOut, finalStateOffset s K V BK BV idx)))
       (expected := fun idx =>
         stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV (m + 1) idx) := by
   have h := fused_recurrent_rwkv6_state_step_slice_compute_correct BHPrev k v w
@@ -723,28 +764,31 @@ the *input* regions (never a read-back of the kernel's own output):
 
 1. the full RWKV6 forward surface lowers to the algorithm layer;
 2. one **output** body realizes `outputClosed(m)` (the key-axis reduction),
-   given the *assumed* carry invariant `BHPrev = stateClosed(m)`;
+   given the *assumed* carry invariant `BHPrev = stateClosed(m)` **and, as
+   clause-local antecedents, the full-tile regime** — that slice loads unmasked
+   where Python masks (see the module docstring for why masking it is blocked by
+   missing reduction-carrier infrastructure, not by a modeling choice);
 3. one **state-update** body realizes `stateClosed(m+1)` (the per-channel decay
-   carry-fold), given the same assumed carry invariant.
+   carry-fold), given the same assumed carry invariant — **masked faithfully**
+   (`mask_bk`/`mask_bv`/`mask_kv` loads and the `mask_kv` store), so this clause
+   needs *no* full-tile hypothesis and holds for partial tiles too, as a
+   `writeIf (activeKV …)` statement about the in-range lanes.
 
 Side conditions, all honest and all necessary:
 
 * `BK ≤ K`, `BV ≤ V` — the tile fits the logical extents, giving offset
   injectivity for the state face;
 * `0 < BV` — contiguous output lanes, giving injectivity for the output face;
-* `hFullK` / `hFullV` — **the full-tile regime**. The step slices load
-  *unmasked* where Python loads under `mask_bk` / `mask_bv` with `other = 0`, so
-  they only model the Python kernel when every lane of the tile is in range.
-  These two hypotheses pin exactly that regime; without them the faces below
-  would be claims about a kernel Python does not run. They are not used by the
-  proof — they scope the *statement*. -/
+* the two antecedents *inside clause 2* — the full-tile regime for the
+  **output** face only. They scope that clause's statement (the proof does not
+  use them); without them clause 2 would be a claim about a kernel Python does
+  not run on a partial tile. They are deliberately not global hypotheses: clause
+  3 is now genuinely mask-faithful and must not be weakened by them. -/
 specification fused_recurrent_rwkv6_output_summary_general
     (q k v w u o h0 ht BHPrev BHOut : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
     (s_k_h s_v_h B H T K V BK BV m : Nat) (scale : ℝ) (s : BlockState)
     (hBV : BV ≤ V) (hBK : BK ≤ K) (hBVpos : 0 < BV)
-    (hFullK : ∀ jk : Fin BK, kIndex s BK jk < K)
-    (hFullV : ∀ jv : Fin BV, vIndex s BV jv < V)
     (hPrev : ∀ idx : TileIndex [BV, BK],
       s.readMem BHPrev (finalStateOffset s K V BK BV idx)
         = stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV m idx) :
@@ -752,24 +796,28 @@ specification fused_recurrent_rwkv6_output_summary_general
     (∃ alg, (fused_recurrent_rwkv6_fwd_surface q k v w u o h0 ht
       s_k_h s_v_h B H T K V BK BV scale USE_INITIAL_STATE STORE_FINAL_STATE
       Bool.false).toAlgorithm? = Except.ok alg) ∧
-    -- (2) the output body realizes the genuine `outputClosed(m)`
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
-        m s_k_h s_v_h B H T K V BK BV scale)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun jv : Fin BV => active s V BV jv)
-        (fun jv => (o, outStepOffset s m s_v_h B H V BV jv)))
-      (expected := fun jv : Fin BV =>
-        outputClosed s q k v w u h0 USE_INITIAL_STATE s_k_h s_v_h H K V BK BV
-          scale m jv)) ∧
+    -- (2) the output body realizes the genuine `outputClosed(m)` — **only in the
+    --     full-tile regime**, which the two antecedents pin (this slice's loads
+    --     are unmasked where Python masks them; see the docstring)
+    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, active s V BV jv) →
+      ComputeCorrect.Realizes_without_Rounding
+        (kernel := fused_recurrent_rwkv6_output_step_slice BHPrev q k v u o
+          m s_k_h s_v_h B H T K V BK BV scale)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (fun jv : Fin BV => active s V BV jv)
+          (fun jv => (o, outStepOffset s m s_v_h B H V BV jv)))
+        (expected := fun jv : Fin BV =>
+          outputClosed s q k v w u h0 USE_INITIAL_STATE s_k_h s_v_h H K V BK BV
+            scale m jv)) ∧
     -- (3) the state-update body realizes the genuine `stateClosed(m+1)`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut
         m s_k_h s_v_h K V BK BV)
       (initialState := s)
-      (write := fun idx : TileIndex [BV, BK] =>
-        some (BHOut, finalStateOffset s K V BK BV idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx)
+        (fun idx => (BHOut, finalStateOffset s K V BK BV idx)))
       (expected := fun idx =>
         stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV
           (m + 1) idx)) := by
@@ -779,7 +827,8 @@ specification fused_recurrent_rwkv6_output_summary_general
     s m s_v_h B H V BV hBVpos
   refine ⟨fused_recurrent_rwkv6_fwd_surface_toAlgorithm_supported _ _ _ _ _ _ _ _
       _ _ _ _ _ _ _ _ _ _ _ _ _, ?_, ?_⟩
-  · exact fused_recurrent_rwkv6_output_step_closed_form BHPrev q k v w u h0 o
+  · intro _hFullK _hFullV
+    exact fused_recurrent_rwkv6_output_step_closed_form BHPrev q k v w u h0 o
       USE_INITIAL_STATE m s_k_h s_v_h B H T K V BK BV scale s hOutInj hPrev
   · exact fused_recurrent_rwkv6_state_step_closed_form BHPrev k v w h0 BHOut
       USE_INITIAL_STATE m s_k_h s_v_h K V BK BV s hStateInj hPrev

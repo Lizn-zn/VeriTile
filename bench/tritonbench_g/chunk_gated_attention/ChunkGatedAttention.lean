@@ -17,17 +17,26 @@ linear attention (`fla`-style):
 
 ## Scope — what is and is not verified
 
-Verified: **one hand-cut slice of `chunk_gated_abc_fwd_kernel_cum`**
-(`chunk_gated_attention_cum_compute_slice`), which reproduces that kernel's whole
-body — masked tile load, lower-triangular `tl.dot`, masked store — at symbolic
-dimensions and strides.
+Verified:
 
-**Not** verified: `chunk_gated_abc_fwd_kernel_h`, the gated chunk recurrence that
-is the substance of this benchmark. Nothing in this file models its gating
-(`b_h *= exp(b_gn)`), its `b_k`/`b_v` pre-gating, or its `b_k @ b_v`
-accumulation. Both `@triton.jit` bodies are shown to *lower* to the algorithm
-layer (`*_toAlgorithm_supported`), which is a well-formedness fact, not
-correctness.
+* **one hand-cut slice of `chunk_gated_abc_fwd_kernel_cum`**
+  (`chunk_gated_attention_cum_compute_slice`), which reproduces that kernel's
+  whole body — masked tile load, lower-triangular `tl.dot`, masked store — at
+  symbolic dimensions and strides; and
+* **one loop body of `chunk_gated_abc_fwd_kernel_h` per `GATEK` branch**
+  (`chunk_gated_attention_h_step_gate{v,k}_slice`) — the gate
+  `b_h *= exp(b_gn)[...]`, the `b_k`/`b_v` pre-gating, and the
+  `b_h += tl.dot(b_k, b_v)` accumulation — over the launched `K`, `V`, `G` at
+  symbolic strides, realizing the genuine closed form `hClosed (m+1)` under an
+  assumed carry invariant.
+
+**Not** verified: the `NT`-iteration *driver* of that recurrence. The step faces
+write a fiction carry region `HOut` while their `hPrev` hypothesis constrains
+`HPrev`, so nothing chains chunk `m` into chunk `m+1`; base case
+(`hClosed_zero`) and step (`hClosed_succ`) are proven, the induction joining them
+is not. `STORE_FINAL_STATE` has no face. Both `@triton.jit` bodies are also shown
+to *lower* to the algorithm layer (`*_toAlgorithm_supported`), which is a
+well-formedness fact, not correctness.
 
 The host launch (`fwd_pre` / `fwd_inner` grids over `(cdiv(S,BS), NT, B*H)` and
 `(NV, NK, B*H)`, the `@triton.autotune` `BS`/warps selection, block scheduling,
@@ -39,9 +48,16 @@ and how the runtime composes per-program writes into `o`/`h`/`ht`) is the
 
 ```
 chunk_gated_attention_cum_slice_output_summary_general        ← TOP THEOREM
-  └─ chunk_gated_attention_cum_compute_slice_closed_form_general
-       └─ chunk_gated_attention_cum_compute_slice_compute_correct
-            (expected := cumComputeStoreValue = lowerTri @ source)
+  ├─ chunk_gated_attention_cum_compute_slice_closed_form_general
+  │    └─ chunk_gated_attention_cum_compute_slice_compute_correct
+  │         (expected := cumComputeStoreValue = lowerTri @ source)
+  ├─ chunk_gated_attention_h_step_gatev_closed_form_general   GATEK = false body
+  │    ├─ chunk_gated_attention_h_step_gatev_slice_correct  (expected := hStepSpec)
+  │    └─ hStepSpec_eq_hClosed_succ ── hClosed_succ
+  ├─ chunk_gated_attention_h_step_gatek_closed_form_general   GATEK = true body
+  │    ├─ chunk_gated_attention_h_step_gatek_slice_correct  (expected := hStepSpec)
+  │    └─ hStepSpec_eq_hClosed_succ ── hClosed_succ
+  └─ hClosed_zero                                             hClosed 0 = hSeed
 
 -- not reachable from the headline, and deliberately so:
 chunk_gated_attention_h_state_memcpy_transports_hClosed       (masked memcpy)
@@ -56,20 +72,31 @@ this docstring that named such lemmas were referring to nothing.
 genuine standalone closed form over the input region, never a read-back of the
 kernel's own output.
 
-## The gated recurrence: an unproved specification
+## The gated recurrence: step and base proven, induction not
 
 `hClosed m = seed ⊙ ∏_{j<m} G_j + Σ_{t<m} S_t ⊙ ∏_{t<j<m} G_j` (with `G_m` the
 per-chunk matrix gate — `exp(b_gn_m[k])` per key-row under `GATEK`, else
 `exp(b_gn_m[v])` per value-column — and `S_m = (gated b_k) @ (gated b_v)`) is the
-intended closed form of the carried `b_h`. It is defined below, with input reads
-routed through named element accessors (`ktElem`, `tvElem`, `gnkElem`, `gnvElem`,
+closed form of the carried `b_h`. It is defined below, with input reads routed
+through named element accessors (`ktElem`, `tvElem`, `gnkElem`, `gnvElem`,
 `h0Elem`) that state the logical indexing and the block-pointer footprint they
-mirror. **No theorem in this file proves the kernel computes it.** The two
-lemmas that mention it are masked memcpys whose load and store addresses are
-character-identical: they *assume* a staging buffer already holds `hClosed` and
-conclude that copying it delivers `hClosed`. The carry-fold
-`hClosed (m+1) = hClosed m ⊙ G_m + S_m` and its base case `hClosed 0 = hSeed`
-are **not** stated or proven here.
+mirror — each at that pointer's own element stride.
+
+What is proven about it:
+
+* `hClosed_zero` — `hClosed 0 = hSeed`, the base case.
+* `hClosed_succ` — `hClosed (m+1) = hClosed m ⊙ G_m + S_m`, the carry-fold.
+* `chunk_gated_attention_h_step_gate{v,k}_slice_correct` — one *kernel* loop body
+  per `GATEK` branch realizes `hStepSpec = HPrev ⊙ G_m + S_m` over the launched
+  `K`, `V`, `G`; and `hStepSpec_eq_hClosed_succ` turns that into `hClosed (m+1)`
+  under the carry invariant `HPrev = hClosed m`.
+
+What is still **not** proven: the cross-chunk induction. `hPrev` is an assumption
+and the bodies write a different (fiction) region, so nothing chains chunk `m`
+into chunk `m+1`. The two `*_memcpy_transports_hClosed` lemmas remain masked
+memcpys whose load and store addresses are character-identical — they *assume* a
+staging buffer already holds `hClosed` and conclude that copying it delivers
+`hClosed`, and they are deliberately out of the headline.
 
 ## Modeling boundary
 
@@ -93,8 +120,10 @@ open VeriTile.Triton
 set_option linter.unusedSimpArgs false
 
 /-! **★ Main theorem:** `chunk_gated_attention_cum_slice_output_summary_general` —
-shape-general, and scoped to the `fwd_pre` cumsum kernel's slice. The gated
-`chunk_gated_abc_fwd_kernel_h` recurrence has no correctness face here. -/
+shape-general; covers the `fwd_pre` cumsum kernel's slice plus one loop body of
+the gated `chunk_gated_abc_fwd_kernel_h` recurrence per `GATEK` branch, and the
+recurrence's base case. The `NT` driver that would chain the bodies is not
+modeled. -/
 
 /-! # ══════════ CORRECT — genuine / shape-general (review this) ══════════ -/
 
@@ -649,20 +678,18 @@ noncomputable def tvElem (s : BlockState) (R : RegionName)
   s.readMem R (s.pids 2 * s_v_h + t * s_v_t + v * s_v_d)
 
 /-- Last-lane cumulative gate `b_gn[k]` under `GATEK`: lane `tLast*KSize + k` of
-`p_gn`'s flattened `(T*K,)` view of `G` at batch-head `s.pids 2`. NOTE: the
-port's `p_gn` carries element stride `s_k_d`; this closed form reads the lane at
-**unit element stride** (i.e. it is the `s_k_d = 1` footprint). -/
+`p_gn`'s flattened `(T*K,)` view of `G` at batch-head `s.pids 2`, at the block
+pointer's own element stride `s_k_d` (`chunk_gated_attention.py:90`). -/
 noncomputable def gnkElem (s : BlockState) (G : RegionName)
-    (s_k_h KSize tLast k : Nat) : ℝ :=
-  s.readMem G (s.pids 2 * s_k_h + (tLast * KSize + k))
+    (s_k_h s_k_d KSize tLast k : Nat) : ℝ :=
+  s.readMem G (s.pids 2 * s_k_h + (tLast * KSize + k) * s_k_d)
 
 /-- Last-lane cumulative gate `b_gn[v]` under `¬GATEK`: lane `tLast*VSize + v` of
-`p_gn`'s flattened `(T*V,)` view of `G` at batch-head `s.pids 2`. NOTE: the
-port's `p_gn` carries element stride `s_v_d`; this closed form reads the lane at
-**unit element stride** (i.e. it is the `s_v_d = 1` footprint). -/
+`p_gn`'s flattened `(T*V,)` view of `G` at batch-head `s.pids 2`, at the block
+pointer's own element stride `s_v_d` (`chunk_gated_attention.py:100`). -/
 noncomputable def gnvElem (s : BlockState) (G : RegionName)
-    (s_v_h VSize tLast v : Nat) : ℝ :=
-  s.readMem G (s.pids 2 * s_v_h + (tLast * VSize + v))
+    (s_v_h s_v_d VSize tLast v : Nat) : ℝ :=
+  s.readMem G (s.pids 2 * s_v_h + (tLast * VSize + v) * s_v_d)
 
 /-- Initial-state element `h0[i_bh][k, v]`: mirrors the `h0` block pointer
 (`base = h0 + i_bh*K*V`, `shape = (K, V)`, `strides = (V, 1)`). -/
@@ -675,13 +702,13 @@ noncomputable def h0Elem (s : BlockState) (H0 : RegionName)
 last-row (`t = BT-1`) cumulative gate of chunk `m`. -/
 noncomputable def hGate
     (s : BlockState) (G : RegionName) (GATEK : Bool)
-    (s_k_h s_v_h KSize VSize BT BK BV m : Nat)
+    (s_k_h s_k_d s_v_h s_v_d KSize VSize BT BK BV m : Nat)
     (idx : TileIndex [BK, BV]) : ℝ :=
   if GATEK then
-    Real.exp (gnkElem s G s_k_h KSize (chunkLastTime BT m)
+    Real.exp (gnkElem s G s_k_h s_k_d KSize (chunkLastTime BT m)
       (kIndexState s BK idx.1))
   else
-    Real.exp (gnvElem s G s_v_h VSize (chunkLastTime BT m)
+    Real.exp (gnvElem s G s_v_h s_v_d VSize (chunkLastTime BT m)
       (vIndexState s BV idx.2.1))
 
 /-- Per-chunk gated matmul accumulation `S_m[k,v] = (gated b_k) @ (gated b_v)`,
@@ -697,13 +724,13 @@ noncomputable def hStepTerm
     let vVal := tvElem s V s_v_h s_v_t s_v_d
       (m * BT + t.val) (vIndexState s BV idx.2.1)
     if GATEK then
-      let gnVal := gnkElem s G s_k_h KSize (chunkLastTime BT m)
+      let gnVal := gnkElem s G s_k_h s_k_d KSize (chunkLastTime BT m)
         (kIndexState s BK idx.1)
       let gVal := ktElem s G s_k_h s_k_t s_k_d
         (kIndexState s BK idx.1) (m * BT + t.val)
       (kVal * Real.exp (gnVal - gVal)) * vVal
     else
-      let gnVal := gnvElem s G s_v_h VSize (chunkLastTime BT m)
+      let gnVal := gnvElem s G s_v_h s_v_d VSize (chunkLastTime BT m)
         (vIndexState s BV idx.2.1)
       let gVal := tvElem s G s_v_h s_v_t s_v_d
         (m * BT + t.val) (vIndexState s BV idx.2.1)
@@ -727,12 +754,72 @@ noncomputable def hClosed
     (idx : TileIndex [BK, BV]) : ℝ :=
   hSeed s H0 USE_INITIAL_STATE KSize VSize BK BV idx *
       (∏ j ∈ Finset.range m,
-        hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx) +
+        hGate s G GATEK s_k_h s_k_d s_v_h s_v_d KSize VSize BT BK BV j idx) +
     ∑ t ∈ Finset.range m,
       hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
           KSize VSize BT BK BV t idx *
         (∏ j ∈ Finset.Ico (t + 1) m,
-          hGate s G GATEK s_k_h s_v_h KSize VSize BT BK BV j idx)
+          hGate s G GATEK s_k_h s_k_d s_v_h s_v_d KSize VSize BT BK BV j idx)
+
+/-- **The gated carry-fold's base case.** At `m = 0` the closed form collapses to
+the seed (empty gate product, empty accumulation sum): `hClosed 0 = hSeed`. This
+is the closed-form counterpart of the Python prologue `b_h = tl.zeros([BK, BV],
+...)` plus the optional `USE_INITIAL_STATE` load
+(`chunk_gated_attention.py:74–77`). -/
+theorem hClosed_zero
+    (s : BlockState) (K V G H0 : RegionName)
+    (GATEK USE_INITIAL_STATE : Bool)
+    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat)
+    (idx : TileIndex [BK, BV]) :
+    hClosed s K V G H0 GATEK USE_INITIAL_STATE
+        s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV 0 idx
+      = hSeed s H0 USE_INITIAL_STATE KSize VSize BK BV idx := by
+  simp [hClosed]
+
+/-- **The gated carry-fold recurrence.** Unrolling one chunk:
+`hClosed (m+1) = hClosed m ⊙ G_m + S_m` — the exact closed-form counterpart of
+the Python loop body `b_h *= exp(b_gn)[...]` followed by
+`b_h += tl.dot(b_k, b_v)` (`chunk_gated_attention.py:94/104` and `:109`).
+
+The two summands separate cleanly because the gate product telescopes: the seed
+picks up one more factor `G_m`, every accumulated term `S_t` (`t < m`) picks up
+the same factor via `Finset.prod_Ico_succ_top` (legal since `t < m ⇒ t+1 ≤ m`),
+and the new term `S_m` carries the empty product `∏_{Ico (m+1) (m+1)} = 1`. -/
+theorem hClosed_succ
+    (s : BlockState) (K V G H0 : RegionName)
+    (GATEK USE_INITIAL_STATE : Bool)
+    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m : Nat)
+    (idx : TileIndex [BK, BV]) :
+    hClosed s K V G H0 GATEK USE_INITIAL_STATE
+        s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx
+      = hClosed s K V G H0 GATEK USE_INITIAL_STATE
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx *
+          hGate s G GATEK s_k_h s_k_d s_v_h s_v_d KSize VSize BT BK BV m idx
+        + hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
+            KSize VSize BT BK BV m idx := by
+  unfold hClosed
+  rw [Finset.prod_range_succ, Finset.sum_range_succ, Finset.Ico_self]
+  simp only [Finset.prod_empty, mul_one]
+  have hsum :
+      (∑ t ∈ Finset.range m,
+          hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
+              KSize VSize BT BK BV t idx *
+            ∏ j ∈ Finset.Ico (t + 1) (m + 1),
+              hGate s G GATEK s_k_h s_k_d s_v_h s_v_d KSize VSize BT BK BV j idx)
+        = (∑ t ∈ Finset.range m,
+              hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
+                  KSize VSize BT BK BV t idx *
+                ∏ j ∈ Finset.Ico (t + 1) m,
+                  hGate s G GATEK s_k_h s_k_d s_v_h s_v_d KSize VSize
+                    BT BK BV j idx) *
+            hGate s G GATEK s_k_h s_k_d s_v_h s_v_d KSize VSize BT BK BV m idx := by
+    rw [Finset.sum_mul]
+    refine Finset.sum_congr rfl fun t ht => ?_
+    simp only [Finset.mem_range] at ht
+    rw [Finset.prod_Ico_succ_top (by omega : t + 1 ≤ m)]
+    ring
+  rw [hsum]
+  ring
 
 /-- Swap the `expected` value of a `writeIf`-`Realizes_without_Rounding` when the two `expected`
 functions agree on every cumSurfaceActive (`mask`-satisfying) index. -/
@@ -760,6 +847,210 @@ theorem realizes_writeIf_expected_congr {ι : Type} {α : Type}
       intro s0 s' hExec hs0 i hi
       rw [← hAgree i hi]
       exact hp s0 s' hExec hs0 i hi
+
+/-! ## ════════ Gated chunk-recurrence step slices (genuine) ════════
+
+At a fixed chunk index `m`, `chunk_gated_abc_fwd_kernel_h`'s loop body does
+exactly two things to the carried `[BK, BV]` state: gate it
+(`b_h *= tl.exp(b_gn)[...]`) and add the gated matmul
+(`b_h += tl.dot(b_k, b_v)`), with the `GATEK` constexpr deciding whether the gate
+rides the key rows (`[:, None]`, pre-gating `b_k`) or the value columns
+(`[None, :]`, pre-gating `b_v`). The two slices below transcribe those two
+branches over the **launched** regions `K`, `V`, `G`, at the launch's own strides
+and its own pid assignment `i_v, i_k, i_bh = pid 0, pid 1, pid 2`, taking the
+carried state from a materialized buffer `HPrev` and writing the updated state to
+`HOut`.
+
+Scope, stated plainly:
+
+* `HPrev` / `HOut` are **fiction regions** — the Python `b_h` is a register, not a
+  tensor. They are addressed at the contiguous `[K, V]` state layout
+  `finalStateOffset` (`i_bh·KSize·VSize + (i_k·BK + j_k)·VSize + (i_v·BV + j_v)`),
+  the layout the `STORE_FINAL_STATE` writeback uses. So these are faces about the
+  carried register's update, not about the Python tensors `h` / `ht`.
+* Unlike the memcpy lemmas below, they **compute**: `expected` is
+  `HPrev ⊙ G_m + S_m`, with `G_m` and `S_m` read off `K`, `V`, `G` — the very
+  `hGate` / `hStepTerm` that build `hClosed`.
+* The `NT`-iteration driver is **not** modeled: nothing threads chunk `m`'s
+  `HOut` into chunk `m+1`'s `HPrev`, so `hPrev` stays an assumption. With
+  `hClosed_succ` these give the recurrence's *step* and with `hClosed_zero` its
+  *base*; the induction chaining them is still missing.
+* The Python loop stores the *pre-update* state before gating, so the value these
+  slices produce is the state entering chunk `m+1`, i.e. `hClosed (m+1)`.
+* The `b_k` / `b_v` / `b_g` / `b_gn` loads are unmasked here, whereas the Python
+  reads them through `boundary_check`ed block pointers; the partial-tail-chunk
+  regime (`m·BT + BT > T`, or `i_k·BK + BK > KSize` / `i_v·BV + BV > VSize`) is
+  part of the trusted boundary, as it already is for the
+  `fused_recurrent_retention` step slices. -/
+
+/-- `GATEK = false` branch: the gate rides the **value columns**, and `b_v` is
+pre-gated by `exp(b_gn[v] - b_g[t,v])`. -/
+def chunk_gated_attention_h_step_gatev_slice
+    (K V G HPrev HOut : RegionName)
+    (m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat) :
+    ComputeKernel := triton {
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs_k = tl.arange(0, $(BK))
+  offs_v = tl.arange(0, $(BV))
+  offs_t = tl.arange(0, $(BT))
+  b_h = tl.load(HPrev + i_bh * $(KSize) * $(VSize) +
+    (i_k * $(BK) + offs_k[:, None]) * $(VSize) + (i_v * $(BV) + offs_v[None, :]))
+  b_gn = tl.load(G + i_bh * $(s_v_h) +
+    ($(chunkLastTime BT m) * $(VSize) + (i_v * $(BV) + offs_v)) * $(s_v_d))
+  b_g = tl.load(G + i_bh * $(s_v_h) + ($(m) * $(BT) + offs_t[:, None]) * $(s_v_t) +
+    (i_v * $(BV) + offs_v[None, :]) * $(s_v_d))
+  b_k = tl.load(K + i_bh * $(s_k_h) + (i_k * $(BK) + offs_k[:, None]) * $(s_k_d) +
+    ($(m) * $(BT) + offs_t[None, :]) * $(s_k_t))
+  b_v = tl.load(V + i_bh * $(s_v_h) + ($(m) * $(BT) + offs_t[:, None]) * $(s_v_t) +
+    (i_v * $(BV) + offs_v[None, :]) * $(s_v_d))
+  b_h = b_h * tl.exp(b_gn)[None, :]
+  b_v = b_v * tl.exp(b_gn[None, :] - b_g)
+  b_h = b_h + tl.dot(b_k, b_v, allow_tf32=false)
+  tl.store(HOut + i_bh * $(KSize) * $(VSize) +
+    (i_k * $(BK) + offs_k[:, None]) * $(VSize) + (i_v * $(BV) + offs_v[None, :]),
+    (b_h).to(HOut.dtype.element_ty))
+}
+
+/-- `GATEK = true` branch: the gate rides the **key rows**, and `b_k` is
+pre-gated by `exp(b_gn[k] - b_g[k,t])`. -/
+def chunk_gated_attention_h_step_gatek_slice
+    (K V G HPrev HOut : RegionName)
+    (m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat) :
+    ComputeKernel := triton {
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs_k = tl.arange(0, $(BK))
+  offs_v = tl.arange(0, $(BV))
+  offs_t = tl.arange(0, $(BT))
+  b_h = tl.load(HPrev + i_bh * $(KSize) * $(VSize) +
+    (i_k * $(BK) + offs_k[:, None]) * $(VSize) + (i_v * $(BV) + offs_v[None, :]))
+  b_gn = tl.load(G + i_bh * $(s_k_h) +
+    ($(chunkLastTime BT m) * $(KSize) + (i_k * $(BK) + offs_k)) * $(s_k_d))
+  b_g = tl.load(G + i_bh * $(s_k_h) + (i_k * $(BK) + offs_k[:, None]) * $(s_k_d) +
+    ($(m) * $(BT) + offs_t[None, :]) * $(s_k_t))
+  b_k = tl.load(K + i_bh * $(s_k_h) + (i_k * $(BK) + offs_k[:, None]) * $(s_k_d) +
+    ($(m) * $(BT) + offs_t[None, :]) * $(s_k_t))
+  b_v = tl.load(V + i_bh * $(s_v_h) + ($(m) * $(BT) + offs_t[:, None]) * $(s_v_t) +
+    (i_v * $(BV) + offs_v[None, :]) * $(s_v_d))
+  b_h = b_h * tl.exp(b_gn)[:, None]
+  b_k = b_k * tl.exp(b_gn[:, None] - b_g)
+  b_h = b_h + tl.dot(b_k, b_v, allow_tf32=false)
+  tl.store(HOut + i_bh * $(KSize) * $(VSize) +
+    (i_k * $(BK) + offs_k[:, None]) * $(VSize) + (i_v * $(BV) + offs_v[None, :]),
+    (b_h).to(HOut.dtype.element_ty))
+}
+
+theorem chunk_gated_attention_h_step_gatev_slice_toAlgorithm_supported
+    (K V G HPrev HOut : RegionName)
+    (m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat) :
+    ∃ alg, (chunk_gated_attention_h_step_gatev_slice K V G HPrev HOut
+      m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK
+      BV).toAlgorithm? = Except.ok alg := by
+  simp [chunk_gated_attention_h_step_gatev_slice, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
+theorem chunk_gated_attention_h_step_gatek_slice_toAlgorithm_supported
+    (K V G HPrev HOut : RegionName)
+    (m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat) :
+    ∃ alg, (chunk_gated_attention_h_step_gatek_slice K V G HPrev HOut
+      m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK
+      BV).toAlgorithm? = Except.ok alg := by
+  simp [chunk_gated_attention_h_step_gatek_slice, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
+/-- The arithmetic spec of one gated chunk-recurrence body: `HPrev ⊙ G_m + S_m`,
+the materialized previous state gated by `hGate` plus the gated
+`tl.dot(b_k, b_v)` accumulation `hStepTerm`. -/
+noncomputable def hStepSpec
+    (s : BlockState) (HPrev K V G : RegionName) (GATEK : Bool)
+    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m : Nat)
+    (idx : TileIndex [BK, BV]) : ℝ :=
+  s.readMem HPrev (finalStateOffset s KSize VSize BK BV idx) *
+      hGate s G GATEK s_k_h s_k_d s_v_h s_v_d KSize VSize BT BK BV m idx +
+    hStepTerm s K V G GATEK s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d
+      KSize VSize BT BK BV m idx
+
+theorem chunk_gated_attention_h_step_gatev_slice_correct
+    (K V G HPrev HOut : RegionName)
+    (m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s KSize VSize BK BV idx)) :
+    ∀ idx : TileIndex [BK, BV],
+      (exec (chunk_gated_attention_h_step_gatev_slice K V G HPrev HOut
+            m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV) s).map
+          (·.readMem HOut (finalStateOffset s KSize VSize BK BV idx))
+        = some (hStepSpec s HPrev K V G Bool.false
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx) := by
+  intro idx
+  have hOffsetInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        s.pids 2 * KSize * VSize + (s.pids 1 * BK + idx.1.val) * VSize +
+          (s.pids 0 * BV + idx.2.1.val)) := by
+    simpa [finalStateOffset, kIndexFinal, vIndexFinal] using hOutInj
+  simp [exec, chunk_gated_attention_h_step_gatev_slice, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+    Tile.expandDim, Tile.uop, Tile.ptrAdd, Tile.dot, NumericDType.add,
+    NumericDType.mul, NumericDType.sub, WithBot.realExp,
+    ComputeKernel.toAlgKernel, ComputeStmt.toAlgorithm?,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    hStepSpec, hGate, hStepTerm, ktElem, tvElem, gnvElem, finalStateOffset,
+    kIndexFinal, vIndexFinal, kIndexState, vIndexState,
+    TileShape.dropInsertedIndex]
+  rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
+
+theorem chunk_gated_attention_h_step_gatek_slice_correct
+    (K V G HPrev HOut : RegionName)
+    (m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat)
+    (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s KSize VSize BK BV idx)) :
+    ∀ idx : TileIndex [BK, BV],
+      (exec (chunk_gated_attention_h_step_gatek_slice K V G HPrev HOut
+            m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV) s).map
+          (·.readMem HOut (finalStateOffset s KSize VSize BK BV idx))
+        = some (hStepSpec s HPrev K V G Bool.true
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx) := by
+  intro idx
+  have hOffsetInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        s.pids 2 * KSize * VSize + (s.pids 1 * BK + idx.1.val) * VSize +
+          (s.pids 0 * BV + idx.2.1.val)) := by
+    simpa [finalStateOffset, kIndexFinal, vIndexFinal] using hOutInj
+  simp [exec, chunk_gated_attention_h_step_gatek_slice, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+    Tile.expandDim, Tile.uop, Tile.ptrAdd, Tile.dot, NumericDType.add,
+    NumericDType.mul, NumericDType.sub, WithBot.realExp,
+    ComputeKernel.toAlgKernel, ComputeStmt.toAlgorithm?,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    hStepSpec, hGate, hStepTerm, ktElem, tvElem, gnkElem, finalStateOffset,
+    kIndexFinal, vIndexFinal, kIndexState, vIndexState,
+    TileShape.dropInsertedIndex]
+  rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
+
+/-- **Gated carry-fold step (genuine).** If the materialized previous-state
+buffer `HPrev` holds `hClosed m`, one loop body — `hStepSpec`, i.e.
+`HPrev ⊙ G_m + S_m` — produces exactly `hClosed (m+1)`. This is the statement the
+module docstring used to *describe* without stating. -/
+theorem hStepSpec_eq_hClosed_succ
+    (s : BlockState) (HPrev K V G H0 : RegionName)
+    (GATEK USE_INITIAL_STATE : Bool)
+    (s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m : Nat)
+    (hPrev : ∀ idx : TileIndex [BK, BV],
+      s.readMem HPrev (finalStateOffset s KSize VSize BK BV idx)
+        = hClosed s K V G H0 GATEK USE_INITIAL_STATE
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx)
+    (idx : TileIndex [BK, BV]) :
+    hStepSpec s HPrev K V G GATEK
+        s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx
+      = hClosed s K V G H0 GATEK USE_INITIAL_STATE
+          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx := by
+  rw [hClosed_succ]
+  unfold hStepSpec
+  rw [hPrev idx]
 
 /-! ## ════════ Memcpy transport lemmas — NOT recurrence proofs ════════
 
@@ -863,6 +1154,93 @@ theorem chunk_gated_attention_cum_compute_slice_closed_form_general
   chunk_gated_attention_cum_compute_slice_compute_correct SReg Z s_s_h s_s_t
     s_s_d T S BT BS s hOutInj
 
+/-- **Gated-recurrence step face, `GATEK = false`.** Given the carry invariant
+`HPrev = hClosed m`, the gate-V loop body writes exactly `hClosed (m+1)` into the
+carry register `HOut`. -/
+theorem chunk_gated_attention_h_step_gatev_closed_form_general
+    (K V G H0 HPrev HOut : RegionName) (USE_INITIAL_STATE : Bool)
+    (m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat)
+    (s : BlockState)
+    (hStateInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s KSize VSize BK BV idx))
+    (hPrev : ∀ idx : TileIndex [BK, BV],
+      s.readMem HPrev (finalStateOffset s KSize VSize BK BV idx)
+        = hClosed s K V G H0 Bool.false USE_INITIAL_STATE
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := chunk_gated_attention_h_step_gatev_slice K V G HPrev HOut
+        m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV)
+      (initialState := s)
+      (write := fun idx : TileIndex [BK, BV] =>
+        some (HOut, finalStateOffset s KSize VSize BK BV idx))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        hClosed s K V G H0 Bool.false USE_INITIAL_STATE
+          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx) := by
+  have hfun :
+      (fun idx : TileIndex [BK, BV] =>
+          hClosed s K V G H0 Bool.false USE_INITIAL_STATE
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx)
+        = fun idx : TileIndex [BK, BV] =>
+            hStepSpec s HPrev K V G Bool.false
+              s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx := by
+    funext idx
+    exact (hStepSpec_eq_hClosed_succ s HPrev K V G H0 Bool.false USE_INITIAL_STATE
+      s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m hPrev idx).symm
+  rw [hfun]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_gated_attention_h_step_gatev_slice, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have h := chunk_gated_attention_h_step_gatev_slice_correct K V G HPrev HOut
+    m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV s hStateInj idx
+  rw [hExec] at h
+  exact Option.some.inj h
+
+/-- **Gated-recurrence step face, `GATEK = true`.** Same statement with the gate
+on the key rows. -/
+theorem chunk_gated_attention_h_step_gatek_closed_form_general
+    (K V G H0 HPrev HOut : RegionName) (USE_INITIAL_STATE : Bool)
+    (m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV : Nat)
+    (s : BlockState)
+    (hStateInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s KSize VSize BK BV idx))
+    (hPrev : ∀ idx : TileIndex [BK, BV],
+      s.readMem HPrev (finalStateOffset s KSize VSize BK BV idx)
+        = hClosed s K V G H0 Bool.true USE_INITIAL_STATE
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx) :
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := chunk_gated_attention_h_step_gatek_slice K V G HPrev HOut
+        m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV)
+      (initialState := s)
+      (write := fun idx : TileIndex [BK, BV] =>
+        some (HOut, finalStateOffset s KSize VSize BK BV idx))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        hClosed s K V G H0 Bool.true USE_INITIAL_STATE
+          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx) := by
+  have hfun :
+      (fun idx : TileIndex [BK, BV] =>
+          hClosed s K V G H0 Bool.true USE_INITIAL_STATE
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx)
+        = fun idx : TileIndex [BK, BV] =>
+            hStepSpec s HPrev K V G Bool.true
+              s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx := by
+    funext idx
+    exact (hStepSpec_eq_hClosed_succ s HPrev K V G H0 Bool.true USE_INITIAL_STATE
+      s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m hPrev idx).symm
+  rw [hfun]
+  apply ComputeKernel.computeCorrect_of_toAlgKernel
+  · simp [chunk_gated_attention_h_step_gatek_slice, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?]
+  intro s0 s' hExec hs0
+  subst s0
+  intro idx
+  have h := chunk_gated_attention_h_step_gatek_slice_correct K V G HPrev HOut
+    m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV s hStateInj idx
+  rw [hExec] at h
+  exact Option.some.inj h
+
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 
 /-- **SCOPE — this covers `chunk_gated_abc_fwd_kernel_cum` only.** The headline
@@ -873,26 +1251,53 @@ store) at symbolic `T S BT BS` and strides, with the launch's own pid assignment
 `i_s, i_t, i_bh = pid 0, pid 1, pid 2`.
 
 `chunk_gated_abc_fwd_kernel_h` — the gated chunk recurrence, which is the
-substance of this benchmark — is **not** covered. Its two former conjuncts were
-masked memcpys (identical load and store addresses) whose entire content was the
-`hBufState` / `hBufFinal` assumptions; they have been removed from the headline
-rather than presented as recurrence results, and what remains of them is labelled
-`*_memcpy_transports_hClosed` above. As a consequence the flags
-`GATEK` / `USE_INITIAL_STATE` / `STORE_FINAL_STATE` are exercised by **no**
-conjunct of this headline; the previous claim that its flag combinations "match
-the four Python `fwd_inner` test cases" was false.
+substance of this benchmark — is now covered **at the level of one loop body per
+`GATEK` branch** (conjuncts 2 and 3). Its two *former* conjuncts were masked
+memcpys (identical load and store addresses) whose entire content was the
+`hBufState` / `hBufFinal` assumptions; those stay out of the headline and remain
+labelled `*_memcpy_transports_hClosed` above. What replaces them computes: each
+new conjunct realizes `hClosed (m+1)` — gate-times-previous plus the gated
+`b_k @ b_v` accumulation, read off the launched `K`, `V`, `G` — so `GATEK` is now
+exercised by the headline in **both** settings. `USE_INITIAL_STATE` flows through
+`hClosed`'s seed term; `STORE_FINAL_STATE` is still exercised by no conjunct.
 
-The single honest side condition is offset injectivity of the store footprint —
-a no-aliasing hypothesis on the strides, which for the bench strides
-`(s_s_t, s_s_d) = (S, 1)` holds. No dimension is pinned. No region-distinctness
-hypothesis is needed: the slice performs its load before its single store and
-`expected` reads the initial state, so `SReg = GCum` cannot falsify it. -/
+The recurrence's **base case** is conjunct 4 (`hClosed 0 = hSeed`) and its **step**
+is `hClosed_succ`, used inside conjuncts 2 and 3. The **induction** chaining them
+is still missing: the conjuncts write `HOut` while `hPrevV`/`hPrevK` constrain
+`HPrev`, and the `NT` driver is not modeled. `HPrev`/`HOut` are fiction regions
+(the Python `b_h` is a register) — see the step-slice section's scope list, which
+also records that the step slices read `b_k`/`b_v`/`b_g`/`b_gn` unmasked.
+
+Honest side conditions: offset injectivity of both store footprints (`hCumInj`,
+`hStateInj`) — no-aliasing hypotheses on the strides, which hold for the bench
+strides `(s_s_t, s_s_d) = (S, 1)` and `(VSize, 1)`; and the two carry invariants
+`hPrevV`/`hPrevK`, which are *assumptions* carrying the cross-chunk fold. No
+dimension is pinned. No region-distinctness hypothesis is needed: every slice
+performs its loads before its single store and every `expected` reads the initial
+state, so aliasing cannot falsify a conjunct.
+
+(The `cum_slice` in this declaration's name is historical — it now bundles the
+gated-recurrence bodies too. The name is kept because the checked-in
+`proof_gap_manifest.tsv` keys on it.) -/
 specification chunk_gated_attention_cum_slice_output_summary_general
-    (SReg GCum : RegionName)
-    (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState)
+    (SReg GCum K V G H0 HPrev HOut : RegionName) (USE_INITIAL_STATE : Bool)
+    (s_s_h s_s_t s_s_d T S BT BS
+      m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BK BV : Nat)
+    (s : BlockState)
     (hCumInj : Function.Injective
-      (fun idx : TileIndex [BT, BS] => tileOffset s s_s_h s_s_t s_s_d BT BS idx)) :
-    ComputeCorrect.Realizes_without_Rounding
+      (fun idx : TileIndex [BT, BS] => tileOffset s s_s_h s_s_t s_s_d BT BS idx))
+    (hStateInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s KSize VSize BK BV idx))
+    (hPrevV : ∀ idx : TileIndex [BK, BV],
+      s.readMem HPrev (finalStateOffset s KSize VSize BK BV idx)
+        = hClosed s K V G H0 Bool.false USE_INITIAL_STATE
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx)
+    (hPrevK : ∀ idx : TileIndex [BK, BV],
+      s.readMem HPrev (finalStateOffset s KSize VSize BK BV idx)
+        = hClosed s K V G H0 Bool.true USE_INITIAL_STATE
+            s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx) :
+    -- (1) the `fwd_pre` cumsum body realizes the causal intra-chunk cumsum
+    (ComputeCorrect.Realizes_without_Rounding
       (kernel := chunk_gated_attention_cum_compute_slice SReg GCum s_s_h s_s_t
         s_s_d T S BT BS)
       (initialState := s)
@@ -901,9 +1306,43 @@ specification chunk_gated_attention_cum_slice_output_summary_general
         (fun idx : TileIndex [BT, BS] =>
           (GCum, tileOffset s s_s_h s_s_t s_s_d BT BS idx)))
       (expected := fun idx : TileIndex [BT, BS] =>
-        cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx) :=
-  chunk_gated_attention_cum_compute_slice_closed_form_general SReg GCum
-    s_s_h s_s_t s_s_d T S BT BS s hCumInj
+        cumComputeStoreValue s SReg s_s_h s_s_t s_s_d T S BT BS idx)) ∧
+    -- (2) one `GATEK = false` recurrence body realizes `hClosed (m+1)`
+    (ComputeCorrect.Realizes_without_Rounding
+      (kernel := chunk_gated_attention_h_step_gatev_slice K V G HPrev HOut
+        m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV)
+      (initialState := s)
+      (write := fun idx : TileIndex [BK, BV] =>
+        some (HOut, finalStateOffset s KSize VSize BK BV idx))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        hClosed s K V G H0 Bool.false USE_INITIAL_STATE
+          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx)) ∧
+    -- (3) one `GATEK = true` recurrence body realizes `hClosed (m+1)`
+    (ComputeCorrect.Realizes_without_Rounding
+      (kernel := chunk_gated_attention_h_step_gatek_slice K V G HPrev HOut
+        m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV)
+      (initialState := s)
+      (write := fun idx : TileIndex [BK, BV] =>
+        some (HOut, finalStateOffset s KSize VSize BK BV idx))
+      (expected := fun idx : TileIndex [BK, BV] =>
+        hClosed s K V G H0 Bool.true USE_INITIAL_STATE
+          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV (m + 1) idx)) ∧
+    -- (4) the recurrence's base case
+    (∀ (GATEK : Bool) (idx : TileIndex [BK, BV]),
+      hClosed s K V G H0 GATEK USE_INITIAL_STATE
+          s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV 0 idx
+        = hSeed s H0 USE_INITIAL_STATE KSize VSize BK BV idx) := by
+  refine ⟨chunk_gated_attention_cum_compute_slice_closed_form_general SReg GCum
+      s_s_h s_s_t s_s_d T S BT BS s hCumInj, ?_, ?_, ?_⟩
+  · exact chunk_gated_attention_h_step_gatev_closed_form_general K V G H0 HPrev
+      HOut USE_INITIAL_STATE m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize
+      BT BK BV s hStateInj hPrevV
+  · exact chunk_gated_attention_h_step_gatek_closed_form_general K V G H0 HPrev
+      HOut USE_INITIAL_STATE m s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize
+      BT BK BV s hStateInj hPrevK
+  · intro GATEK idx
+    exact hClosed_zero s K V G H0 GATEK USE_INITIAL_STATE
+      s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV idx
 
 end Correct_without_Rounding
 

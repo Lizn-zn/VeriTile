@@ -812,8 +812,8 @@ theorem fwd_decay_cumsum_surface_closed_compute_correct_general
 
 /-- **Genuine `qg` closed form.** At chunk row `t_rel` and lane `i`, the
 `prepare_qg_kg` kernel writes `q[idx] * exp2(g[idx]) * scale` into `QG`, with
-`exp2(x) = Real.exp (x * Real.log 2)`. This is the honest pointwise
-specification of the `q *= exp2(g) * scale` map (here `scale = 1`). -/
+`exp2(x) = Real.exp (x * Real.log 2)`. This is the honest pointwise specification
+of the `q *= exp2(g) * scale` map (here `scale = 1`). -/
 noncomputable def prepareQgClosed
     (s : BlockState) (Q G : RegionName)
     (s_qk_h DK BT BK : Nat) (t_rel : Fin BT) (i : Fin BK) (scale : ℝ) : ℝ :=
