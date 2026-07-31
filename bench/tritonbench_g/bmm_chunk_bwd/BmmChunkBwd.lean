@@ -1496,4 +1496,1812 @@ specification bmm_chunk_bwd_output_summary_general
     SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS numCSBlocks K
     hBCS hInj hmlt hmlt' hnlt hundef
 
+/-! ## The `⊨[R]` streaming face (wave-5 S1 fold genre, 3-D pid grid)
+
+Everything below is purely additive; the exact surface above is untouched.
+
+Shape of the `execR R` story: the genuine surface carries **no rounding event
+at all** — every load is `.real`, the accumulator add / `tl.dot` are `.real`,
+the `db = acc.to(Db.dtype.element_ty)` cast **erases** at translation (it
+lowers to a plain `Stmt.assign .real … (Op.ref .real … "acc")`, see
+`bbwdPostBody`), and the terminal `tl.store` lowers to `Stmt.store .real`.
+So the whole kernel is cast-free: under `execR R` the prologue and the CS-loop
+collapse verbatim onto the exact stepper (`stepForRangeAuxR_castFree`) and the
+proven `bbwd_preLoop` / `bbwd_step` / `bbwd_loop` invariant stack above is
+reused unchanged. Only the six post-loop statements are re-run on the `R` side
+(`bbwd_postLoopR`), because the skin additionally needs the `readMemAs`
+readback at the `MemCell` layer and the outside-the-window frame, neither of
+which `bbwd_postLoop` exposes. `outDType := .real`, so the skin's boundary
+quantization degenerates (`R.round .real = id`). -/
+
+section IOFace
+
+open scoped VeriTile.Triton.StreamMetaMasked3DKernelIO₂
+
+/-! ### `.real` store plumbing (no rounding events anywhere) -/
+
+/-- A `.real`-typed rounded write **is** the `writeMemAsR R .real` write
+(`RoundingModel.storeValue_real`): lets the masked `.real` terminal store
+reuse the `writeMemAsR` scatter readback / frame lemma family. -/
+private theorem bbwdIO_writeMemTypedR_real_eq (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier TileDType.real) :
+    s.writeMemTypedR R .real region offset v
+      = s.writeMemAsR R .real region offset v := by
+  show s.writeMemTyped .real region offset v = _
+  simp only [BlockState.writeMemTyped, BlockState.writeMemAs, BlockState.writeMemAsR,
+    RoundingModel.storeValue_real]
+
+/-- Tag-exact readback of a stored `.real` cell through `readMemAs .real`. -/
+private theorem bbwdIO_readMemAs_real_of_cell {s : BlockState} {region : RegionName}
+    {offset : Nat} {x : ℝ}
+    (h : s.mem region offset
+      = MemCell.of FloatDType.real.toTileDType (FloatDType.real.ofReal x)) :
+    s.readMemAs .real region offset = FloatDType.real.ofReal x := by
+  simp [BlockState.readMemAs, h, FloatDType.storeValue, FloatDType.ofReal]
+
+/-- A masked `.ptr` load with an `other=` default always evaluates once its
+pointer, mask and default tiles do — the value-free sibling of
+`load_ptr_maskOther_alltrue`, for the safety walk (which runs from arbitrary
+launch states, so no mask is known to be all-true there). -/
+private theorem bbwdIO_load_maskOther_some {shape : TileShape}
+    (ptrOp : Op .ptr shape) (maskOp : Op .bool shape) (otherOp : Op .real shape)
+    (s : BlockState) (ptrs : Tile .ptr shape) (mtile : Tile .bool shape)
+    (otile : Tile .real shape)
+    (hp : evalOp ptrOp s = some ptrs) (hm : evalOp maskOp s = some mtile)
+    (ho : evalOp otherOp s = some otile) :
+    ∃ v : Tile .real shape,
+      evalOp (Op.load .real (MemAccess.ptr ptrOp) (MaskOpt.maskOther maskOp otherOp)) s
+        = some v := by
+  unfold evalOp
+  simp only [hp, hm, ho, Option.bind_eq_bind, Option.bind_some]
+  exact ⟨_, rfl⟩
+
+/-! ### Named body decomposition
+
+`bbwd_body_split` above splits the kernel as `body.take 15 ++ (loop ::
+bbwdPostBody …)`. The `⊨[R]` walk needs the prefix as an explicit statement
+list (to run `TraceSafeListR` and the cast-free collapse over it), so
+`bbwdPrologue` names those 15 statements and `bbwd_take15_eq` locks it to the
+surface. -/
+
+/-- The kernel's 15-statement prologue (the pid derivation, the `Dout`/`A`
+batch bases, the three index vectors, the two pointer tiles and `acc = 0`) —
+`body.take 15`, named. -/
+private def bbwdPrologue (A Dout : RegionName)
+    (chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN BM BN BCS : Nat) :
+    List Stmt :=
+  [ Stmt.assign .nat [] "pid_b" (Op.programId 1),
+    Stmt.assign .nat [] "pid_ch" (Op.programId 2),
+    Stmt.assign .nat [] "pid_c"
+      (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "pid_ch") (Op.constNat ngroups)),
+    Stmt.assign .nat [] "pid_h"
+      (Op.sub .nat Broadcast.nil (Op.ref .nat [] "pid_ch")
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_c") (Op.constNat ngroups))),
+    Stmt.assign .nat [] "num_pid_n"
+      (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.constNat K) (Op.constNat BN)) (Op.constNat 1)) (Op.constNat BN)),
+    Stmt.assign .nat [] "pid_m"
+      (Op.floorDiv .nat Broadcast.nil (Op.programId 0) (Op.ref .nat [] "num_pid_n")),
+    Stmt.assign .nat [] "pid_n"
+      (Op.mod .nat Broadcast.nil (Op.programId 0) (Op.ref .nat [] "num_pid_n")),
+    Stmt.assign .ptr [] "Dout"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase Dout)
+        (Op.add .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_b") (Op.constNat SDB))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_c") (Op.constNat SDC)))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_h") (Op.constNat SDH)))),
+    Stmt.assign .ptr [] "A"
+      (Op.ptrAdd Broadcast.nil (Op.ptrBase A)
+        (Op.add .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_b") (Op.constNat SAB))
+            (Op.mul .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_c") (Op.constNat chunk_size)) (Op.constNat SAS)))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_h") (Op.constNat SAH)))),
+    Stmt.assign .nat [BM] "offs_m"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM)) (Op.arange BM)),
+    Stmt.assign .nat [BN] "offs_n"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN)) (Op.arange BN)),
+    Stmt.assign .nat [BCS] "offs_cs" (Op.arange BCS),
+    Stmt.assign .ptr [BM, BCS] "dout_ptrs"
+      (Op.ptrAdd Broadcast.nil.consL.consR
+        (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "Dout")
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat SDN)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BCS] "offs_cs")) (Op.constNat SDM))),
+    Stmt.assign .ptr [BCS, BN] "a_ptrs"
+      (Op.ptrAdd Broadcast.nil.consL.consR
+        (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "A")
+          (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BCS] "offs_cs")) (Op.constNat SAS)))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat SAK))),
+    Stmt.assign .real [BM, BN] "acc" (Op.full [BM, BN] (Op.const 0)) ]
+
+/-- `bbwdPrologue` **is** the surface's 15-statement prefix. By `rfl`. -/
+private theorem bbwd_take15_eq (A Dout Db : RegionName)
+    (chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK
+      BM BN BCS numCSBlocks K : Nat) :
+    (bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+        SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS).toAlgKernel.body.take 15
+      = bbwdPrologue A Dout chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN BM BN BCS :=
+  rfl
+
+/-- The `cs`-loop statement, named (the `forRangeDyn` whose dynamic bound is
+`tl.cdiv(CSL, BLOCK_SIZE_CS)`). -/
+private def bbwdLoopStmt (BM BN BCS chunk_size CSL K SDM SAS : Nat) : Stmt :=
+  Stmt.forRangeDyn "cs" (Op.constNat 0)
+    (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+      (Op.add .nat Broadcast.nil (Op.constNat CSL) (Op.constNat BCS)) (Op.constNat 1)) (Op.constNat BCS))
+    (Op.constNat 1) (bbwdLoopBody BM BN BCS chunk_size CSL K SDM SAS)
+
+/-- `bbwd_body_split` with the prologue and the loop statement named. By `rfl`. -/
+private theorem bbwd_body_split' (A Dout Db : RegionName)
+    (chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK
+      BM BN BCS numCSBlocks K : Nat) :
+    (bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+        SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS).toAlgKernel.body
+      = bbwdPrologue A Dout chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN BM BN BCS
+        ++ (bbwdLoopStmt BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS
+            :: bbwdPostBody Db chunk_size (BCS * numCSBlocks) K SOB SOS SOH SOK BM BN) :=
+  rfl
+
+/-! ### Cast-free collapse of every segment -/
+
+set_option maxHeartbeats 1000000 in
+/-- The prologue is cast-free: it steps identically under `stepStmtsR R`. -/
+private theorem bbwdIO_prologue_castFree (R : RoundingModel) (A Dout : RegionName)
+    (chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN BM BN BCS : Nat)
+    (t : BlockState) :
+    stepStmtsR R (bbwdPrologue A Dout chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN BM BN BCS) t
+      = stepStmts (bbwdPrologue A Dout chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN BM BN BCS) t := by
+  simp only [bbwdPrologue, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- The CS-loop body is cast-free (two `.real` masked loads, `tl.dot` + add,
+two nat pointer advances — no `castFloat`, no narrow-float store). -/
+private theorem bbwdIO_loopBody_castFree (R : RoundingModel)
+    (BM BN BCS chunk_size CSL K SDM SAS : Nat) (t : BlockState) :
+    stepStmtsR R (bbwdLoopBody BM BN BCS chunk_size CSL K SDM SAS) t
+      = stepStmts (bbwdLoopBody BM BN BCS chunk_size CSL K SDM SAS) t := by
+  simp only [bbwdLoopBody, stepStmtsR, stepStmts, stepStmtR, stepStmt,
+    evalOpR.eq_def, evalOp.eq_def]
+  rfl
+
+/-- `Op.constNat` is cast-free (the `forRangeDyn` start/step bounds). -/
+private theorem bbwdIO_evalR_constNat (R : RoundingModel) (n : Nat) (s : BlockState) :
+    evalOpR R (Op.constNat n) s = evalOp (Op.constNat n) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The dynamic loop bound `tl.cdiv(CSL, BCS)` is cast-free. -/
+private theorem bbwdIO_evalR_cdiv (R : RoundingModel) (CSL BCS : Nat) (s : BlockState) :
+    evalOpR R (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.constNat CSL) (Op.constNat BCS)) (Op.constNat 1))
+        (Op.constNat BCS)) s
+      = evalOp (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+        (Op.add .nat Broadcast.nil (Op.constNat CSL) (Op.constNat BCS)) (Op.constNat 1))
+        (Op.constNat BCS)) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+set_option maxHeartbeats 1000000 in
+/-- The whole `forRangeDyn` CS-loop statement is cast-free: its three bound
+expressions are nat arithmetic and its body collapses, so the `R` fold and the
+exact fold agree step by step. -/
+private theorem bbwdIO_loopStmt_castFree (R : RoundingModel)
+    (BM BN BCS chunk_size CSL K SDM SAS : Nat) (s : BlockState) :
+    stepStmtR R (bbwdLoopStmt BM BN BCS chunk_size CSL K SDM SAS) s
+      = stepStmt (bbwdLoopStmt BM BN BCS chunk_size CSL K SDM SAS) s := by
+  unfold bbwdLoopStmt
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  simp only [stepStmtR, bbwdIO_evalR_constNat, bbwdIO_evalR_cdiv, evalOp_constNat,
+    Option.bind_some, bind, Option.bind_eq_bind]
+  cases hstop : evalOp (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+      (Op.add .nat Broadcast.nil (Op.constNat CSL) (Op.constNat BCS)) (Op.constNat 1))
+      (Op.constNat BCS)) s with
+  | none => rfl
+  | some v =>
+      simp only [Option.bind_some]
+      exact stepForRangeAuxR_castFree R _
+        (bbwdIO_loopBody_castFree R BM BN BCS chunk_size CSL K SDM SAS) "cs" _ _ _ s
+
+/-! ### Flat-memory coverage
+
+`StmtList.FlattenOk` over the body is one large conjunction; the two
+shape-indexed `Op` arms this kernel uses (`expandDim`'s `insertAxis` and
+`dot`'s `batch ++ [M, N]`) match only up to unfolding the *type index*, so
+they are supplied as recipe lemmas **applied**, never put in a simp set. -/
+
+private theorem bbwdIO_flattenOk_expandDim {dtype : TileDType} {shape : TileShape}
+    (ax : Fin (shape.length + 1)) (a : Op dtype shape) :
+    (Op.expandDim ax a).FlattenOk ↔ a.FlattenOk := by simp [Op.FlattenOk]
+
+private theorem bbwdIO_flattenOk_dot {batch : TileShape} {M K N : Nat}
+    (a : Op .real (batch ++ [M, K])) (b : Op .real (batch ++ [K, N])) :
+    (Op.dot a b).FlattenOk ↔ a.FlattenOk ∧ b.FlattenOk := by simp [Op.FlattenOk]
+
+private theorem bbwdIO_flattenOk_cons (st : Stmt) (l : List Stmt)
+    (h1 : Stmt.FlattenOk st) (h2 : StmtList.FlattenOk l) :
+    StmtList.FlattenOk (st :: l) := ⟨h1, h2⟩
+
+private theorem bbwdIO_flattenOk_append : ∀ (l1 l2 : List Stmt),
+    StmtList.FlattenOk l1 → StmtList.FlattenOk l2 → StmtList.FlattenOk (l1 ++ l2)
+  | [], _, _, h2 => h2
+  | _ :: rest, l2, h1, h2 => ⟨h1.1, bbwdIO_flattenOk_append rest l2 h1.2 h2⟩
+
+set_option maxHeartbeats 4000000 in
+/-- The genuine surface sits inside the flat-memory bridge's covered fragment
+(plain `ptrAdd` walks only — no `ptrSub`, no atomics, no block pointers; the
+`forRangeDyn` clause recurses into the loop body). -/
+private theorem bbwd_flattenOk (A Dout Db : RegionName)
+    (chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK
+      BM BN BCS numCSBlocks K : Nat) :
+    ((bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+        SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [bbwd_body_split' A Dout Db chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN
+    SOB SOS SOH SOK BM BN BCS numCSBlocks K]
+  refine bbwdIO_flattenOk_append _ _ ?_ (bbwdIO_flattenOk_cons _ _ ?_ ?_)
+  · simp [bbwdPrologue, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+    repeat' first
+      | exact trivial
+      | apply And.intro
+      | exact (bbwdIO_flattenOk_expandDim _ _).mpr (by simp [Op.FlattenOk])
+  · simp [bbwdLoopStmt, bbwdLoopBody, Stmt.FlattenOk, StmtList.FlattenOk, Op.FlattenOk]
+    repeat' first
+      | exact trivial
+      | apply And.intro
+      | exact (bbwdIO_flattenOk_expandDim _ _).mpr (by simp [Op.FlattenOk])
+      | apply (bbwdIO_flattenOk_dot _ _).mpr
+      | simp [Op.FlattenOk]
+  · simp [bbwdPostBody, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+    repeat' first
+      | exact trivial
+      | apply And.intro
+      | exact (bbwdIO_flattenOk_expandDim _ _).mpr (by simp [Op.FlattenOk])
+
+/-! ### Lane-form address vocabulary
+
+The skin indexes each per-step tile by one flat lane, so the three windows are
+restated as functions of a `Nat` lane (row-major: `Fin (BM*BCS)` for the `Dout`
+tile, `Fin (BCS*BN)` for the `A` tile, `Fin (BM*BN)` for the output). Each is
+literally the corresponding cell of `bbwdInvariant`'s pointer tiles at block
+`t`; `Lane2D.encode`/`decode` bridge them to the `TileIndex` spellings. -/
+
+/-- The `Dout` window: `dout_ptrs` cell `(i, e) = (j / BCS, j % BCS)` after `t`
+block advances — `doutOff + (PM·BM+i)·SDN + e·SDM + t·BCS·SDM`. -/
+private def bbwdDoutAddr (PB PC PH PM BM BCS SDB SDC SDH SDN SDM : Nat) (t j : Nat) : Nat :=
+  doutOff PB PC PH SDB SDC SDH + (PM * BM + j / BCS) * SDN + (j % BCS) * SDM + t * BCS * SDM
+
+/-- The `A` window: `a_ptrs` cell `(e, n) = (j / BN, j % BN)` after `t` block
+advances — `batchOff + e·SAS + (PN·BN+n)·SAK + t·BCS·SAS`. -/
+private def bbwdAAddr (PB PC PH PN BN BCS chunk_size SAB SAS SAH SAK : Nat) (t j : Nat) : Nat :=
+  batchOff PB PC PH chunk_size SAB SAS SAH + (j / BN) * SAS + (PN * BN + j % BN) * SAK
+    + t * BCS * SAS
+
+/-- The output window: `db_ptrs` cell `(i, n) = (j / BN, j % BN)`, i.e.
+`dbOffset` in lane form. -/
+private def bbwdDbAddr (PB PC PH PM PN BM BN chunk_size SOB SOS SOH SOK : Nat) (j : Nat) : Nat :=
+  PB * SOB + PC * chunk_size * SOS + PH * SOH + SOS * (PM * BM + j / BN)
+    + (PN * BN + j % BN) * SOK
+
+/-- The output window at an encoded lane **is** `dbOffset` at the tile index. -/
+private theorem bbwdDbAddr_encode (PB PC PH PM PN BM BN chunk_size SOB SOS SOH SOK : Nat)
+    (idx : TileIndex [BM, BN]) :
+    bbwdDbAddr PB PC PH PM PN BM BN chunk_size SOB SOS SOH SOK (Lane2D.encode idx).val
+      = dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN idx := by
+  simp only [bbwdDbAddr, dbOffset, rowIndex, colIndex, Lane2D.encode_div, Lane2D.encode_mod]
+
+/-! ### The per-lane masked accumulator
+
+The exact stack above pins the **all-live tile** case: `bbwd_step` assumes the
+whole `[BM, BN]` tile is in range (`PM·BM+i < chunk_size`, `PN·BN+n < K`), which
+is what the launched grid guarantees for interior programs. The `⊨[R]` skin,
+however, quantifies over **every** `(pid₀, pid₁, pid₂) : ℕ³`, so a tile-level
+in-range premise would be *contradictory* (`pidM pid₀ K BN = pid₀ / cdiv K BN`
+grows without bound) and the face would be vacuous. The honest contract is
+therefore the kernel's own per-lane one.
+
+Both loads are masked with `other = 0.0`, and each factor's mask depends only on
+its own *output* index: the `dout` tile is zeroed on rows `≥ chunk_size`, the `a`
+tile on columns `≥ K` (the per-block CS-tail conjunct `offs_cs < CSL - cs·BCS` is
+all-true for every `t < numCSBlocks` when `CSL = BCS·numCSBlocks`, so it never
+zeroes anything). Hence `tl.dot` factorizes and the accumulator cell `(i, n)` is
+the plain partial sum when row `i` and column `n` are both live, `0` otherwise —
+that is `bbwdMaskedPartial`. The terminal store is likewise masked
+(`bbwdStoreActive`), so only those lanes are claimed and the frame is exact. -/
+
+/-- The accumulator cell after `c` CS-blocks under the kernel's own load masks:
+the partial sum on live `(row, col)` lanes, `0` on masked-off ones. -/
+private noncomputable def bbwdMaskedPartial (s0 : BlockState) (Dout A : RegionName)
+    (PB PC PH PM PN BM BN chunk_size SDB SDC SDH SDN SDM SAB SAS SAH SAK BLOCK_CS K : Nat)
+    (i : Fin BM) (j : Fin BN) (c : Nat) : ℝ :=
+  if rowIndex PM BM i < chunk_size ∧ colIndex PN BN j < K then
+    accPartial s0 Dout A PB PC PH PM PN BM BN chunk_size SDB SDC SDH SDN SDM
+      SAB SAS SAH SAK BLOCK_CS i j c
+  else 0
+
+/-- The terminal store's own active set: `(offs_m < chunk_size_limit) &
+(offs_n < K)`. -/
+private def bbwdStoreActive (PM PN BM BN CSL K : Nat) (idx : TileIndex [BM, BN]) : Prop :=
+  rowIndex PM BM idx.1 < CSL ∧ colIndex PN BN idx.2.1 < K
+
+private instance (PM PN BM BN CSL K : Nat) (idx : TileIndex [BM, BN]) :
+    Decidable (bbwdStoreActive PM PN BM BN CSL K idx) := by
+  unfold bbwdStoreActive; infer_instance
+
+/-- The terminal store's active set in **lane** form (the shape the skin's
+`writeMask` field takes). -/
+def bbwdWriteOk (PM PN BM BN CSL K : Nat) (j : Nat) : Prop :=
+  PM * BM + j / BN < CSL ∧ PN * BN + j % BN < K
+
+instance (PM PN BM BN CSL K j : Nat) : Decidable (bbwdWriteOk PM PN BM BN CSL K j) := by
+  unfold bbwdWriteOk; infer_instance
+
+/-- Lane form ↔ tile-index form of the store's active set. -/
+private theorem bbwdWriteOk_encode (PM PN BM BN CSL K : Nat) (idx : TileIndex [BM, BN]) :
+    bbwdWriteOk PM PN BM BN CSL K (Lane2D.encode idx).val
+      ↔ bbwdStoreActive PM PN BM BN CSL K idx := by
+  simp only [bbwdWriteOk, bbwdStoreActive, rowIndex, colIndex, Lane2D.encode_div,
+    Lane2D.encode_mod]
+
+/-- The masked loop invariant: `bbwdInvariant` with the accumulator at the
+per-lane masked partial sum. -/
+private noncomputable def bbwdMInv (Dout A : RegionName) (s0 : BlockState)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK
+      BLOCK_CS numCSBlocks K : Nat) (c : Nat) (s : BlockState) : Prop :=
+  s.pids = s0.pids ∧ c ≤ numCSBlocks ∧
+  (s.regs .real [BM, BN] "acc" = some ⟨fun idx : TileIndex [BM, BN] =>
+      some (bbwdMaskedPartial s0 Dout A PB PC PH PM PN BM BN chunk_size SDB SDC SDH SDN SDM
+        SAB SAS SAH SAK BLOCK_CS K idx.1 idx.2.1 c)⟩) ∧
+  (s.regs .nat [] "pid_b" = some (Tile.scalar PB)) ∧
+  (s.regs .nat [] "pid_c" = some (Tile.scalar PC)) ∧
+  (s.regs .nat [] "pid_h" = some (Tile.scalar PH)) ∧
+  (s.regs .nat [] "pid_m" = some (Tile.scalar PM)) ∧
+  (s.regs .nat [] "pid_n" = some (Tile.scalar PN)) ∧
+  (s.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => PM * BM + i.val))) ∧
+  (s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => PN * BN + j.val))) ∧
+  (s.regs .nat [BLOCK_CS] "offs_cs" = some (Tile.vec (fun e : Fin BLOCK_CS => e.val))) ∧
+  (s.regs .ptr [BM, BLOCK_CS] "dout_ptrs" = some ⟨fun idx : TileIndex [BM, BLOCK_CS] =>
+      (Dout.cast, doutOff PB PC PH SDB SDC SDH + (PM * BM + idx.1.val) * SDN
+        + idx.2.1.val * SDM + c * BLOCK_CS * SDM)⟩) ∧
+  (s.regs .ptr [BLOCK_CS, BN] "a_ptrs" = some ⟨fun idx : TileIndex [BLOCK_CS, BN] =>
+      (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH + idx.1.val * SAS
+        + (PN * BN + idx.2.1.val) * SAK + c * BLOCK_CS * SAS)⟩) ∧
+  (∀ rg o, s.undef rg o = 0) ∧ (s.mem = s0.mem)
+
+/-! ### The terminal masked store on the `R` side
+
+`bbwd_postLoop` runs the six post-loop statements under the exact stepper, but
+only for the all-live tile; the skin additionally needs (a) the `readMemAs .real`
+readback at the `MemCell` layer, (b) the full outside-the-window frame, and (c)
+the store's own mask kept as the active set. Since the store is `.real`-typed the
+`R` run **is** the exact run (`bbwdIO_writeMemTypedR_real_eq`); the scatter is
+re-derived here through the `writeMemAsR` readback / frame family. -/
+
+/-- The terminal store's mask tile, evaluated: lane `(i, n)` is
+`(offs_m i < CSL) && (offs_n n < K)`. The general (not all-true) sibling of
+`dbmask_alltrue`. -/
+private theorem bbwdIO_dbmask_eval (s : BlockState) (CSL K BM BN : Nat)
+    (gm : Fin BM → Nat) (gn : Fin BN → Nat)
+    (hm : s.regs .nat [BM] "offs_m" = some (Tile.vec gm))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec gn)) :
+    ∃ mtile : Tile .bool [BM, BN],
+      evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat CSL))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat K))) s = some mtile
+      ∧ ∀ idx : TileIndex [BM, BN],
+          mtile.data idx = (decide (gm idx.1 < CSL) && decide (gn idx.2.1 < K)) := by
+  refine ⟨_, by
+    simp only [evalOp, evalOp.eq_def, hm, hn, Option.bind, Option.bind_some, Option.bind_eq_bind,
+      Tile.expandDim, pure, Option.some.injEq]; rfl, ?_⟩
+  intro idx
+  simp only [Tile.bop, Tile.cop, Tile.expandDim, Tile.vec, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, ComparableDType.lt, TileShape.dropInsertedIndex]
+  rfl
+
+/-- The `dout` load's mask tile, evaluated. The CS-tail conjunct
+`offs_cs < CSL - cs·BCS` is all-true (hypothesis `hlt`, discharged from
+`c < numCSBlocks` and `CSL = BCS·numCSBlocks`), so only the row conjunct
+survives: lane `(i, e)` is live iff `offs_m i < chunk_size`. -/
+private theorem bbwdIO_doutmask_eval (s : BlockState) (BM BCS chunk_size CSL c : Nat)
+    (gm : Fin BM → Nat)
+    (hm : s.regs .nat [BM] "offs_m" = some (Tile.vec gm))
+    (hcs : s.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val)))
+    (hcc : s.regs .nat [] "cs" = some (Tile.scalar c))
+    (hlt : ∀ e : Fin BCS, e.val < CSL - c * BCS) :
+    ∃ mtile : Tile .bool [BM, BCS],
+      evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat chunk_size))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BCS] "offs_cs"))
+          (Op.sub .nat Broadcast.nil (Op.constNat CSL)
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cs") (Op.constNat BCS))))) s = some mtile
+      ∧ ∀ idx : TileIndex [BM, BCS], mtile.data idx = decide (gm idx.1 < chunk_size) := by
+  refine ⟨_, by
+    simp only [evalOp, evalOp.eq_def, hm, hcs, hcc, Option.bind, Option.bind_some,
+      Option.bind_eq_bind, Tile.expandDim, pure, Option.some.injEq]; rfl, ?_⟩
+  intro idx
+  simp only [Tile.bop, Tile.cop, Tile.expandDim, Tile.vec, Tile.scalar, ComparableDType.lt,
+    NumericDType.sub, NumericDType.mul, Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex]
+  simp [hlt idx.2.1]
+
+/-- The `a` load's mask tile, evaluated: only the column conjunct
+`offs_n n < K` survives (same CS-tail argument). -/
+private theorem bbwdIO_amask_eval (s : BlockState) (BN BCS K CSL c : Nat) (gn : Fin BN → Nat)
+    (hcs : s.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val)))
+    (hn : s.regs .nat [BN] "offs_n" = some (Tile.vec gn))
+    (hcc : s.regs .nat [] "cs" = some (Tile.scalar c))
+    (hlt : ∀ e : Fin BCS, e.val < CSL - c * BCS) :
+    ∃ mtile : Tile .bool [BCS, BN],
+      evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BCS] "offs_cs"))
+          (Op.sub .nat Broadcast.nil (Op.constNat CSL)
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cs") (Op.constNat BCS))))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat K))) s = some mtile
+      ∧ ∀ idx : TileIndex [BCS, BN], mtile.data idx = decide (gn idx.2.1 < K) := by
+  refine ⟨_, by
+    simp only [evalOp, evalOp.eq_def, hcs, hn, hcc, Option.bind, Option.bind_some,
+      Option.bind_eq_bind, Tile.expandDim, pure, Option.some.injEq]; rfl, ?_⟩
+  intro idx
+  simp only [Tile.bop, Tile.cop, Tile.expandDim, Tile.vec, Tile.scalar, ComparableDType.lt,
+    NumericDType.sub, NumericDType.mul, Broadcast.leftIndex, Broadcast.rightIndex,
+    TileShape.dropInsertedIndex]
+  simp [hlt idx.1]
+
+/-- The `offs_m` / `offs_n` refresh op is cast-free. -/
+private theorem bbwdIO_evalR_offs (R : RoundingModel) (M B : Nat) (pidReg : RegName)
+    (s : BlockState) :
+    evalOpR R (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] pidReg) (Op.constNat B)) (Op.arange M)) s
+      = evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] pidReg) (Op.constNat B)) (Op.arange M)) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `Db` base-pointer advance is cast-free. -/
+private theorem bbwdIO_evalR_dbBase (R : RoundingModel) (Db : RegionName)
+    (chunk_size SOB SOS SOH : Nat) (s : BlockState) :
+    evalOpR R (Op.ptrAdd Broadcast.nil (Op.ptrBase Db)
+        (Op.add .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_b") (Op.constNat SOB))
+            (Op.mul .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_c") (Op.constNat chunk_size))
+              (Op.constNat SOS)))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_h") (Op.constNat SOH)))) s
+      = evalOp (Op.ptrAdd Broadcast.nil (Op.ptrBase Db)
+        (Op.add .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_b") (Op.constNat SOB))
+            (Op.mul .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_c") (Op.constNat chunk_size))
+              (Op.constNat SOS)))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_h") (Op.constNat SOH)))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The `db_ptrs` pointer tile op is cast-free. -/
+private theorem bbwdIO_evalR_dbPtrs (R : RoundingModel) (BM BN SOS SOK : Nat) (s : BlockState) :
+    evalOpR R (Op.ptrAdd Broadcast.nil.consL.consR
+        (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "Db")
+          (Op.mul .nat Broadcast.scalarL (Op.constNat SOS)
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n"))
+          (Op.constNat SOK))) s
+      = evalOp (Op.ptrAdd Broadcast.nil.consL.consR
+        (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "Db")
+          (Op.mul .nat Broadcast.scalarL (Op.constNat SOS)
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m"))))
+        (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n"))
+          (Op.constNat SOK))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+/-- The terminal store's mask is cast-free. -/
+private theorem bbwdIO_evalR_dbMask (R : RoundingModel) (CSL K BM BN : Nat) (s : BlockState) :
+    evalOpR R (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat CSL))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat K))) s
+      = evalOp (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat CSL))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat K))) s := by
+  simp only [evalOpR.eq_def, evalOp.eq_def]
+
+set_option maxHeartbeats 4000000 in
+/-- **R-postLoop (masked)**: from the masked invariant at `numCSBlocks` blocks,
+the six post-loop statements terminate under `stepStmtsR R`; every
+**store-active** output lane holds the exact-ℝ cell
+`MemCell.of .real (bbwdMaskedPartial …)` — a `.real` store carries no rounding
+event — together with a per-cell frame outside the active output window. -/
+private theorem bbwd_postLoopR (R : RoundingModel) (Dout A Db : RegionName) (s0 : BlockState)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK
+      SOB SOS SOH SOK BCS numCSBlocks K : Nat)
+    (hInj : Function.Injective (dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN))
+    (st : BlockState)
+    (hinv : bbwdMInv Dout A s0 PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM
+      SAB SAS SAH SAK BCS numCSBlocks K numCSBlocks st) :
+    ∃ sfin, stepStmtsR R (bbwdPostBody Db chunk_size (BCS * numCSBlocks) K SOB SOS SOH SOK BM BN) st
+        = some sfin
+      ∧ (∀ idx : TileIndex [BM, BN],
+          bbwdStoreActive PM PN BM BN (BCS * numCSBlocks) K idx →
+          sfin.mem Db (dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN idx)
+            = MemCell.of FloatDType.real.toTileDType
+                (FloatDType.real.ofReal
+                  (bbwdMaskedPartial s0 Dout A PB PC PH PM PN BM BN chunk_size SDB SDC SDH SDN SDM
+                    SAB SAS SAH SAK BCS K idx.1 idx.2.1 numCSBlocks)))
+      ∧ (∀ r o, (r ≠ Db ∨ ∀ idx : TileIndex [BM, BN],
+            bbwdStoreActive PM PN BM BN (BCS * numCSBlocks) K idx →
+            o ≠ dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN idx) →
+          sfin.mem r o = st.mem r o) := by
+  simp only [bbwdMInv] at hinv
+  obtain ⟨hpids, hcle, hz, hpb, hpc, hph, hpm, hpn, hmm, hnn, hcs, hdp, hap, hundef, hmem⟩ := hinv
+  set g : TileIndex [BM, BN] → ℝ :=
+    fun idx => bbwdMaskedPartial s0 Dout A PB PC PH PM PN BM BN chunk_size SDB SDC SDH SDN SDM
+      SAB SAS SAH SAK BCS K idx.1 idx.2.1 numCSBlocks with hg
+  have hzspec : st.regs .real [BM, BN] "acc" = some ⟨fun idx => some (g idx)⟩ := hz
+  unfold bbwdPostBody
+  -- step 1: offs_m
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+    (show evalOpR R _ st = _ from by rw [bbwdIO_evalR_offs]; exact offs_m_eval st PM BM hpm))]
+  set s1 := st.setReg "offs_m" .nat [BM] (Tile.vec (fun i : Fin BM => rowIndex PM BM i)) with hs1
+  -- step 2: offs_n
+  have hpn1 : s1.regs .nat [] "pid_n" = some (Tile.scalar PN) := by simp [hs1, hpn]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+    (show evalOpR R _ s1 = _ from by rw [bbwdIO_evalR_offs]; exact offs_n_eval s1 PN BN hpn1))]
+  set s2 := s1.setReg "offs_n" .nat [BN] (Tile.vec (fun j : Fin BN => colIndex PN BN j)) with hs2
+  -- step 3: db = acc
+  have hacc2 : s2.regs .real [BM, BN] "acc" = some ⟨fun idx => some (g idx)⟩ := by
+    simp [hs2, hs1, hzspec]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+    (show evalOpR R (Op.ref .real [BM, BN] "acc") s2 = some ⟨fun idx => some (g idx)⟩ by
+      rw [evalOpR_ref, hacc2]))]
+  set s3 := s2.setReg "db" .real [BM, BN] (⟨fun idx => some (g idx)⟩ : Tile .real [BM, BN]) with hs3
+  -- step 4: Db base
+  have hpb3 : s3.regs .nat [] "pid_b" = some (Tile.scalar PB) := by simp [hs3, hs2, hs1, hpb]
+  have hpc3 : s3.regs .nat [] "pid_c" = some (Tile.scalar PC) := by simp [hs3, hs2, hs1, hpc]
+  have hph3 : s3.regs .nat [] "pid_h" = some (Tile.scalar PH) := by simp [hs3, hs2, hs1, hph]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+    (show evalOpR R _ s3 = _ from by
+      rw [bbwdIO_evalR_dbBase]
+      exact dbptr_base_eval s3 Db PB PC PH chunk_size SOB SOS SOH hpb3 hpc3 hph3))]
+  set s4 := s3.setReg "Db" .ptr []
+    (Tile.scalar (Db.cast, PB * SOB + PC * chunk_size * SOS + PH * SOH)) with hs4
+  -- step 5: db_ptrs
+  set opT : Tile .ptr [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] =>
+      (Db.cast, dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN idx)⟩ with hopT
+  have hobase4 : s4.regs .ptr [] "Db"
+      = some (Tile.scalar (Db.cast, PB * SOB + PC * chunk_size * SOS + PH * SOH)) := by simp [hs4]
+  have hm4 : s4.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => rowIndex PM BM i)) := by
+    simp [hs4, hs3, hs2, hs1]
+  have hn4 : s4.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => colIndex PN BN j)) := by
+    simp [hs4, hs3, hs2]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+    (show evalOpR R _ s4 = some opT from by
+      rw [bbwdIO_evalR_dbPtrs,
+        dbptrs_eval s4 Db BM BN SOS SOK (PB * SOB + PC * chunk_size * SOS + PH * SOH)
+          (fun i => rowIndex PM BM i) (fun j => colIndex PN BN j) hobase4 hm4 hn4]
+      rfl))]
+  set s5 := s4.setReg "db_ptrs" .ptr [BM, BN] opT with hs5
+  -- step 6: the masked `.real` store
+  have hm5 : s5.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => rowIndex PM BM i)) := by
+    simp [hs5, hm4]
+  have hn5 : s5.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => colIndex PN BN j)) := by
+    simp [hs5, hn4]
+  obtain ⟨mT, hmask_eval, hmaskval⟩ :=
+    bbwdIO_dbmask_eval s5 (BCS * numCSBlocks) K BM BN (fun i => rowIndex PM BM i)
+      (fun j => colIndex PN BN j) hm5 hn5
+  set oT : Tile .real [BM, BN] := (⟨fun idx => some (g idx)⟩ : Tile .real [BM, BN]) with hoT
+  have hout5 : s5.regs .real [BM, BN] "db" = some oT := by simp [hs5, hs4, hs3, hs2, hoT]
+  have hop5 : s5.regs .ptr [BM, BN] "db_ptrs" = some opT := by simp [hs5]
+  have hmaskR : evalOpR R (Op.boolAnd Broadcast.nil.consL.consR
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat (BCS * numCSBlocks)))
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat K))) s5
+      = some mT := by
+    rw [bbwdIO_evalR_dbMask]; exact hmask_eval
+  have hboolval : ∀ idx : TileIndex [BM, BN],
+      mT.data idx = decide (bbwdStoreActive PM PN BM BN (BCS * numCSBlocks) K idx) := by
+    intro idx
+    rw [hmaskval idx]
+    unfold bbwdStoreActive
+    by_cases h1 : rowIndex PM BM idx.1 < BCS * numCSBlocks <;>
+      by_cases h2 : colIndex PN BN idx.2.1 < K <;> simp [h1, h2]
+  have hstore : stepStmtR R (Stmt.store .real [BM, BN]
+      (MemAccess.ptr (Op.ref .ptr [BM, BN] "db_ptrs")) (Op.ref .real [BM, BN] "db")
+      (MaskOpt.mask (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat (BCS * numCSBlocks)))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat K))))) s5
+      = some ((TileShape.allIndices [BM, BN]).foldl
+          (fun acc idx =>
+            if bbwdStoreActive PM PN BM BN (BCS * numCSBlocks) K idx then
+              acc.writeMemAsR R .real Db
+                (dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN idx) (oT.data idx)
+            else acc) s5) := by
+    simp only [stepStmtR, evalOpR_ref, hout5, hop5, hmaskR, bind, Option.bind_some,
+      Option.map_some]
+    refine congrArg some (List.foldl_ext _ _ s5 (fun acc idx _ => ?_))
+    by_cases hb : bbwdStoreActive PM PN BM BN (BCS * numCSBlocks) K idx
+    · simp only [hboolval idx, hb, decide_true, if_true, hopT, Region.cast_id,
+        bbwdIO_writeMemTypedR_real_eq]
+    · simp only [hboolval idx, hb, decide_false, Bool.false_eq_true, if_false]
+  rw [stepStmtsR_cons_some hstore, stepStmtsR_nil]
+  refine ⟨_, rfl, ?_, ?_⟩
+  · intro idx hact
+    rw [BlockState.scatter_memcell_R_prop_masked_nd R .real (region := Db) s5
+      (dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN)
+      (fun idx => oT.data idx) (bbwdStoreActive PM PN BM BN (BCS * numCSBlocks) K) hInj idx,
+      if_pos hact]
+    simp only [hoT, RoundingModel.storeValue_real, FloatDType.real_storeValue,
+      WithBot.unbotD_some, hg]
+  · intro r o hcond
+    by_cases hr : r = Db
+    · rcases hcond with hne | hno
+      · exact absurd hr hne
+      · rw [hr, BlockState.foldl_writeMemAsR_preserve_masked_prop R .real
+          (dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN)
+          (fun idx => oT.data idx) (bbwdStoreActive PM PN BM BN (BCS * numCSBlocks) K) o
+          (TileShape.allIndices [BM, BN]) (fun k _ hk he => hno k hk he.symm) s5]
+        rfl
+    · rw [BlockState.foldl_writeMemAsR_preserve_other_region R .real
+        (dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN)
+        (fun idx => oT.data idx) (bbwdStoreActive PM PN BM BN (BCS * numCSBlocks) K) r hr o
+        (TileShape.allIndices [BM, BN]) s5]
+      rfl
+
+/-! ### The safety-walk context (weak, `undef`-free)
+
+The skin's `hts` obligation quantifies over an **arbitrary** launch state, so
+the safety walk cannot assume `bbwd_preLoop`'s clean-`undef` precondition (nor
+does it need the accumulator's *value*). `bbwdSafeInv` is the shape half of
+`bbwdInvariant`: the pid scalars, the three index vectors, *some* accumulator
+tile, and the two loop-carried pointer tiles at block `c`. -/
+
+/-- The safety-walk loop invariant: `bbwdInvariant` minus the accumulator
+value, the `undef` pin and the `mem`/`pids` pins. -/
+private def bbwdSafeInv (Dout A : RegionName)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks : Nat)
+    (c : Nat) (s : BlockState) : Prop :=
+  c ≤ numCSBlocks ∧
+  (s.regs .nat [] "pid_b" = some (Tile.scalar PB)) ∧
+  (s.regs .nat [] "pid_c" = some (Tile.scalar PC)) ∧
+  (s.regs .nat [] "pid_h" = some (Tile.scalar PH)) ∧
+  (s.regs .nat [] "pid_m" = some (Tile.scalar PM)) ∧
+  (s.regs .nat [] "pid_n" = some (Tile.scalar PN)) ∧
+  (s.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => PM * BM + i.val))) ∧
+  (s.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => PN * BN + j.val))) ∧
+  (s.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val))) ∧
+  (∃ zT : Tile .real [BM, BN], s.regs .real [BM, BN] "acc" = some zT) ∧
+  (s.regs .ptr [BM, BCS] "dout_ptrs" = some ⟨fun idx : TileIndex [BM, BCS] =>
+      (Dout.cast, doutOff PB PC PH SDB SDC SDH + (PM * BM + idx.1.val) * SDN
+        + idx.2.1.val * SDM + c * BCS * SDM)⟩) ∧
+  (s.regs .ptr [BCS, BN] "a_ptrs" = some ⟨fun idx : TileIndex [BCS, BN] =>
+      (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH + idx.1.val * SAS
+        + (PN * BN + idx.2.1.val) * SAK + c * BCS * SAS)⟩)
+
+set_option maxHeartbeats 2000000 in
+/-- Weak `preLoop`: from an **arbitrary** state the 15-statement prologue steps
+to a state satisfying `bbwdSafeInv … 0` (no clean-`undef` hypothesis; the value
+half of `bbwd_preLoop` is dropped). -/
+private theorem bbwd_preLoopW (A Dout : RegionName) (s : BlockState)
+    (chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN BM BN BCS numCSBlocks : Nat) :
+    ∃ s', stepStmts (bbwdPrologue A Dout chunk_size K ngroups SAB SAS SAH SAK
+        SDB SDC SDH SDM SDN BM BN BCS) s = some s'
+      ∧ bbwdSafeInv Dout A (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN)
+          chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks 0 s' := by
+  obtain ⟨s7, h7, hpids, hpb, hpc, hph, hpm, hpn, huf, hmem⟩ :=
+    preLoop_scalars s K ngroups BM BN BCS
+  set PB := s.pids 1 with hPB
+  set PC := pidC (s.pids 2) ngroups with hPC
+  set PH := pidH (s.pids 2) ngroups with hPH
+  set PM := pidM (s.pids 0) K BN with hPM
+  set PN := pidN (s.pids 0) K BN with hPN
+  rw [show bbwdPrologue A Dout chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN BM BN BCS
+      = [ Stmt.assign .nat [] "pid_b" (Op.programId 1),
+          Stmt.assign .nat [] "pid_ch" (Op.programId 2),
+          Stmt.assign .nat [] "pid_c"
+            (Op.floorDiv .nat Broadcast.nil (Op.ref .nat [] "pid_ch") (Op.constNat ngroups)),
+          Stmt.assign .nat [] "pid_h"
+            (Op.sub .nat Broadcast.nil (Op.ref .nat [] "pid_ch")
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_c") (Op.constNat ngroups))),
+          Stmt.assign .nat [] "num_pid_n"
+            (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+              (Op.add .nat Broadcast.nil (Op.constNat K) (Op.constNat BN)) (Op.constNat 1)) (Op.constNat BN)),
+          Stmt.assign .nat [] "pid_m"
+            (Op.floorDiv .nat Broadcast.nil (Op.programId 0) (Op.ref .nat [] "num_pid_n")),
+          Stmt.assign .nat [] "pid_n"
+            (Op.mod .nat Broadcast.nil (Op.programId 0) (Op.ref .nat [] "num_pid_n")) ]
+      ++ [ Stmt.assign .ptr [] "Dout"
+            (Op.ptrAdd Broadcast.nil (Op.ptrBase Dout)
+              (Op.add .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil
+                  (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_b") (Op.constNat SDB))
+                  (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_c") (Op.constNat SDC)))
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_h") (Op.constNat SDH)))),
+          Stmt.assign .ptr [] "A"
+            (Op.ptrAdd Broadcast.nil (Op.ptrBase A)
+              (Op.add .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil
+                  (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_b") (Op.constNat SAB))
+                  (Op.mul .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_c") (Op.constNat chunk_size)) (Op.constNat SAS)))
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_h") (Op.constNat SAH)))),
+          Stmt.assign .nat [BM] "offs_m"
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM)) (Op.arange BM)),
+          Stmt.assign .nat [BN] "offs_n"
+            (Op.add .nat Broadcast.scalarL
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN)) (Op.arange BN)),
+          Stmt.assign .nat [BCS] "offs_cs" (Op.arange BCS),
+          Stmt.assign .ptr [BM, BCS] "dout_ptrs"
+            (Op.ptrAdd Broadcast.nil.consL.consR
+              (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "Dout")
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat SDN)))
+              (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BCS] "offs_cs")) (Op.constNat SDM))),
+          Stmt.assign .ptr [BCS, BN] "a_ptrs"
+            (Op.ptrAdd Broadcast.nil.consL.consR
+              (Op.ptrAdd Broadcast.scalarL (Op.ref .ptr [] "A")
+                (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BCS] "offs_cs")) (Op.constNat SAS)))
+              (Op.mul .nat Broadcast.scalarR (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat SAK))),
+          Stmt.assign .real [BM, BN] "acc" (Op.full [BM, BN] (Op.const 0)) ] from rfl]
+  rw [stepStmts.append_some h7]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (doutptr_base_eval s7 Dout PB PC PH SDB SDC SDH hpb hpc hph))]
+  set s8 := s7.setReg "Dout" .ptr [] (Tile.scalar (Dout.cast, doutOff PB PC PH SDB SDC SDH)) with hs8
+  have hpb8 : s8.regs .nat [] "pid_b" = some (Tile.scalar PB) := by simp [hs8, hpb]
+  have hpc8 : s8.regs .nat [] "pid_c" = some (Tile.scalar PC) := by simp [hs8, hpc]
+  have hph8 : s8.regs .nat [] "pid_h" = some (Tile.scalar PH) := by simp [hs8, hph]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aptr_base_eval s8 A PB PC PH chunk_size SAB SAS SAH hpb8 hpc8 hph8))]
+  set s9 := s8.setReg "A" .ptr [] (Tile.scalar (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH)) with hs9
+  have hpm9 : s9.regs .nat [] "pid_m" = some (Tile.scalar PM) := by simp [hs9, hs8, hpm]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM)) (Op.arange BM)) s9
+      = some (Tile.vec (fun i : Fin BM => PM * BM + i.val)) by
+      simp only [evalOp_add, evalOp_mul, evalOp_ref, hpm9, evalOp_constNat, evalOp_arange, Option.bind, Option.bind_some]
+      refine congrArg some ?_; ext i
+      simp only [Tile.bop, Tile.vec, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  set s10 := s9.setReg "offs_m" .nat [BM] (Tile.vec (fun i : Fin BM => PM * BM + i.val)) with hs10
+  have hpn10 : s10.regs .nat [] "pid_n" = some (Tile.scalar PN) := by simp [hs10, hs9, hs8, hpn]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.add .nat Broadcast.scalarL
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN)) (Op.arange BN)) s10
+      = some (Tile.vec (fun j : Fin BN => PN * BN + j.val)) by
+      simp only [evalOp_add, evalOp_mul, evalOp_ref, hpn10, evalOp_constNat, evalOp_arange, Option.bind, Option.bind_some]
+      refine congrArg some ?_; ext j
+      simp only [Tile.bop, Tile.vec, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.add, NumericDType.mul]))]
+  set s11 := s10.setReg "offs_n" .nat [BN] (Tile.vec (fun j : Fin BN => PN * BN + j.val)) with hs11
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.arange BCS) s11 = some (Tile.vec (fun e : Fin BCS => e.val)) by simp [evalOp_arange]))]
+  set s12 := s11.setReg "offs_cs" .nat [BCS] (Tile.vec (fun e : Fin BCS => e.val)) with hs12
+  have hdbase12 : s12.regs .ptr [] "Dout" = some (Tile.scalar (Dout.cast, doutOff PB PC PH SDB SDC SDH)) := by
+    simp [hs12, hs11, hs10, hs9, hs8]
+  have hm12 : s12.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => PM * BM + i.val)) := by simp [hs12, hs11, hs10]
+  have hcs12 : s12.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val)) := by simp [hs12]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (doutptrs_eval s12 Dout BM BCS SDN SDM (doutOff PB PC PH SDB SDC SDH) (fun i => PM * BM + i.val) hdbase12 hm12 hcs12))]
+  set s13 := s12.setReg "dout_ptrs" .ptr [BM, BCS]
+    (⟨fun idx : TileIndex [BM, BCS] => (Dout.cast, doutOff PB PC PH SDB SDC SDH + (PM * BM + idx.1.val) * SDN + idx.2.1.val * SDM)⟩) with hs13
+  have habase13 : s13.regs .ptr [] "A" = some (Tile.scalar (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH)) := by
+    simp [hs13, hs12, hs11, hs10, hs9]
+  have hcs13 : s13.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val)) := by simp [hs13, hs12]
+  have hn13 : s13.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => PN * BN + j.val)) := by simp [hs13, hs12, hs11]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (aptrs_eval s13 A BCS BN SAS SAK (batchOff PB PC PH chunk_size SAB SAS SAH) (fun j => PN * BN + j.val) habase13 hcs13 hn13))]
+  set s14 := s13.setReg "a_ptrs" .ptr [BCS, BN]
+    (⟨fun idx : TileIndex [BCS, BN] => (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH + idx.1.val * SAS + (PN * BN + idx.2.1.val) * SAK)⟩) with hs14
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (acc_init_eval s14 BM BN)), stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨Nat.zero_le _, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [hs14, hs13, hs12, hs11, hs10, hs9, hs8, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq]; exact hpb
+  · simp only [hs14, hs13, hs12, hs11, hs10, hs9, hs8, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq]; exact hpc
+  · simp only [hs14, hs13, hs12, hs11, hs10, hs9, hs8, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq]; exact hph
+  · simp only [hs14, hs13, hs12, hs11, hs10, hs9, hs8, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq]; exact hpm
+  · simp only [hs14, hs13, hs12, hs11, hs10, hs9, hs8, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq]; exact hpn
+  · simp only [hs14, hs13, hs12, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq]; exact hm12
+  · simp only [hs14, hs13, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq]; exact hn13
+  · simp only [hs14, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq]; exact hcs13
+  · refine ⟨⟨fun _ => some (0 : ℝ)⟩, ?_⟩
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+  · simp only [hs14, hs13, BlockState.setReg_same, BlockState.setReg_ne_name,
+      BlockState.setReg_ne_shape, BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq,
+      not_false_eq_true, String.reduceEq, Option.some.injEq]
+    ext idx <;> simp [Nat.zero_mul]
+  · simp only [hs14, BlockState.setReg_same, BlockState.setReg_ne_name, BlockState.setReg_ne_shape,
+      BlockState.setReg_ne_dtype, ne_eq, reduceCtorEq, not_false_eq_true, String.reduceEq,
+      Option.some.injEq]
+    ext idx <;> simp [Nat.zero_mul]
+
+set_option maxHeartbeats 4000000 in
+/-- Weak step lemma: one CS-block iteration from `bbwdSafeInv c` steps
+successfully (exact stepper; the body is cast-free) and re-establishes
+`bbwdSafeInv (c+1)` — the shape half of `bbwd_step`, valid from arbitrary
+launch states. -/
+private theorem bbwd_stepW (Dout A : RegionName)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks K : Nat)
+    (c : Nat) (s : BlockState) (hclt : c < numCSBlocks)
+    (hinv : bbwdSafeInv Dout A PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM
+      SAB SAS SAH SAK BCS numCSBlocks c s) :
+    ∃ s', stepStmts (bbwdLoopBody BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS)
+        (s.setReg "cs" .nat [] (Tile.scalar c)) = some s'
+      ∧ bbwdSafeInv Dout A PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM
+          SAB SAS SAH SAK BCS numCSBlocks (c + 1) s' := by
+  obtain ⟨hcle, hpb, hpc, hph, hpm, hpn, hmm, hnn, hcs, ⟨zT, hz⟩, hdp, hap⟩ := hinv
+  set CSL := BCS * numCSBlocks with hCSLdef
+  have hlt : ∀ e : Fin BCS, e.val < CSL - c * BCS := by
+    intro e
+    have hcCSL : c * BCS + BCS ≤ CSL := by
+      rw [hCSLdef]; calc c * BCS + BCS = (c + 1) * BCS := by ring
+        _ ≤ numCSBlocks * BCS := Nat.mul_le_mul_right _ hclt
+        _ = BCS * numCSBlocks := Nat.mul_comm _ _
+    omega
+  set dpT : Tile .ptr [BM, BCS] :=
+    ⟨fun idx : TileIndex [BM, BCS] => (Dout.cast, doutOff PB PC PH SDB SDC SDH
+      + (PM * BM + idx.1.val) * SDN + idx.2.1.val * SDM + c * BCS * SDM)⟩ with hdpT
+  set apT : Tile .ptr [BCS, BN] :=
+    ⟨fun idx : TileIndex [BCS, BN] => (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH
+      + idx.1.val * SAS + (PN * BN + idx.2.1.val) * SAK + c * BCS * SAS)⟩ with hapT
+  set sk := s.setReg "cs" .nat [] (Tile.scalar c) with hsk
+  have hdpk : sk.regs .ptr [BM, BCS] "dout_ptrs" = some dpT := by simp [hsk, hdp, hdpT]
+  have hapk : sk.regs .ptr [BCS, BN] "a_ptrs" = some apT := by simp [hsk, hap, hapT]
+  have hzk : sk.regs .real [BM, BN] "acc" = some zT := by simp [hsk, hz]
+  have hmk : sk.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => PM * BM + i.val)) := by
+    simp [hsk, hmm]
+  have hnk : sk.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => PN * BN + j.val)) := by
+    simp [hsk, hnn]
+  have hcsk : sk.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val)) := by
+    simp [hsk, hcs]
+  have hcck : sk.regs .nat [] "cs" = some (Tile.scalar c) := by simp [hsk]
+  obtain ⟨dmt, hdm_eval, -⟩ :=
+    bbwdIO_doutmask_eval sk BM BCS chunk_size CSL c _ hmk hcsk hcck hlt
+  obtain ⟨dsub, hdload⟩ :=
+    bbwdIO_load_maskOther_some (Op.ref .ptr [BM, BCS] "dout_ptrs") _ _ sk dpT dmt _
+      (by rw [evalOp_ref]; simp [hdpk]) hdm_eval (other_broadcast_eval sk [BM, BCS])
+  set sk1 := sk.setReg "dout" .real [BM, BCS] dsub with hsk1
+  have hcsk1 : sk1.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val)) := by
+    simp [hsk1, hcsk]
+  have hnk1 : sk1.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => PN * BN + j.val)) := by
+    simp [hsk1, hnk]
+  have hcck1 : sk1.regs .nat [] "cs" = some (Tile.scalar c) := by simp [hsk1, hcck]
+  obtain ⟨amt, ham_eval, -⟩ :=
+    bbwdIO_amask_eval sk1 BN BCS K CSL c _ hcsk1 hnk1 hcck1 hlt
+  obtain ⟨asub, haload⟩ :=
+    bbwdIO_load_maskOther_some (Op.ref .ptr [BCS, BN] "a_ptrs") _ _ sk1 apT amt _
+      (by rw [evalOp_ref]; simp [hsk1, hapk]) ham_eval (other_broadcast_eval sk1 [BCS, BN])
+  set sk2 := sk1.setReg "a" .real [BCS, BN] asub with hsk2
+  unfold bbwdLoopBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some hdload)]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some haload)]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (accdot_op_eval BM BCS BN sk2 zT dsub asub
+          (by simp [hsk2, hsk1, hzk])
+          (by simp [hsk2, hsk1])
+          (by simp [hsk2])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (doutptr_adv_eval _ BM BCS BCS SDM dpT (by simp [hsk2, hsk1, hdpk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aptr_adv_eval _ BCS BN BCS SAS apT (by simp [hsk2, hsk1, hapk])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by omega, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp [hsk2, hsk1, hsk, hpb]
+  · simp [hsk2, hsk1, hsk, hpc]
+  · simp [hsk2, hsk1, hsk, hph]
+  · simp [hsk2, hsk1, hsk, hpm]
+  · simp [hsk2, hsk1, hsk, hpn]
+  · simp [hsk2, hsk1, hsk, hmm]
+  · simp [hsk2, hsk1, hsk, hnn]
+  · simp [hsk2, hsk1, hsk, hcs]
+  · refine ⟨Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      zT (Tile.dot [] dsub asub), ?_⟩
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq,
+      String.reduceEq, not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hdpT, NumericDType.add]
+    ring
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hapT, NumericDType.add]
+    ring
+
+/-! ### Trace-safety walk -/
+
+/-- The exact resolve of the dynamic CS-loop bound: `cdiv(BCS·numCSBlocks, BCS)
+= numCSBlocks`, so the `forRangeDyn` statement **is** the `numCSBlocks`-step
+strided fold. (`bbwd_loop`'s internal resolve, named.) -/
+private theorem bbwdIO_loopStmt_resolve (BM BN BCS chunk_size K SDM SAS numCSBlocks : Nat)
+    (hBCS : 0 < BCS) (s : BlockState) :
+    stepStmt (bbwdLoopStmt BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS) s
+      = stepForRangeAux "cs" 0 numCSBlocks 1
+          (bbwdLoopBody BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS) s := by
+  have hcdiv : (BCS * numCSBlocks + BCS - 1) / BCS = numCSBlocks := by
+    have he : BCS * numCSBlocks + BCS - 1 = (BCS - 1) + BCS * numCSBlocks := by omega
+    rw [he, Nat.add_mul_div_left _ _ hBCS, Nat.div_eq_of_lt (by omega), Nat.zero_add]
+  unfold bbwdLoopStmt
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  simp only [evalOp_constNat, evalOp_div, evalOp_sub, evalOp_add, Tile.scalar, Tile.bop,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, NumericDType.sub,
+    NumericDType.add, Tile.data, Option.bind_some, bind]
+  rw [hcdiv]
+
+/-- The `R`-side resolve: same bound, same fold, `stepForRangeAuxR`. -/
+private theorem bbwdIO_loopStmtR_resolve (R : RoundingModel)
+    (BM BN BCS chunk_size K SDM SAS numCSBlocks : Nat) (hBCS : 0 < BCS) (s : BlockState) :
+    stepStmtR R (bbwdLoopStmt BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS) s
+      = stepForRangeAux "cs" 0 numCSBlocks 1
+          (bbwdLoopBody BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS) s := by
+  rw [bbwdIO_loopStmt_castFree, bbwdIO_loopStmt_resolve _ _ _ _ _ _ _ _ hBCS]
+
+set_option maxHeartbeats 2000000 in
+/-- Per-iteration `TraceSafeListR` for the CS-loop body: the two masked loads'
+active addresses are the invariant's pointer cells, in bounds by the skin's
+`read1` / `read2` windows at step `c`; the three remaining assigns are
+register-only, hence unconditionally safe. -/
+private theorem bbwd_bodySafeR (R : RoundingModel) (bounds : RegionBounds)
+    (Dout A : RegionName)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks K : Nat)
+    (c : Nat) (hc : c < numCSBlocks) (sk : BlockState)
+    (hdp : sk.regs .ptr [BM, BCS] "dout_ptrs" = some ⟨fun idx : TileIndex [BM, BCS] =>
+        (Dout.cast, doutOff PB PC PH SDB SDC SDH + (PM * BM + idx.1.val) * SDN
+          + idx.2.1.val * SDM + c * BCS * SDM)⟩)
+    (hap : sk.regs .ptr [BCS, BN] "a_ptrs" = some ⟨fun idx : TileIndex [BCS, BN] =>
+        (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH + idx.1.val * SAS
+          + (PN * BN + idx.2.1.val) * SAK + c * BCS * SAS)⟩)
+    (hbr1 : ∀ (t : Fin numCSBlocks) (j : Fin (BM * BCS)),
+      bbwdDoutAddr PB PC PH PM BM BCS SDB SDC SDH SDN SDM t.val j.val < bounds Dout)
+    (hbr2 : ∀ (t : Fin numCSBlocks) (j : Fin (BCS * BN)),
+      bbwdAAddr PB PC PH PN BN BCS chunk_size SAB SAS SAH SAK t.val j.val < bounds A) :
+    Stmt.TraceSafeListR R bounds
+      (bbwdLoopBody BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS) sk := by
+  unfold bbwdLoopBody
+  refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+  · -- load `dout`
+    simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+      memAccessActiveAddressSafeR]
+    refine ⟨trivial, ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+    intro ptrs hptrs i _
+    rw [evalOpR_ref, hdp] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    show doutOff PB PC PH SDB SDC SDH + (PM * BM + i.1.val) * SDN + i.2.1.val * SDM
+        + c * BCS * SDM < bounds (Region.cast Dout)
+    have h' := hbr1 ⟨c, hc⟩ (Lane2D.encode (i.1, i.2.1, PUnit.unit))
+    simp only [bbwdDoutAddr, Lane2D.encode_div, Lane2D.encode_mod] at h'
+    simpa only [Region.cast_id] using h'
+  · intro s1 h1
+    obtain ⟨v1, -, rfl⟩ := stepStmtR_assign_inv h1
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- load `a`
+      simp only [Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR,
+        memAccessActiveAddressSafeR]
+      refine ⟨trivial, ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def]⟩, ?_⟩
+      intro ptrs hptrs i _
+      rw [evalOpR_ref] at hptrs
+      rw [show (sk.setReg "dout" .real [BM, BCS] v1).regs .ptr [BCS, BN] "a_ptrs"
+          = some (⟨fun idx : TileIndex [BCS, BN] =>
+              (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH + idx.1.val * SAS
+                + (PN * BN + idx.2.1.val) * SAK + c * BCS * SAS)⟩ : Tile .ptr [BCS, BN])
+        from by simp [hap]] at hptrs
+      obtain rfl := Option.some.inj hptrs
+      show batchOff PB PC PH chunk_size SAB SAS SAH + i.1.val * SAS
+          + (PN * BN + i.2.1.val) * SAK + c * BCS * SAS < bounds (Region.cast A)
+      have h' := hbr2 ⟨c, hc⟩ (Lane2D.encode (i.1, i.2.1, PUnit.unit))
+      simp only [bbwdAAddr, Lane2D.encode_div, Lane2D.encode_mod] at h'
+      simpa only [Region.cast_id] using h'
+    · intro s2 h2
+      obtain ⟨v2, -, rfl⟩ := stepStmtR_assign_inv h2
+      refine Stmt.TraceSafeListR.of_forall _ _ ?_
+      intro st hst s'
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+      rcases hst with rfl | rfl | rfl <;>
+        simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+
+set_option maxHeartbeats 2000000 in
+/-- The terminal masked store is trace-safe: its own mask pins each *active*
+lane to `bbwdWriteOk`, where the skin's `write` window supplies the bound. -/
+private theorem bbwdIO_storeSafeR (R : RoundingModel) (bounds : RegionBounds) (Db : RegionName)
+    (PB PC PH PM PN chunk_size BM BN SOB SOS SOH SOK CSL K : Nat) (u : BlockState)
+    (hm : u.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => rowIndex PM BM i)))
+    (hn : u.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => colIndex PN BN j)))
+    (hop : u.regs .ptr [BM, BN] "db_ptrs" = some ⟨fun idx : TileIndex [BM, BN] =>
+      (Db.cast, dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN idx)⟩)
+    (hbw : ∀ j : Fin (BM * BN), bbwdWriteOk PM PN BM BN CSL K j.val →
+      bbwdDbAddr PB PC PH PM PN BM BN chunk_size SOB SOS SOH SOK j.val < bounds Db) :
+    Stmt.TraceSafeR R bounds (Stmt.store .real [BM, BN]
+      (MemAccess.ptr (Op.ref .ptr [BM, BN] "db_ptrs")) (Op.ref .real [BM, BN] "db")
+      (MaskOpt.mask (Op.boolAnd Broadcast.nil.consL.consR
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat CSL))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat K))))) u := by
+  simp only [Stmt.TraceSafeR, MemAccess.SafeAtR, MaskOpt.SafeAtR, Op.SafeAtR.eq_def,
+    MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+  refine ⟨trivial, trivial, by simp [Op.SafeAtR.eq_def], ?_⟩
+  intro ptrs hptrs i hact
+  obtain ⟨masks, hmasks, hmi⟩ := hact
+  obtain ⟨mT, hmeval, hmval⟩ := bbwdIO_dbmask_eval u CSL K BM BN
+    (fun i => rowIndex PM BM i) (fun j => colIndex PN BN j) hm hn
+  rw [bbwdIO_evalR_dbMask, hmeval] at hmasks
+  obtain rfl := Option.some.inj hmasks
+  rw [hmval i, Bool.and_eq_true, decide_eq_true_eq, decide_eq_true_eq] at hmi
+  rw [evalOpR_ref, hop] at hptrs
+  obtain rfl := Option.some.inj hptrs
+  show dbOffset PB PC PH chunk_size SOB SOS SOH SOK PM PN BM BN i < bounds (Region.cast Db)
+  have h' := hbw (Lane2D.encode i) ((bbwdWriteOk_encode PM PN BM BN CSL K i).mpr hmi)
+  rw [bbwdDbAddr_encode] at h'
+  simpa only [Region.cast_id] using h'
+
+set_option maxHeartbeats 4000000 in
+/-- `TraceSafeListR` for the post-loop tail: the five assigns are register-only
+(the erased `.to(Db.dtype.element_ty)` is a plain `.real` copy, not a memory or
+rounding event) and the single masked `.real` store's active addresses are the
+skin's `write` window. -/
+private theorem bbwd_tailSafeR (R : RoundingModel) (bounds : RegionBounds) (Db : RegionName)
+    (PB PC PH PM PN chunk_size BM BN SOB SOS SOH SOK CSL K : Nat) (st : BlockState)
+    (hpb : st.regs .nat [] "pid_b" = some (Tile.scalar PB))
+    (hpc : st.regs .nat [] "pid_c" = some (Tile.scalar PC))
+    (hph : st.regs .nat [] "pid_h" = some (Tile.scalar PH))
+    (hpm : st.regs .nat [] "pid_m" = some (Tile.scalar PM))
+    (hpn : st.regs .nat [] "pid_n" = some (Tile.scalar PN))
+    (hbw : ∀ j : Fin (BM * BN), bbwdWriteOk PM PN BM BN CSL K j.val →
+      bbwdDbAddr PB PC PH PM PN BM BN chunk_size SOB SOS SOH SOK j.val < bounds Db) :
+    Stmt.TraceSafeListR R bounds (bbwdPostBody Db chunk_size CSL K SOB SOS SOH SOK BM BN) st := by
+  unfold bbwdPostBody
+  -- 1. offs_m
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s1 h1
+  obtain ⟨v1, hv1, rfl⟩ := stepStmtR_assign_inv h1
+  rw [bbwdIO_evalR_offs, offs_m_eval st PM BM hpm] at hv1
+  obtain rfl := Option.some.inj hv1
+  -- 2. offs_n
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s2 h2
+  obtain ⟨v2, hv2, rfl⟩ := stepStmtR_assign_inv h2
+  rw [bbwdIO_evalR_offs, offs_n_eval _ PN BN (by simp [hpn])] at hv2
+  obtain rfl := Option.some.inj hv2
+  -- 3. db = acc  (register copy)
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s3 h3
+  obtain ⟨v3, -, rfl⟩ := stepStmtR_assign_inv h3
+  -- 4. Db base
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s4 h4
+  obtain ⟨v4, hv4, rfl⟩ := stepStmtR_assign_inv h4
+  rw [bbwdIO_evalR_dbBase, dbptr_base_eval _ Db PB PC PH chunk_size SOB SOS SOH
+    (by simp [hpb]) (by simp [hpc]) (by simp [hph])] at hv4
+  obtain rfl := Option.some.inj hv4
+  -- 5. db_ptrs
+  refine Stmt.TraceSafeListR.cons_intro (by simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]) ?_
+  intro s5 h5
+  obtain ⟨v5, hv5, rfl⟩ := stepStmtR_assign_inv h5
+  rw [bbwdIO_evalR_dbPtrs, dbptrs_eval _ Db BM BN SOS SOK
+    (PB * SOB + PC * chunk_size * SOS + PH * SOH)
+    (fun i => rowIndex PM BM i) (fun j => colIndex PN BN j)
+    (by simp) (by simp) (by simp)] at hv5
+  obtain rfl := Option.some.inj hv5
+  -- 6. the masked store
+  exact Stmt.TraceSafeListR.cons_intro
+    (bbwdIO_storeSafeR R bounds Db PB PC PH PM PN chunk_size BM BN SOB SOS SOH SOK CSL K _
+      (by simp) (by simp) (by simp [dbOffset]) hbw)
+    (fun s' _ => Stmt.TraceSafeListR.nil_intro)
+
+set_option maxHeartbeats 4000000 in
+/-- **The `TraceSafeR` walk for the whole kernel**, driven by
+`Stmt.forRangeTraceSafeR_inv` over the weak `bbwdSafeInv`. The three bound
+groups are exactly the skin's `read1` / `read2` / `write` windows. -/
+private theorem bbwd_traceSafeR (R : RoundingModel) (bounds : RegionBounds)
+    (A Dout Db : RegionName)
+    (chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK
+      BM BN BCS numCSBlocks K : Nat) (hBCS : 0 < BCS) (s : BlockState)
+    (hbr1 : ∀ (t : Fin numCSBlocks) (j : Fin (BM * BCS)),
+      bbwdDoutAddr (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+        (pidM (s.pids 0) K BN) BM BCS SDB SDC SDH SDN SDM t.val j.val < bounds Dout)
+    (hbr2 : ∀ (t : Fin numCSBlocks) (j : Fin (BCS * BN)),
+      bbwdAAddr (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+        (pidN (s.pids 0) K BN) BN BCS chunk_size SAB SAS SAH SAK t.val j.val < bounds A)
+    (hbw : ∀ j : Fin (BM * BN),
+      bbwdWriteOk (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) BM BN (BCS * numCSBlocks) K j.val →
+      bbwdDbAddr (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+        (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) BM BN chunk_size SOB SOS SOH SOK j.val
+        < bounds Db) :
+    ((bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+      SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS).toAlgKernel).TraceSafeR
+        R bounds s := by
+  unfold Kernel.TraceSafeR
+  rw [bbwd_body_split' A Dout Db chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN
+    SOB SOS SOH SOK BM BN BCS numCSBlocks K]
+  have hstep : ∀ c s', c < numCSBlocks →
+      bbwdSafeInv Dout A (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+        (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) chunk_size BM BN SDB SDC SDH SDN SDM
+        SAB SAS SAH SAK BCS numCSBlocks c s' →
+      Stmt.TraceSafeListR R bounds
+          (bbwdLoopBody BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS)
+          (s'.setReg "cs" .nat [] (Tile.scalar c)) ∧
+      ∃ s'', stepStmtsR R (bbwdLoopBody BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS)
+          (s'.setReg "cs" .nat [] (Tile.scalar c)) = some s'' ∧
+        bbwdSafeInv Dout A (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) chunk_size BM BN SDB SDC SDH SDN SDM
+          SAB SAS SAH SAK BCS numCSBlocks (c + 1) s'' := by
+    intro c s' hc hP
+    obtain ⟨hcle, hpb, hpc, hph, hpm, hpn, hmm, hnn, hcs, hzE, hdp, hap⟩ := hP
+    refine ⟨bbwd_bodySafeR R bounds Dout A _ _ _ _ _ chunk_size BM BN SDB SDC SDH SDN SDM
+        SAB SAS SAH SAK BCS numCSBlocks K c hc _ (by simp [hdp]) (by simp [hap]) hbr1 hbr2, ?_⟩
+    obtain ⟨s'', hs'', hP''⟩ :=
+      bbwd_stepW Dout A _ _ _ _ _ chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK
+        BCS numCSBlocks K c s' hc
+        ⟨hcle, hpb, hpc, hph, hpm, hpn, hmm, hnn, hcs, hzE, hdp, hap⟩
+    exact ⟨s'', by rw [bbwdIO_loopBody_castFree]; exact hs'', hP''⟩
+  refine Stmt.TraceSafeListR.append_intro _ _ ?_ ?_
+  · -- the prologue: register-only assigns, safe at every state
+    refine Stmt.TraceSafeListR.of_forall _ _ ?_
+    intro st hst s'
+    simp only [bbwdPrologue, List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl |
+      rfl | rfl | rfl <;> simp [Stmt.TraceSafeR, Op.SafeAtR.eq_def]
+  · intro s1 hs1
+    obtain ⟨s1x, hpre, hP0⟩ := bbwd_preLoopW A Dout s chunk_size K ngroups SAB SAS SAH SAK
+      SDB SDC SDH SDM SDN BM BN BCS numCSBlocks
+    rw [bbwdIO_prologue_castFree R A Dout chunk_size K ngroups SAB SAS SAH SAK
+      SDB SDC SDH SDM SDN BM BN BCS s, hpre] at hs1
+    obtain rfl := Option.some.inj hs1
+    refine Stmt.TraceSafeListR.cons_intro ?_ ?_
+    · -- the CS-loop: the invariant principle over the weak invariant
+      have hstart : evalOpR R (Op.constNat 0) s1x = some (Tile.scalar 0) := by
+        rw [bbwdIO_evalR_constNat, evalOp_constNat]
+      have hstepop : evalOpR R (Op.constNat 1) s1x = some (Tile.scalar 1) := by
+        rw [bbwdIO_evalR_constNat, evalOp_constNat]
+      have hstop : evalOpR R (Op.div .nat Broadcast.nil (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat (BCS * numCSBlocks)) (Op.constNat BCS))
+          (Op.constNat 1)) (Op.constNat BCS)) s1x = some (Tile.scalar numCSBlocks) := by
+        have hcdiv : (BCS * numCSBlocks + BCS - 1) / BCS = numCSBlocks := by
+          have he : BCS * numCSBlocks + BCS - 1 = (BCS - 1) + BCS * numCSBlocks := by omega
+          rw [he, Nat.add_mul_div_left _ _ hBCS, Nat.div_eq_of_lt (by omega), Nat.zero_add]
+        rw [bbwdIO_evalR_cdiv]
+        simp only [evalOp_constNat, evalOp_div, evalOp_sub, evalOp_add, Tile.scalar, Tile.bop,
+          Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.div, NumericDType.sub,
+          NumericDType.add, Option.bind_some, bind]
+        rw [hcdiv]
+      simp only [bbwdLoopStmt, Stmt.TraceSafeR, hstart, hstop, hstepop]
+      refine ⟨by simp [Op.SafeAtR.eq_def], by simp [Op.SafeAtR.eq_def],
+        by simp [Op.SafeAtR.eq_def], ?_⟩
+      show Stmt.forRangeTraceSafeR R bounds "cs" 0 numCSBlocks 1 _ s1x
+      exact Stmt.forRangeTraceSafeR_inv R bounds "cs" numCSBlocks 1 _ _ hstep 0 s1x hP0
+    · intro s2 hs2
+      obtain ⟨final, sLoop, haux, hfinal, hPL⟩ :=
+        forRangeAux_inv (idx := "cs") (stop := numCSBlocks) (step := 1)
+          (P := bbwdSafeInv Dout A (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+            (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) chunk_size BM BN SDB SDC SDH SDN SDM
+            SAB SAS SAH SAK BCS numCSBlocks)
+          (by norm_num)
+          (fun i st hlt hinv => bbwd_stepW Dout A _ _ _ _ _ chunk_size BM BN SDB SDC SDH SDN SDM
+            SAB SAS SAH SAK BCS numCSBlocks K i st hlt hinv)
+          0 s1x hP0
+      have hfinalEq : final = numCSBlocks := by
+        have hle : final ≤ numCSBlocks := hPL.1
+        exact le_antisymm hle hfinal
+      rw [hfinalEq] at hPL
+      rw [bbwdIO_loopStmtR_resolve R BM BN BCS chunk_size K SDM SAS numCSBlocks hBCS, haux] at hs2
+      obtain rfl := Option.some.inj hs2
+      obtain ⟨-, hpbL, hpcL, hphL, hpmL, hpnL, -, -, -, -, -, -⟩ := hPL
+      exact bbwd_tailSafeR R bounds Db _ _ _ _ _ chunk_size BM BN SOB SOS SOH SOK
+        (BCS * numCSBlocks) K sLoop hpbL hpcL hphL hpmL hpnL hbw
+
+
+/-! ### The masked loop chain
+
+`bbwd_preLoop` / `bbwd_step` / `bbwd_loop` above prove the **all-live tile**
+case. Here the same three steps are re-run against `bbwdMInv`, which carries the
+per-lane masked accumulator and therefore needs **no** in-range hypothesis at
+all — the price of covering every `(pid₀, pid₁, pid₂) : ℕ³` the skin quantifies
+over. Only `bbwd_stepM` is genuinely new work: `bbwd_preLoopM` is `bbwd_preLoop`
+re-packaged (at `c = 0` both accumulators are `0`), and `bbwd_loopM` is the same
+`forRangeAux_inv` drive. -/
+
+/-- A masked `.ptr` load with an `other = 0.0` default, evaluated: the active
+lanes read memory, the masked-off lanes take the default. The value-carrying
+sibling of `bbwdIO_load_maskOther_some`. -/
+private theorem bbwdIO_load_maskOther_eval {shape : TileShape}
+    (ptrOp : Op .ptr shape) (maskOp : Op .bool shape) (otherOp : Op .real shape)
+    (s : BlockState) (ptrs : Tile .ptr shape) (mtile : Tile .bool shape)
+    (otile : Tile .real shape) (f : TileIndex shape → Prop) [DecidablePred f]
+    (hp : evalOp ptrOp s = some ptrs) (hm : evalOp maskOp s = some mtile)
+    (ho : evalOp otherOp s = some otile)
+    (hmv : ∀ i, mtile.data i = Bool.true ↔ f i)
+    (hov : ∀ i, otile.data i = some (0 : ℝ)) :
+    evalOp (Op.load .real (MemAccess.ptr ptrOp) (MaskOpt.maskOther maskOp otherOp)) s
+      = some ⟨fun i => some (if f i then s.readMem (ptrs.data i).1 (ptrs.data i).2 else 0)⟩ := by
+  unfold evalOp
+  simp only [hp, hm, ho, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some ?_
+  ext i
+  by_cases hb : f i
+  · have hmi : mtile.data i = Bool.true := (hmv i).mpr hb
+    simp only [hmi, if_true, if_pos hb, BlockState.readMemValue_real]
+  · have hmi : mtile.data i = Bool.false := by
+      by_cases h : mtile.data i = Bool.true
+      · exact absurd ((hmv i).mp h) hb
+      · simpa using h
+    simp only [hmi, Bool.false_eq_true, if_false, if_neg hb, hov i]
+
+/-- **Mask factorization of `tl.dot`.** Each factor's mask depends only on its
+own output index, so the contraction pulls both guards out: the dot cell is the
+plain sum when row and column are live, `0` otherwise. -/
+private theorem bbwdIO_dot_masked (BCS : Nat) (P Q : Prop) [Decidable P] [Decidable Q]
+    (d a : Fin BCS → ℝ) :
+    (Finset.univ.sum fun e : Fin BCS => (if P then d e else 0) * (if Q then a e else 0))
+      = if P ∧ Q then Finset.univ.sum (fun e : Fin BCS => d e * a e) else 0 := by
+  by_cases hp : P <;> by_cases hq : Q <;> simp [hp, hq]
+
+set_option maxHeartbeats 2000000 in
+/-- **Masked preLoop**: `bbwd_preLoop` re-packaged at `bbwdMInv` — at `c = 0`
+the masked accumulator and the plain one are both `0`, so no new work. -/
+private theorem bbwd_preLoopM (A Dout Db : RegionName) (s : BlockState)
+    (chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK
+      BM BN BCS numCSBlocks : Nat)
+    (hundef : ∀ rg o, s.undef rg o = 0) :
+    ∃ s', stepStmts (bbwdPrologue A Dout chunk_size K ngroups SAB SAS SAH SAK
+        SDB SDC SDH SDM SDN BM BN BCS) s = some s'
+      ∧ bbwdMInv Dout A s (s.pids 1) (pidC (s.pids 2) ngroups) (pidH (s.pids 2) ngroups)
+          (pidM (s.pids 0) K BN) (pidN (s.pids 0) K BN) chunk_size BM BN SDB SDC SDH SDN SDM
+          SAB SAS SAH SAK BCS numCSBlocks K 0 s' := by
+  obtain ⟨s', h, hinv⟩ := bbwd_preLoop Dout A Db s chunk_size (BCS * numCSBlocks) K ngroups
+    SDB SDC SDH SDN SDM SAB SAS SAH SAK SOB SOS SOH SOK BM BN BCS numCSBlocks hundef
+  rw [bbwd_take15_eq A Dout Db chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN
+    SOB SOS SOH SOK BM BN BCS numCSBlocks K] at h
+  refine ⟨s', h, ?_⟩
+  simp only [bbwdInvariant] at hinv
+  obtain ⟨hpids, hcle, hz, hpb, hpc, hph, hpm, hpn, hmm, hnn, hcs, hdp, hap, hu, hmem⟩ := hinv
+  refine ⟨hpids, hcle, ?_, hpb, hpc, hph, hpm, hpn, hmm, hnn, hcs, hdp, hap, hu, hmem⟩
+  rw [hz]
+  refine congrArg some ?_
+  ext idx
+  simp only [bbwdMaskedPartial, accPartial, Nat.zero_mul, Finset.range_zero, Finset.sum_empty,
+    ite_self]
+
+set_option maxHeartbeats 4000000 in
+/-- **Masked step lemma**: one CS-block iteration advances the *per-lane masked*
+accumulator by one block. Both loads keep their masks (`bbwdIO_doutmask_eval` /
+`bbwdIO_amask_eval`), `tl.dot` factorizes them out (`bbwdIO_dot_masked`), and the
+result is `bbwdMaskedPartial` at `c + 1` on both branches of the guard. Valid for
+**every** program of the grid — no in-range hypothesis. -/
+private theorem bbwd_stepM (Dout A : RegionName) (s0 : BlockState)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks K : Nat)
+    (c : Nat) (s : BlockState) (hclt : c < numCSBlocks)
+    (hinv : bbwdMInv Dout A s0 PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM
+      SAB SAS SAH SAK BCS numCSBlocks K c s) :
+    ∃ s', stepStmts (bbwdLoopBody BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS)
+        (s.setReg "cs" .nat [] (Tile.scalar c)) = some s'
+      ∧ bbwdMInv Dout A s0 PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM
+          SAB SAS SAH SAK BCS numCSBlocks K (c + 1) s' := by
+  set CSL := BCS * numCSBlocks with hCSLdef
+  simp only [bbwdMInv] at hinv
+  obtain ⟨hpids, hcle, hz, hpb, hpc, hph, hpm, hpn, hmm, hnn, hcs, hdp, hap, hundef, hmem⟩ := hinv
+  have hlt : ∀ e : Fin BCS, e.val < CSL - c * BCS := by
+    intro e
+    have hcCSL : c * BCS + BCS ≤ CSL := by
+      rw [hCSLdef]; calc c * BCS + BCS = (c + 1) * BCS := by ring
+        _ ≤ numCSBlocks * BCS := Nat.mul_le_mul_right _ hclt
+        _ = BCS * numCSBlocks := Nat.mul_comm _ _
+    omega
+  set dpT : Tile .ptr [BM, BCS] :=
+    ⟨fun idx : TileIndex [BM, BCS] => (Dout.cast, doutOff PB PC PH SDB SDC SDH
+      + (PM * BM + idx.1.val) * SDN + idx.2.1.val * SDM + c * BCS * SDM)⟩ with hdpT
+  set apT : Tile .ptr [BCS, BN] :=
+    ⟨fun idx : TileIndex [BCS, BN] => (A.cast, batchOff PB PC PH chunk_size SAB SAS SAH
+      + idx.1.val * SAS + (PN * BN + idx.2.1.val) * SAK + c * BCS * SAS)⟩ with hapT
+  set zT : Tile .real [BM, BN] :=
+    ⟨fun idx : TileIndex [BM, BN] => some (bbwdMaskedPartial s0 Dout A PB PC PH PM PN BM BN
+      chunk_size SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS K idx.1 idx.2.1 c)⟩ with hzT
+  set sk := s.setReg "cs" .nat [] (Tile.scalar c) with hsk
+  have hrmem : ∀ (Rg : RegionName) (o : Nat), sk.readMem Rg o = s0.readMem Rg o := by
+    intro Rg o; simp only [hsk, BlockState.setReg_readMem]; unfold BlockState.readMem; rw [hmem]
+  have hdpk : sk.regs .ptr [BM, BCS] "dout_ptrs" = some dpT := by simp [hsk, hdp, hdpT]
+  have hapk : sk.regs .ptr [BCS, BN] "a_ptrs" = some apT := by simp [hsk, hap, hapT]
+  have hzk : sk.regs .real [BM, BN] "acc" = some zT := by simp [hsk, hz, hzT]
+  have hmk : sk.regs .nat [BM] "offs_m" = some (Tile.vec (fun i : Fin BM => PM * BM + i.val)) := by
+    simp [hsk, hmm]
+  have hnk : sk.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => PN * BN + j.val)) := by
+    simp [hsk, hnn]
+  have hcsk : sk.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val)) := by
+    simp [hsk, hcs]
+  have hcck : sk.regs .nat [] "cs" = some (Tile.scalar c) := by simp [hsk]
+  obtain ⟨dmt, hdm_eval, hdmval⟩ :=
+    bbwdIO_doutmask_eval sk BM BCS chunk_size CSL c _ hmk hcsk hcck hlt
+  set dsub : Tile .real [BM, BCS] :=
+    ⟨fun idx => some (if PM * BM + idx.1.val < chunk_size then
+      sk.readMem (dpT.data idx).1 (dpT.data idx).2 else 0)⟩ with hdsub
+  have hdload : evalOp (Op.load .real (MemAccess.ptr (Op.ref .ptr [BM, BCS] "dout_ptrs"))
+      (MaskOpt.maskOther
+        (Op.boolAnd Broadcast.nil.consL.consR
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_m")) (Op.constNat chunk_size))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BCS] "offs_cs"))
+            (Op.sub .nat Broadcast.nil (Op.constNat CSL)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cs") (Op.constNat BCS)))))
+        ((Op.const 0.0).broadcast [BM, BCS]))) sk = some dsub :=
+    bbwdIO_load_maskOther_eval _ _ _ sk dpT dmt _
+      (fun idx : TileIndex [BM, BCS] => PM * BM + idx.1.val < chunk_size)
+      (by rw [evalOp_ref]; simp [hdpk]) hdm_eval (other_broadcast_eval sk [BM, BCS])
+      (fun i => by simp [hdmval i]) (fun i => by norm_num)
+  set sk1 := sk.setReg "dout" .real [BM, BCS] dsub with hsk1
+  have hcsk1 : sk1.regs .nat [BCS] "offs_cs" = some (Tile.vec (fun e : Fin BCS => e.val)) := by
+    simp [hsk1, hcsk]
+  have hnk1 : sk1.regs .nat [BN] "offs_n" = some (Tile.vec (fun j : Fin BN => PN * BN + j.val)) := by
+    simp [hsk1, hnk]
+  have hcck1 : sk1.regs .nat [] "cs" = some (Tile.scalar c) := by simp [hsk1, hcck]
+  obtain ⟨amt, ham_eval, hamval⟩ := bbwdIO_amask_eval sk1 BN BCS K CSL c _ hcsk1 hnk1 hcck1 hlt
+  set asub : Tile .real [BCS, BN] :=
+    ⟨fun idx => some (if PN * BN + idx.2.1.val < K then
+      sk1.readMem (apT.data idx).1 (apT.data idx).2 else 0)⟩ with hasub
+  have haload : evalOp (Op.load .real (MemAccess.ptr (Op.ref .ptr [BCS, BN] "a_ptrs"))
+      (MaskOpt.maskOther
+        (Op.boolAnd Broadcast.nil.consL.consR
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BCS] "offs_cs"))
+            (Op.sub .nat Broadcast.nil (Op.constNat CSL)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "cs") (Op.constNat BCS))))
+          (Op.lt ComparableDType.nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_n")) (Op.constNat K)))
+        ((Op.const 0.0).broadcast [BCS, BN]))) sk1 = some asub :=
+    bbwdIO_load_maskOther_eval _ _ _ sk1 apT amt _
+      (fun idx : TileIndex [BCS, BN] => PN * BN + idx.2.1.val < K)
+      (by rw [evalOp_ref]; simp [hsk1, hapk]) ham_eval (other_broadcast_eval sk1 [BCS, BN])
+      (fun i => by simp [hamval i]) (fun i => by norm_num)
+  set sk2 := sk1.setReg "a" .real [BCS, BN] asub with hsk2
+  unfold bbwdLoopBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some hdload)]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some haload)]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (accdot_op_eval BM BCS BN sk2 zT dsub asub
+          (by simp [hsk2, hsk1, hzk])
+          (by simp [hsk2, hsk1])
+          (by simp [hsk2])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (doutptr_adv_eval _ BM BCS BCS SDM dpT (by simp [hsk2, hsk1, hdpk])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (aptr_adv_eval _ BCS BN BCS SAS apT (by simp [hsk2, hsk1, hapk])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  refine ⟨by simp [hsk2, hsk1, hsk, hpids], by omega, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    ?_, ?_⟩
+  · -- the masked accumulator advances by one block
+    simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx
+    have hrmem1 : ∀ (Rg : RegionName) (o : Nat), sk1.readMem Rg o = s0.readMem Rg o := by
+      intro Rg o; rw [hsk1, BlockState.setReg_readMem]; exact hrmem Rg o
+    have hds : ∀ e : Fin BCS, dsub.data (idx.1, e, PUnit.unit)
+        = some (if PM * BM + idx.1.val < chunk_size then
+            doutElem s0 Dout PB PC PH PM BM SDB SDC SDH SDN SDM idx.1 (c * BCS + e.val) else 0) := by
+      intro e
+      have haddr : sk.readMem (dpT.data (idx.1, e, PUnit.unit)).1
+            (dpT.data (idx.1, e, PUnit.unit)).2
+          = doutElem s0 Dout PB PC PH PM BM SDB SDC SDH SDN SDM idx.1 (c * BCS + e.val) := by
+        simp only [hdpT, hrmem, doutElem, rowIndex, doutOff]
+        congr 1
+        ring
+      show some (if PM * BM + idx.1.val < chunk_size then
+          sk.readMem (dpT.data (idx.1, e, PUnit.unit)).1 (dpT.data (idx.1, e, PUnit.unit)).2
+        else 0) = _
+      rw [haddr]
+    have has : ∀ e : Fin BCS, asub.data (e, idx.2.1, PUnit.unit)
+        = some (if PN * BN + idx.2.1.val < K then
+            aElem s0 A PB PC PH PN BN chunk_size SAB SAS SAH SAK idx.2.1 (c * BCS + e.val)
+          else 0) := by
+      intro e
+      have haddr : sk1.readMem (apT.data (e, idx.2.1, PUnit.unit)).1
+            (apT.data (e, idx.2.1, PUnit.unit)).2
+          = aElem s0 A PB PC PH PN BN chunk_size SAB SAS SAH SAK idx.2.1 (c * BCS + e.val) := by
+        simp only [hapT, hrmem1, aElem, colIndex, batchOff]
+        congr 1
+        ring
+      show some (if PN * BN + idx.2.1.val < K then
+          sk1.readMem (apT.data (e, idx.2.1, PUnit.unit)).1 (apT.data (e, idx.2.1, PUnit.unit)).2
+        else 0) = _
+      rw [haddr]
+    rw [accadd_eval BM BN zT (Tile.dot [] dsub asub) idx.1 idx.2.1
+        (bbwdMaskedPartial s0 Dout A PB PC PH PM PN BM BN chunk_size SDB SDC SDH SDN SDM
+          SAB SAS SAH SAK BCS K idx.1 idx.2.1 c)
+        (if PM * BM + idx.1.val < chunk_size ∧ PN * BN + idx.2.1.val < K then
+          Finset.univ.sum (fun e : Fin BCS =>
+            doutElem s0 Dout PB PC PH PM BM SDB SDC SDH SDN SDM idx.1 (c * BCS + e.val)
+              * aElem s0 A PB PC PH PN BN chunk_size SAB SAS SAH SAK idx.2.1 (c * BCS + e.val))
+        else 0)
+        (by rw [hzT])
+        (by
+          rw [dot_da BM BCS BN dsub asub idx.1 idx.2.1 _ _ hds has]
+          exact congrArg some (bbwdIO_dot_masked BCS _ _ _ _))]
+    show some _ = some (bbwdMaskedPartial s0 Dout A PB PC PH PM PN BM BN chunk_size
+      SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS K idx.1 idx.2.1 (c + 1))
+    simp only [bbwdMaskedPartial, rowIndex, colIndex]
+    by_cases hpq : PM * BM + idx.1.val < chunk_size ∧ PN * BN + idx.2.1.val < K
+    · rw [if_pos hpq, if_pos hpq, if_pos hpq, accPartial_succ]
+    · rw [if_neg hpq, if_neg hpq, if_neg hpq, add_zero]
+  · simp [hsk2, hsk1, hsk, hpb]
+  · simp [hsk2, hsk1, hsk, hpc]
+  · simp [hsk2, hsk1, hsk, hph]
+  · simp [hsk2, hsk1, hsk, hpm]
+  · simp [hsk2, hsk1, hsk, hpn]
+  · simp [hsk2, hsk1, hsk, hmm]
+  · simp [hsk2, hsk1, hsk, hnn]
+  · simp [hsk2, hsk1, hsk, hcs]
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hdpT, NumericDType.add]
+    ring
+  · simp only [BlockState.setReg_same, BlockState.setReg_ne_name, ne_eq, String.reduceEq,
+      not_false_eq_true, reduceCtorEq, IsEmpty.forall_iff]
+    refine congrArg some ?_
+    ext idx <;> simp only [Tile.ptrAdd, Tile.bop, Broadcast.leftIndex, Broadcast.rightIndex,
+      Tile.scalar, hapT, NumericDType.add]
+    ring
+  · intro rg o; simp [hsk2, hsk1, hsk, hundef]
+  · show _ = s0.mem; rw [← hmem]; rfl
+
+/-- **Masked loop**: the `forRangeDyn` CS-loop advances `bbwdMInv` from `0` to
+`numCSBlocks`. -/
+private theorem bbwd_loopM (Dout A : RegionName) (s0 : BlockState)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks K : Nat)
+    (hBCS : 0 < BCS) (s : BlockState)
+    (hP0 : bbwdMInv Dout A s0 PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM
+      SAB SAS SAH SAK BCS numCSBlocks K 0 s) :
+    ∃ sLoop, stepStmt (bbwdLoopStmt BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS) s
+        = some sLoop
+      ∧ bbwdMInv Dout A s0 PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM
+          SAB SAS SAH SAK BCS numCSBlocks K numCSBlocks sLoop := by
+  rw [bbwdIO_loopStmt_resolve BM BN BCS chunk_size K SDM SAS numCSBlocks hBCS]
+  obtain ⟨final, sLoop, haux, hfinal, hPfinal⟩ :=
+    forRangeAux_inv (idx := "cs") (stop := numCSBlocks) (step := 1)
+      (P := bbwdMInv Dout A s0 PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM
+        SAB SAS SAH SAK BCS numCSBlocks K)
+      (by norm_num)
+      (fun i st hlt hinv => bbwd_stepM Dout A s0 PB PC PH PM PN chunk_size BM BN
+        SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks K i st hlt hinv)
+      0 s hP0
+  have hfinalEq : final = numCSBlocks := le_antisymm hPfinal.2.1 hfinal
+  rw [hfinalEq] at hPfinal
+  exact ⟨sLoop, haux, hPfinal⟩
+
+/-! ### IO signature, lane bridges, spec bridge -/
+
+/-- The `Dout`-stream lane feeding output lane `l` at contraction key `e`: the
+row of `l` (row-major over the `[BM, BN]` output tile) paired with `e` over the
+`[BM, BLOCK_CS]` per-step `Dout` tile, both through the shared `Lane2D`
+bridge. -/
+def bbwdDoutLane (BM BN BCS : Nat) (l : Fin (BM * BN)) (e : Fin BCS) : Fin (BM * BCS) :=
+  Lane2D.encode ((Lane2D.decode l).1, e, PUnit.unit)
+
+/-- The `A`-stream lane feeding output lane `l` at contraction key `e`: `e`
+paired with the column of `l` over the `[BLOCK_CS, BN]` per-step `A` tile. -/
+def bbwdALane (BM BN BCS : Nat) (l : Fin (BM * BN)) (e : Fin BCS) : Fin (BCS * BN) :=
+  Lane2D.encode (e, (Lane2D.decode l).2.1, PUnit.unit)
+
+/-- **The streamed batched-matmul-backward spec**: the ideal ℝ value of output
+lane `l = (i, n)` as a `T`-step fold over the streamed tiles,
+
+`∑_{t < T} ∑_{e < BLOCK_CS} maskedDout(t)[i, e] · maskedA(t)[e, n]`,
+
+where the two factors are zeroed exactly where the kernel's own `other = 0.0`
+load masks are false — the `dout` tile on rows `≥ chunk_size`, the `a` tile on
+columns `≥ K`. (The kernel's third conjunct, the per-block CS tail
+`offs_cs < chunk_size_limit - cs·BLOCK_CS`, is all-true at
+`CSL = BLOCK_CS·numCSBlocks` and so contributes nothing.) This is the `⊨[R]`
+face of `bbwdSpec`: the same `Σ_cs Dout·A` reference, split into the kernel's own
+`BLOCK_CS`-sized contraction blocks and carrying the kernel's own masking. -/
+noncomputable def bbwdStreamSum (PM PN BM BN BCS T chunk_size K : Nat)
+    (xs : Fin T → Fin (BM * BCS) → ℝ) (ys : Fin T → Fin (BCS * BN) → ℝ)
+    (l : Fin (BM * BN)) : ℝ :=
+  ∑ t : Fin T, ∑ e : Fin BCS,
+    (if PM * BM + l.val / BN < chunk_size then xs t (bbwdDoutLane BM BN BCS l e) else 0)
+      * (if PN * BN + l.val % BN < K then ys t (bbwdALane BM BN BCS l e) else 0)
+
+set_option maxHeartbeats 1000000 in
+/-- Under the two stream pins, the plain partial sum at the decoded output lane
+**is** the skin-level double fold (`StreamLane.sum_range_mul` plus the address
+identity of the windows with the invariant's pointer cells). -/
+private theorem bbwdAccPartial_eq_streamSum (Dout A : RegionName) (s₀ : BlockState)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks : Nat)
+    (xs : Fin numCSBlocks → Fin (BM * BCS) → ℝ) (ys : Fin numCSBlocks → Fin (BCS * BN) → ℝ)
+    (hx : ∀ (t : Fin numCSBlocks) (j : Fin (BM * BCS)),
+      s₀.readMem Dout (bbwdDoutAddr PB PC PH PM BM BCS SDB SDC SDH SDN SDM t.val j.val) = xs t j)
+    (hy : ∀ (t : Fin numCSBlocks) (j : Fin (BCS * BN)),
+      s₀.readMem A (bbwdAAddr PB PC PH PN BN BCS chunk_size SAB SAS SAH SAK t.val j.val) = ys t j)
+    (l : Fin (BM * BN)) :
+    accPartial s₀ Dout A PB PC PH PM PN BM BN chunk_size SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS
+        (Lane2D.decode l).1 (Lane2D.decode l).2.1 numCSBlocks
+      = ∑ t : Fin numCSBlocks, ∑ e : Fin BCS,
+          xs t (bbwdDoutLane BM BN BCS l e) * ys t (bbwdALane BM BN BCS l e) := by
+  unfold accPartial
+  rw [StreamLane.sum_range_mul]
+  refine Finset.sum_congr rfl fun t _ => Finset.sum_congr rfl fun e _ => ?_
+  have hxa : doutElem s₀ Dout PB PC PH PM BM SDB SDC SDH SDN SDM (Lane2D.decode l).1
+        (t.val * BCS + e.val) = xs t (bbwdDoutLane BM BN BCS l e) := by
+    rw [← hx t (bbwdDoutLane BM BN BCS l e)]
+    simp only [bbwdDoutLane, bbwdDoutAddr, Lane2D.encode_div, Lane2D.encode_mod, doutElem,
+      rowIndex]
+    congr 1
+    ring
+  have hya : aElem s₀ A PB PC PH PN BN chunk_size SAB SAS SAH SAK (Lane2D.decode l).2.1
+        (t.val * BCS + e.val) = ys t (bbwdALane BM BN BCS l e) := by
+    rw [← hy t (bbwdALane BM BN BCS l e)]
+    simp only [bbwdALane, bbwdAAddr, Lane2D.encode_div, Lane2D.encode_mod, aElem, colIndex]
+    congr 1
+    ring
+  rw [hxa, hya]
+
+set_option maxHeartbeats 1000000 in
+/-- The kernel's masked accumulator at the decoded output lane **is** the
+streamed masked fold. -/
+private theorem bbwdMaskedPartial_eq_streamSum (Dout A : RegionName) (s₀ : BlockState)
+    (PB PC PH PM PN chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks K : Nat)
+    (xs : Fin numCSBlocks → Fin (BM * BCS) → ℝ) (ys : Fin numCSBlocks → Fin (BCS * BN) → ℝ)
+    (hx : ∀ (t : Fin numCSBlocks) (j : Fin (BM * BCS)),
+      s₀.readMem Dout (bbwdDoutAddr PB PC PH PM BM BCS SDB SDC SDH SDN SDM t.val j.val) = xs t j)
+    (hy : ∀ (t : Fin numCSBlocks) (j : Fin (BCS * BN)),
+      s₀.readMem A (bbwdAAddr PB PC PH PN BN BCS chunk_size SAB SAS SAH SAK t.val j.val) = ys t j)
+    (l : Fin (BM * BN)) :
+    bbwdMaskedPartial s₀ Dout A PB PC PH PM PN BM BN chunk_size SDB SDC SDH SDN SDM
+        SAB SAS SAH SAK BCS K (Lane2D.decode l).1 (Lane2D.decode l).2.1 numCSBlocks
+      = bbwdStreamSum PM PN BM BN BCS numCSBlocks chunk_size K xs ys l := by
+  unfold bbwdMaskedPartial bbwdStreamSum
+  simp only [rowIndex, colIndex, Lane2D.decode_row, Lane2D.decode_col]
+  by_cases hp : PM * BM + l.val / BN < chunk_size
+  · by_cases hq : PN * BN + l.val % BN < K
+    · rw [if_pos ⟨hp, hq⟩,
+        bbwdAccPartial_eq_streamSum Dout A s₀ PB PC PH PM PN chunk_size BM BN
+          SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks xs ys hx hy l]
+      exact Finset.sum_congr rfl fun t _ => Finset.sum_congr rfl fun e _ => by
+        rw [if_pos hp, if_pos hq]
+    · rw [if_neg (fun h => hq h.2)]
+      symm
+      exact Finset.sum_eq_zero fun t _ => Finset.sum_eq_zero fun e _ => by
+        rw [if_neg hq, mul_zero]
+  · rw [if_neg (fun h => hp h.1)]
+    symm
+    exact Finset.sum_eq_zero fun t _ => Finset.sum_eq_zero fun e _ => by
+      rw [if_neg hp, zero_mul]
+
+/-- **Streaming IO signature** of `bmm_chunk_bwd` on the metadata-parametrized
+two-stream fold skin (S1: fold + terminal masked store, 3-D pid grid), at
+`nMeta := 0` — this kernel loads **no** scalar metadata, so the slot vector is
+empty (`sty`/`mbuf`/`mwin` are `Fin.elim0`, and the region list degenerates to
+`[Dout, A, Db]`) and every window is a function of the three pids alone. The
+grid is the kernel's own: `pid₀` = flattened `(m, n)` output tile, `pid₁` =
+batch, `pid₂` = chunk·group (split into `pid_c` / `pid_h` by `ngroups`).
+
+Step `t` of the CS-loop reads the `[BLOCK_M, BLOCK_CS]` `Dout` tile and the
+`[BLOCK_CS, BLOCK_N]` `A` tile; after the loop one `[BLOCK_M, BLOCK_N]` tile is
+masked-stored at the **`.real`** grid (`outDType` default — the Python
+`.to(db_ptr.dtype.element_ty)` cast erases at translation, so the transcribed
+`tl.store` carries no quantization event). The windows transcribe the kernel's
+pointer arithmetic exactly:
+
+* `read1` lane `j = (i, e)` (row-major over `[BLOCK_M, BLOCK_CS]`), step `t`:
+  `doutOff + (pid_m·BM+i)·SDN + e·SDM + t·BCS·SDM` — the invariant's
+  `dout_ptrs` cell after `t` advances.
+* `read2` lane `j = (e, n)` (row-major over `[BLOCK_CS, BLOCK_N]`), step `t`:
+  `batchOff + e·SAS + (pid_n·BN+n)·SAK + t·BCS·SAS` — the `a_ptrs` cell.
+* `write` lane `j = (i, n)`: `dbOffset` in lane form.
+
+`writeMask` is the kernel's **own** terminal store mask `(offs_m <
+chunk_size_limit) & (offs_n < K)`, so the frame is exact: the face claims a
+value on precisely the lanes the program writes, for every pid of the grid.
+`mask1` / `mask2` are `True`: the consumer pins (and bounds) the whole streamed
+tile, and the spec `bbwdStreamSum` carries the kernel's own per-lane load
+masking itself. -/
+def bmm_chunk_bwd_IO (A Dout Db : RegionName)
+    (chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK
+      BM BN BCS numCSBlocks : Nat) :
+    StreamMetaMasked3DKernelIO₂ where
+  kernel := bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+    SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS
+  inp1 := Dout
+  inp2 := A
+  out := Db
+  nMeta := 0
+  sty := Fin.elim0
+  mbuf := Fin.elim0
+  mwin := Fin.elim0
+  T := numCSBlocks
+  B1 := BM * BCS
+  B2 := BCS * BN
+  C := BM * BN
+  outDType := .real
+  read1 := fun pid₀ pid₁ pid₂ _ t j =>
+    bbwdDoutAddr pid₁ (pidC pid₂ ngroups) (pidH pid₂ ngroups) (pidM pid₀ K BN)
+      BM BCS SDB SDC SDH SDN SDM t.val j.val
+  read2 := fun pid₀ pid₁ pid₂ _ t j =>
+    bbwdAAddr pid₁ (pidC pid₂ ngroups) (pidH pid₂ ngroups) (pidN pid₀ K BN)
+      BN BCS chunk_size SAB SAS SAH SAK t.val j.val
+  write := fun pid₀ pid₁ pid₂ _ j =>
+    bbwdDbAddr pid₁ (pidC pid₂ ngroups) (pidH pid₂ ngroups) (pidM pid₀ K BN) (pidN pid₀ K BN)
+      BM BN chunk_size SOB SOS SOH SOK j.val
+  mask1 := fun _ _ _ _ _ _ => True
+  mask2 := fun _ _ _ _ _ _ => True
+  writeMask := fun pid₀ _ _ _ j =>
+    bbwdWriteOk (pidM pid₀ K BN) (pidN pid₀ K BN) BM BN (BCS * numCSBlocks) K j.val
+
+/-! ### The headline -/
+
+set_option maxHeartbeats 4000000 in
+/-- **The `⊨[R]` streaming headline (wave-5 S1 fold genre, 3-D grid).**
+
+For every rounding model `R`, the faithful `HAS_RESIDUAL = false` surface of
+`bmm_chunk_bwd` implements, on its `StreamMetaMasked3DKernelIO₂` signature at
+`nMeta := 0`, the **ideal ℝ batched-matmul-backward fold** over the streamed
+tiles: every write-active output lane `l = (i, n)` holds
+
+`∑_{t < numCSBlocks} ∑_{e < BLOCK_CS} maskedDout(t)[i,e] · maskedA(t)[e,n]`
+
+— exact real arithmetic, the two factors zeroed exactly where the kernel's own
+`other = 0.0` load masks are false (`row ≥ chunk_size` / `col ≥ K`). On an
+interior program, where the whole tile is in range, both guards are true and this
+is the plain `Σ_cs Dout[i,cs]·A[cs,n]` of the exact headline.
+
+Layer map: the whole kernel is **cast-free** (`.real` loads, `.real` dot/add,
+the Python `.to(db_ptr.dtype.element_ty)` cast erased at translation, `.real`
+store), so under `execR R` the prologue and the CS-loop collapse verbatim onto
+the exact stepper. The store is `.real`-typed, so the skin's boundary
+quantization degenerates: the readback's `R.round .real` is the identity
+(`round_real_apply`). Hence **no** `R`-side hypothesis is needed — this face
+holds for every rounding model.
+
+Why the *masked* contract: the skin quantifies over **all** `(pid₀, pid₁, pid₂)
+: ℕ³`, and `pidM pid₀ K BN = pid₀ / cdiv K BN` is unbounded, so the exact
+headline's tile-level in-range premises (`hmlt` / `hmlt'` / `hnlt`, stated for
+one fixed launch state) would be *contradictory* if universally quantified over
+`pid₀` — the face would be vacuous whenever `BM, BN, K > 0`. The per-lane
+masked chain (`bbwd_stepM` / `bbwd_loopM` / `bbwd_postLoopR`) replaces them,
+covering every program of the grid instead.
+
+Hypotheses:
+
+* `hBCS : 0 < BCS` — the CS-loop steps by `BLOCK_SIZE_CS`; at `0` the loop never
+  advances and `cdiv(CSL, BCS)` is meaningless. Exact headline's `hBCS`.
+* `hOutInj` — output-address injectivity of the write window, the pid-form
+  spelling of the exact headline's `hInj` (the skin quantifies the launch state
+  internally, so the state-indexed spelling is not expressible here). It is
+  pid-uniform and therefore satisfiable: shifting the base by the batch/chunk
+  offsets does not affect injectivity in `(i, n)`. With colliding output lanes
+  the per-lane readback would be last-writer-wins and the statement false. As in
+  the exact headline it is carried as an open side condition, not discharged.
+
+The exact headline's `hundef` is **not** a hypothesis here: the skin's triple
+already pins `s₀.undef = fun _ _ => 0`, which is exactly the zero default the
+two `other = 0.0` masked loads fall back on.
+
+Relation to the exact surface: `bmm_chunk_bwd_output_summary_general`
+(`Realizes_without_Rounding`) above is retained unchanged; this `⊨[R]` face
+restates the same batched matmul backward on the streaming skin, for every `R`
+and every program of the grid at once. Both are kept per the
+rounding-as-default doctrine. -/
+specification bmm_chunk_bwd_io_correctness (R : RoundingModel)
+    (A Dout Db : RegionName)
+    (chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK
+      BM BN BCS numCSBlocks : Nat)
+    (hBCS : 0 < BCS)
+    (hOutInj : ∀ pid₀ pid₁ pid₂ : Nat,
+      Function.Injective (dbOffset pid₁ (pidC pid₂ ngroups) (pidH pid₂ ngroups)
+        chunk_size SOB SOS SOH SOK (pidM pid₀ K BN) (pidN pid₀ K BN) BM BN)) :
+    bmm_chunk_bwd_IO A Dout Db chunk_size K ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN
+        SOB SOS SOH SOK BM BN BCS numCSBlocks ⊨[R]
+      fun pid₀ _ _ _ xs ys l =>
+        bbwdStreamSum (pidM pid₀ K BN) (pidN pid₀ K BN) BM BN BCS numCSBlocks chunk_size K
+          xs ys l := by
+  refine StreamMetaMasked3DKernelIO₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact bbwd_flattenOk A Dout Db chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN
+      SOB SOS SOH SOK BM BN BCS numCSBlocks K
+  · -- the safety walk
+    intro bounds s m xs ys _hm _hx _hy _hbm hbr1 hbr2 hbw
+    simp only [bmm_chunk_bwd_IO] at hbr1 hbr2 hbw ⊢
+    exact bbwd_traceSafeR R bounds A Dout Db chunk_size ngroups SAB SAS SAH SAK
+      SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS numCSBlocks K hBCS s
+      (fun t j => hbr1 t j trivial) (fun t j => hbr2 t j trivial) hbw
+  · -- the rounded Hoare triple
+    intro s₀ m xs ys hundef _hm hx hy
+    simp only [bmm_chunk_bwd_IO] at hx hy ⊢
+    have hundef' : ∀ rg o, s₀.undef rg o = 0 := fun rg o => by rw [hundef]
+    obtain ⟨s1, hpre, hP0⟩ := bbwd_preLoopM A Dout Db s₀ chunk_size K ngroups
+      SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS numCSBlocks hundef'
+    obtain ⟨sLoop, hLoopStmt, hPLoop⟩ :=
+      bbwd_loopM Dout A s₀ (s₀.pids 1) (pidC (s₀.pids 2) ngroups) (pidH (s₀.pids 2) ngroups)
+        (pidM (s₀.pids 0) K BN) (pidN (s₀.pids 0) K BN) chunk_size BM BN SDB SDC SDH SDN SDM
+        SAB SAS SAH SAK BCS numCSBlocks K hBCS s1 hP0
+    obtain ⟨sfin, hTailR, hval, hframe⟩ :=
+      bbwd_postLoopR R Dout A Db s₀ (s₀.pids 1) (pidC (s₀.pids 2) ngroups)
+        (pidH (s₀.pids 2) ngroups) (pidM (s₀.pids 0) K BN) (pidN (s₀.pids 0) K BN)
+        chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK SOB SOS SOH SOK BCS numCSBlocks K
+        (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) sLoop hPLoop
+    have hmem0 : sLoop.mem = s₀.mem := hPLoop.2.2.2.2.2.2.2.2.2.2.2.2.2.2
+    have hLoopR : stepStmtR R (bbwdLoopStmt BM BN BCS chunk_size (BCS * numCSBlocks) K SDM SAS) s1
+        = some sLoop := by
+      rw [bbwdIO_loopStmt_castFree]
+      exact hLoopStmt
+    refine ⟨sfin, ?_, ?_, ?_⟩
+    · show execR R (bbwd_matmul_surface A Dout Db chunk_size (BCS * numCSBlocks) K ngroups
+          SAB SAS SAH SAK SDB SDC SDH SDM SDN SOB SOS SOH SOK BM BN BCS).toAlgKernel s₀
+        = some sfin
+      unfold execR
+      rw [bbwd_body_split' A Dout Db chunk_size ngroups SAB SAS SAH SAK SDB SDC SDH SDM SDN
+          SOB SOS SOH SOK BM BN BCS numCSBlocks K, stepStmtsR_append,
+        bbwdIO_prologue_castFree R A Dout chunk_size K ngroups SAB SAS SAH SAK
+          SDB SDC SDH SDM SDN BM BN BCS s₀,
+        hpre, Option.bind_some, stepStmtsR_cons_some hLoopR]
+      exact hTailR
+    · -- the readback on write-active lanes
+      intro l hj
+      have hact : bbwdStoreActive (pidM (s₀.pids 0) K BN) (pidN (s₀.pids 0) K BN) BM BN
+          (BCS * numCSBlocks) K (Lane2D.decode l) := by
+        rw [← bbwdWriteOk_encode, Lane2D.encode_decode]
+        exact hj
+      rw [show bbwdDbAddr (s₀.pids 1) (pidC (s₀.pids 2) ngroups) (pidH (s₀.pids 2) ngroups)
+            (pidM (s₀.pids 0) K BN) (pidN (s₀.pids 0) K BN) BM BN chunk_size SOB SOS SOH SOK l.val
+          = dbOffset (s₀.pids 1) (pidC (s₀.pids 2) ngroups) (pidH (s₀.pids 2) ngroups)
+              chunk_size SOB SOS SOH SOK (pidM (s₀.pids 0) K BN) (pidN (s₀.pids 0) K BN)
+              BM BN (Lane2D.decode l)
+        from by rw [← bbwdDbAddr_encode]; simp only [Lane2D.encode_decode]]
+      rw [bbwdIO_readMemAs_real_of_cell (hval (Lane2D.decode l) hact), R.round_real_apply]
+      refine congrArg _ ?_
+      exact bbwdMaskedPartial_eq_streamSum Dout A s₀ (s₀.pids 1) (pidC (s₀.pids 2) ngroups)
+        (pidH (s₀.pids 2) ngroups) (pidM (s₀.pids 0) K BN) (pidN (s₀.pids 0) K BN)
+        chunk_size BM BN SDB SDC SDH SDN SDM SAB SAS SAH SAK BCS numCSBlocks K xs ys
+        (fun t j => hx t j trivial) (fun t j => hy t j trivial) l
+    · -- the frame
+      intro r o hcond
+      have hcond' : r ≠ Db ∨ ∀ idx : TileIndex [BM, BN],
+          bbwdStoreActive (pidM (s₀.pids 0) K BN) (pidN (s₀.pids 0) K BN) BM BN
+            (BCS * numCSBlocks) K idx →
+          o ≠ dbOffset (s₀.pids 1) (pidC (s₀.pids 2) ngroups) (pidH (s₀.pids 2) ngroups)
+            chunk_size SOB SOS SOH SOK (pidM (s₀.pids 0) K BN) (pidN (s₀.pids 0) K BN)
+            BM BN idx := by
+        rcases hcond with hne | hno
+        · exact Or.inl hne
+        · refine Or.inr fun idx hactive => ?_
+          have h := hno (Lane2D.encode idx) ((bbwdWriteOk_encode _ _ _ _ _ _ idx).mpr hactive)
+          rwa [bbwdDbAddr_encode] at h
+      rw [hframe r o hcond', hmem0]
+
+end IOFace
+
 end VeriTile.Bench.TritonBenchG.BmmChunkBwd
+
+#print axioms VeriTile.Bench.TritonBenchG.BmmChunkBwd.bmm_chunk_bwd_io_correctness
