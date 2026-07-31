@@ -73,13 +73,16 @@ import VeriTile.Triton.Semantics
 
 namespace VeriTile.Triton
 
-/-! ## Unmasked-scatter frame primitives
+/-! ## Missing scatter frame primitives
 
-`BlockState` already ships the masked-scatter `pids` frame
-(`foldl_writeMem_prop_masked_pids`) and both unmasked `mem` frames
+`BlockState` ships the masked-scatter `pids` frame
+(`foldl_writeMem_prop_masked_pids`) and both *unmasked* `mem` frames
 (`foldl_writeMem_mem_preserve_other_region`,
-`foldl_writeMem_mem_preserve_unhit`).  The unmasked `pids` frame — needed by
-every slice whose store carries no mask — was missing. -/
+`foldl_writeMem_mem_preserve_unhit`).  The two entries of that square this
+driver needs and that were missing are the unmasked `pids` frame — for a slice
+whose store carries no mask — and the **masked** `mem`-outside-the-region
+frame, which is what `AgreeOutsideRegion.mem` is discharged by for the (usual)
+masked store. -/
 
 namespace BlockState
 
@@ -92,6 +95,27 @@ theorem foldl_writeMem_pids {α : Type} (region : RegionName)
   induction l generalizing s with
   | nil => rfl
   | cons hd tl ih => rw [List.foldl_cons, ih]; simp
+
+/-- A **masked** `writeMem` scatter into `region` leaves every other region's
+cells untouched.  The masked companion of
+`foldl_writeMem_mem_preserve_other_region`; stated on `mem` rather than
+`readMem` because that is the field `AgreeOutsideRegion` pins. -/
+theorem foldl_writeMem_prop_masked_mem_preserve_other_region {α : Type}
+    {region : RegionName} (offsetFn : α → Nat) (valueFn : α → ℝ)
+    (P : α → Prop) [DecidablePred P] (l : List α)
+    (r : RegionName) (hr : r ≠ region) (o : Nat) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc) s).mem r o)
+        = s.mem r o := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons, ih]
+      by_cases hP : P hd
+      · rw [if_pos hP, writeMem_mem, if_neg (fun hc => hr hc.1)]
+      · rw [if_neg hP]
 
 end BlockState
 
