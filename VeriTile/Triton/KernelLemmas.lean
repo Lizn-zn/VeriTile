@@ -11,3 +11,4 @@ import VeriTile.Triton.KernelLemmas.OffsetInjective
 import VeriTile.Triton.KernelLemmas.Matmul
 import VeriTile.Triton.KernelLemmas.ScatterStore
 import VeriTile.Triton.KernelLemmas.LoopInvariant
+import VeriTile.Triton.KernelLemmas.CarryFold
