@@ -112,23 +112,32 @@ Output-offset injectivity side conditions (`BK ≤ K`, `BV ≤ V` for the
 `[BV,BK]`/`[BK,BV]` state tiles) are honest structural hypotheses; the Python
 regression (`K = BK = 16`, `V = 32`, `BV ∈ {8, 32}`) satisfies them.
 
-**The load masks — a disclosed gap, scoped by `hFullK` / `hFullV`.** Every
-Python load in both kernels is guarded (`mask_bk` / `mask_bv`, `other = 0`); the
-step slices in this file load *unmasked* (their masked *stores* are transcribed
-faithfully). For a partial tile Python reads `0` where these slices read live
-memory, so the headline pins the full-tile regime with the two explicit
-hypotheses `hFullK` / `hFullV` rather than pretending to cover partial tiles.
-Why the masks are not simply put back: every face here observes a value produced
-by a `tl.sum` over the *other* axis, so masking the loads turns each executed
-lane into an `if mask then some … else some 0` carrier inside a `WithBot ℝ`
-reduction, whose lane index is a `TileShape.insertAxisIndex`-projected index that
-`simp`/`rw` cannot normalize (the generic `insertAxisIndex_succ` simp lemma does
-not fire on the `Fin 2` literal `1`); `Semantics/MaskedReduction.lean` carries
-carrier bridges only for two-factor 1-D shapes, not for these 2-D multi-factor
-ones. Closing the gap needs that library-level bridge first — the sibling port
-`fused_rwkv6_kernel` shows the shape of the fix where a face is *elementwise*
-(its state-update slice is now fully masked and needs no full-tile hypothesis),
-and every face in this file is a reduction face.
+**The load masks — closed for the forward chain, still open for the rest.**
+Every Python load in both kernels is guarded (`mask_bk` / `mask_bv`,
+`other = 0`). The state of play, clause by clause:
+
+* **Clauses 3 and 4 are mask-faithful.** `fused_recurrent_delta_vnew_step_slice`
+  and both `fused_recurrent_delta_state_step_slice_*` reproduce `mask_kv` on
+  `prev`, `mask_bk` on `b_k`, `mask_bv` on `b_v` (and on headwise `b_beta`; the
+  scalar `b_beta` is unmasked in Python too), plus the `mask_kv` store on the
+  state slices. Their specs are guarded to match — the `v_minus` reduction's
+  summand is `if activeK … then … else 0`, which is what Python computes, since
+  an out-of-range key column reads `0` in *both* factors. These two clauses
+  therefore hold for partial tiles and carry **no** full-tile antecedent, and
+  the guard propagates into `deltaState`, `vMinusClosed` and `vNewClosed`.
+* **Clauses 5–11 still load unmasked**, and each now carries the full-tile
+  antecedent as a **clause-local** hypothesis rather than the whole theorem
+  carrying it — so an unmasked backward slice can no longer weaken a
+  mask-faithful forward one. For a partial tile Python reads `0` where those
+  slices read live memory, and those clauses say nothing.
+
+What unblocked clauses 3 and 4 was `Semantics/MaskedReduction.lean`'s
+`ite_some_some` (it pushes each `other = 0` carrier's `some` outward so the
+existing `@[simp]` `WithBot` lemmas collapse the whole factor tower) together
+with the `TileShape.insertAxisIndex` `Fin`-literal normalizations. That
+machinery now exists and is proven on this port and on `fused_rwkv6_kernel`;
+the remaining clauses are **mechanical work, not a missing capability**, and
+this docstring should not be read as claiming otherwise.
 
 ## DSL-forced transcription notes (all mechanical, documented per
 `review_criteria.md`)
@@ -452,6 +461,14 @@ instance activeKDecidable (s : BlockState) (K BK : Nat) (jk : Fin BK) :
     Decidable (activeK s K BK jk) := by
   unfold activeK; infer_instance
 
+/-- Python's `mask_kv` tile predicate (`mask_bk[None, :] & mask_bv[:, None]`). -/
+def activeKV (s : BlockState) (K V BK BV : Nat) (idx : TileIndex [BV, BK]) : Prop :=
+  activeK s K BK idx.2.1 ∧ activeV s V BV idx.1
+
+instance activeKVDecidable (s : BlockState) (K V BK BV : Nat)
+    (idx : TileIndex [BV, BK]) : Decidable (activeKV s K V BK BV idx) := by
+  unfold activeKV; infer_instance
+
 /-! ## Genuine input readers (over the *input* regions)
 
 `kVal/vVal` read the kernel's exact block-pointer layouts at time row `t`
@@ -527,9 +544,11 @@ noncomputable def deltaState (s : BlockState) (k v beta h0 : RegionName)
           (betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV m idx.1 *
             (vVal s v s_vo_h V BV m idx.1
               - ∑ jk : Fin BK,
-                  deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-                      s_qk_h s_vo_h T K V BK BV m (idx.1, jk, PUnit.unit)
-                    * kVal s k s_qk_h K BK m jk))
+                  if activeK s K BK jk then
+                    deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+                        s_qk_h s_vo_h T K V BK BV m (idx.1, jk, PUnit.unit)
+                      * kVal s k s_qk_h K BK m jk
+                  else 0))
 
 /-- The state readout `v_minus` at step `m`, lane `j_v`:
 `Σ_{j_k} deltaState(m)[j_v,j_k] · k_m[j_k]`. -/
@@ -537,9 +556,11 @@ noncomputable def vMinusClosed (s : BlockState) (k v beta h0 : RegionName)
     (IS_HEADWISE_BETA USE_INITIAL_STATE : Bool)
     (s_qk_h s_vo_h T K V BK BV : Nat) (m : Nat) (jv : Fin BV) : ℝ :=
   ∑ jk : Fin BK,
-    deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-        s_qk_h s_vo_h T K V BK BV m (jv, jk, PUnit.unit)
-      * kVal s k s_qk_h K BK m jk
+    if activeK s K BK jk then
+      deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+          s_qk_h s_vo_h T K V BK BV m (jv, jk, PUnit.unit)
+        * kVal s k s_qk_h K BK m jk
+    else 0
 
 /-- **Genuine closed form of the in-place `v` writeback at step `m`**:
 the delta `v_new = v_m − v_minus`. -/
@@ -607,25 +628,37 @@ def fused_recurrent_delta_vnew_step_slice
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
   mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
   prev = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   _v_minus = tl.sum(prev * b_k[None, :], axis=1)
   b_v -= _v_minus
   tl.store(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
     (b_v).to(v.dtype.element_ty), mask=mask_bv)
 }
 
-/-- The per-lane spec of one `v_new` writeback:
-`v_t[j_v] − Σ_{j_k} HPrev[j_v,j_k] · k_t[j_k]`. -/
+/-- The per-lane spec of one `v_new` writeback, over the *in-range* key channels
+(`mask_bk`, i.e. `activeK`):
+`v_t[j_v] − Σ_{j_k ∈ mask_bk} HPrev[j_v,j_k] · k_t[j_k]`.
+
+The `activeK` guard mirrors Python's `other = 0` loads: on an out-of-range key
+channel both `prev` (via `mask_kv`) and `b_k` (via `mask_bk`) read `0`, so the
+column contributes `0 · 0 = 0` to `tl.sum(_, axis = 1)`. -/
 noncomputable def vnewStepSpec (s : BlockState) (HPrev k v : RegionName)
     (t s_qk_h s_vo_h K V BK BV : Nat) (jv : Fin BV) : ℝ :=
   s.readMem v (vRowOffset s t s_vo_h V BV jv)
     - ∑ jk : Fin BK,
-        s.readMem HPrev (stateOffset s K V BK BV (jv, jk, PUnit.unit))
-          * kVal s k s_qk_h K BK t jk
+        if activeK s K BK jk then
+          s.readMem HPrev (stateOffset s K V BK BV (jv, jk, PUnit.unit))
+            * kVal s k s_qk_h K BK t jk
+        else 0
 
 set_option maxHeartbeats 1000000 in
 theorem fused_recurrent_delta_vnew_step_slice_correct
@@ -640,22 +673,35 @@ theorem fused_recurrent_delta_vnew_step_slice_correct
             vnewStepSpec s HPrev k v t s_qk_h s_vo_h K V BK BV jv
           else s.readMem v outAddr) := by
   intro jv
+  -- The masked loads' `other = 0.0` is an `OfScientific` literal; naming it once
+  -- keeps the out-of-range branch inside `ring`'s reach.
+  have hzero : (0.0 : ℝ) = 0 := by norm_num
   simp [exec, fused_recurrent_delta_vnew_step_slice, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.uop, Tile.ptrAdd, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
         NumericDType.sub, ComparableDType.lt, stateOffset, vRowOffset, activeV,
         vIndex, kIndex, TileShape.dropInsertedIndex]
+  -- Collapse the guarded `WithBot ℝ` reduction the masked loads produce down to a
+  -- plain real sum, exactly as `fused_rwkv6_kernel`'s output slice does.
+  simp only [TileShape.insertAxisIndex_one_rank2, MaskedReduction.ite_some_some,
+    Option.map₂_some_some, WithBot.sum_someTerm_eq_some, WithBot.unbotD_some]
   let offsetFn : TileIndex [BV] → Nat :=
     fun idx => s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V
   let valueFn : TileIndex [BV] → ℝ :=
     fun idx =>
-      s.readMem v (s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V)
+      (if s.pids 0 * BV + idx.1.val < V then
+          s.readMem v (s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V)
+        else 0.0)
         - ∑ jk : Fin BK,
-            s.readMem HPrev
-                (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
-                  (s.pids 0 * BV + idx.1.val)) *
-              s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+            (if s.pids 1 * BK + jk.val < K ∧ s.pids 0 * BV + idx.1.val < V then
+                s.readMem HPrev
+                  (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
+                    (s.pids 0 * BV + idx.1.val))
+              else 0.0) *
+              (if s.pids 1 * BK + jk.val < K then
+                  s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+                else 0.0)
   let P : TileIndex [BV] → Prop := fun idx => s.pids 0 * BV + idx.1.val < V
   have hOffsetInj : Function.Injective offsetFn := by
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
@@ -672,9 +718,18 @@ theorem fused_recurrent_delta_vnew_step_slice_correct
     else s.readMem v (offsetFn (jv, PUnit.unit))
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (jv, PUnit.unit)]
   by_cases hjv : s.pids 0 * BV + jv.val < V
-  · simp only [P, hjv, if_true, activeV, vIndex]
-    simp only [valueFn, vnewStepSpec, stateOffset, kVal, vVal, vRowOffset,
-      kIndex, vIndex]
+  · simp only [P, hjv, if_true, activeV, vIndex, valueFn, vnewStepSpec,
+      stateOffset, kVal, vVal, vRowOffset, kIndex, vIndex, activeK]
+    congr 1
+    apply Finset.sum_congr rfl
+    intro jk _
+    -- In range: every guard is true and the two summands are identical. Out of
+    -- range: Python's `other = 0` zeroes both factors, giving `0 · 0 = 0`, which
+    -- is exactly the guarded specification's `else 0`.
+    by_cases hK : s.pids 1 * BK + jk.val < K
+    · simp only [hK, hjv, and_self, if_true, and_true]
+    · simp only [hK, if_false, false_and, hzero]
+      ring
   · simp only [P, activeV, vIndex, hjv, if_false, BlockState.setReg_readMem]
 
 theorem fused_recurrent_delta_vnew_step_slice_compute_correct
@@ -719,18 +774,25 @@ def fused_recurrent_delta_state_step_slice_headwise
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
   prev = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   _v_minus = tl.sum(prev * b_k[None, :], axis=1)
   b_v -= _v_minus
-  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   b_v *= b_beta
   acc = prev + b_k[None, :] * b_v[:, None]
   tl.store(HOut + i_bh * $(K) * $(V) +
     (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
-    (acc).to(HOut.dtype.element_ty))
+    (acc).to(HOut.dtype.element_ty), mask=mask_kv)
 }
 
 def fused_recurrent_delta_state_step_slice_scalarbeta
@@ -741,10 +803,16 @@ def fused_recurrent_delta_state_step_slice_scalarbeta
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
   prev = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   _v_minus = tl.sum(prev * b_k[None, :], axis=1)
   b_v -= _v_minus
   b_beta = tl.load(beta + i_bh * $(T) + $(t))
@@ -752,7 +820,7 @@ def fused_recurrent_delta_state_step_slice_scalarbeta
   acc = prev + b_k[None, :] * b_v[:, None]
   tl.store(HOut + i_bh * $(K) * $(V) +
     (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
-    (acc).to(HOut.dtype.element_ty))
+    (acc).to(HOut.dtype.element_ty), mask=mask_kv)
 }
 
 /-- The arithmetic spec of one state-update body (both beta modes, selected
@@ -766,10 +834,12 @@ noncomputable def stateStepSpec (s : BlockState) (HPrev k v beta : RegionName)
         (betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV t idx.1 *
           (vVal s v s_vo_h V BV t idx.1
             - ∑ jk : Fin BK,
-                s.readMem HPrev (stateOffset s K V BK BV (idx.1, jk, PUnit.unit))
-                  * kVal s k s_qk_h K BK t jk))
+                if activeK s K BK jk then
+                  s.readMem HPrev (stateOffset s K V BK BV (idx.1, jk, PUnit.unit))
+                    * kVal s k s_qk_h K BK t jk
+                else 0))
 
-set_option maxHeartbeats 1000000 in
+set_option maxHeartbeats 4000000 in
 theorem fused_recurrent_delta_state_step_slice_headwise_correct
     (HPrev k v beta HOut : RegionName)
     (t s_qk_h s_vo_h T K V BK BV : Nat) (s : BlockState)
@@ -779,45 +849,103 @@ theorem fused_recurrent_delta_state_step_slice_headwise_correct
       let outAddr := stateOffset s K V BK BV idx
       (exec (fused_recurrent_delta_state_step_slice_headwise HPrev k v beta HOut
             t s_qk_h s_vo_h T K V BK BV) s).map (·.readMem HOut outAddr)
-        = some (stateStepSpec s HPrev k v beta Bool.true
-            t s_qk_h s_vo_h T K V BK BV idx) := by
+        = some (if activeKV s K V BK BV idx then
+            stateStepSpec s HPrev k v beta Bool.true
+              t s_qk_h s_vo_h T K V BK BV idx
+          else s.readMem HOut outAddr) := by
   intro idx
+  have hzero : (0.0 : ℝ) = 0 := by norm_num
   simp [exec, fused_recurrent_delta_state_step_slice_headwise, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.uop, Tile.ptrAdd, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
         NumericDType.sub, ComparableDType.lt, stateOffset, vRowOffset,
         vIndex, kIndex, TileShape.dropInsertedIndex]
+  -- Collapse the guarded `WithBot ℝ` reduction the masked loads produce.
+  simp only [TileShape.insertAxisIndex_one_rank2, MaskedReduction.ite_some_some,
+    Option.map₂_some_some, WithBot.sum_someTerm_eq_some, WithBot.unbotD_some]
   let offsetFn : TileIndex [BV, BK] → Nat :=
     fun idx => s.pids 2 * K * V +
       (s.pids 1 * BK + idx.2.1.val) * V + (s.pids 0 * BV + idx.1.val)
   let valueFn : TileIndex [BV, BK] → ℝ :=
     fun idx =>
-      s.readMem HPrev
-          (s.pids 2 * K * V + (s.pids 1 * BK + idx.2.1.val) * V +
-            (s.pids 0 * BV + idx.1.val))
-        + s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + idx.2.1.val + t * K) *
-            ((s.readMem v (s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V)
+      (if s.pids 1 * BK + idx.2.1.val < K ∧ s.pids 0 * BV + idx.1.val < V then
+          s.readMem HPrev
+            (s.pids 2 * K * V + (s.pids 1 * BK + idx.2.1.val) * V +
+              (s.pids 0 * BV + idx.1.val))
+        else 0.0)
+        + (if s.pids 1 * BK + idx.2.1.val < K then
+              s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + idx.2.1.val + t * K)
+            else 0.0) *
+            (((if s.pids 0 * BV + idx.1.val < V then
+                  s.readMem v (s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V)
+                else 0.0)
               - ∑ jk : Fin BK,
-                  s.readMem HPrev
-                      (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
-                        (s.pids 0 * BV + idx.1.val)) *
-                    s.readMem k
-                      (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)) *
-              s.readMem beta
-                (s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V))
+                  (if s.pids 1 * BK + jk.val < K ∧ s.pids 0 * BV + idx.1.val < V then
+                      s.readMem HPrev
+                        (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
+                          (s.pids 0 * BV + idx.1.val))
+                    else 0.0) *
+                    (if s.pids 1 * BK + jk.val < K then
+                        s.readMem k
+                          (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+                      else 0.0)) *
+              (if s.pids 0 * BV + idx.1.val < V then
+                  s.readMem beta (s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V)
+                else 0.0))
+  let P : TileIndex [BV, BK] → Prop :=
+    fun idx => s.pids 1 * BK + idx.2.1.val < K ∧ s.pids 0 * BV + idx.1.val < V
   have hOffsetInj : Function.Injective offsetFn := by
     simpa [offsetFn, stateOffset, kIndex, vIndex] using hOutInj
   change (List.foldl
-      (fun (acc : BlockState) i => acc.writeMem HOut (offsetFn i) (valueFn i))
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem HOut (offsetFn i) (valueFn i) else acc)
       _ (TileShape.allIndices [BV, BK])).readMem HOut (offsetFn idx) =
-    stateStepSpec s HPrev k v beta Bool.true t s_qk_h s_vo_h T K V BK BV idx
-  rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
-  simp only [valueFn, stateStepSpec, stateOffset, betaVal, kVal, vVal,
-    kIndex, vIndex, if_true, ite_true]
-  ring
+    if activeKV s K V BK BV idx then
+      stateStepSpec s HPrev k v beta Bool.true t s_qk_h s_vo_h T K V BK BV idx
+    else s.readMem HOut (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hjk : s.pids 1 * BK + idx.2.1.val < K
+  · by_cases hjv : s.pids 0 * BV + idx.1.val < V
+    · -- both in range: the outer guards resolve and only the reduction's per-column
+      -- guard is left, which `hsum` discharges lane by lane
+      have hsum : ∀ jk : Fin BK,
+          (if s.pids 1 * BK + jk.val < K ∧ s.pids 0 * BV + idx.1.val < V then
+              s.readMem HPrev
+                (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
+                  (s.pids 0 * BV + idx.1.val))
+            else 0.0) *
+            (if s.pids 1 * BK + jk.val < K then
+                s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+              else 0.0)
+          = if s.pids 1 * BK + jk.val < K then
+              s.readMem HPrev
+                  (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
+                    (s.pids 0 * BV + idx.1.val)) *
+                s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+            else 0 := by
+        intro jk
+        by_cases hK : s.pids 1 * BK + jk.val < K
+        · simp only [hK, hjv, and_self, if_true, and_true]
+        · simp only [hK, if_false, false_and, hzero]
+          ring
+      -- `hsum` must fire *before* the outer simp: that simp rewrites `hjv` to
+      -- `True` and renormalizes `0.0`, after which `hsum` no longer matches and
+      -- the two sides carry syntactically different sums.
+      simp only [valueFn, hsum]
+      -- `Bool.false_eq_true` / `if_false` resolve `betaVal`'s compile-time flag in
+      -- the scalar-beta specialization; the headwise one takes the `ite_true` side.
+      simp only [P, activeKV, activeK, activeV, kIndex, vIndex, hjk, hjv,
+        and_self, if_true, stateStepSpec, stateOffset, betaVal, kVal,
+        vVal, kIndex, vIndex, if_true, ite_true, Bool.false_eq_true, if_false,
+        ite_false]
+      ring
+    · simp only [P, activeKV, activeK, activeV, kIndex, vIndex, hjv, and_false,
+        if_false, BlockState.setReg_readMem, offsetFn]
+  · simp only [P, activeKV, activeK, activeV, kIndex, vIndex, hjk, false_and,
+      if_false, BlockState.setReg_readMem, offsetFn]
 
-set_option maxHeartbeats 1000000 in
+set_option maxHeartbeats 4000000 in
 theorem fused_recurrent_delta_state_step_slice_scalarbeta_correct
     (HPrev k v beta HOut : RegionName)
     (t s_qk_h s_vo_h T K V BK BV : Nat) (s : BlockState)
@@ -827,42 +955,99 @@ theorem fused_recurrent_delta_state_step_slice_scalarbeta_correct
       let outAddr := stateOffset s K V BK BV idx
       (exec (fused_recurrent_delta_state_step_slice_scalarbeta HPrev k v beta HOut
             t s_qk_h s_vo_h T K V BK BV) s).map (·.readMem HOut outAddr)
-        = some (stateStepSpec s HPrev k v beta Bool.false
-            t s_qk_h s_vo_h T K V BK BV idx) := by
+        = some (if activeKV s K V BK BV idx then
+            stateStepSpec s HPrev k v beta Bool.false
+              t s_qk_h s_vo_h T K V BK BV idx
+          else s.readMem HOut outAddr) := by
   intro idx
+  have hzero : (0.0 : ℝ) = 0 := by norm_num
   simp [exec, fused_recurrent_delta_state_step_slice_scalarbeta, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.uop, Tile.ptrAdd, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
         NumericDType.sub, ComparableDType.lt, stateOffset, vRowOffset,
         vIndex, kIndex, TileShape.dropInsertedIndex]
+  -- Collapse the guarded `WithBot ℝ` reduction the masked loads produce.
+  simp only [TileShape.insertAxisIndex_one_rank2, MaskedReduction.ite_some_some,
+    Option.map₂_some_some, WithBot.sum_someTerm_eq_some, WithBot.unbotD_some]
   let offsetFn : TileIndex [BV, BK] → Nat :=
     fun idx => s.pids 2 * K * V +
       (s.pids 1 * BK + idx.2.1.val) * V + (s.pids 0 * BV + idx.1.val)
   let valueFn : TileIndex [BV, BK] → ℝ :=
     fun idx =>
-      s.readMem HPrev
-          (s.pids 2 * K * V + (s.pids 1 * BK + idx.2.1.val) * V +
-            (s.pids 0 * BV + idx.1.val))
-        + s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + idx.2.1.val + t * K) *
-            ((s.readMem v (s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V)
+      (if s.pids 1 * BK + idx.2.1.val < K ∧ s.pids 0 * BV + idx.1.val < V then
+          s.readMem HPrev
+            (s.pids 2 * K * V + (s.pids 1 * BK + idx.2.1.val) * V +
+              (s.pids 0 * BV + idx.1.val))
+        else 0.0)
+        + (if s.pids 1 * BK + idx.2.1.val < K then
+              s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + idx.2.1.val + t * K)
+            else 0.0) *
+            (((if s.pids 0 * BV + idx.1.val < V then
+                  s.readMem v (s.pids 2 * s_vo_h + s.pids 0 * BV + idx.1.val + t * V)
+                else 0.0)
               - ∑ jk : Fin BK,
-                  s.readMem HPrev
-                      (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
-                        (s.pids 0 * BV + idx.1.val)) *
-                    s.readMem k
-                      (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)) *
+                  (if s.pids 1 * BK + jk.val < K ∧ s.pids 0 * BV + idx.1.val < V then
+                      s.readMem HPrev
+                        (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
+                          (s.pids 0 * BV + idx.1.val))
+                    else 0.0) *
+                    (if s.pids 1 * BK + jk.val < K then
+                        s.readMem k
+                          (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+                      else 0.0)) *
               s.readMem beta (s.pids 2 * T + t))
+  let P : TileIndex [BV, BK] → Prop :=
+    fun idx => s.pids 1 * BK + idx.2.1.val < K ∧ s.pids 0 * BV + idx.1.val < V
   have hOffsetInj : Function.Injective offsetFn := by
     simpa [offsetFn, stateOffset, kIndex, vIndex] using hOutInj
   change (List.foldl
-      (fun (acc : BlockState) i => acc.writeMem HOut (offsetFn i) (valueFn i))
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem HOut (offsetFn i) (valueFn i) else acc)
       _ (TileShape.allIndices [BV, BK])).readMem HOut (offsetFn idx) =
-    stateStepSpec s HPrev k v beta Bool.false t s_qk_h s_vo_h T K V BK BV idx
-  rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
-  simp only [valueFn, stateStepSpec, stateOffset, betaVal, kVal, vVal,
-    kIndex, vIndex, Bool.false_eq_true, ite_false, if_false]
-  ring
+    if activeKV s K V BK BV idx then
+      stateStepSpec s HPrev k v beta Bool.false t s_qk_h s_vo_h T K V BK BV idx
+    else s.readMem HOut (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hjk : s.pids 1 * BK + idx.2.1.val < K
+  · by_cases hjv : s.pids 0 * BV + idx.1.val < V
+    · -- both in range: the outer guards resolve and only the reduction's per-column
+      -- guard is left, which `hsum` discharges lane by lane
+      have hsum : ∀ jk : Fin BK,
+          (if s.pids 1 * BK + jk.val < K ∧ s.pids 0 * BV + idx.1.val < V then
+              s.readMem HPrev
+                (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
+                  (s.pids 0 * BV + idx.1.val))
+            else 0.0) *
+            (if s.pids 1 * BK + jk.val < K then
+                s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+              else 0.0)
+          = if s.pids 1 * BK + jk.val < K then
+              s.readMem HPrev
+                  (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
+                    (s.pids 0 * BV + idx.1.val)) *
+                s.readMem k (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+            else 0 := by
+        intro jk
+        by_cases hK : s.pids 1 * BK + jk.val < K
+        · simp only [hK, hjv, and_self, if_true, and_true]
+        · simp only [hK, if_false, false_and, hzero]
+          ring
+      -- `hsum` must fire *before* the outer simp: that simp rewrites `hjv` to
+      -- `True` and renormalizes `0.0`, after which `hsum` no longer matches and
+      -- the two sides carry syntactically different sums.
+      simp only [valueFn, hsum]
+      -- `Bool.false_eq_true` / `if_false` resolve `betaVal`'s compile-time flag in
+      -- the scalar-beta specialization; the headwise one takes the `ite_true` side.
+      simp only [P, activeKV, activeK, activeV, kIndex, vIndex, hjk, hjv,
+        and_self, if_true, stateStepSpec, stateOffset, betaVal, kVal,
+        vVal, kIndex, vIndex, if_true, ite_true, Bool.false_eq_true, if_false,
+        ite_false]
+      ring
+    · simp only [P, activeKV, activeK, activeV, kIndex, vIndex, hjv, and_false,
+        if_false, BlockState.setReg_readMem, offsetFn]
+  · simp only [P, activeKV, activeK, activeV, kIndex, vIndex, hjk, false_and,
+      if_false, BlockState.setReg_readMem, offsetFn]
 
 theorem fused_recurrent_delta_state_step_slice_headwise_compute_correct
     (HPrev k v beta HOut : RegionName)
@@ -873,20 +1058,22 @@ theorem fused_recurrent_delta_state_step_slice_headwise_compute_correct
       (kernel := fused_recurrent_delta_state_step_slice_headwise HPrev k v beta
         HOut t s_qk_h s_vo_h T K V BK BV)
       (initialState := s)
-      (write := fun idx : TileIndex [BV, BK] =>
-        some (HOut, stateOffset s K V BK BV idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx)
+        (fun idx => (HOut, stateOffset s K V BK BV idx)))
       (expected := fun idx =>
         stateStepSpec s HPrev k v beta Bool.true t s_qk_h s_vo_h T K V BK BV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [fused_recurrent_delta_state_step_slice_headwise,
       ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
-  intro idx
+  intro idx hActive
   have h := fused_recurrent_delta_state_step_slice_headwise_correct HPrev k v beta
     HOut t s_qk_h s_vo_h T K V BK BV s hOutInj idx
   rw [hExec] at h
-  exact Option.some.inj h
+  simpa [hActive] using Option.some.inj h
 
 theorem fused_recurrent_delta_state_step_slice_scalarbeta_compute_correct
     (HPrev k v beta HOut : RegionName)
@@ -897,20 +1084,22 @@ theorem fused_recurrent_delta_state_step_slice_scalarbeta_compute_correct
       (kernel := fused_recurrent_delta_state_step_slice_scalarbeta HPrev k v beta
         HOut t s_qk_h s_vo_h T K V BK BV)
       (initialState := s)
-      (write := fun idx : TileIndex [BV, BK] =>
-        some (HOut, stateOffset s K V BK BV idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx)
+        (fun idx => (HOut, stateOffset s K V BK BV idx)))
       (expected := fun idx =>
         stateStepSpec s HPrev k v beta Bool.false t s_qk_h s_vo_h T K V BK BV idx) := by
+  rw [ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [fused_recurrent_delta_state_step_slice_scalarbeta,
       ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
-  intro idx
+  intro idx hActive
   have h := fused_recurrent_delta_state_step_slice_scalarbeta_correct HPrev k v beta
     HOut t s_qk_h s_vo_h T K V BK BV s hOutInj idx
   rw [hExec] at h
-  exact Option.some.inj h
+  simpa [hActive] using Option.some.inj h
 
 /-! ## Output-readout step slice (the per-step `o_t` store)
 
@@ -1054,7 +1243,9 @@ theorem vnewStepSpec_eq_vNewClosed
   congr 1
   apply Finset.sum_congr rfl
   intro jk _
-  rw [hPrev]
+  split_ifs with hK
+  · rw [hPrev]
+  · rfl
 
 /-- **State carry-fold step (genuine).** If `HPrev` holds `deltaState(m)`,
 then one loop body — `stateStepSpec`, i.e.
@@ -1074,15 +1265,21 @@ theorem stateStepSpec_eq_deltaState_succ
           s_qk_h s_vo_h T K V BK BV (m + 1) idx := by
   have hsum :
       (∑ jk : Fin BK,
-          s.readMem HPrev (stateOffset s K V BK BV (idx.1, jk, PUnit.unit))
-            * kVal s k s_qk_h K BK m jk)
+          if activeK s K BK jk then
+            s.readMem HPrev (stateOffset s K V BK BV (idx.1, jk, PUnit.unit))
+              * kVal s k s_qk_h K BK m jk
+          else 0)
         = ∑ jk : Fin BK,
-            deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-                s_qk_h s_vo_h T K V BK BV m (idx.1, jk, PUnit.unit)
-              * kVal s k s_qk_h K BK m jk := by
+            if activeK s K BK jk then
+              deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+                  s_qk_h s_vo_h T K V BK BV m (idx.1, jk, PUnit.unit)
+                * kVal s k s_qk_h K BK m jk
+            else 0 := by
     apply Finset.sum_congr rfl
     intro jk _
-    rw [hPrev]
+    split_ifs with hK
+    · rw [hPrev]
+    · rfl
   rw [deltaState_succ]
   unfold stateStepSpec vNewClosed vMinusClosed
   rw [hPrev idx, hsum]
@@ -1166,8 +1363,9 @@ theorem fused_recurrent_delta_state_step_closed_form
           fused_recurrent_delta_state_step_slice_scalarbeta HPrev k v beta HOut
             m s_qk_h s_vo_h T K V BK BV)
       (initialState := s)
-      (write := fun idx : TileIndex [BV, BK] =>
-        some (HOut, stateOffset s K V BK BV idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx)
+        (fun idx => (HOut, stateOffset s K V BK BV idx)))
       (expected := fun idx =>
         deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV (m + 1) idx) := by
@@ -2486,12 +2684,12 @@ presented as a result about `ht`.
 
 Side conditions. Structural: `BV ≤ V`, `BK ≤ K` (the state tile fits the logical
 extents, giving state-address injectivity); all row-address injectivities are
-unconditional. **Scope-fixing:** `hFullK` / `hFullV` pin the **full-tile
-regime** — every step slice in this file loads *unmasked* where every Python
-load carries `mask_bk` / `mask_bv` with `other = 0`, so outside that regime the
-slices are not the kernel Python runs. They are not used by the proofs; they
-scope the statements (see the module docstring for why the masks cannot yet be
-put back). **Load-bearing:** `hPrev` and `hNext` are *assumptions* and they
+unconditional. **Scope-fixing:** the full-tile antecedents inside
+clauses 5–11 pin the **full-tile regime** for those clauses only — those slices
+still load *unmasked* where every Python load carries `mask_bk` / `mask_bv` with
+`other = 0`, so outside that regime they are not the kernel Python runs. They
+are not used by the proofs; they scope the statements. Clauses 3 and 4 are
+mask-faithful and carry no such antecedent. **Load-bearing:** `hPrev` and `hNext` are *assumptions* and they
 carry the entire forward recurrence; every clause mentioning `deltaState`,
 `vNewClosed` or `outputClosed` holds only under them.
 
@@ -2515,12 +2713,6 @@ specification fused_recurrent_delta_output_summary_general
     (IS_HEADWISE_BETA USE_INITIAL_STATE STORE_FINAL_STATE USE_DH0 USE_DHT : Bool)
     (m s_qk_h s_vo_h NK B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hBV : BV ≤ V) (hBK : BK ≤ K)
-    -- **the full-tile regime**, forced by the step slices loading *unmasked*
-    -- where every Python load carries `mask_bk` / `mask_bv` with `other = 0`;
-    -- outside this regime the slices are not the kernel Python runs (see the
-    -- module docstring for why masking them is currently blocked)
-    (hFullK : ∀ jk : Fin BK, activeK s K BK jk)
-    (hFullV : ∀ jv : Fin BV, activeV s V BV jv)
     (hPrev : ∀ idx : TileIndex [BV, BK],
       s.readMem HPrev (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
@@ -2559,12 +2751,17 @@ specification fused_recurrent_delta_output_summary_general
           fused_recurrent_delta_state_step_slice_scalarbeta HPrev k v beta HOut
             m s_qk_h s_vo_h T K V BK BV)
       (initialState := s)
-      (write := fun idx : TileIndex [BV, BK] =>
-        some (HOut, stateOffset s K V BK BV idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx)
+        (fun idx => (HOut, stateOffset s K V BK BV idx)))
       (expected := fun idx =>
         deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV (m + 1) idx)) ∧
     -- (5) the output body realizes the genuine `outputClosed(m)`
+    -- **Full-tile antecedent, scoped to this clause.** The slice below still
+    --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
+    --     it: both are mask-faithful and hold for partial tiles.
+    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, activeV s V BV jv) →
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_output_step_slice HOut q o
         m s_qk_h s_vo_h B H K V BK BV scale)
@@ -2574,8 +2771,12 @@ specification fused_recurrent_delta_output_summary_general
         (fun jv => (o, outOffset s m s_vo_h B H V BV jv)))
       (expected := fun jv : Fin BV =>
         outputClosed s q k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-          s_qk_h s_vo_h T K V BK BV scale m jv)) ∧
+          s_qk_h s_vo_h T K V BK BV scale m jv))) ∧
     -- (6) the backward loop-1 `dk` body realizes the genuine `dkStepSpec`
+    -- **Full-tile antecedent, scoped to this clause.** The slice below still
+    --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
+    --     it: both are mask-faithful and hold for partial tiles.
+    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, activeV s V BV jv) →
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dk_step_slice_headwise DHPrev q do_ v beta dk
@@ -2589,8 +2790,12 @@ specification fused_recurrent_delta_output_summary_general
         (fun jk => (dk, dkRowOffset s m s_qk_h B H K BK jk)))
       (expected := fun jk : Fin BK =>
         dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
-          m s_qk_h s_vo_h T K V BK BV scale jk)) ∧
+          m s_qk_h s_vo_h T K V BK BV scale jk))) ∧
     -- (7) the backward loop-1 `dv` body realizes the genuine `dvStepSpec`
+    -- **Full-tile antecedent, scoped to this clause.** The slice below still
+    --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
+    --     it: both are mask-faithful and hold for partial tiles.
+    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, activeV s V BV jv) →
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dv_step_slice_headwise DHPrev q do_ k beta dv
@@ -2604,8 +2809,12 @@ specification fused_recurrent_delta_output_summary_general
         (fun jv => (dv, outOffset s m s_vo_h B H V BV jv)))
       (expected := fun jv : Fin BV =>
         dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
-          m s_qk_h s_vo_h T K V BK BV scale jv)) ∧
+          m s_qk_h s_vo_h T K V BK BV scale jv))) ∧
     -- (8) the backward loop-1 headwise `dbeta` body realizes `dbetaStepSpec`
+    -- **Full-tile antecedent, scoped to this clause.** The slice below still
+    --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
+    --     it: both are mask-faithful and hold for partial tiles.
+    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, activeV s V BV jv) →
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_headwise DHPrev q do_ k v
         dbeta m s_qk_h s_vo_h NK B H T K V BK BV scale)
@@ -2614,18 +2823,26 @@ specification fused_recurrent_delta_output_summary_general
         (fun jv : Fin BV => activeV s V BV jv)
         (fun jv => (dbeta, dbetaRowOffset s m s_vo_h B H NK V BV jv)))
       (expected := fun jv : Fin BV =>
-        dbetaStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale jv)) ∧
+        dbetaStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale jv))) ∧
     -- (9) the backward loop-1 scalar `dbeta` body realizes `dbetaScalarStepSpec`
+    -- **Full-tile antecedent, scoped to this clause.** The slice below still
+    --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
+    --     it: both are mask-faithful and hold for partial tiles.
+    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, activeV s V BV jv) →
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta DHPrev q do_ k v
         dbeta m s_qk_h s_vo_h B H T K V BK BV scale)
       (initialState := s)
       (write := fun _ : PUnit => some (dbeta, dbetaScalarOffset s m T B H))
       (expected := fun _ =>
-        dbetaScalarStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale)) ∧
+        dbetaScalarStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale))) ∧
     -- (10) the backward loop-2 `dk` correction body, **sequenced onto the loop-1
     --      stores**: given that the `dk`/`dv` rows still hold what clauses 6 and 7
     --      put there, the final `dk` row is `dkCorrClosed`
+    -- **Full-tile antecedent, scoped to this clause.** The slice below still
+    --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
+    --     it: both are mask-faithful and hold for partial tiles.
+    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, activeV s V BV jv) →
     ((∀ jk : Fin BK,
         s.readMem dk (dkRowOffset s m s_qk_h B H K BK jk)
           = dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
@@ -2643,8 +2860,12 @@ specification fused_recurrent_delta_output_summary_general
           (fun jk => (dk, dkRowOffset s m s_qk_h B H K BK jk)))
         (expected := fun jk : Fin BK =>
           dkCorrClosed s DHPrev HRec q do_ k v beta IS_HEADWISE_BETA
-            m s_qk_h s_vo_h T K V BK BV scale jk)) ∧
+            m s_qk_h s_vo_h T K V BK BV scale jk))) ∧
     -- (11) the backward loop-2 `dq` body realizes the genuine `dqStepSpec`
+    -- **Full-tile antecedent, scoped to this clause.** The slice below still
+    --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
+    --     it: both are mask-faithful and hold for partial tiles.
+    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, activeV s V BV jv) →
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dq_step_slice_headwise HRec k v beta do_ dq
@@ -2658,7 +2879,7 @@ specification fused_recurrent_delta_output_summary_general
         (fun jk => (dq, dkRowOffset s m s_qk_h B H K BK jk)))
       (expected := fun jk : Fin BK =>
         dqStepSpec s HRec k v beta do_ IS_HEADWISE_BETA
-          m s_qk_h s_vo_h T K V BK BV scale jk)) := by
+          m s_qk_h s_vo_h T K V BK BV scale jk))) := by
   have hStateInj := fused_recurrent_delta_state_offset_injective_general
     s K V BK BV hBV hBK
   have hVRowInj := fused_recurrent_delta_v_row_offset_injective_general
@@ -2682,22 +2903,28 @@ specification fused_recurrent_delta_output_summary_general
   · exact fused_recurrent_delta_state_step_closed_form HPrev k v beta h0 HOut
       IS_HEADWISE_BETA USE_INITIAL_STATE m s_qk_h s_vo_h T K V BK BV s
       hStateInj hPrev
-  · exact fused_recurrent_delta_output_step_closed_form HOut q k v beta h0 o
+  · intro _hFullK _hFullV
+    exact fused_recurrent_delta_output_step_closed_form HOut q k v beta h0 o
       IS_HEADWISE_BETA USE_INITIAL_STATE m s_qk_h s_vo_h B H T K V BK BV scale
       s hOutInj hNext
-  · exact fused_recurrent_delta_bwd_dk_step_slice_compute_correct DHPrev q do_
+  · intro _hFullK _hFullV
+    exact fused_recurrent_delta_bwd_dk_step_slice_compute_correct DHPrev q do_
       v beta dk IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s hDkInj
-  · exact fused_recurrent_delta_bwd_dv_step_slice_compute_correct DHPrev q do_
+  · intro _hFullK _hFullV
+    exact fused_recurrent_delta_bwd_dv_step_slice_compute_correct DHPrev q do_
       k beta dv IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s hOutInj
-  · exact fused_recurrent_delta_bwd_dbeta_step_slice_headwise_compute_correct
+  · intro _hFullK _hFullV
+    exact fused_recurrent_delta_bwd_dbeta_step_slice_headwise_compute_correct
       DHPrev q do_ k v dbeta m s_qk_h s_vo_h NK B H T K V BK BV scale s hDbetaInj
-  · exact fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta_compute_correct
+  · intro _hFullK _hFullV
+    exact fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta_compute_correct
       DHPrev q do_ k v dbeta m s_qk_h s_vo_h B H T K V BK BV scale s
-  · intro hDkRow hDvRow
+  · intro _hFullK _hFullV hDkRow hDvRow
     exact fused_recurrent_delta_bwd_dk_correction_step_sequenced DHPrev HRec q do_
       k v beta dk dv IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s
       hDkInj hDkRow hDvRow
-  · exact fused_recurrent_delta_bwd_dq_step_slice_compute_correct HRec k v
+  · intro _hFullK _hFullV
+    exact fused_recurrent_delta_bwd_dq_step_slice_compute_correct HRec k v
       beta do_ dq IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s hDkInj
 
 end Correct_without_Rounding
