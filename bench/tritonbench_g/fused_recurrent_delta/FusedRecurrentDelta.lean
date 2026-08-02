@@ -116,20 +116,22 @@ regression (`K = BK = 16`, `V = 32`, `BV ∈ {8, 32}`) satisfies them.
 Every Python load in both kernels is guarded (`mask_bk` / `mask_bv`,
 `other = 0`). The state of play, clause by clause:
 
-* **Clauses 3 and 4 are mask-faithful.** `fused_recurrent_delta_vnew_step_slice`
-  and both `fused_recurrent_delta_state_step_slice_*` reproduce `mask_kv` on
-  `prev`, `mask_bk` on `b_k`, `mask_bv` on `b_v` (and on headwise `b_beta`; the
-  scalar `b_beta` is unmasked in Python too), plus the `mask_kv` store on the
-  state slices. Their specs are guarded to match — the `v_minus` reduction's
-  summand is `if activeK … then … else 0`, which is what Python computes, since
-  an out-of-range key column reads `0` in *both* factors. These two clauses
-  therefore hold for partial tiles and carry **no** full-tile antecedent, and
-  the guard propagates into `deltaState`, `vMinusClosed` and `vNewClosed`.
-* **Clauses 5–11 still load unmasked**, and each now carries the full-tile
-  antecedent as a **clause-local** hypothesis rather than the whole theorem
-  carrying it — so an unmasked backward slice can no longer weaken a
-  mask-faithful forward one. For a partial tile Python reads `0` where those
-  slices read live memory, and those clauses say nothing.
+* **The whole forward pass — clauses 3, 4 and 5 — is mask-faithful.**
+  `fused_recurrent_delta_vnew_step_slice`, both
+  `fused_recurrent_delta_state_step_slice_*` and
+  `fused_recurrent_delta_output_step_slice` reproduce `mask_kv` on the state
+  tile, `mask_bk` on `b_k` / `b_q`, `mask_bv` on `b_v` (and on headwise
+  `b_beta`; the scalar `b_beta` is unmasked in Python too), plus the `mask_kv`
+  store on the state slices. Their specs are guarded to match — each reduction
+  summand is `if active… then … else 0`, which is what Python computes, since
+  an out-of-range column reads `0` in *every* factor. These three clauses hold
+  for partial tiles and carry **no** full-tile antecedent, and the guard
+  propagates into `deltaState`, `vMinusClosed`, `vNewClosed` and `outputClosed`.
+* **Clauses 6–11 (the backward pass) still load unmasked**, and each now
+  carries the full-tile antecedent as a **clause-local** hypothesis rather than
+  the whole theorem carrying it — so an unmasked backward slice can no longer
+  weaken a mask-faithful forward one. For a partial tile Python reads `0` where
+  those slices read live memory, and those clauses say nothing.
 
 What unblocked clauses 3 and 4 was `Semantics/MaskedReduction.lean`'s
 `ite_some_some` (it pushes each `other = 0` carrier's `some` outward so the
@@ -595,9 +597,11 @@ noncomputable def outputClosed (s : BlockState) (q k v beta h0 : RegionName)
     (IS_HEADWISE_BETA USE_INITIAL_STATE : Bool)
     (s_qk_h s_vo_h T K V BK BV : Nat) (scale : ℝ) (m : Nat) (jv : Fin BV) : ℝ :=
   ∑ jk : Fin BK,
-    deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-        s_qk_h s_vo_h T K V BK BV (m + 1) (jv, jk, PUnit.unit)
-      * qVal s q s_qk_h K BK scale m jk
+    if activeK s K BK jk then
+      deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+          s_qk_h s_vo_h T K V BK BV (m + 1) (jv, jk, PUnit.unit)
+        * qVal s q s_qk_h K BK scale m jk
+    else 0
 
 /-! ## Row offsets of the per-step stores -/
 
@@ -1121,10 +1125,14 @@ def fused_recurrent_delta_output_step_slice
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
   mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
   prev = tl.load(HNext + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K)) * $(scale)
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
   _o = prev * b_q[None, :]
   _o = tl.sum(_o, axis=1)
   tl.store(o + (i_bh + i_k * $(B) * $(H)) * $(s_vo_h) + i_v * $(BV) + offs_v +
@@ -1137,8 +1145,10 @@ materialized state `HNext`:
 noncomputable def outputStepSpec (s : BlockState) (HNext q : RegionName)
     (t s_qk_h K V BK BV : Nat) (scale : ℝ) (jv : Fin BV) : ℝ :=
   ∑ jk : Fin BK,
-    s.readMem HNext (stateOffset s K V BK BV (jv, jk, PUnit.unit))
-      * qVal s q s_qk_h K BK scale t jk
+    if activeK s K BK jk then
+      s.readMem HNext (stateOffset s K V BK BV (jv, jk, PUnit.unit))
+        * qVal s q s_qk_h K BK scale t jk
+    else 0
 
 set_option maxHeartbeats 1000000 in
 theorem fused_recurrent_delta_output_step_slice_correct
@@ -1154,22 +1164,30 @@ theorem fused_recurrent_delta_output_step_slice_correct
             outputStepSpec s HNext q t s_qk_h K V BK BV scale jv
           else s.readMem o outAddr) := by
   intro jv
+  have hzero : (0.0 : ℝ) = 0 := by norm_num
   simp [exec, fused_recurrent_delta_output_step_slice, stepStmts, stepStmt,
         evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
         Tile.expandDim, Tile.uop, Tile.ptrAdd, Tile.reduceSum, Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
         ComparableDType.lt, stateOffset, outOffset, activeV, vIndex, kIndex,
         TileShape.dropInsertedIndex]
+  -- Collapse the guarded `WithBot ℝ` reduction the masked loads produce.
+  simp only [TileShape.insertAxisIndex_one_rank2, MaskedReduction.ite_some_some,
+    Option.map₂_some_some, WithBot.sum_someTerm_eq_some, WithBot.unbotD_some]
   let offsetFn : TileIndex [BV] → Nat :=
     fun idx => (s.pids 2 + s.pids 1 * B * H) * s_vo_h + s.pids 0 * BV +
       idx.1.val + t * V
   let valueFn : TileIndex [BV] → ℝ :=
     fun idx =>
       ∑ jk : Fin BK,
-        s.readMem HNext
-            (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
-              (s.pids 0 * BV + idx.1.val)) *
-          (s.readMem q (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K) * scale)
+        (if s.pids 1 * BK + jk.val < K ∧ s.pids 0 * BV + idx.1.val < V then
+            s.readMem HNext
+              (s.pids 2 * K * V + (s.pids 1 * BK + jk.val) * V +
+                (s.pids 0 * BV + idx.1.val))
+          else 0.0) *
+          ((if s.pids 1 * BK + jk.val < K then
+                s.readMem q (s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K)
+              else 0.0) * scale)
   let P : TileIndex [BV] → Prop := fun idx => s.pids 0 * BV + idx.1.val < V
   have hOffsetInj : Function.Injective offsetFn := by
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
@@ -1186,11 +1204,17 @@ theorem fused_recurrent_delta_output_step_slice_correct
     else s.readMem o (offsetFn (jv, PUnit.unit))
   rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj (jv, PUnit.unit)]
   by_cases hjv : s.pids 0 * BV + jv.val < V
-  · simp only [P, hjv, if_true, activeV, vIndex]
-    simp only [valueFn, outputStepSpec, stateOffset, kVal, qVal, kIndex, vIndex]
+  · simp only [P, hjv, if_true, activeV, vIndex, valueFn, outputStepSpec,
+      stateOffset, kVal, qVal, kIndex, vIndex, activeK, and_true]
     apply Finset.sum_congr rfl
     intro jk _
-    ring
+    -- In range the two summands agree up to `ring`; out of range Python's
+    -- `other = 0` zeroes both `prev` and `b_q`, giving `0 · (0 · scale) = 0`.
+    by_cases hK : s.pids 1 * BK + jk.val < K
+    · simp only [hK, if_true]
+      ring
+    · simp only [hK, if_false, hzero]
+      ring
   · simp only [P, activeV, vIndex, hjv, if_false, BlockState.setReg_readMem]
 
 theorem fused_recurrent_delta_output_step_slice_compute_correct
@@ -1302,7 +1326,9 @@ theorem outputStepSpec_eq_outputClosed
   unfold outputStepSpec outputClosed
   apply Finset.sum_congr rfl
   intro jk _
-  rw [hNext]
+  split_ifs with hK
+  · rw [hNext]
+  · rfl
 
 /-- **Genuine `v_new` writeback.** One `v` writeback body, with the
 materialized pre-update state `HPrev = deltaState(m)`, realizes the genuine
@@ -2685,11 +2711,12 @@ presented as a result about `ht`.
 Side conditions. Structural: `BV ≤ V`, `BK ≤ K` (the state tile fits the logical
 extents, giving state-address injectivity); all row-address injectivities are
 unconditional. **Scope-fixing:** the full-tile antecedents inside
-clauses 5–11 pin the **full-tile regime** for those clauses only — those slices
-still load *unmasked* where every Python load carries `mask_bk` / `mask_bv` with
-`other = 0`, so outside that regime they are not the kernel Python runs. They
-are not used by the proofs; they scope the statements. Clauses 3 and 4 are
-mask-faithful and carry no such antecedent. **Load-bearing:** `hPrev` and `hNext` are *assumptions* and they
+clauses 6–11 pin the **full-tile regime** for those clauses only — those
+backward slices still load *unmasked* where every Python load carries `mask_bk`
+/ `mask_bv` with `other = 0`, so outside that regime they are not the kernel
+Python runs. They are not used by the proofs; they scope the statements. The
+whole forward pass (clauses 3, 4, 5) is mask-faithful and carries no such
+antecedent. **Load-bearing:** `hPrev` and `hNext` are *assumptions* and they
 carry the entire forward recurrence; every clause mentioning `deltaState`,
 `vNewClosed` or `outputClosed` holds only under them.
 
@@ -2757,11 +2784,8 @@ specification fused_recurrent_delta_output_summary_general
       (expected := fun idx =>
         deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV (m + 1) idx)) ∧
-    -- (5) the output body realizes the genuine `outputClosed(m)`
-    -- **Full-tile antecedent, scoped to this clause.** The slice below still
-    --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
-    --     it: both are mask-faithful and hold for partial tiles.
-    ((∀ jk : Fin BK, activeK s K BK jk) → (∀ jv : Fin BV, activeV s V BV jv) →
+    -- (5) the output body realizes the genuine `outputClosed(m)` — mask-faithful,
+    --     so it holds for partial tiles and carries no full-tile antecedent
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_output_step_slice HOut q o
         m s_qk_h s_vo_h B H K V BK BV scale)
@@ -2771,7 +2795,7 @@ specification fused_recurrent_delta_output_summary_general
         (fun jv => (o, outOffset s m s_vo_h B H V BV jv)))
       (expected := fun jv : Fin BV =>
         outputClosed s q k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-          s_qk_h s_vo_h T K V BK BV scale m jv))) ∧
+          s_qk_h s_vo_h T K V BK BV scale m jv)) ∧
     -- (6) the backward loop-1 `dk` body realizes the genuine `dkStepSpec`
     -- **Full-tile antecedent, scoped to this clause.** The slice below still
     --     loads *unmasked* where Python masks. Clauses 3 and 4 no longer carry
@@ -2903,8 +2927,7 @@ specification fused_recurrent_delta_output_summary_general
   · exact fused_recurrent_delta_state_step_closed_form HPrev k v beta h0 HOut
       IS_HEADWISE_BETA USE_INITIAL_STATE m s_qk_h s_vo_h T K V BK BV s
       hStateInj hPrev
-  · intro _hFullK _hFullV
-    exact fused_recurrent_delta_output_step_closed_form HOut q k v beta h0 o
+  · exact fused_recurrent_delta_output_step_closed_form HOut q k v beta h0 o
       IS_HEADWISE_BETA USE_INITIAL_STATE m s_qk_h s_vo_h B H T K V BK BV scale
       s hOutInj hNext
   · intro _hFullK _hFullV
