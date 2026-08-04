@@ -41,18 +41,25 @@ This file supplies both halves: `AgreeOutsideRegion` is the frame relation for
   drivers are complementary, not substitutes.
 * **Four bench ports consume this driver** (`fused_rwkv6_kernel`,
   `fused_recurrent_delta`, `fused_recurrent_retention` — forward state only —
-  and `chunk_gated_attention`).  The other four recurrence ports still state
-  their carry invariant as a *pinned* `hPrev` hypothesis, and in every case that
-  is **structural** rather than pending work: `fused_recurrent_hgrn` keeps its
-  carry in registers only (no region is written back); `lightning_attention`'s
-  kv step reads per-block *staged* regions, so a chain would re-stage the same
-  block; `chunk_delta_fwd`'s carry address is time-indexed while `addr` here is
-  fixed across steps; and `chunk_gate_recurrence`'s step *reads* its carry at a
-  time-free address but *writes* a time-indexed history row of a different
-  region, so read and write never meet — generalizing `addr` to move with the
-  step would not close that one either.  A port's headline is unaffected by this driver
-  unless it states the fold as its own theorem, so do not read a port's
-  `hPrev` hypothesis as evidence either way — check for a `*_carry_fold`.
+  and `chunk_gated_attention`).  A fifth, `chunk_delta_fwd`, folds its
+  cross-chunk carry **without** this driver and by the stronger route: its
+  `cdfOuterLoop_run` runs `forRange_inv` over the kernel's *own* `Stmt.forRange`
+  with the carry living in the register `b_h` throughout, which is what the
+  Python loop actually does.  Where that route is available it is the better
+  one; this driver is the fallback for slices stated as standalone kernels.
+
+  The remaining three recurrence ports still state their carry invariant as a
+  *pinned* `hPrev` hypothesis, and in each case that is **structural** rather
+  than pending work: `fused_recurrent_hgrn` keeps its carry in registers only
+  (no region is written back); `lightning_attention`'s kv step reads per-block
+  *staged* regions, so a chain would re-stage the same block; and
+  `chunk_gate_recurrence`'s step *reads* its carry at a time-free address but
+  *writes* a time-indexed history row of a different region, so read and write
+  never meet — generalizing `addr` to move with the step would not close that
+  one either.  A port's headline is unaffected by this driver unless it states
+  the fold as its own theorem, so do not read a port's `hPrev` hypothesis as
+  evidence either way — check for a `*_carry_fold`, and check for a
+  `forRange_inv` fold before concluding a port's loop is unmodeled at all.
 
 ## What a port must supply to actually use `carryFold_execChain`
 
