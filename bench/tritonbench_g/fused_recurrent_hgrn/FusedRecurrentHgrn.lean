@@ -50,11 +50,12 @@ is needed. What is **outside** every claim in this file:
   longer in this list: `hgrnFwdOuterLoop_run` runs the kernel's **own**
   `Stmt.forRange` under `forRange_inv`, carrying `b_h` in a *register* across
   all `T` iterations — the way Python carries it — and lands
-  `hgrnStateClosed T` with no per-step hypothesis. It needs only `x ≠ o` and
-  `g ≠ o`. What it does **not** yet state is the per-row `O` history; the
-  headline's clause 2 is still the single-step face over the materialized
-  fiction region `BHPrev`, whose carry invariant nothing propagates, so that
-  clause's scope is unchanged.
+  `hgrnStateClosed T` with no per-step hypothesis — **and** it states the per-row
+  `O` history: every time row `t < T` holds `hgrnStateClosed (t+1)` on every
+  active lane, which is the kernel's actual output, not just its final carry.
+  It needs only `x ≠ o` and `g ≠ o`. The headline's clause 2 is still the
+  single-step face over the materialized fiction region `BHPrev`, so *that
+  clause's* scope is unchanged; the fold stands beside it, not through it.
 
   The backward reverse-time fold threading `b_dh` is still unmodeled: its carry
   is presented to its slice as a materialized fiction region `DHPrev`
@@ -660,6 +661,84 @@ theorem readMem_of_mem_eq {s t : BlockState} {r : RegionName} {off : Nat}
     (h : s.mem r off = t.mem r off) : s.readMem r off = t.readMem r off := by
   unfold BlockState.readMem; rw [h]
 
+/-- Masked companion of `BlockState.foldl_writeMem_mem_preserve_unhit`: a masked
+scatter leaves an address no *enabled* lane targets alone. The library ships
+only the unmasked form. -/
+theorem foldl_writeMem_masked_preserve_unhit {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (l : List α) (off : Nat) (ho : ∀ k ∈ l, offsetFn k ≠ off) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+          s).mem region off)
+        = s.mem region off := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons, ih (fun k hk => ho k (List.mem_cons_of_mem hd hk))]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem,
+          if_neg (fun hc => ho hd (List.mem_cons_self) hc.2.symm)]
+      · rw [if_neg hP]
+
+/-- The per-iteration lane address is injective in the lane. No side condition:
+`hgrnChan` is `i_d·BD + j` with `j` ranging over `Fin BD`. -/
+theorem hgrnAddr_injective (s0 : BlockState) (T D BD i : Nat) :
+    Function.Injective (fun j : TileIndex [BD] => hgrnAddr s0 T D BD i j) := by
+  rintro ⟨a, ⟨⟩⟩ ⟨b, ⟨⟩⟩ hab
+  simp only [hgrnAddr, hgrnChan] at hab
+  have : a.val = b.val := by omega
+  simpa using Fin.ext this
+
+/-- A row written at iteration `i` is never an *active* row of an earlier
+iteration `t < i`: the active lanes of a row span less than one `D`-stride. -/
+theorem hgrnAddr_ne_of_lt (s0 : BlockState) (T D BD t i : Nat)
+    (ht : t < i) (j k : TileIndex [BD]) (hj : hgrnChan s0 BD j < D) :
+    hgrnAddr s0 T D BD i k ≠ hgrnAddr s0 T D BD t j := by
+  have h1 : t * D + D ≤ i * D := by
+    have h2 : (t + 1) * D ≤ i * D := Nat.mul_le_mul_right D ht
+    rwa [Nat.succ_mul] at h2
+  simp only [hgrnAddr] at *
+  omega
+
+set_option maxHeartbeats 1000000 in
+/-- **The loop body's output store.** On active lanes the body writes the new
+carry into `o` at the current row; rows no active lane of this iteration targets
+are left alone. -/
+theorem hgrnFwdOuterBody_step_out
+    (s0 : BlockState) (x g o : RegionName) (T D BD i : Nat)
+    (bhCur : TileIndex [BD] → ℝ) (s s' : BlockState)
+    (hmask : s.regs .bool [BD] "mask"
+      = some ⟨fun j => decide (hgrnChan s0 BD j < D)⟩)
+    (hpx : s.regs .ptr [BD] "p_x" = some ⟨fun j => (x, hgrnAddr s0 T D BD i j)⟩)
+    (hpg : s.regs .ptr [BD] "p_g" = some ⟨fun j => (g, hgrnAddr s0 T D BD i j)⟩)
+    (hpo : s.regs .ptr [BD] "p_o" = some ⟨fun j => (o, hgrnAddr s0 T D BD i j)⟩)
+    (hbh : s.regs .real [BD] "b_h"
+      = some ⟨fun j => some (if hgrnChan s0 BD j < D then bhCur j else 0)⟩)
+    (hrun : stepStmts (hgrnFwdOuterBody D BD) s = some s') :
+    (∀ j : TileIndex [BD], hgrnChan s0 BD j < D →
+        s'.readMem o (hgrnAddr s0 T D BD i j)
+          = s.readMem g (hgrnAddr s0 T D BD i j) * bhCur j
+            + s.readMem x (hgrnAddr s0 T D BD i j))
+      ∧ (∀ off, (∀ k : TileIndex [BD], hgrnAddr s0 T D BD i k ≠ off) →
+          s'.mem o off = s.mem o off) := by
+  simp [hgrnFwdOuterBody, hgrnMaskOther, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, NumericDType.add,
+    NumericDType.mul, hpx, hpg, hpo, hmask, hbh] at hrun
+  constructor
+  · intro j hj
+    rw [← hrun]
+    repeat rw [BlockState.setReg_readMem]
+    rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _
+      (hgrnAddr_injective s0 T D BD i) j, if_pos hj]
+    simp [hj, mul_comm]
+  · intro off hoff
+    rw [← hrun]
+    simp only [BlockState.setReg_mem]
+    exact foldl_writeMem_masked_preserve_unhit _ _ _ _ off
+      (fun k _ => hoff k) _
+
 /-- **Forward loop invariant.** At iteration `i`: the lane mask and the three
 row pointers are pinned at `i`, the register carry `b_h` holds the genuine
 closed form `hgrnStateClosed i` on active lanes (`0` off-mask — see the step
@@ -674,12 +753,16 @@ def HgrnFwdInv (s0 : BlockState) (x g o h0 : RegionName) (U : Bool)
   ∧ s.regs .real [BD] "b_h" = some ⟨fun j => some (if hgrnChan s0 BD j < D then
       hgrnStateClosed s0 x g h0 U T D BD i j.1 else 0)⟩
   ∧ (∀ r, r ≠ o → ∀ off, s.mem r off = s0.mem r off)
+  ∧ (∀ t, t < i → ∀ j : TileIndex [BD], hgrnChan s0 BD j < D →
+      s.readMem o (hgrnAddr s0 T D BD t j)
+        = hgrnStateClosed s0 x g h0 U T D BD (t + 1) j.1)
 
 set_option maxHeartbeats 1000000 in
 /-- **Cross-step carry fold for the forward loop (genuine).** Running the
 kernel's own `forRange "_i" 0 n 1` from a state satisfying the invariant at `0`
 lands the invariant at exactly `n`: the register carry `b_h` holds
-`hgrnStateClosed n` on every active lane.
+`hgrnStateClosed n` on every active lane, and every output row `t < n` of `o`
+holds `hgrnStateClosed (t+1)` there — the kernel's actual output.
 
 The carry never leaves the register file — this is the `forRange_inv` route, not
 the memory-threaded `CarryFold` one, and it models what the Python loop does.
@@ -698,7 +781,7 @@ theorem hgrnFwdOuterLoop_run
       (P := HgrnFwdInv s0 x g o h0 U T D BD n) (s_init := s)
       (by norm_num) hInv
       (fun i t hi hPt => by
-        obtain ⟨hle, hmask, hpx, hpg, hpo, hbh, hmem⟩ := hPt
+        obtain ⟨hle, hmask, hpx, hpg, hpo, hbh, hmem, hhist⟩ := hPt
         obtain ⟨t', hstep, hmask', hpx', hpg', hpo', hbh'⟩ :=
           hgrnFwdOuterBody_step s0 x g o T D BD i
             (fun j => hgrnStateClosed s0 x g h0 U T D BD i j.1)
@@ -713,7 +796,12 @@ theorem hgrnFwdOuterLoop_run
             (by simpa using hmask) (by simpa using hpx) (by simpa using hpg)
             (by simpa using hpo) (by simpa using hbh) hstep r hr off
           simpa using this
-        refine ⟨t', hstep, by omega, hmask', ?_, ?_, ?_, ?_, ?_⟩
+        have hout := hgrnFwdOuterBody_step_out s0 x g o T D BD i
+          (fun j => hgrnStateClosed s0 x g h0 U T D BD i j.1)
+          (t.setReg "_i" .nat [] (Tile.scalar i)) t'
+          (by simpa using hmask) (by simpa using hpx) (by simpa using hpg)
+          (by simpa using hpo) (by simpa using hbh) hstep
+        refine ⟨t', hstep, by omega, hmask', ?_, ?_, ?_, ?_, ?_, ?_⟩
         · simpa using hpx'
         · simpa using hpg'
         · simpa using hpo'
@@ -743,7 +831,26 @@ theorem hgrnFwdOuterLoop_run
             · rw [if_neg hc, if_neg hc]
           rw [hbh', hfun]
         · intro r hr off
-          rw [hmemStep r hr off]; exact hmem r hr off)
+          rw [hmemStep r hr off]; exact hmem r hr off
+        · intro tt htt j hjc
+          rcases Nat.lt_succ_iff_lt_or_eq.mp htt with hlt | heq
+          · -- an earlier row: this iteration's active lanes never target it
+            have hne : ∀ k : TileIndex [BD],
+                hgrnAddr s0 T D BD i k ≠ hgrnAddr s0 T D BD tt j :=
+              fun k => hgrnAddr_ne_of_lt s0 T D BD tt i hlt j k hjc
+            rw [readMem_of_mem_eq (hout.2 (hgrnAddr s0 T D BD tt j) hne)]
+            simpa using hhist tt hlt j hjc
+          · subst heq
+            rw [hout.1 j hjc, hgrnStateClosed_succ]
+            have hg : (t.setReg "_i" .nat [] (Tile.scalar tt)).readMem g
+                (hgrnAddr s0 T D BD tt j) = gVal s0 g T D BD tt j.1 := by
+              simp only [gVal, ← hgrnAddr_eq_outOffset]
+              exact readMem_of_mem_eq (by simpa using hmem g hgo _)
+            have hx : (t.setReg "_i" .nat [] (Tile.scalar tt)).readMem x
+                (hgrnAddr s0 T D BD tt j) = xVal s0 x T D BD tt j.1 := by
+              simp only [xVal, ← hgrnAddr_eq_outOffset]
+              exact readMem_of_mem_eq (by simpa using hmem x hxo _)
+            rw [hg, hx])
   have hfin : final = n := by
     obtain ⟨hle, _⟩ := hP; omega
   subst hfin
