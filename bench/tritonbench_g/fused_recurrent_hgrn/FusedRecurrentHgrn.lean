@@ -46,14 +46,19 @@ is not modeled — `BD` is a free parameter. The step slices reproduce Python's
 `mask = o_d < D` / `other = 0` loads faithfully, so no full-tile side condition
 is needed. What is **outside** every claim in this file:
 
-* **The cross-step folds.** Neither the forward `range(0, T)` fold threading
-  `b_h` nor the backward reverse-time fold threading `b_dh` is modeled. Each
-  carry is presented to its slice as a materialized fiction region (`BHPrev`,
-  `DHPrev`) and constrained by an *assumed* hypothesis. In particular the forward
-  carry invariant `BHPrev = hgrnStateClosed(i_t)` is **not** propagated by any
-  clause: clause 2 writes `O` at the time-indexed `outOffset s i_t`, while the
-  hypothesis is about `BHPrev` at the time-free `bhOffset` — a different region
-  at a different offset. There is no bridging lemma and no base case.
+* **The backward cross-step fold.** The *forward* `range(0, T)` fold is no
+  longer in this list: `hgrnFwdOuterLoop_run` runs the kernel's **own**
+  `Stmt.forRange` under `forRange_inv`, carrying `b_h` in a *register* across
+  all `T` iterations — the way Python carries it — and lands
+  `hgrnStateClosed T` with no per-step hypothesis. It needs only `x ≠ o` and
+  `g ≠ o`. What it does **not** yet state is the per-row `O` history; the
+  headline's clause 2 is still the single-step face over the materialized
+  fiction region `BHPrev`, whose carry invariant nothing propagates, so that
+  clause's scope is unchanged.
+
+  The backward reverse-time fold threading `b_dh` is still unmodeled: its carry
+  is presented to its slice as a materialized fiction region `DHPrev`
+  constrained by an *assumed* hypothesis.
   On the backward side the carry *value* is pinned down: `hgrnBwdCarry` is the
   closed form of `b_dh`, `hgrnBwdCarry_pred` proves the `b_dh = b_dh * b_g` fold
   and `hgrnBwdCarry_init` the `tl.zeros` seed, and the two-step slice executes
@@ -636,6 +641,113 @@ theorem fused_recurrent_hgrn_forward_step_closed_form
     exact forwardStepValue_eq_hgrnStateClosed_succ s BHPrev X G h0
       USE_INITIAL_STATE i_t T D BD hPrev i
   rwa [hcong] at h
+
+/-! ## Cross-step fold of the forward loop (genuine, register carry)
+
+This is the piece the port's step face could not reach: the cross-step
+induction, run over the kernel's **own** `Stmt.forRange` with the carry `b_h`
+living in a *register* the whole way, exactly as the Python loop carries it.
+No materialized `BHPrev` region, no per-step hypothesis. -/
+
+/-- The loop's flat lane address is the `outOffset` the closed form reads. -/
+theorem hgrnAddr_eq_outOffset (s0 : BlockState) (T D BD t : Nat)
+    (j : TileIndex [BD]) :
+    hgrnAddr s0 T D BD t j = outOffset s0 t T D BD j.1 := by
+  simp only [hgrnAddr, hgrnChan, outOffset, dIndex]; ring
+
+/-- Memory agreement transports to the real-channel readback. -/
+theorem readMem_of_mem_eq {s t : BlockState} {r : RegionName} {off : Nat}
+    (h : s.mem r off = t.mem r off) : s.readMem r off = t.readMem r off := by
+  unfold BlockState.readMem; rw [h]
+
+/-- **Forward loop invariant.** At iteration `i`: the lane mask and the three
+row pointers are pinned at `i`, the register carry `b_h` holds the genuine
+closed form `hgrnStateClosed i` on active lanes (`0` off-mask — see the step
+lemma's note), and nothing outside the output region `o` has moved. -/
+def HgrnFwdInv (s0 : BlockState) (x g o h0 : RegionName) (U : Bool)
+    (T D BD n : Nat) (i : Nat) (s : BlockState) : Prop :=
+  i ≤ n
+  ∧ s.regs .bool [BD] "mask" = some ⟨fun j => decide (hgrnChan s0 BD j < D)⟩
+  ∧ s.regs .ptr [BD] "p_x" = some ⟨fun j => (x, hgrnAddr s0 T D BD i j)⟩
+  ∧ s.regs .ptr [BD] "p_g" = some ⟨fun j => (g, hgrnAddr s0 T D BD i j)⟩
+  ∧ s.regs .ptr [BD] "p_o" = some ⟨fun j => (o, hgrnAddr s0 T D BD i j)⟩
+  ∧ s.regs .real [BD] "b_h" = some ⟨fun j => some (if hgrnChan s0 BD j < D then
+      hgrnStateClosed s0 x g h0 U T D BD i j.1 else 0)⟩
+  ∧ (∀ r, r ≠ o → ∀ off, s.mem r off = s0.mem r off)
+
+set_option maxHeartbeats 1000000 in
+/-- **Cross-step carry fold for the forward loop (genuine).** Running the
+kernel's own `forRange "_i" 0 n 1` from a state satisfying the invariant at `0`
+lands the invariant at exactly `n`: the register carry `b_h` holds
+`hgrnStateClosed n` on every active lane.
+
+The carry never leaves the register file — this is the `forRange_inv` route, not
+the memory-threaded `CarryFold` one, and it models what the Python loop does.
+
+Side conditions, both necessary: `x ≠ o` and `g ≠ o`, without which the body's
+store into `o` could disturb the very inputs `hgrnStateClosed` reads. -/
+theorem hgrnFwdOuterLoop_run
+    (s0 : BlockState) (x g o h0 : RegionName) (U : Bool) (T D BD n : Nat)
+    (s : BlockState) (hxo : x ≠ o) (hgo : g ≠ o)
+    (hInv : HgrnFwdInv s0 x g o h0 U T D BD n 0 s) :
+    ∃ s', stepStmt (.forRange "_i" 0 n 1 (hgrnFwdOuterBody D BD)) s = some s'
+      ∧ HgrnFwdInv s0 x g o h0 U T D BD n n s' := by
+  obtain ⟨final, sF, hrun, hfinal, hP⟩ :=
+    forRange_inv (idx := "_i") (start := 0) (stop := n) (step := 1)
+      (body := hgrnFwdOuterBody D BD)
+      (P := HgrnFwdInv s0 x g o h0 U T D BD n) (s_init := s)
+      (by norm_num) hInv
+      (fun i t hi hPt => by
+        obtain ⟨hle, hmask, hpx, hpg, hpo, hbh, hmem⟩ := hPt
+        obtain ⟨t', hstep, hmask', hpx', hpg', hpo', hbh'⟩ :=
+          hgrnFwdOuterBody_step s0 x g o T D BD i
+            (fun j => hgrnStateClosed s0 x g h0 U T D BD i j.1)
+            (t.setReg "_i" .nat [] (Tile.scalar i))
+            (by simpa using hmask) (by simpa using hpx) (by simpa using hpg)
+            (by simpa using hpo) (by simpa using hbh)
+        have hmemStep : ∀ r, r ≠ o → ∀ off, t'.mem r off = t.mem r off := by
+          intro r hr off
+          have := hgrnFwdOuterBody_step_frame s0 x g o T D BD i
+            (fun j => hgrnStateClosed s0 x g h0 U T D BD i j.1)
+            (t.setReg "_i" .nat [] (Tile.scalar i)) t'
+            (by simpa using hmask) (by simpa using hpx) (by simpa using hpg)
+            (by simpa using hpo) (by simpa using hbh) hstep r hr off
+          simpa using this
+        refine ⟨t', hstep, by omega, hmask', ?_, ?_, ?_, ?_, ?_⟩
+        · simpa using hpx'
+        · simpa using hpg'
+        · simpa using hpo'
+        · have hfun : (fun j : TileIndex [BD] => some
+              (if hgrnChan s0 BD j < D then
+                (t.setReg "_i" .nat [] (Tile.scalar i)).readMem g
+                    (hgrnAddr s0 T D BD i j) *
+                  hgrnStateClosed s0 x g h0 U T D BD i j.1
+                + (t.setReg "_i" .nat [] (Tile.scalar i)).readMem x
+                    (hgrnAddr s0 T D BD i j)
+              else 0))
+              = (fun j : TileIndex [BD] => some
+                (if hgrnChan s0 BD j < D then
+                  hgrnStateClosed s0 x g h0 U T D BD (i + 1) j.1 else 0)) := by
+            funext j
+            by_cases hc : hgrnChan s0 BD j < D
+            · rw [if_pos hc, if_pos hc, hgrnStateClosed_succ]
+              have hg : (t.setReg "_i" .nat [] (Tile.scalar i)).readMem g
+                  (hgrnAddr s0 T D BD i j) = gVal s0 g T D BD i j.1 := by
+                simp only [gVal, ← hgrnAddr_eq_outOffset]
+                exact readMem_of_mem_eq (by simpa using hmem g hgo _)
+              have hx : (t.setReg "_i" .nat [] (Tile.scalar i)).readMem x
+                  (hgrnAddr s0 T D BD i j) = xVal s0 x T D BD i j.1 := by
+                simp only [xVal, ← hgrnAddr_eq_outOffset]
+                exact readMem_of_mem_eq (by simpa using hmem x hxo _)
+              rw [hg, hx]
+            · rw [if_neg hc, if_neg hc]
+          rw [hbh', hfun]
+        · intro r hr off
+          rw [hmemStep r hr off]; exact hmem r hr off)
+  have hfin : final = n := by
+    obtain ⟨hle, _⟩ := hP; omega
+  subst hfin
+  exact ⟨sF, hrun, hP⟩
 
 /-! ## Offset-injectivity side conditions (dimension-general + Python shape)
 
