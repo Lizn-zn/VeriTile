@@ -77,12 +77,17 @@ Scope limits and what is **outside** the claims in this file:
   the *literal* Python spelling and therefore models that mask as a no-op; the
   surface carries only the lowering claim, never a semantic one, but a reader
   comparing the two must know why they differ.
-* **Full-block scope.** The `Out`-writeback face assumes
-  `hFullBlock : m·BLOCK + BLOCK ≤ n`, under which every load/store mask lane is
-  live. Since `NUM_BLOCK = cdiv(n, BLOCK)` (`lightning_attention.py:378`) this
-  covers every block except a partial tail one; the partial tail block is trusted
-  boundary. `hBM : BLOCK_MODEL ≤ e` is the store-offset no-aliasing condition
-  (`BLOCK_MODEL = min(next_power_of_2(e), 32)`, `lightning_attention.py:380`).
+* **Partial tail blocks are covered.** The `Out`-writeback face used to assume
+  `hFullBlock : m·BLOCK + BLOCK ≤ n`, excluding the partial tail block
+  (`NUM_BLOCK = cdiv(n, BLOCK)`, `lightning_attention.py:378`). It no longer
+  does: the face is a `writeIf (m·BLOCK + r < n)` statement covering every
+  block, including the tail. The stored value needs **no** guard of its own,
+  because on a written row every causally kept key is automatically in range —
+  `j ≤ r` gives `m·BLOCK + j ≤ m·BLOCK + r < n` — so the `k`/`v` masks never
+  bite where `tl.where` keeps the term, and where they could bite `tl.where`
+  has already zeroed it. `hBM : BLOCK_MODEL ≤ e` remains as the store-offset
+  no-aliasing condition (`BLOCK_MODEL = min(next_power_of_2(e), 32)`,
+  `lightning_attention.py:380`).
 * **The cross-block loop.** The `NUM_BLOCK` driver threading the carry is not
   modeled. `hPrev`/`hK`/`hV` are *assumed*: nothing proves `kvClosed 0 = 0`, and
   nothing chains block `m`'s output buffer into block `m+1`'s input buffer. This
@@ -488,13 +493,13 @@ Two modelling points that must be read before trusting the face below.
   differ. Note also that Python computes `index` **once, before** the loop, from
   `off_block = tl.arange(0, BLOCK)`, so the predicate is block-relative `j ≤ r`
   and does not drift as `off_block += BLOCK`.)
-* **Full-block scope.** `hFullBlock : m·BLOCK + BLOCK ≤ n` restricts the face to
-  blocks that lie entirely inside the sequence. Under it all three load masks and
-  the store mask are satisfied on every lane, so the loads' `other=0.0` never
-  fires. `NUM_BLOCK = cdiv(n, BLOCK)` (`lightning_attention.py:378`), so this
-  holds for every block except a partial tail one; the partial tail block is part
-  of the trusted boundary, matching the precedent set by the
-  `fused_recurrent_retention` step slices. -/
+* **Every block, tail included.** The face is stated per written lane
+  (`writeIf (m·BLOCK + r < n)`), so it covers the partial tail block too. On a
+  written row the three load masks are satisfied wherever the value depends on
+  them: `j ≤ r` forces `m·BLOCK + j ≤ m·BLOCK + r < n`, and the columns where a
+  mask could fire have already been zeroed by `tl.where`. Rows outside the
+  sequence are not written at all, and the face says nothing about them —
+  which is exactly what the kernel does. -/
 
 def lightning_attention_forward_body_slice
     (Q K V KVPrev Out : RegionName)
@@ -640,22 +645,20 @@ theorem bodyOutOffset_injective (s : BlockState) (m n e BLOCK BLOCK_MODEL : Nat)
   obtain ⟨hr, hc⟩ := key
   subst hr; subst hc; rfl
 
+set_option maxHeartbeats 4000000 in
 theorem lightning_attention_forward_body_slice_correct
     (Q K V KVPrev Out : RegionName) (m n d e BLOCK BLOCK_MODEL : Nat)
     (s : BlockState)
-    (hFullBlock : m * BLOCK + BLOCK ≤ n)
     (hBM : BLOCK_MODEL ≤ e) :
     ∀ idx : TileIndex [BLOCK, BLOCK_MODEL],
       (exec (lightning_attention_forward_body_slice Q K V KVPrev Out
           m n d e BLOCK BLOCK_MODEL) s).map
           (·.readMem Out (bodyOutOffset s m n e BLOCK BLOCK_MODEL idx))
-        = some (bodyStoreValue s Q K V KVPrev m n d e BLOCK BLOCK_MODEL idx) := by
+        = some (if m * BLOCK + idx.1.val < n then
+            bodyStoreValue s Q K V KVPrev m n d e BLOCK BLOCK_MODEL idx
+          else s.readMem Out (bodyOutOffset s m n e BLOCK BLOCK_MODEL idx)) := by
   intro idx
-  have hlt : ∀ r : Fin BLOCK, (m * BLOCK + r.val < n) = True := by
-    intro r
-    have := r.isLt
-    simp only [eq_iff_iff, iff_true]
-    omega
+  have hzero : (0.0 : ℝ) = 0 := by norm_num
   have hOffsetInj : Function.Injective
       (fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
         s.pids 0 * n * e + (m * BLOCK + idx.1.val) * e + s.pids 1 * BLOCK_MODEL +
@@ -667,10 +670,47 @@ theorem lightning_attention_forward_body_slice_correct
     NumericDType.add, NumericDType.mul, ComparableDType.ge, ComparableDType.lt,
     ComputeKernel.toAlgKernel, ComputeStmt.toAlgorithm?,
     ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
-    bodyOutOffset, bodyStoreValue, bodyIntraRow, bodyInterRow, fwdKVal,
-    fwdVVal, hlt, TileShape.dropInsertedIndex]
-  rw [BlockState.scatter_readback_nd _ _ _ hOffsetInj idx]
-  rfl
+    bodyOutOffset, TileShape.dropInsertedIndex]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hAct : m * BLOCK + idx.1.val < n
+  · -- A written lane. Every *causally kept* key is automatically in range —
+    -- `j ≤ r` gives `m·BLOCK + j ≤ m·BLOCK + r < n` — so the `k`/`v` masks never
+    -- bite where the `tl.where` keeps the term, and where they could bite the
+    -- `tl.where` has already zeroed it. That is why the stored value needs no
+    -- guard of its own.
+    --
+    -- `bodyStoreValue` is deliberately left *folded* by the walk's `simp` above:
+    -- unfolding it there lets `simp` renormalize its `Option.map₂ f a (some b)`
+    -- into a `match`, after which the two sides no longer share a shape and no
+    -- congruence can bridge them.
+    simp only [hAct, if_true, bodyStoreValue]
+    -- The type arguments go on `congrArg₂`, not on `Option.map₂`: pinning the
+    -- latter fixes the operands at `Option ℝ`, and `Finset.sum` then wants an
+    -- `AddCommMonoid (Option ℝ)` that does not exist — the reduction lives at
+    -- `WithBot ℝ`.
+    refine congrArg (WithBot.unbotD 0)
+      (congrArg₂ (α := WithBot ℝ) (β := WithBot ℝ) (γ := WithBot ℝ)
+        (Option.map₂ (fun x y => x + y)) ?_ ?_)
+    · refine Finset.sum_congr rfl ?_
+      intro x _
+      by_cases hle : x ≤ idx.1
+      · have hx : m * BLOCK + x.val < n := by
+          have hxv : x.val ≤ idx.1.val := Fin.le_def.mp hle
+          omega
+        simp only [hle, hx, if_true, bodyIntraRow, fwdKVal, fwdVVal,
+          Option.map₂_some_some, WithBot.sum_someTerm_eq_some]
+      · -- the causal mask already zeroed this column
+        simp only [hle, if_false, fwdVVal, Option.map₂_some_some]
+        split_ifs with hx
+        · rfl
+        · simp only [hzero, zero_mul, Option.map₂_some_some, mul_zero]
+    · simp only [bodyInterRow, fwdKVal, Option.map₂_some_some,
+        WithBot.sum_someTerm_eq_some]
+  · -- An unwritten lane. `rw`, not `simp only`: peeling the register tower with
+    -- `simp only` makes it traverse the tower's (very large) tile data and blow
+    -- the whnf budget, while `rw` only ever fires at the head.
+    rw [if_neg hAct, if_neg hAct]
+    repeat rw [BlockState.setReg_readMem]
 
 /-- **Genuine closed form for the launched output row** — the causal linear
 attention `_fwd_kernel` computes, at global time row `t` and value channel
@@ -796,17 +836,16 @@ linear-attention row
 `o[t, c] = Σ_{s ≤ t}(Σ_a q[t,a]·k[s,a])·v[s,c]` at global time `t = m·BLOCK + r`
 and value channel `off_e·BLOCK_MODEL + c`, over the input regions `Q`, `K`, `V`.
 
-Side conditions, all honest: `hFullBlock` (the block lies inside the sequence, so
-every load/store mask lane is live — the partial tail block is trusted boundary),
-`hBM` (`BLOCK_MODEL ≤ e`, giving store-offset injectivity; the launch sets
-`BLOCK_MODEL = min(next_power_of_2(e), 32)`), and `hPrev` — the *assumed* loop-carry
-invariant `KVPrev = kvClosed m`, which is what the unmodeled `NUM_BLOCK` driver
-would have to establish. The write map is unmasked because `hFullBlock` makes the
-kernel's `mask=off_block[:, None] < n` true on every lane. -/
+Side conditions, all honest: `hBM` (`BLOCK_MODEL ≤ e`, giving store-offset
+injectivity; the launch sets `BLOCK_MODEL = min(next_power_of_2(e), 32)`), and
+`hPrev` — the *assumed* loop-carry invariant `KVPrev = kvClosed m`, which is what
+the unmodeled `NUM_BLOCK` driver would have to establish. The write map is
+`writeIf (m·BLOCK + r < n)`, transcribing the kernel's own
+`mask=off_block[:, None] < n`, so the face covers the partial tail block as well
+as the full ones. -/
 theorem lightning_attention_forward_body_closed_form_general
     (Q K V KVPrev Out : RegionName) (m n d e BLOCK BLOCK_MODEL : Nat)
     (s : BlockState)
-    (hFullBlock : m * BLOCK + BLOCK ≤ n)
     (hBM : BLOCK_MODEL ≤ e)
     (hPrev : ∀ idx : TileIndex [d, BLOCK_MODEL],
       s.readMem KVPrev (kvOffset BLOCK_MODEL idx)
@@ -815,8 +854,9 @@ theorem lightning_attention_forward_body_closed_form_general
       (kernel := lightning_attention_forward_body_slice Q K V KVPrev Out
         m n d e BLOCK BLOCK_MODEL)
       (initialState := s)
-      (write := fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        some (Out, bodyOutOffset s m n e BLOCK BLOCK_MODEL idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK, BLOCK_MODEL] => m * BLOCK + idx.1.val < n)
+        (fun idx => (Out, bodyOutOffset s m n e BLOCK BLOCK_MODEL idx)))
       (expected := fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
         fwdOutClosed s Q K V n d e BLOCK_MODEL
           (m * BLOCK + idx.1.val) idx.2.1.val) := by
@@ -830,17 +870,17 @@ theorem lightning_attention_forward_body_closed_form_general
     rw [bodyStoreValue_eq_bodyStepSpec,
       bodyStepSpec_eq_fwdOutClosed s Q K V KVPrev m n d e BLOCK BLOCK_MODEL
         hPrev idx]
-  rw [hfun]
+  rw [hfun, ComputeCorrect.realizes_writeIf_iff]
   apply ComputeKernel.computeCorrect_of_toAlgKernel
   · simp [lightning_attention_forward_body_slice, ComputeExpr.toAlgorithm?,
       ComputeOp.toAlgorithm?]
   intro s0 s' hExec hs0
   subst s0
-  intro idx
+  intro idx hActive
   have h := lightning_attention_forward_body_slice_correct Q K V KVPrev Out
-    m n d e BLOCK BLOCK_MODEL s hFullBlock hBM idx
+    m n d e BLOCK BLOCK_MODEL s hBM idx
   rw [hExec] at h
-  exact Option.some.inj h
+  simpa [hActive] using Option.some.inj h
 
 /-- Faithful transcription of `lightning_attention.py`'s `_bwd_intra_kernel`.
 
@@ -1472,8 +1512,9 @@ pinned. Exposes:
    address realize exactly `fwdOutClosed` — the causal linear-attention row
    `o[t,c] = Σ_{s ≤ t}(Σ_a q[t,a]·k[s,a])·v[s,c]` at `t = m·BLOCK + r` — over the
    input regions `Q`, `K`, `V`. The causal mask supplies the in-block keys and the
-   carried state (via `hPrev`) supplies all earlier ones. This clause needs
-   `hFullBlock` and `hBM`; see the module docstring for both.
+   carried state (via `hPrev`) supplies all earlier ones. The write map is
+   `writeIf (m·BLOCK + r < n)`, so this clause covers the partial tail block
+   too; its only side condition is `hBM` (see the module docstring).
 
 What this theorem does **not** say: nothing about the
 `NUM_BLOCK` loop that threads the carry, and nothing about the backward
@@ -1481,7 +1522,7 @@ gradients beyond lowering. See the module docstring's modeling boundary.
 
 Side conditions. The staged-tile offsets are injective unconditionally from the
 `Fin` bounds; the launched `Out` offset needs `hBM : BLOCK_MODEL ≤ e`, and clause 4
-is scoped to full blocks by `hFullBlock : m·BLOCK + BLOCK ≤ n` (both with launch
+is stated per written lane, covering partial tail blocks as well (both with launch
 provenance on their binders). **Load-bearing:** `hPrev`/`hK`/`hV` are *assumed*
 loop-carry / staging hypotheses, not lemmas — `hPrev` is what clause 4 needs and
 what the unmodeled `NUM_BLOCK` driver would have to establish. -/
@@ -1491,7 +1532,6 @@ specification lightning_attention_output_summary_general
     (_b h n d e BLOCK NUM_BLOCK BLOCK_MODEL m : Nat)
     -- block `m` lies inside the sequence; `NUM_BLOCK = cdiv(n, BLOCK)`
     -- (`lightning_attention.py:378`) so only a partial tail block can violate it
-    (hFullBlock : m * BLOCK + BLOCK ≤ n)
     -- the channel block fits the value width; the launch sets
     -- `BLOCK_MODEL = min(next_power_of_2(e), 32)` (`lightning_attention.py:380`)
     (hBM : BLOCK_MODEL ≤ e)
@@ -1540,8 +1580,9 @@ specification lightning_attention_output_summary_general
       (kernel := lightning_attention_forward_body_slice Q K V KVPrev Out
         m n d e BLOCK BLOCK_MODEL)
       (initialState := s)
-      (write := fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
-        some (Out, bodyOutOffset s m n e BLOCK BLOCK_MODEL idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK, BLOCK_MODEL] => m * BLOCK + idx.1.val < n)
+        (fun idx => (Out, bodyOutOffset s m n e BLOCK BLOCK_MODEL idx)))
       (expected := fun idx : TileIndex [BLOCK, BLOCK_MODEL] =>
         fwdOutClosed s Q K V n d e BLOCK_MODEL
           (m * BLOCK + idx.1.val) idx.2.1.val)) := by
@@ -1560,7 +1601,7 @@ specification lightning_attention_output_summary_general
   · exact lightning_attention_forward_o_inter_dot_slice_compute_correct Q KVPrev
       OInter BLOCK d BLOCK_MODEL s (oInterOffset_injective BLOCK BLOCK_MODEL)
   · exact lightning_attention_forward_body_closed_form_general Q K V KVPrev Out
-      m n d e BLOCK BLOCK_MODEL s hFullBlock hBM hPrev
+      m n d e BLOCK BLOCK_MODEL s hBM hPrev
 
 end Correct_without_Rounding
 
