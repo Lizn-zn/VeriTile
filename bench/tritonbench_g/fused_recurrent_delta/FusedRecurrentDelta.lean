@@ -1118,6 +1118,266 @@ theorem fused_recurrent_delta_state_step_slice_scalarbeta_compute_correct
   rw [hExec] at h
   simpa [hActive] using Option.some.inj h
 
+/-! ## Cross-step carry fold — the `range(0, T)` loop, threaded through memory
+
+The step face above assumes the carry invariant `HPrev = deltaState(m)` at its
+own `m`. This section discharges that assumption for all but the first step: the
+state slices are run as a `CarryFold.execChain` whose carry-in and carry-out
+region are literally the same name `C`, leaving a single hypothesis about the
+**initial** buffer.
+
+Honesty limits, the same ones `VeriTile.Triton.CarryFold` states and
+`fused_rwkv6_kernel` carries:
+
+* the carry travels through a **memory region**, one launch per step. Python
+  keeps `h` in a *register* across `range(0, T)`; that object is still not
+  modeled anywhere in this file;
+* the fold covers the **state** recurrence only. The `v_new` writeback and the
+  output row write `v` and `o`, not `C`, so they are not stages of this chain.
+  In particular this fold does **not** model the in-place `v` overwrite:
+  `deltaState` reads the pristine `v` rows and expresses the delta in closed
+  form, which is exactly what a chain of state slices — none of which writes
+  `v` — computes;
+* `hSeed` is an assumption about the caller's buffer, not a theorem. -/
+
+/-- One state step leaves everything outside the carry region alone: it writes
+only `HOut`, and a `writeMem` scatter touches neither the program ids nor any
+other region. (`headwise` specialization.) -/
+theorem fused_recurrent_delta_state_step_frame_headwise
+    (C k v beta : RegionName) (m s_qk_h s_vo_h T K V BK BV : Nat)
+    (u u' : BlockState)
+    (hExec : exec (fused_recurrent_delta_state_step_slice_headwise C k v beta C
+      m s_qk_h s_vo_h T K V BK BV) u = some u') :
+    u'.pids = u.pids ∧ ∀ r, r ≠ C → ∀ o, u'.mem r o = u.mem r o := by
+  simp [exec, fused_recurrent_delta_state_step_slice_headwise, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.uop, Tile.ptrAdd, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, ComparableDType.lt, TileShape.dropInsertedIndex] at hExec
+  rw [← hExec]
+  refine ⟨?_, ?_⟩
+  · rw [BlockState.foldl_writeMem_prop_masked_pids]
+    simp
+  · intro r hr o
+    rw [BlockState.foldl_writeMem_prop_masked_mem_preserve_other_region _ _ _ _ r hr o]
+    simp
+
+/-- One state step leaves everything outside the carry region alone: it writes
+only `HOut`, and a `writeMem` scatter touches neither the program ids nor any
+other region. (`scalarbeta` specialization.) -/
+theorem fused_recurrent_delta_state_step_frame_scalarbeta
+    (C k v beta : RegionName) (m s_qk_h s_vo_h T K V BK BV : Nat)
+    (u u' : BlockState)
+    (hExec : exec (fused_recurrent_delta_state_step_slice_scalarbeta C k v beta C
+      m s_qk_h s_vo_h T K V BK BV) u = some u') :
+    u'.pids = u.pids ∧ ∀ r, r ≠ C → ∀ o, u'.mem r o = u.mem r o := by
+  simp [exec, fused_recurrent_delta_state_step_slice_scalarbeta, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.uop, Tile.ptrAdd, Tile.reduceSum, Tile.reduceSumDrop,
+        TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, ComparableDType.lt, TileShape.dropInsertedIndex] at hExec
+  rw [← hExec]
+  refine ⟨?_, ?_⟩
+  · rw [BlockState.foldl_writeMem_prop_masked_pids]
+    simp
+  · intro r hr o
+    rw [BlockState.foldl_writeMem_prop_masked_mem_preserve_other_region _ _ _ _ r hr o]
+    simp
+
+/-- Address congruence: `stateOffset` reads the state only through `pids`. -/
+theorem stateOffset_congr (s u : BlockState) (K V BK BV : Nat)
+    (h : u.pids = s.pids) (idx : TileIndex [BV, BK]) :
+    stateOffset u K V BK BV idx = stateOffset s K V BK BV idx := by
+  unfold stateOffset kIndex vIndex; rw [h]
+
+/-- Mask congruence: `activeKV` reads the state only through `pids`. -/
+theorem activeKV_congr (s u : BlockState) (K V BK BV : Nat)
+    (h : u.pids = s.pids) (idx : TileIndex [BV, BK]) :
+    activeKV u K V BK BV idx = activeKV s K V BK BV idx := by
+  unfold activeKV activeK activeV kIndex vIndex; rw [h]
+
+/-- `stateStepSpec` transported to a state `u` agreeing with the reference state
+`s` on `pids` and on the three **input** regions it reads. The carry region `C`
+is deliberately *not* transported: its content at `u` is what the fold's
+invariant supplies. This is what forces the `k`/`v`/`beta ≠ C` side conditions
+on the fold below. -/
+theorem stateStepSpec_transport
+    (s u : BlockState) (C k v beta : RegionName) (IS_HEADWISE_BETA : Bool)
+    (m s_qk_h s_vo_h T K V BK BV : Nat)
+    (hpids : u.pids = s.pids)
+    (hk : ∀ o, u.readMem k o = s.readMem k o)
+    (hv : ∀ o, u.readMem v o = s.readMem v o)
+    (hbeta : ∀ o, u.readMem beta o = s.readMem beta o)
+    (idx : TileIndex [BV, BK]) :
+    stateStepSpec u C k v beta IS_HEADWISE_BETA m s_qk_h s_vo_h T K V BK BV idx
+      = u.readMem C (stateOffset s K V BK BV idx)
+        + kVal s k s_qk_h K BK m idx.2.1 *
+            (betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV m idx.1 *
+              (vVal s v s_vo_h V BV m idx.1
+                - ∑ jk : Fin BK,
+                    if activeK s K BK jk then
+                      u.readMem C (stateOffset s K V BK BV (idx.1, jk, PUnit.unit))
+                        * kVal s k s_qk_h K BK m jk
+                    else 0)) := by
+  -- `simp only`, not `unfold` + `rw`: the readback offsets differ per operand
+  -- (headwise vs scalar `beta`, and the reduction's own lane), so a single `rw`
+  -- pass leaves some of them behind, and unfolding `activeK` reintroduces a
+  -- `kIndex u` that must then be rewritten again.
+  simp only [stateStepSpec, betaVal, kVal, vVal, stateOffset, kIndex, vIndex,
+    activeK, hpids, hk, hv, hbeta]
+
+/-- **Cross-step carry fold for the delta-rule state recurrence (genuine).**
+
+Running `T` state slices as a chain through the shared carry region `C`, the
+final buffer holds the genuine closed form `deltaState(T)` on every write-active
+lane, and the chain leaves everything outside `C` untouched.
+
+What is *no longer* assumed is the point: the step face assumes
+`HPrev = deltaState(m)` at its own `m`, so a `T`-step story needed `T`
+assumptions with nothing identifying one step's output buffer with the next
+step's input buffer. Here there is **one**, `hSeed`, and the identification is
+structural — the same region name is both the slice's `HPrev` and its `HOut`.
+
+Hypotheses, all necessary:
+
+* `hkC` / `hvC` / `hbetaC` — the three input regions are distinct from the carry
+  region, forced by `stateStepSpec_transport`;
+* `hInj` — state-address injectivity, as in the step face;
+* `hSeed` — the initial buffer holds `deltaState(0) = stateSeed` on write-active
+  lanes. Nothing is claimed on the rest: a masked step never writes them, so the
+  invariant could not be maintained there anyway, which is why the fold runs at
+  the subtype of write-active lanes;
+* `hRun` — the chain runs to completion (postcondition style).
+
+This says nothing about the launched `fused_recurrent_delta_fwd_surface`, which
+keeps `h` in a register across its own `Stmt.forRange`. -/
+theorem fused_recurrent_delta_state_carry_fold
+    (C k v beta h0 : RegionName) (IS_HEADWISE_BETA USE_INITIAL_STATE : Bool)
+    (s_qk_h s_vo_h T K V BK BV : Nat) (s sFinal : BlockState)
+    (hkC : k ≠ C) (hvC : v ≠ C) (hbetaC : beta ≠ C)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BV, BK] => stateOffset s K V BK BV idx))
+    (hSeed : ∀ idx : TileIndex [BV, BK], activeKV s K V BK BV idx →
+      s.readMem C (stateOffset s K V BK BV idx)
+        = stateSeed s h0 USE_INITIAL_STATE K V BK BV idx)
+    (hRun : execChain (foldStages
+        (fun j => if IS_HEADWISE_BETA then
+            fused_recurrent_delta_state_step_slice_headwise C k v beta C
+              j s_qk_h s_vo_h T K V BK BV
+          else
+            fused_recurrent_delta_state_step_slice_scalarbeta C k v beta C
+              j s_qk_h s_vo_h T K V BK BV) T) s = some sFinal) :
+    AgreeOutsideRegion C s sFinal ∧
+    ∀ idx : TileIndex [BV, BK], activeKV s K V BK BV idx →
+      sFinal.readMem C (stateOffset s K V BK BV idx)
+        = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+            s_qk_h s_vo_h T K V BK BV T idx := by
+  have key := carryFold_execChain
+    (ι := {idx : TileIndex [BV, BK] // activeKV s K V BK BV idx})
+    (step := fun j => if IS_HEADWISE_BETA then
+        fused_recurrent_delta_state_step_slice_headwise C k v beta C
+          j s_qk_h s_vo_h T K V BK BV
+      else
+        fused_recurrent_delta_state_step_slice_scalarbeta C k v beta C
+          j s_qk_h s_vo_h T K V BK BV)
+    (C := C)
+    (addr := fun i => stateOffset s K V BK BV i.val)
+    (val := fun j i =>
+      deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+        s_qk_h s_vo_h T K V BK BV j i.val)
+    (n := T) (s := s) (sFinal := sFinal)
+    (fun i => by simpa [deltaState] using hSeed i.val i.property)
+    (fun j _hj t t' hAgree hInv hExec => by
+      have hpidsR : t.resetRegs.pids = s.pids := by
+        rw [BlockState.resetRegs_pids]; exact hAgree.pids
+      have hframe : t'.pids = t.resetRegs.pids ∧
+          ∀ r, r ≠ C → ∀ o, t'.mem r o = t.resetRegs.mem r o := by
+        cases hb : IS_HEADWISE_BETA
+        · exact fused_recurrent_delta_state_step_frame_scalarbeta C k v beta
+            j s_qk_h s_vo_h T K V BK BV t.resetRegs t' (by simp only [hb] at hExec; simpa using hExec)
+        · exact fused_recurrent_delta_state_step_frame_headwise C k v beta
+            j s_qk_h s_vo_h T K V BK BV t.resetRegs t' (by simp only [hb] at hExec; simpa using hExec)
+      obtain ⟨hp', hm'⟩ := hframe
+      have hAgree' : AgreeOutsideRegion C s t' :=
+        ⟨by rw [hp', BlockState.resetRegs_pids]; exact hAgree.pids,
+         by
+           intro r hr o
+           rw [hm' r hr o, BlockState.resetRegs_mem]
+           exact hAgree.mem r hr o⟩
+      refine ⟨hAgree', ?_⟩
+      intro i
+      show t'.readMem C (stateOffset s K V BK BV i.val)
+        = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+            s_qk_h s_vo_h T K V BK BV (j + 1) i.val
+      have hInjT : Function.Injective
+          (fun idx : TileIndex [BV, BK] => stateOffset t.resetRegs K V BK BV idx) := by
+        intro a b hab
+        exact hInj (by simpa [stateOffset_congr s t.resetRegs K V BK BV hpidsR] using hab)
+      have hcorr : t'.readMem C (stateOffset s K V BK BV i.val)
+          = stateStepSpec t.resetRegs C k v beta IS_HEADWISE_BETA
+              j s_qk_h s_vo_h T K V BK BV i.val := by
+        cases hb : IS_HEADWISE_BETA
+        · have h := fused_recurrent_delta_state_step_slice_scalarbeta_correct C k v beta C
+            j s_qk_h s_vo_h T K V BK BV t.resetRegs hInjT i.val
+          -- restate `hExec` in the *same spelling* the step face uses; the flag
+          -- branch leaves it as a coerced `if`-selected kernel, which no `rw`
+          -- inside `h` can match
+          have hE : exec (fused_recurrent_delta_state_step_slice_scalarbeta C k v beta C
+              j s_qk_h s_vo_h T K V BK BV) t.resetRegs = some t' := by
+            simpa [hb] using hExec
+          rw [hE] at h
+          have h2 := Option.some.inj h
+          simp only [stateOffset_congr s t.resetRegs K V BK BV hpidsR,
+            activeKV_congr s t.resetRegs K V BK BV hpidsR, i.property, if_true] at h2
+          exact h2
+        · have h := fused_recurrent_delta_state_step_slice_headwise_correct C k v beta C
+            j s_qk_h s_vo_h T K V BK BV t.resetRegs hInjT i.val
+          -- restate `hExec` in the *same spelling* the step face uses; the flag
+          -- branch leaves it as a coerced `if`-selected kernel, which no `rw`
+          -- inside `h` can match
+          have hE : exec (fused_recurrent_delta_state_step_slice_headwise C k v beta C
+              j s_qk_h s_vo_h T K V BK BV) t.resetRegs = some t' := by
+            simpa [hb] using hExec
+          rw [hE] at h
+          have h2 := Option.some.inj h
+          simp only [stateOffset_congr s t.resetRegs K V BK BV hpidsR,
+            activeKV_congr s t.resetRegs K V BK BV hpidsR, i.property, if_true] at h2
+          exact h2
+      rw [hcorr, stateStepSpec_transport s t.resetRegs C k v beta IS_HEADWISE_BETA
+        j s_qk_h s_vo_h T K V BK BV hpidsR
+        (fun o => by rw [BlockState.resetRegs_readMem]; exact hAgree.readMem k hkC o)
+        (fun o => by rw [BlockState.resetRegs_readMem]; exact hAgree.readMem v hvC o)
+        (fun o => by rw [BlockState.resetRegs_readMem]; exact hAgree.readMem beta hbetaC o)
+        i.val]
+      have hOuter : t.resetRegs.readMem C (stateOffset s K V BK BV i.val)
+          = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+              s_qk_h s_vo_h T K V BK BV j i.val := by
+        rw [BlockState.resetRegs_readMem]; exact hInv i
+      have hSum : ∀ jk : Fin BK,
+          (if activeK s K BK jk then
+              t.resetRegs.readMem C
+                  (stateOffset s K V BK BV (i.val.1, jk, PUnit.unit)) *
+                kVal s k s_qk_h K BK j jk
+            else 0)
+          = if activeK s K BK jk then
+              deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+                  s_qk_h s_vo_h T K V BK BV j (i.val.1, jk, PUnit.unit) *
+                kVal s k s_qk_h K BK j jk
+            else 0 := by
+        intro jk
+        split_ifs with hk
+        · rw [BlockState.resetRegs_readMem]
+          -- the reduced lane is itself write-active: its key channel is in range
+          -- by the guard, and its value channel is `i`'s, which is active
+          exact congrArg (· * kVal s k s_qk_h K BK j jk)
+            (hInv ⟨(i.val.1, jk, PUnit.unit), ⟨hk, i.property.2⟩⟩)
+        · rfl
+      rw [hOuter]
+      simp only [hSum]
+      simp only [deltaState])
+    hRun
+  exact ⟨key.1, fun idx hidx => key.2 ⟨idx, hidx⟩⟩
+
 /-! ## Output-readout step slice (the per-step `o_t` store)
 
 One loop body's output store, isolated from the cross-step loop. The delta
