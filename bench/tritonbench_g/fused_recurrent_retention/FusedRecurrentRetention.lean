@@ -107,13 +107,19 @@ deleted rather than presented as a result about `final_state`.
 The cross-step folds over `range(0, T)` threading `h` (forward and backward phase
 1) and `d_h` (backward phase 2) are **not modeled**: the carried state is
 presented to each step slice as a materialized buffer (`HPrev`, `DHPrev`, at the
-flat state layout), and the carry invariants `HPrev = stateClosed(m)` /
-`DHPrev = b_b·dStateClosed(m+1)` are *assumed*, not proven. They are **not
-self-propagating**: the state-update body writes the register `HOut` while the
-invariant constrains `HPrev`, so nothing chains step `m` into step `m+1`.
+flat state layout). The **backward** carry invariant
+`DHPrev = b_b·dStateClosed(m+1)` is still *assumed*, not proven, and is **not
+self-propagating**: that body writes `DHOut` while the invariant constrains
+`DHPrev`, so nothing chains step `m` into step `m+1` there.
 
-Both **base cases are now theorems**, so the induction is missing only its
-step-chaining. `stateClosed_zero` proves `h^(0) = stateSeed`, and
+The **forward** state carry is no longer in that position.
+`fused_recurrent_retention_state_carry_fold` chains it: running the state slices
+through one shared carry region `C` reaches `stateClosed(T)` from a single
+assumption about the initial buffer. What that fold models is a
+memory-threaded, one-launch-per-step program; the launched kernel keeps `h` in a
+*register* across its loop, and that object remains unmodeled.
+
+Both **base cases are theorems**. `stateClosed_zero` proves `h^(0) = stateSeed`, and
 `fused_recurrent_retention_seed_slice_realizes_stateClosed_zero` anchors it to the
 kernel's own `USE_INITIAL_STATE` prologue (`fused_recurrent_retention.py:30–36`),
 for **both** flag settings, via `fused_recurrent_retention_seed_slice`.
@@ -902,6 +908,156 @@ theorem stateStepSpec_eq_stateClosed_succ
   rw [stateClosed_succ]
   unfold stateStepSpec
   rw [hPrev idx.2.1 idx.1]
+
+/-! ## Cross-step carry fold — the state loop, threaded through memory
+
+The docstring above says the induction "is missing only its step-chaining": both
+base cases are theorems, but the step face constrains `HPrev` while concluding
+about `HOut`, with nothing relating them. This section supplies exactly that
+missing piece, by running the state slices as a `CarryFold.execChain` whose
+carry-in and carry-out region are literally the same name `C`.
+
+Because this slice's store is **unmasked**, the fold runs at the full tile index
+— no write-active subtype is needed, unlike `fused_rwkv6_kernel` and
+`fused_recurrent_delta`.
+
+Honesty limits, the same ones `VeriTile.Triton.CarryFold` states: the carry
+travels through a **memory region**, one launch per step, while Python keeps `h`
+in a *register* across the loop — that object is still not modeled here. `hSeed`
+is an assumption about the caller's buffer; what `stateClosed_zero` contributes
+is that the value it must hold is exactly `stateSeed`. -/
+
+/-- One state step leaves everything outside the carry region alone: it writes
+only `HOut`, and an (unmasked) `writeMem` scatter touches neither the program
+ids nor any other region. -/
+theorem fused_recurrent_retention_state_step_frame
+    (C k v : RegionName) (t s_qk_h s_vo_h H DK DV BK BV : Nat)
+    (u u' : BlockState)
+    (hExec : exec (fused_recurrent_retention_state_step_slice C k v C
+      t s_qk_h s_vo_h H DK DV BK BV) u = some u') :
+    u'.pids = u.pids ∧ ∀ r, r ≠ C → ∀ o, u'.mem r o = u.mem r o := by
+  simp [exec, fused_recurrent_retention_state_step_slice, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.expandDim, Tile.uop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, WithBot.realExp2,
+        stateOffset, kIdx, vIdx, TileShape.dropInsertedIndex] at hExec
+  rw [← hExec]
+  refine ⟨?_, ?_⟩
+  · rw [BlockState.foldl_writeMem_pids]
+    simp
+  · intro r hr o
+    rw [BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o]
+    simp
+
+/-- Address congruence: `stateOffset` reads the state only through `pids`. -/
+theorem stateOffset_congr (s u : BlockState) (DK DV BK BV : Nat)
+    (h : u.pids = s.pids) (jk : Fin BK) (jv : Fin BV) :
+    stateOffset u DK DV BK BV jk jv = stateOffset s DK DV BK BV jk jv := by
+  unfold stateOffset kIdx vIdx; rw [h]
+
+/-- `stateStepSpec` transported to a state `u` agreeing with the reference state
+`s` on `pids` and on the two **input** regions it reads. The carry region `C` is
+deliberately *not* transported: its content at `u` is what the fold's invariant
+supplies. This is what forces the `k`/`v ≠ C` side conditions below. The decay
+`b_b` needs no hypothesis — it is a function of `pids` alone. -/
+theorem stateStepSpec_transport
+    (s u : BlockState) (C k v : RegionName)
+    (t s_qk_h s_vo_h H DK DV BK BV : Nat)
+    (hpids : u.pids = s.pids)
+    (hk : ∀ o, u.readMem k o = s.readMem k o)
+    (hv : ∀ o, u.readMem v o = s.readMem v o)
+    (idx : TileIndex [BV, BK]) :
+    stateStepSpec u C k v t s_qk_h s_vo_h H DK DV BK BV idx
+      = bbVal s H * u.readMem C (stateOffset s DK DV BK BV idx.2.1 idx.1)
+        + kValR s k s_qk_h DK BK t idx.2.1 * vValR s v s_vo_h DV BV t idx.1 := by
+  simp only [stateStepSpec, bbVal, kValR, vValR, stateOffset, kIdx, vIdx,
+    hpids, hk, hv]
+
+/-- **Cross-step carry fold for the retention state recurrence (genuine).**
+
+Running `T` state slices as a chain through the shared carry region `C`, the
+final buffer holds the genuine closed form `stateClosed(T)` on **every** lane,
+and the chain leaves everything outside `C` untouched.
+
+This is the step-chaining the module docstring records as missing: the step face
+constrains `HPrev` and concludes about `HOut` with nothing relating them, so a
+`T`-step story needed `T` assumptions. Here there is **one**, `hSeed`, and the
+identification is structural — the same region name is both the slice's `HPrev`
+and its `HOut`.
+
+Hypotheses, all necessary:
+
+* `hkC` / `hvC` — the two input regions are distinct from the carry region,
+  forced by `stateStepSpec_transport`;
+* `hInj` — state-address injectivity, as in the step face;
+* `hSeed` — the initial buffer holds the seed. `stateClosed_zero` is what
+  identifies that value as `stateSeed`, so this is a statement about the
+  caller's buffer and nothing more;
+* `hRun` — the chain runs to completion (postcondition style).
+
+This says nothing about the launched surface, which keeps `h` in a register
+across its own loop. -/
+theorem fused_recurrent_retention_state_carry_fold
+    (C k v h0 : RegionName) (USE_INITIAL_STATE : Bool)
+    (s_qk_h s_vo_h H DK DV BK BV T : Nat) (s sFinal : BlockState)
+    (hkC : k ≠ C) (hvC : v ≠ C)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BV, BK] => stateOffset s DK DV BK BV idx.2.1 idx.1))
+    (hSeed : ∀ idx : TileIndex [BV, BK],
+      s.readMem C (stateOffset s DK DV BK BV idx.2.1 idx.1)
+        = stateSeed s h0 USE_INITIAL_STATE DK DV BK BV idx.2.1 idx.1)
+    (hRun : execChain (foldStages
+        (fun j => fused_recurrent_retention_state_step_slice C k v C
+          j s_qk_h s_vo_h H DK DV BK BV) T) s = some sFinal) :
+    AgreeOutsideRegion C s sFinal ∧
+    ∀ idx : TileIndex [BV, BK],
+      sFinal.readMem C (stateOffset s DK DV BK BV idx.2.1 idx.1)
+        = stateClosed s k v h0 USE_INITIAL_STATE s_qk_h s_vo_h H DK DV BK BV
+            T idx.2.1 idx.1 := by
+  have key := carryFold_execChain
+    (ι := TileIndex [BV, BK])
+    (step := fun j => fused_recurrent_retention_state_step_slice C k v C
+      j s_qk_h s_vo_h H DK DV BK BV)
+    (C := C)
+    (addr := fun idx => stateOffset s DK DV BK BV idx.2.1 idx.1)
+    (val := fun j idx =>
+      stateClosed s k v h0 USE_INITIAL_STATE s_qk_h s_vo_h H DK DV BK BV
+        j idx.2.1 idx.1)
+    (n := T) (s := s) (sFinal := sFinal)
+    (fun idx => by simpa [stateClosed] using hSeed idx)
+    (fun j _hj t t' hAgree hInv hExec => by
+      have hpidsR : t.resetRegs.pids = s.pids := by
+        rw [BlockState.resetRegs_pids]; exact hAgree.pids
+      obtain ⟨hp', hm'⟩ := fused_recurrent_retention_state_step_frame C k v
+        j s_qk_h s_vo_h H DK DV BK BV t.resetRegs t' hExec
+      have hAgree' : AgreeOutsideRegion C s t' :=
+        ⟨by rw [hp', BlockState.resetRegs_pids]; exact hAgree.pids,
+         by
+           intro r hr o
+           rw [hm' r hr o, BlockState.resetRegs_mem]
+           exact hAgree.mem r hr o⟩
+      refine ⟨hAgree', ?_⟩
+      intro idx
+      show t'.readMem C (stateOffset s DK DV BK BV idx.2.1 idx.1)
+        = stateClosed s k v h0 USE_INITIAL_STATE s_qk_h s_vo_h H DK DV BK BV
+            (j + 1) idx.2.1 idx.1
+      have hInjT : Function.Injective
+          (fun i : TileIndex [BV, BK] =>
+            stateOffset t.resetRegs DK DV BK BV i.2.1 i.1) := by
+        intro a b hab
+        exact hInj (by simpa [stateOffset_congr s t.resetRegs DK DV BK BV hpidsR] using hab)
+      have h := fused_recurrent_retention_state_step_slice_correct C k v C
+        j s_qk_h s_vo_h H DK DV BK BV t.resetRegs hInjT idx
+      rw [hExec] at h
+      have hcorr := Option.some.inj h
+      simp only [stateOffset_congr s t.resetRegs DK DV BK BV hpidsR] at hcorr
+      rw [hcorr, stateStepSpec_transport s t.resetRegs C k v
+        j s_qk_h s_vo_h H DK DV BK BV hpidsR
+        (fun o => by rw [BlockState.resetRegs_readMem]; exact hAgree.readMem k hkC o)
+        (fun o => by rw [BlockState.resetRegs_readMem]; exact hAgree.readMem v hvC o)
+        idx, BlockState.resetRegs_readMem, hInv idx, stateClosed_succ])
+    hRun
+  exact ⟨key.1, key.2⟩
 
 /-! ## Output-reduction step slice (the forward per-step `o_t`)
 
