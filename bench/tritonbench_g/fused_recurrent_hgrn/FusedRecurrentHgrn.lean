@@ -322,6 +322,43 @@ theorem hgrnFwdOuterBody_step
       Broadcast.leftIndex, Broadcast.rightIndex]) <;> (try ring) <;> (try rfl)
   all_goals (split_ifs <;> simp [mul_comm])
 
+/-! ## The loop body's memory frame
+
+`hgrnFwdOuterBody_step` pins the registers; this section pins what the body does
+*not* touch. `forRange_inv` needs it because the closed form's `gVal`/`xVal` read
+the `x` and `g` regions of the **initial** state, and those reads have to stay
+valid across every iteration — which they do exactly when the body's only store
+target `o` is a different region.
+
+The body's single store lowers to a masked `foldl` of `writeMemTyped .real`,
+which normalizes to plain `writeMem` at the `.real` channel (the carrier's `⊥`
+fallback collapses to `WithBot.unbotD 0`), so the library's
+`BlockState.foldl_writeMem_prop_masked_mem_preserve_other_region` applies
+directly — no typed re-derivation is needed. -/
+
+/-- **The forward loop body's memory frame.** The body writes only `o`; every
+other region is left alone, so in particular the `x` and `g` reads the closed
+form depends on are stable across iterations. -/
+theorem hgrnFwdOuterBody_step_frame
+    (s0 : BlockState) (x g o : RegionName) (T D BD i : Nat)
+    (bhCur : TileIndex [BD] → ℝ) (s s' : BlockState)
+    (hmask : s.regs .bool [BD] "mask"
+      = some ⟨fun j => decide (hgrnChan s0 BD j < D)⟩)
+    (hpx : s.regs .ptr [BD] "p_x" = some ⟨fun j => (x, hgrnAddr s0 T D BD i j)⟩)
+    (hpg : s.regs .ptr [BD] "p_g" = some ⟨fun j => (g, hgrnAddr s0 T D BD i j)⟩)
+    (hpo : s.regs .ptr [BD] "p_o" = some ⟨fun j => (o, hgrnAddr s0 T D BD i j)⟩)
+    (hbh : s.regs .real [BD] "b_h"
+      = some ⟨fun j => some (if hgrnChan s0 BD j < D then bhCur j else 0)⟩)
+    (hrun : stepStmts (hgrnFwdOuterBody D BD) s = some s') :
+    ∀ r, r ≠ o → ∀ off, s'.mem r off = s.mem r off := by
+  simp [hgrnFwdOuterBody, hgrnMaskOther, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, NumericDType.add,
+    NumericDType.mul, hpx, hpg, hpo, hmask, hbh] at hrun
+  intro r hr off
+  rw [← hrun]
+  exact BlockState.foldl_writeMem_prop_masked_mem_preserve_other_region
+    _ _ _ _ r hr off _
+
 /-- Surface transcription of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_bwd_kernel`.
 
