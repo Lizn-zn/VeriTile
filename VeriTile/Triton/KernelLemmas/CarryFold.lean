@@ -39,12 +39,20 @@ This file supplies both halves: `AgreeOutsideRegion` is the frame relation for
   directly with `forRange_inv` / `forRangeDyn_inv` (`LoopInvariant.lean`), which
   carry a register tile through the kernel's own `Stmt.forRange`.  The two
   drivers are complementary, not substitutes.
-* **No bench port consumes this driver yet.**  It is the library half of the
-  gap; the eight recurrence ports (`fused_recurrent_*`, `chunk_gate_recurrence`,
-  `chunk_delta_fwd`, `lightning_attention`, …) still state their carry invariant
-  as a *pinned* `hPrev` hypothesis, and landing this file does not change any of
-  their statements.  Do not read its presence as evidence that the cross-step
-  fold is modeled anywhere.
+* **Four bench ports consume this driver** (`fused_rwkv6_kernel`,
+  `fused_recurrent_delta`, `fused_recurrent_retention` — forward state only —
+  and `chunk_gated_attention`).  The other four recurrence ports still state
+  their carry invariant as a *pinned* `hPrev` hypothesis, and in every case that
+  is **structural** rather than pending work: `fused_recurrent_hgrn` keeps its
+  carry in registers only (no region is written back); `lightning_attention`'s
+  kv step reads per-block *staged* regions, so a chain would re-stage the same
+  block; `chunk_delta_fwd`'s carry address is time-indexed while `addr` here is
+  fixed across steps; and `chunk_gate_recurrence`'s step *reads* its carry at a
+  time-free address but *writes* a time-indexed history row of a different
+  region, so read and write never meet — generalizing `addr` to move with the
+  step would not close that one either.  A port's headline is unaffected by this driver
+  unless it states the fold as its own theorem, so do not read a port's
+  `hPrev` hypothesis as evidence either way — check for a `*_carry_fold`.
 
 ## What a port must supply to actually use `carryFold_execChain`
 
