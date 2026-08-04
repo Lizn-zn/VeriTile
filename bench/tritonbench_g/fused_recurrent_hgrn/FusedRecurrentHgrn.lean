@@ -254,6 +254,74 @@ theorem fused_recurrent_hgrn_fwd_body_split
             ++ hgrnFwdEpilogue ht D BD STORE_FINAL_STATE)) := by
   rfl
 
+/-! ## One forward loop body, walked at the register level
+
+`hgrnFwdOuterBody_step` executes the body `hgrnFwdOuterBody` — the very
+statement list `fused_recurrent_hgrn_fwd_body_split` identifies as the kernel's
+own `forRange` body — from a state whose registers are pinned at iteration `i`,
+and pins them again at `i + 1`. It is the `hStep` obligation of
+`VeriTile.Triton.forRange_inv`, minus the memory half.
+
+Still **not** a correctness result: it says nothing about the `o` region the body
+stores into, so the port's cross-step story remains the pinned `hPrev`
+hypothesis of `fused_recurrent_hgrn_forward_step_closed_form`. What it does is
+retire the hard half of the register walk.
+
+Two modeling points the statement makes explicit:
+
+* `b_h` is pinned as `some (if lane active then … else 0)`. Off-mask lanes
+  really do hold `0`, not garbage: the seed is `Op.full 0` and both loads carry
+  `other = 0`, so an inactive lane computes `0 · prev + 0`. Writing the carry as
+  a bare closed form would be **false** there — `gVal`/`xVal` read out-of-range
+  addresses off-mask.
+* all three pointer registers advance by `D` per iteration, so all three are
+  invariant clauses, not just the carry. -/
+
+/-- Per-lane global channel index `i_d·BD + j`. -/
+def hgrnChan (s0 : BlockState) (BD : Nat) (j : TileIndex [BD]) : Nat :=
+  s0.pids 0 * BD + j.1.val
+
+/-- Flat address of lane `j` at forward loop iteration `i`. -/
+def hgrnAddr (s0 : BlockState) (T D BD i : Nat) (j : TileIndex [BD]) : Nat :=
+  s0.pids 1 * T * D + hgrnChan s0 BD j + i * D
+
+set_option maxHeartbeats 1000000 in
+/-- **One forward loop body, at the register level.** From registers pinned at
+iteration `i`, the body runs, advances `p_x`/`p_g`/`p_o` by `D`, keeps `mask`,
+and updates the carry to `g_i · b_h + x_i` on active lanes (`0` off-mask). -/
+theorem hgrnFwdOuterBody_step
+    (s0 : BlockState) (x g o : RegionName) (T D BD i : Nat)
+    (bhCur : TileIndex [BD] → ℝ) (s : BlockState)
+    (hmask : s.regs .bool [BD] "mask"
+      = some ⟨fun j => decide (hgrnChan s0 BD j < D)⟩)
+    (hpx : s.regs .ptr [BD] "p_x" = some ⟨fun j => (x, hgrnAddr s0 T D BD i j)⟩)
+    (hpg : s.regs .ptr [BD] "p_g" = some ⟨fun j => (g, hgrnAddr s0 T D BD i j)⟩)
+    (hpo : s.regs .ptr [BD] "p_o" = some ⟨fun j => (o, hgrnAddr s0 T D BD i j)⟩)
+    (hbh : s.regs .real [BD] "b_h"
+      = some ⟨fun j => some (if hgrnChan s0 BD j < D then bhCur j else 0)⟩) :
+    ∃ s', stepStmts (hgrnFwdOuterBody D BD) s = some s'
+      ∧ s'.regs .bool [BD] "mask"
+          = some ⟨fun j => decide (hgrnChan s0 BD j < D)⟩
+      ∧ s'.regs .ptr [BD] "p_x"
+          = some ⟨fun j => (x, hgrnAddr s0 T D BD (i + 1) j)⟩
+      ∧ s'.regs .ptr [BD] "p_g"
+          = some ⟨fun j => (g, hgrnAddr s0 T D BD (i + 1) j)⟩
+      ∧ s'.regs .ptr [BD] "p_o"
+          = some ⟨fun j => (o, hgrnAddr s0 T D BD (i + 1) j)⟩
+      ∧ s'.regs .real [BD] "b_h"
+          = some ⟨fun j => some (if hgrnChan s0 BD j < D then
+              s.readMem g (hgrnAddr s0 T D BD i j) * bhCur j
+                + s.readMem x (hgrnAddr s0 T D BD i j)
+            else 0)⟩ := by
+  simp [hgrnFwdOuterBody, hgrnMaskOther, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, NumericDType.add,
+    NumericDType.mul, hpx, hpg, hpo, hmask, hbh]
+  and_intros <;>
+    (try simp only [Tile.ptrAdd]) <;> (try congr 1) <;> (try funext j) <;>
+    (try simp only [Tile.scalar, hgrnAddr, Prod.mk.injEq, true_and,
+      Broadcast.leftIndex, Broadcast.rightIndex]) <;> (try ring) <;> (try rfl)
+  all_goals (split_ifs <;> simp [mul_comm])
+
 /-- Surface transcription of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_bwd_kernel`.
 
