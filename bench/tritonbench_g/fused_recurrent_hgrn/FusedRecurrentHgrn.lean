@@ -141,6 +141,119 @@ theorem fused_recurrent_hgrn_fwd_surface_toAlgorithm_supported
   simp [fused_recurrent_hgrn_fwd_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
 
+/-! ## Algorithm-layer form of the forward surface (a lowering identity)
+
+`fused_recurrent_hgrn_fwd_body_split` below is **not a correctness result**. It
+is the exact-lowering counterpart of `*_toAlgorithm_supported`: where that says
+*some* algorithm exists, this says *which* one, by naming the erased statement
+list and checking it with `rfl`.
+
+Its purpose is to make the forward loop attackable as the kernel's **own**
+`Stmt.forRange`, so that a cross-step fold can be run with `forRange_inv`
+(`VeriTile.Triton.LoopInvariant`) with the carry `b_h` staying in a *register*
+across iterations — the way the Python loop actually carries it, and the route
+`chunk_delta_fwd` takes via `cdfOuterLoop_run`.  That fold is **not** in this
+file yet; until it lands, the port's cross-step story is still the pinned
+`hPrev` hypothesis of `fused_recurrent_hgrn_forward_step_closed_form`, and
+nothing here changes that.
+
+Two facts the split makes visible, both needed by the eventual invariant:
+
+* the loop body advances `p_x`/`p_g`/`p_o` by `D` *each iteration*, so the
+  invariant must pin all three pointer registers at `base + i·D`, not just the
+  carry `b_h`;
+* the loads carry `MaskOpt.maskOther … 0` and the store `MaskOpt.mask`, i.e. the
+  `mask = o_d < D` lane predicate is applied on both sides. -/
+
+/-- The `p_x`/`p_g`/`p_o` row-base pointer expression (`R + i_bh·T·D + o_d`). -/
+def hgrnRowPtr (R : RegionName) (T D BD : Nat) : Op .ptr [BD] :=
+  Op.ptrAdd Broadcast.scalarL (Op.ptrBase R)
+    (Op.add .nat Broadcast.scalarL
+      (Op.mul .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat T))
+        (Op.constNat D))
+      (Op.ref .nat [BD] "o_d"))
+
+/-- The `p_h0`/`p_ht` state pointer expression (`R + i_bh·D + o_d`). -/
+def hgrnStatePtr (R : RegionName) (D BD : Nat) : Op .ptr [BD] :=
+  Op.ptrAdd Broadcast.scalarL (Op.ptrBase R)
+    (Op.add .nat Broadcast.scalarL
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat D))
+      (Op.ref .nat [BD] "o_d"))
+
+/-- The shared `mask=mask, other=0` load option. -/
+def hgrnMaskOther (BD : Nat) : MaskOpt .real [BD] :=
+  MaskOpt.maskOther (Op.ref .bool [BD] "mask") ((Op.const 0).broadcast [BD])
+
+/-- Algorithm-layer prologue: program ids, `o_d`, `mask`, the three row
+pointers, `b_h = 0`, and the `USE_INITIAL_STATE` seed `ifThen`. -/
+def hgrnFwdPrologue (x g o h0 : RegionName) (T D BD : Nat) (U : Bool) :
+    List Stmt :=
+  [ Stmt.assign .nat [] "i_d" (Op.programId 0),
+    Stmt.assign .nat [] "i_bh" (Op.programId 1),
+    Stmt.assign .nat [BD] "o_d"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_d") (Op.constNat BD))
+        (Op.arange BD)),
+    Stmt.assign .bool [BD] "mask"
+      (Op.lt .nat Broadcast.scalarR (Op.ref .nat [BD] "o_d") (Op.constNat D)),
+    Stmt.assign .ptr [BD] "p_x" (hgrnRowPtr x T D BD),
+    Stmt.assign .ptr [BD] "p_g" (hgrnRowPtr g T D BD),
+    Stmt.assign .ptr [BD] "p_o" (hgrnRowPtr o T D BD),
+    Stmt.assign .real [BD] "b_h" (Op.full [BD] (Op.const 0)),
+    Stmt.ifThen (Op.constBool U)
+      [ Stmt.assign .ptr [BD] "p_h0" (hgrnStatePtr h0 D BD),
+        Stmt.assign .real [BD] "b_h"
+          (Op.add .real Broadcast.nil.consSame (Op.ref .real [BD] "b_h")
+            (Op.load .real (MemAccess.ptr (Op.ref .ptr [BD] "p_h0"))
+              (hgrnMaskOther BD))) ] ]
+
+/-- Algorithm-layer forward loop body: the two masked loads, the recurrence
+`b_h = b_g · b_h + b_x`, the masked output store, and the three `+= D` pointer
+advances. -/
+def hgrnFwdOuterBody (D BD : Nat) : List Stmt :=
+  [ Stmt.assign .real [BD] "b_x"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BD] "p_x")) (hgrnMaskOther BD)),
+    Stmt.assign .real [BD] "b_g"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BD] "p_g")) (hgrnMaskOther BD)),
+    Stmt.assign .real [BD] "b_h"
+      (Op.add .real Broadcast.nil.consSame
+        (Op.mul .real Broadcast.nil.consSame (Op.ref .real [BD] "b_g")
+          (Op.ref .real [BD] "b_h"))
+        (Op.ref .real [BD] "b_x")),
+    Stmt.store .real [BD] (MemAccess.ptr (Op.ref .ptr [BD] "p_o"))
+      (Op.ref .real [BD] "b_h") (MaskOpt.mask (Op.ref .bool [BD] "mask")),
+    Stmt.assign .ptr [BD] "p_x"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BD] "p_x") (Op.constNat D)),
+    Stmt.assign .ptr [BD] "p_g"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BD] "p_g") (Op.constNat D)),
+    Stmt.assign .ptr [BD] "p_o"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BD] "p_o") (Op.constNat D)) ]
+
+/-- Algorithm-layer epilogue: the `STORE_FINAL_STATE` flush `ifThen`. -/
+def hgrnFwdEpilogue (ht : RegionName) (D BD : Nat) (S : Bool) : List Stmt :=
+  [ Stmt.ifThen (Op.constBool S)
+      [ Stmt.assign .ptr [BD] "p_ht" (hgrnStatePtr ht D BD),
+        Stmt.store .real [BD] (MemAccess.ptr (Op.ref .ptr [BD] "p_ht"))
+          (Op.ref .real [BD] "b_h") (MaskOpt.mask (Op.ref .bool [BD] "mask")) ] ]
+
+set_option maxRecDepth 8000 in
+/-- **Body split (by `rfl`).** The forward surface lowers (float-erased) to the
+prologue, the single `forRange "_i" 0 T 1` carrying `hgrnFwdOuterBody`, and the
+epilogue — at symbolic `T`, `D`, `BD` and both constexpr flags.
+
+A lowering identity, not a correctness statement: see the section note above. -/
+theorem fused_recurrent_hgrn_fwd_body_split
+    (x g o h0 ht : RegionName) (T D BD : Nat)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
+    (fused_recurrent_hgrn_fwd_surface x g o h0 ht T D BD
+        USE_INITIAL_STATE STORE_FINAL_STATE).toAlgorithm?
+      = Except.ok (Kernel.mk [x, x, g, g, o, o] []
+          (hgrnFwdPrologue x g o h0 T D BD USE_INITIAL_STATE
+            ++ [Stmt.forRange "_i" 0 T 1 (hgrnFwdOuterBody D BD)]
+            ++ hgrnFwdEpilogue ht D BD STORE_FINAL_STATE)) := by
+  rfl
+
 /-- Surface transcription of `fused_recurrent_hgrn.py`'s
 `fused_recurrent_hgrn_bwd_kernel`.
 
