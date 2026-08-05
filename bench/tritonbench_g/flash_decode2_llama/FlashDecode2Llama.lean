@@ -61,6 +61,7 @@ composition of these faces with the (trusted) loop scheduling.
 namespace VeriTile.Bench.TritonBenchG.FlashDecode2Llama
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 
@@ -513,5 +514,197 @@ specification flash_decode2_llama_running_max_output_summary_general
 
 end Correct_without_Rounding
 
+
+/-! ## ════════ `⊨` IO face for the final writeback ════════
+
+The summary above is stated per *declared write map*. This section restates the
+final `Final → O` writeback on the audit-once IO surface
+`Masked3DTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat
+memory** placement.
+
+The slice is a plain tile copy whose two windows are built from *both* program axes
+(`cur_batch`, `cur_head`) with different strides on the two buffers — the shape the
+three-axis tile skin exists for. Every lane is active (neither the load nor the
+store carries a mask). -/
+
+section IOFace
+
+/-- Cell-level frame of an unmasked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame_unmasked {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k))
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl, BlockState.writeMem_mem, if_neg ?_]
+      rintro ⟨h1, h2⟩
+      rcases hc with h | h
+      · exact h h1
+      · exact h hd List.mem_cons_self h2.symm
+
+theorem final_store_flattenOk (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) :
+    ((flash_decode2_llama_final_store_slice Final O stride_final_b
+      stride_final_h stride_final_d stride_obs stride_oh stride_od
+      BLOCK_DMODEL).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [flash_decode2_llama_final_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+
+theorem final_store_terminates (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (s : BlockState) :
+    ∃ s1, exec (flash_decode2_llama_final_store_slice Final O stride_final_b
+      stride_final_h stride_final_d stride_obs stride_oh stride_od
+      BLOCK_DMODEL) s = some s1 := by
+  simp [exec, flash_decode2_llama_final_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul]
+
+theorem final_store_frame (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (s s' : BlockState)
+    (hExec : exec (flash_decode2_llama_final_store_slice Final O stride_final_b
+      stride_final_h stride_final_d stride_obs stride_oh stride_od
+      BLOCK_DMODEL) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ O ∨ ∀ i : Fin BLOCK_DMODEL,
+        o ≠ outOffset s stride_obs stride_oh stride_od i) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, flash_decode2_llama_final_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame_unmasked (region := O)
+    (fun i : TileIndex [BLOCK_DMODEL] =>
+      s.pids 0 * stride_obs + s.pids 1 * stride_oh + i.1.val * stride_od)
+    _ r o (TileShape.allIndices [BLOCK_DMODEL]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun i _ => Ne.symm (h i.1)
+
+theorem final_store_traceSafe (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ i : Fin BLOCK_DMODEL,
+      finalOffset s stride_final_b stride_final_h stride_final_d i
+        < bounds Final)
+    (hout : ∀ i : Fin BLOCK_DMODEL,
+      outOffset s stride_obs stride_oh stride_od i < bounds O) :
+    ((flash_decode2_llama_final_store_slice Final O stride_final_b
+      stride_final_h stride_final_d stride_obs stride_oh stride_od
+      BLOCK_DMODEL).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, flash_decode2_llama_final_store_slice,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.mul]
+  exact ⟨fun a => hin a, fun a => hout a⟩
+
+/-- Region-model run of the final writeback. -/
+theorem final_store_region_run (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s₀ stride_obs stride_oh stride_od i))
+    (xs : TileIndex [BLOCK_DMODEL] → ℝ)
+    (hx : ∀ i : TileIndex [BLOCK_DMODEL],
+      s₀.readMem Final
+          (finalOffset s₀ stride_final_b stride_final_h stride_final_d i.1)
+        = xs i) :
+    ∃ s1, exec (flash_decode2_llama_final_store_slice Final O stride_final_b
+        stride_final_h stride_final_d stride_obs stride_oh stride_od
+        BLOCK_DMODEL) s₀ = some s1
+      ∧ (∀ i : TileIndex [BLOCK_DMODEL],
+          s1.readMem O (outOffset s₀ stride_obs stride_oh stride_od i.1) = xs i)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ O ∨ ∀ i : Fin BLOCK_DMODEL,
+            o ≠ outOffset s₀ stride_obs stride_oh stride_od i) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := final_store_terminates Final O stride_final_b
+    stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL s₀
+  refine ⟨s1, hexec, ?_, final_store_frame Final O stride_final_b stride_final_h
+    stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL s₀ s1 hexec⟩
+  intro i
+  have h := flash_decode2_llama_final_store_slice_correct Final O stride_final_b
+    stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL s₀
+    hOutInj i.1
+  have h' : s1.readMem O (outOffset s₀ stride_obs stride_oh stride_od i.1)
+      = s₀.readMem Final
+        (finalOffset s₀ stride_final_b stride_final_h stride_final_d i.1) := by
+    simpa [hexec] using h
+  rw [h', hx i]
+
+/-- IO signature of the final writeback on the three-axis tile surface. -/
+def finalStoreIO (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) : Masked3DTileKernelIO₁ where
+  kernel := flash_decode2_llama_final_store_slice Final O stride_final_b
+    stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL
+  inp := Final
+  out := O
+  shape := [BLOCK_DMODEL]
+  read := fun p₀ p₁ _p₂ i =>
+    p₀ * stride_final_b + p₁ * stride_final_h + i.1.val * stride_final_d
+  write := fun p₀ p₁ _p₂ i =>
+    p₀ * stride_obs + p₁ * stride_oh + i.1.val * stride_od
+  mask := fun _p₀ _p₁ _p₂ _ => True
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `flash_decode2_llama.py`'s final
+writeback: for every disjoint flat placement of `Final` / `O`, every program
+coordinate whose lanes are in bounds, and every launch state whose `Final` row holds
+`xs`, the translated pointer kernel terminates, every lane of the `O` row holds
+`xs i`, and every other memory cell is unchanged.
+
+Both windows are built from *two* program axes with different strides on the two
+buffers — the shape the three-axis tile skin exists for. Dimension-general in all six
+strides and `BLOCK_DMODEL`. Honest side-condition: output-address injectivity at every
+program coordinate, the same hypothesis the per-write-map summary takes. -/
+specification flash_decode2_llama_final_store_io_correctness (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BLOCK_DMODEL =>
+        p₀ * stride_obs + p₁ * stride_oh + i.val * stride_od)) :
+    finalStoreIO Final O stride_final_b stride_final_h stride_final_d stride_obs
+        stride_oh stride_od BLOCK_DMODEL
+      ⊨ fun _p₀ _p₁ xs i => xs i := by
+  refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact final_store_flattenOk Final O stride_final_b stride_final_h
+      stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL
+  · intro bounds s h1 h2
+    exact final_store_traceSafe Final O stride_final_b stride_final_h
+      stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL bounds s
+      (fun i => h1 (i, PUnit.unit) trivial) (fun i => h2 (i, PUnit.unit) trivial)
+  · intro s₀ xs hin
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      final_store_region_run Final O stride_final_b stride_final_h stride_final_d
+        stride_obs stride_oh stride_od BLOCK_DMODEL s₀
+        (hOutInj (s₀.pids 0) (s₀.pids 1)) xs (fun i => hin i trivial)
+    exact ⟨s1, hexec, fun i _ => hval i,
+      fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr fun i => h (i, PUnit.unit) trivial)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FlashDecode2Llama
