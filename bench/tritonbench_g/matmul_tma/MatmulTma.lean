@@ -18,9 +18,18 @@ real-valued `Σ_e A·B` GEMM reference is derived independently from the loaded
 ## Proof architecture
 
 ```
-matmul_tma_f32_closed_form_correct          ← TOP THEOREM (f32 branch, ComputeCorrect.Realizes_without_Rounding)
+matmul_tma_f32_io_correctness               ← TOP THEOREM (`⊨`, f32 branch)
+  ├─ matmul_tma_f32_flattenOk               inside the flat-memory bridge
+  ├─ matmul_tma_f32_traceSafe               per-execution address safety
+  └─ matmul_tma_f32_region_run              region-model run
+       ├─ matmul_tma_f32_terminates
+       ├─ matmul_tma_f32_exec_closed_form   exec-side closed form (shared, below)
+       ├─ matmulSpec_eq_of                  memory spec = value spec under the pins
+       └─ matmul_tma_f32_frame              cell-level frame off the write window
+
+matmul_tma_f32_closed_form_correct          per-write-map summary (f32 branch)
   └─ matmul_tma_f32_exec_closed_form        ← exec-side closed form (every cell = ∑_e A·B)
-matmul_tma_f16_closed_form_correct          ← TOP THEOREM (fp16 branch)
+matmul_tma_f16_closed_form_correct          per-write-map summary (fp16 branch)
   └─ matmul_tma_f16_exec_closed_form        ← exec-side closed form (every cell = fp16(∑_e A·B))
 ```
 
@@ -58,6 +67,7 @@ compare against. The textual py↔lean scans in
 namespace VeriTile.Bench.TritonBenchG.MatmulTma
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedTileShapedKernelIO₂
 
 set_option linter.unusedSimpArgs false
 
@@ -624,5 +634,262 @@ specification matmul_tma_f16_closed_form_correct
       stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s0 = some s' := hExec
   rw [hExec2] at hmain
   simpa only [ComputeCorrect.OutputReadable.read_memcell] using hmain
+
+/-! ## ════════ `⊨` IO face for the f32 branch ════════
+
+The closed forms above are stated per *declared write map*. This section restates
+the f32 branch on the audit-once IO surface
+`MaskedTileShapedKernelIO₂.Implements` (`⊨`), which additionally pins the **flat
+memory** placement.
+
+A contraction is exactly the case the per-channel-shape skin exists for: the two
+inputs live on `[BLOCK_M, BLOCK_N]`-incompatible lane sets — `A` on
+`[BLOCK_M, BLOCK_K]`, `B` on `[BLOCK_K, BLOCK_N]` — and the output on
+`[BLOCK_M, BLOCK_N]`. The three are related only through `f`, which reads both
+inputs at lanes the output index does not name. Every lane of all three channels
+is active: the block pointers carry no `boundary_check`. -/
+
+section IOFace
+
+/-- Cell-level frame of an **unmasked** scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame_unmasked {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k))
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl, BlockState.writeMem_mem, if_neg ?_]
+      rintro ⟨h1, h2⟩
+      rcases hc with h | h
+      · exact h h1
+      · exact h hd List.mem_cons_self h2.symm
+
+/-- Value-level GEMM spec: `Σ_{e < BLOCK_K} xs[i, e] · ys[e, j]`, over the
+*loaded values* rather than over memory — which is what the IO surface
+quantifies. Reading both inputs at lanes the output index does not name is the
+whole reason the channels need separate shapes. -/
+noncomputable def matmulSpecOf (BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (xs : TileIndex [BLOCK_M, BLOCK_K] → ℝ)
+    (ys : TileIndex [BLOCK_K, BLOCK_N] → ℝ)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : ℝ :=
+  (Finset.univ : Finset (Fin BLOCK_K)).sum
+    (fun e => xs (idx.1, e, PUnit.unit) * ys (e, idx.2.1, PUnit.unit))
+
+/-- The memory-level and value-level GEMM specs agree once both input tiles are
+pinned. -/
+theorem matmulSpec_eq_of (A B : RegionName)
+    (stride_am stride_ak stride_bk stride_bn BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (s : BlockState)
+    (xs : TileIndex [BLOCK_M, BLOCK_K] → ℝ)
+    (ys : TileIndex [BLOCK_K, BLOCK_N] → ℝ)
+    (hx : ∀ k : TileIndex [BLOCK_M, BLOCK_K],
+      s.readMem A (k.1.val * stride_am + k.2.1.val * stride_ak) = xs k)
+    (hy : ∀ k : TileIndex [BLOCK_K, BLOCK_N],
+      s.readMem B (k.1.val * stride_bk + k.2.1.val * stride_bn) = ys k)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) :
+    matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+        idx.1.val idx.2.1.val
+      = matmulSpecOf BLOCK_M BLOCK_N BLOCK_K xs ys idx := by
+  simp only [matmulSpec, matmulSpecOf, aElem, bElem]
+  refine Finset.sum_congr rfl fun e _ => ?_
+  rw [hx (idx.1, e, PUnit.unit), hy (e, idx.2.1, PUnit.unit)]
+
+/-- The f32 branch sits inside the flat-memory bridge's covered fragment. -/
+theorem matmul_tma_f32_flattenOk (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    ((matmul_tma_f32_surface A B C M N K stride_am stride_ak stride_bk stride_bn
+      stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [matmul_tma_f32_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  -- the `tl.dot` node: `Op.FlattenOk`'s per-case equation does not fire under
+  -- `simp` on it, but `.eq_def` is fine on this small op-level residual
+  simp [Op.FlattenOk.eq_def]
+
+/-- Termination of the f32 branch. -/
+theorem matmul_tma_f32_terminates (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) (s : BlockState) :
+    ∃ s1, exec (matmul_tma_f32_surface A B C M N K stride_am stride_ak stride_bk
+      stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s = some s1 := by
+  simp [exec, matmul_tma_f32_surface, stepStmts, stepStmt, evalOp.eq_def,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind, Option.map,
+    Tile.bop, Tile.dot, TileShape.indexToList, BlockPtr.inBounds]
+
+/-- Cell-level frame of the f32 branch. -/
+theorem matmul_tma_f32_frame (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) (s s' : BlockState)
+    (hExec : exec (matmul_tma_f32_surface A B C M N K stride_am stride_ak
+      stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s
+      = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ C ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+        o ≠ cOffset stride_cm stride_cn idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, matmul_tma_f32_surface, stepStmts, stepStmt, evalOp.eq_def,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind, Option.map,
+    Tile.bop, Tile.dot, TileShape.indexToList, BlockPtr.inBounds] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame_unmasked (region := C)
+    (fun i : TileIndex [BLOCK_M, BLOCK_N] =>
+      i.1.val * stride_cm + i.2.1.val * stride_cn)
+    _ r o (TileShape.allIndices [BLOCK_M, BLOCK_N]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun i _ => Ne.symm (h i)
+
+/-- Per-execution safety walk for the f32 branch: the three block pointers carry
+no `boundary_check`, so every lane of both loads and of the store must be in
+bounds. -/
+theorem matmul_tma_f32_traceSafe (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hA : ∀ idx : TileIndex [BLOCK_M, BLOCK_K],
+      idx.1.val * stride_am + idx.2.1.val * stride_ak < bounds A)
+    (hB : ∀ idx : TileIndex [BLOCK_K, BLOCK_N],
+      idx.1.val * stride_bk + idx.2.1.val * stride_bn < bounds B)
+    (hC : ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+      cOffset stride_cm stride_cn idx < bounds C) :
+    ((matmul_tma_f32_surface A B C M N K stride_am stride_ak stride_bk stride_bn
+      stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgKernel).TraceSafe
+      bounds s := by
+  simp [Kernel.TraceSafe, matmul_tma_f32_surface, Stmt.TraceSafeList,
+    Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+    MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, stepStmt, evalOp, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.dot, TileShape.indexToList, BlockPtr.inBounds]
+  -- what survives: the three block pointers' `Op.MemorySafe` (vacuous for a
+  -- register reference, but `simp` will not peel it), the two load windows'
+  -- lane bounds, the `dot` node, and the store window's lane bounds
+  refine ⟨⟨?_, fun a b => hA (a, b, PUnit.unit)⟩,
+    ⟨?_, fun a b => hB (a, b, PUnit.unit)⟩, ?_, ?_,
+    fun a b => hC (a, b, PUnit.unit)⟩ <;>
+    first
+      | simp [Op.MemorySafe]
+      | simp [Op.SafeAt.eq_def]
+
+/-- Region-model run of the f32 branch, in the shape
+`MaskedTileShapedKernelIO₂.Implements.intro` consumes. -/
+theorem matmul_tma_f32_region_run (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hInj : Function.Injective
+      (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn))
+    (s₀ : BlockState)
+    (xs : TileIndex [BLOCK_M, BLOCK_K] → ℝ)
+    (ys : TileIndex [BLOCK_K, BLOCK_N] → ℝ)
+    (hx : ∀ k : TileIndex [BLOCK_M, BLOCK_K],
+      s₀.readMem A (k.1.val * stride_am + k.2.1.val * stride_ak) = xs k)
+    (hy : ∀ k : TileIndex [BLOCK_K, BLOCK_N],
+      s₀.readMem B (k.1.val * stride_bk + k.2.1.val * stride_bn) = ys k) :
+    ∃ s1, exec (matmul_tma_f32_surface A B C M N K stride_am stride_ak stride_bk
+        stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+          s1.readMem C (cOffset stride_cm stride_cn idx)
+            = matmulSpecOf BLOCK_M BLOCK_N BLOCK_K xs ys idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ C ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+            o ≠ cOffset stride_cm stride_cn idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := matmul_tma_f32_terminates A B C M N K stride_am
+    stride_ak stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K s₀
+  refine ⟨s1, hexec, ?_, matmul_tma_f32_frame A B C M N K stride_am stride_ak
+    stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K s₀ s1 hexec⟩
+  intro idx
+  have h := matmul_tma_f32_exec_closed_form A B C s₀ M N K stride_am stride_ak
+    stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K hInj idx
+  have h' : s1.readMem C (cOffset stride_cm stride_cn idx)
+      = matmulSpec s₀ A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+          idx.1.val idx.2.1.val := by
+    simpa [hexec] using h
+  rw [h', matmulSpec_eq_of A B stride_am stride_ak stride_bk stride_bn BLOCK_M
+    BLOCK_N BLOCK_K s₀ xs ys hx hy idx]
+
+/-- IO signature of the f32 branch on the **per-channel-shape** surface: `A` on
+`[BLOCK_M, BLOCK_K]`, `B` on `[BLOCK_K, BLOCK_N]`, `C` on `[BLOCK_M, BLOCK_N]`,
+every lane of all three active (the block pointers carry no `boundary_check`),
+and the addresses are the block pointers' offset-`(0,0)` maps. -/
+def matmulTmaF32IO (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) : MaskedTileShapedKernelIO₂ where
+  kernel := matmul_tma_f32_surface A B C M N K stride_am stride_ak stride_bk
+    stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K
+  in1 := A
+  in2 := B
+  out := C
+  shape1 := [BLOCK_M, BLOCK_K]
+  shape2 := [BLOCK_K, BLOCK_N]
+  shapeOut := [BLOCK_M, BLOCK_N]
+  read1 := fun _p₀ _p₁ k => k.1.val * stride_am + k.2.1.val * stride_ak
+  read2 := fun _p₀ _p₁ k => k.1.val * stride_bk + k.2.1.val * stride_bn
+  write := fun _p₀ _p₁ o => cOffset stride_cm stride_cn o
+  mask1 := fun _p₀ _p₁ _ => True
+  mask2 := fun _p₀ _p₁ _ => True
+  writeMask := fun _p₀ _p₁ _ => True
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `matmul_tma.py`'s
+`matmul_tma_load_store`, `OUTPUT_F16 = false` branch: for every disjoint flat
+placement of the three buffers, and every launch state whose `A` and `B` tiles are
+pinned, the translated pointer kernel terminates, every cell of the output tile
+holds the genuine GEMM value `Σ_{e < BLOCK_K} xs[i, e] · ys[e, j]`, and every
+other memory cell is unchanged.
+
+This is the first **contraction** on an `io ⊨ f` face, and it is what the
+per-channel-shape skin exists for: the three channels live on three different lane
+sets (`[BLOCK_M, BLOCK_K]`, `[BLOCK_K, BLOCK_N]`, `[BLOCK_M, BLOCK_N]`), related
+only through `f`, which reads both inputs at lanes the output index does not name.
+
+Dimension-general in `M`, `N`, `K`, all six strides and all three block sizes.
+Honest side-condition: output-address injectivity (`hInj`) — the same hypothesis
+the closed-form theorems take, dischargeable for row-major `C` by
+`cOffset_injective_of_rowMajor`. -/
+specification matmul_tma_f32_io_correctness (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hInj : Function.Injective
+      (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn)) :
+    matmulTmaF32IO A B C M N K stride_am stride_ak stride_bk stride_bn stride_cm
+        stride_cn BLOCK_M BLOCK_N BLOCK_K
+      ⊨ fun _p₀ _p₁ xs ys idx =>
+          matmulSpecOf BLOCK_M BLOCK_N BLOCK_K xs ys idx := by
+  refine MaskedTileShapedKernelIO₂.Implements.intro _ ?_ ?_ ?_
+  · exact matmul_tma_f32_flattenOk A B C M N K stride_am stride_ak stride_bk
+      stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K
+  · intro bounds s h1 h2 h3
+    exact matmul_tma_f32_traceSafe A B C M N K stride_am stride_ak stride_bk
+      stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K bounds s
+      (fun idx => h1 idx trivial) (fun idx => h2 idx trivial)
+      (fun idx => h3 idx trivial)
+  · intro s₀ xs ys hx hy
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      matmul_tma_f32_region_run A B C M N K stride_am stride_ak stride_bk
+        stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K hInj s₀ xs ys
+        (fun k => hx k trivial) (fun k => hy k trivial)
+    exact ⟨s1, hexec, fun o _ => hval o,
+      fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr fun idx => h idx trivial)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.MatmulTma
