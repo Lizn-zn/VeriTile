@@ -20,7 +20,17 @@ quantified, the per-program statement covers every program.
 ## Proof architecture
 
 ```
-rope_embedding_output_summary_general                       ← TOP THEOREM (dim-general)
+fast_rope_embedding_io_correctness                          ← TOP THEOREM (`⊨`, both halves)
+  ├─ rope_{first,second}_flattenOk                inside the flat-memory bridge
+  ├─ rope_{first,second}_traceSafe                per-execution address safety
+  └─ rope_{first,second}_region_run               region-model run
+       ├─ rope_{first,second}_terminates
+       ├─ rope_embedding_q_{first,second}_half_correct   per-lane readback (shared)
+       ├─ rope{First,Second}Spec_eq_of            memory spec = value spec (lane-local)
+       ├─ q{First,Second}_inj                     output injectivity, discharged not assumed
+       └─ rope_{first,second}_frame               cell-level frame off the write window
+
+rope_embedding_output_summary_general                       per-write-map summary (dim-general)
   ├─ rope_embedding_surface_toAlgorithm_supported
   │      surface lowers to the algorithm layer
   ├─ rope_embedding_q_first_half_compute_correct
@@ -46,6 +56,7 @@ first/second store-offset injectivity hypotheses.
 namespace VeriTile.Bench.TritonBenchG.FastRopeEmbedding
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.InPlaceMaskedTileKernelIO
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -478,5 +489,465 @@ specification rope_embedding_output_summary_general
       BLOCK_SIZE Bool.true
 
 end Correct_without_Rounding
+
+/-! ## ════════ `⊨` IO face for the two RoPE half-updates ════════
+
+The summaries above are stated per *declared write map*. This section restates
+both half-slices on the audit-once IO surface
+`InPlaceMaskedTileKernelIO.Implements` (`⊨`), which additionally pins the **flat
+memory** placement.
+
+RoPE is the shape that skin exists for: `Q` is read at **two** windows
+(`offs_q1`, `offs_q2`), `cos` and `sin` are read-only auxiliaries, and the store
+goes back into `Q` at one of the two windows. Every other family in
+`KernelSpec.lean` lists its output buffer separately from its inputs, which
+excludes `out = in` outright. `f`'s four arguments are the **pre-state** lane
+values, which is the right reading for an in-place update: the two halves are
+computed from the values `Q` held on entry. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+/-! ### First half -/
+
+/-- Value-level first-half spec: `q1 · c - q2 · s`, over the *loaded values*. -/
+noncomputable def ropeFirstSpecOf {BLOCK_SIZE : Nat}
+    (q1 q2 c1 s1 : TileIndex [BLOCK_SIZE] → ℝ)
+    (i : TileIndex [BLOCK_SIZE]) : ℝ :=
+  q1 i * c1 i - q2 i * s1 i
+
+/-- Value-level second-half spec: `q2 · c + q1 · s`. -/
+noncomputable def ropeSecondSpecOf {BLOCK_SIZE : Nat}
+    (q1 q2 c1 s1 : TileIndex [BLOCK_SIZE] → ℝ)
+    (i : TileIndex [BLOCK_SIZE]) : ℝ :=
+  q2 i * c1 i + q1 i * s1 i
+
+/-- The memory-level and value-level first-half specs agree under the pins. -/
+theorem ropeFirstSpec_eq_of (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim BLOCK_SIZE : Nat)
+    (s : BlockState) (q1 q2 c1 s1 : TileIndex [BLOCK_SIZE] → ℝ)
+    (hq1 : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s.readMem Q (qFirstOffset s Q_row_stride head_dim i.1) = q1 i)
+    (hq2 : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s.readMem Q (qSecondOffset s Q_row_stride head_dim i.1) = q2 i)
+    (hc : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s.readMem cos (cosOffset s seqlen cos_row_stride i.1) = c1 i)
+    (hs : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s.readMem sin (sinOffset s seqlen sin_row_stride i.1) = s1 i)
+    (i : TileIndex [BLOCK_SIZE]) (hi : i.1.val < head_dim / 2) :
+    ropeFirstSpec s Q cos sin Q_row_stride cos_row_stride sin_row_stride seqlen
+        head_dim BLOCK_SIZE i.1
+      = ropeFirstSpecOf q1 q2 c1 s1 i := by
+  rw [ropeFirstSpec, ropeFirstSpecOf, hq1 i hi, hq2 i hi, hc i hi, hs i hi]
+
+/-- The memory-level and value-level second-half specs agree under the pins. -/
+theorem ropeSecondSpec_eq_of (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim BLOCK_SIZE : Nat)
+    (s : BlockState) (q1 q2 c1 s1 : TileIndex [BLOCK_SIZE] → ℝ)
+    (hq1 : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s.readMem Q (qFirstOffset s Q_row_stride head_dim i.1) = q1 i)
+    (hq2 : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s.readMem Q (qSecondOffset s Q_row_stride head_dim i.1) = q2 i)
+    (hc : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s.readMem cos (cosOffset s seqlen cos_row_stride i.1) = c1 i)
+    (hs : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s.readMem sin (sinOffset s seqlen sin_row_stride i.1) = s1 i)
+    (i : TileIndex [BLOCK_SIZE]) (hi : i.1.val < head_dim / 2) :
+    ropeSecondSpec s Q cos sin Q_row_stride cos_row_stride sin_row_stride seqlen
+        head_dim BLOCK_SIZE i.1
+      = ropeSecondSpecOf q1 q2 c1 s1 i := by
+  rw [ropeSecondSpec, ropeSecondSpecOf, hq1 i hi, hq2 i hi, hc i hi, hs i hi]
+
+/-- The first-half slice sits inside the flat-memory bridge's covered fragment. -/
+theorem rope_first_flattenOk (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) :
+    ((rope_embedding_q_first_half Q cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [rope_embedding_q_first_half, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+
+/-- The second-half slice sits inside the bridge's covered fragment. -/
+theorem rope_second_flattenOk (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) :
+    ((rope_embedding_q_second_half Q cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [rope_embedding_q_second_half, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+
+/-- Termination of the first-half slice. -/
+theorem rope_first_terminates (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (s : BlockState) :
+    ∃ s1, exec (rope_embedding_q_first_half Q cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE) s
+      = some s1 := by
+  simp [exec, rope_embedding_q_first_half, stepStmts, stepStmt, evalOp.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt]
+
+/-- Termination of the second-half slice. -/
+theorem rope_second_terminates (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (s : BlockState) :
+    ∃ s1, exec (rope_embedding_q_second_half Q cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE) s
+      = some s1 := by
+  simp [exec, rope_embedding_q_second_half, stepStmts, stepStmt, evalOp.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt]
+
+/-- Cell-level frame of the first-half slice. -/
+theorem rope_first_frame (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (s s' : BlockState)
+    (hExec : exec (rope_embedding_q_first_half Q cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE) s
+      = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Q ∨ ∀ i : Fin BLOCK_SIZE, active s head_dim n_heads BLOCK_SIZE i →
+        o ≠ qFirstOffset s Q_row_stride head_dim i) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, rope_embedding_q_first_half, stepStmts, stepStmt, evalOp.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Q)
+    (fun i : TileIndex [BLOCK_SIZE] =>
+      s.pids 0 * Q_row_stride + s.pids 1 * 4 * head_dim + i.1.val)
+    _ (fun i : TileIndex [BLOCK_SIZE] =>
+      i.1.val < head_dim / 2 ∧ s.pids 1 * 4 < n_heads) r o
+    (TileShape.allIndices [BLOCK_SIZE]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun i _ hi => Ne.symm (h i.1 hi)
+
+/-- Cell-level frame of the second-half slice. -/
+theorem rope_second_frame (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (s s' : BlockState)
+    (hExec : exec (rope_embedding_q_second_half Q cos sin Q_row_stride
+      cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE) s
+      = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Q ∨ ∀ i : Fin BLOCK_SIZE, active s head_dim n_heads BLOCK_SIZE i →
+        o ≠ qSecondOffset s Q_row_stride head_dim i) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, rope_embedding_q_second_half, stepStmts, stepStmt, evalOp.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Q)
+    (fun i : TileIndex [BLOCK_SIZE] =>
+      s.pids 0 * Q_row_stride + s.pids 1 * 4 * head_dim + i.1.val
+        + head_dim / 2)
+    _ (fun i : TileIndex [BLOCK_SIZE] =>
+      i.1.val < head_dim / 2 ∧ s.pids 1 * 4 < n_heads) r o
+    (TileShape.allIndices [BLOCK_SIZE]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun i _ hi => Ne.symm (h i.1 hi)
+
+/-- The two `Q` window maps are injective outright — each is `base + lane` (the
+second shifted by `head_dim / 2`) — so the closed-form readbacks' `hOutInj`
+precondition is a *theorem* here, not a hypothesis the headline has to carry. -/
+private theorem qFirst_inj (s : BlockState) (Q_row_stride head_dim BLOCK_SIZE : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_SIZE => qFirstOffset s Q_row_stride head_dim i) := by
+  intro a b h
+  simp only [qFirstOffset, colIndex] at h
+  exact Fin.ext (Nat.add_left_cancel h)
+
+private theorem qSecond_inj (s : BlockState) (Q_row_stride head_dim BLOCK_SIZE : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_SIZE => qSecondOffset s Q_row_stride head_dim i) := by
+  intro a b h
+  simp only [qSecondOffset, colIndex] at h
+  exact Fin.ext (Nat.add_left_cancel (Nat.add_right_cancel h))
+
+/-- Per-execution safety walk for the first-half slice. The four loads are gated
+by the **column** guard only (`col < head_dim / 2`); the store additionally
+carries `head_start < n_heads`. -/
+theorem rope_first_traceSafe (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hq1 : ∀ i : Fin BLOCK_SIZE, i.val < head_dim / 2 →
+      qFirstOffset s Q_row_stride head_dim i < bounds Q)
+    (hq2 : ∀ i : Fin BLOCK_SIZE, i.val < head_dim / 2 →
+      qSecondOffset s Q_row_stride head_dim i < bounds Q)
+    (hc : ∀ i : Fin BLOCK_SIZE, i.val < head_dim / 2 →
+      cosOffset s seqlen cos_row_stride i < bounds cos)
+    (hsn : ∀ i : Fin BLOCK_SIZE, i.val < head_dim / 2 →
+      sinOffset s seqlen sin_row_stride i < bounds sin)
+    (hst : ∀ i : Fin BLOCK_SIZE, active s head_dim n_heads BLOCK_SIZE i →
+      qFirstOffset s Q_row_stride head_dim i < bounds Q) :
+    ((rope_embedding_q_first_half Q cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE).toAlgKernel).TraceSafe
+      bounds s := by
+  simp [Kernel.TraceSafe, rope_embedding_q_first_half, Stmt.TraceSafeList,
+    Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+    MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop,
+    Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
+    NumericDType.sub, ComparableDType.lt]
+  exact ⟨fun a ha => hsn a ha, fun a ha => hc a ha, fun a ha => hq1 a ha,
+    fun a ha => hq2 a ha, fun a ha hh => hst a ⟨ha, hh⟩⟩
+
+/-- Per-execution safety walk for the second-half slice. -/
+theorem rope_second_traceSafe (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hq1 : ∀ i : Fin BLOCK_SIZE, i.val < head_dim / 2 →
+      qFirstOffset s Q_row_stride head_dim i < bounds Q)
+    (hq2 : ∀ i : Fin BLOCK_SIZE, i.val < head_dim / 2 →
+      qSecondOffset s Q_row_stride head_dim i < bounds Q)
+    (hc : ∀ i : Fin BLOCK_SIZE, i.val < head_dim / 2 →
+      cosOffset s seqlen cos_row_stride i < bounds cos)
+    (hsn : ∀ i : Fin BLOCK_SIZE, i.val < head_dim / 2 →
+      sinOffset s seqlen sin_row_stride i < bounds sin)
+    (hst : ∀ i : Fin BLOCK_SIZE, active s head_dim n_heads BLOCK_SIZE i →
+      qSecondOffset s Q_row_stride head_dim i < bounds Q) :
+    ((rope_embedding_q_second_half Q cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE).toAlgKernel).TraceSafe
+      bounds s := by
+  simp [Kernel.TraceSafe, rope_embedding_q_second_half, Stmt.TraceSafeList,
+    Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+    MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop,
+    Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
+    NumericDType.sub, ComparableDType.lt]
+  exact ⟨fun a ha => hsn a ha, fun a ha => hc a ha, fun a ha => hq1 a ha,
+    fun a ha => hq2 a ha, fun a ha hh => hst a ⟨ha, hh⟩⟩
+
+/-- Region-model run of the first-half slice. -/
+theorem rope_first_region_run (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (s₀ : BlockState)
+    (q1 q2 c1 s1 : TileIndex [BLOCK_SIZE] → ℝ)
+    (hq1 : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s₀.readMem Q (qFirstOffset s₀ Q_row_stride head_dim i.1) = q1 i)
+    (hq2 : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s₀.readMem Q (qSecondOffset s₀ Q_row_stride head_dim i.1) = q2 i)
+    (hc : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s₀.readMem cos (cosOffset s₀ seqlen cos_row_stride i.1) = c1 i)
+    (hs : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s₀.readMem sin (sinOffset s₀ seqlen sin_row_stride i.1) = s1 i) :
+    ∃ s' , exec (rope_embedding_q_first_half Q cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE) s₀
+        = some s'
+      ∧ (∀ i : TileIndex [BLOCK_SIZE],
+          active s₀ head_dim n_heads BLOCK_SIZE i.1 →
+          s'.readMem Q (qFirstOffset s₀ Q_row_stride head_dim i.1)
+            = ropeFirstSpecOf q1 q2 c1 s1 i)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Q ∨ ∀ i : Fin BLOCK_SIZE,
+            active s₀ head_dim n_heads BLOCK_SIZE i →
+            o ≠ qFirstOffset s₀ Q_row_stride head_dim i) →
+          s'.mem r o = s₀.mem r o) := by
+  obtain ⟨s', hexec⟩ := rope_first_terminates Q cos sin Q_row_stride
+    cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE s₀
+  refine ⟨s', hexec, ?_, rope_first_frame Q cos sin Q_row_stride cos_row_stride
+    sin_row_stride seqlen head_dim n_heads BLOCK_SIZE s₀ s' hexec⟩
+  intro i hact
+  rw [rope_embedding_q_first_half_correct Q cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE s₀ s'
+      (qFirst_inj s₀ Q_row_stride head_dim BLOCK_SIZE) hexec i.1,
+    if_pos hact,
+    ropeFirstSpec_eq_of Q cos sin Q_row_stride cos_row_stride sin_row_stride
+      seqlen head_dim BLOCK_SIZE s₀ q1 q2 c1 s1
+      hq1 hq2 hc hs i hact.1]
+
+/-- Region-model run of the second-half slice. -/
+theorem rope_second_region_run (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) (s₀ : BlockState)
+    (q1 q2 c1 s1 : TileIndex [BLOCK_SIZE] → ℝ)
+    (hq1 : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s₀.readMem Q (qFirstOffset s₀ Q_row_stride head_dim i.1) = q1 i)
+    (hq2 : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s₀.readMem Q (qSecondOffset s₀ Q_row_stride head_dim i.1) = q2 i)
+    (hc : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s₀.readMem cos (cosOffset s₀ seqlen cos_row_stride i.1) = c1 i)
+    (hs : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < head_dim / 2 →
+      s₀.readMem sin (sinOffset s₀ seqlen sin_row_stride i.1) = s1 i) :
+    ∃ s' , exec (rope_embedding_q_second_half Q cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE) s₀
+        = some s'
+      ∧ (∀ i : TileIndex [BLOCK_SIZE],
+          active s₀ head_dim n_heads BLOCK_SIZE i.1 →
+          s'.readMem Q (qSecondOffset s₀ Q_row_stride head_dim i.1)
+            = ropeSecondSpecOf q1 q2 c1 s1 i)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Q ∨ ∀ i : Fin BLOCK_SIZE,
+            active s₀ head_dim n_heads BLOCK_SIZE i →
+            o ≠ qSecondOffset s₀ Q_row_stride head_dim i) →
+          s'.mem r o = s₀.mem r o) := by
+  obtain ⟨s', hexec⟩ := rope_second_terminates Q cos sin Q_row_stride
+    cos_row_stride sin_row_stride seqlen head_dim n_heads BLOCK_SIZE s₀
+  refine ⟨s', hexec, ?_, rope_second_frame Q cos sin Q_row_stride cos_row_stride
+    sin_row_stride seqlen head_dim n_heads BLOCK_SIZE s₀ s' hexec⟩
+  intro i hact
+  rw [rope_embedding_q_second_half_correct Q cos sin Q_row_stride cos_row_stride
+      sin_row_stride seqlen head_dim n_heads BLOCK_SIZE s₀ s'
+      (qSecond_inj s₀ Q_row_stride head_dim BLOCK_SIZE) hexec i.1,
+    if_pos hact,
+    ropeSecondSpec_eq_of Q cos sin Q_row_stride cos_row_stride sin_row_stride
+      seqlen head_dim BLOCK_SIZE s₀ q1 q2 c1 s1
+      hq1 hq2 hc hs i hact.1]
+
+/-- IO signature of the first-half slice on the **in-place** tile surface: `Q` is
+read at `offs_q1` and `offs_q2`, `cos` / `sin` are read-only, and the store goes
+back to `Q` at `offs_q1`. Loads are gated by the column guard alone; the store
+additionally carries `head_start < n_heads`. -/
+def ropeFirstIO (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) : InPlaceMaskedTileKernelIO where
+  kernel := rope_embedding_q_first_half Q cos sin Q_row_stride cos_row_stride
+    sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
+  main := Q
+  aux1 := cos
+  aux2 := sin
+  shape := [BLOCK_SIZE]
+  readMain1 := fun p₀ p₁ i => p₀ * Q_row_stride + p₁ * 4 * head_dim + i.1.val
+  readMain2 := fun p₀ p₁ i =>
+    p₀ * Q_row_stride + p₁ * 4 * head_dim + i.1.val + head_dim / 2
+  readAux1 := fun p₀ _p₁ i =>
+    IntegralDType.nat.mod p₀ seqlen * cos_row_stride + i.1.val
+  readAux2 := fun p₀ _p₁ i =>
+    IntegralDType.nat.mod p₀ seqlen * sin_row_stride + i.1.val
+  write := fun p₀ p₁ i => p₀ * Q_row_stride + p₁ * 4 * head_dim + i.1.val
+  mask := fun _p₀ _p₁ i => i.1.val < head_dim / 2
+  writeMask := fun _p₀ p₁ i => i.1.val < head_dim / 2 ∧ p₁ * 4 < n_heads
+
+/-- IO signature of the second-half slice: same channels, the store now at
+`offs_q2`. -/
+def ropeSecondIO (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) : InPlaceMaskedTileKernelIO where
+  kernel := rope_embedding_q_second_half Q cos sin Q_row_stride cos_row_stride
+    sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
+  main := Q
+  aux1 := cos
+  aux2 := sin
+  shape := [BLOCK_SIZE]
+  readMain1 := fun p₀ p₁ i => p₀ * Q_row_stride + p₁ * 4 * head_dim + i.1.val
+  readMain2 := fun p₀ p₁ i =>
+    p₀ * Q_row_stride + p₁ * 4 * head_dim + i.1.val + head_dim / 2
+  readAux1 := fun p₀ _p₁ i =>
+    IntegralDType.nat.mod p₀ seqlen * cos_row_stride + i.1.val
+  readAux2 := fun p₀ _p₁ i =>
+    IntegralDType.nat.mod p₀ seqlen * sin_row_stride + i.1.val
+  write := fun p₀ p₁ i =>
+    p₀ * Q_row_stride + p₁ * 4 * head_dim + i.1.val + head_dim / 2
+  mask := fun _p₀ _p₁ i => i.1.val < head_dim / 2
+  writeMask := fun _p₀ p₁ i => i.1.val < head_dim / 2 ∧ p₁ * 4 < n_heads
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `fast_rope_embedding.py`'s
+`_rope_embedding`, both half-updates: for every disjoint flat placement of
+`Q`/`cos`/`sin`, every program coordinate whose active lanes are in bounds, and
+every launch state whose two `Q` windows and the `cos`/`sin` windows are pinned,
+each slice terminates, every write-active lane of `Q` holds the genuine rotary
+value — `q1·cos − q2·sin` for the first half, `q2·cos + q1·sin` for the second —
+and every other memory cell is unchanged.
+
+The four spec arguments are the **pre-state** lane values, which is the honest
+reading of an in-place update. Dimension-general in every stride, `seqlen`,
+`head_dim`, `n_heads` and `BLOCK_SIZE`, with **no** side-condition: the closed-form
+readbacks' output-injectivity precondition is discharged outright by
+`qFirst_inj` / `qSecond_inj` (each window is `base + lane`). -/
+specification fast_rope_embedding_io_correctness (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      BLOCK_SIZE : Nat) :
+    (ropeFirstIO Q cos sin Q_row_stride cos_row_stride sin_row_stride seqlen
+        head_dim n_heads BLOCK_SIZE
+      ⊨ fun _p₀ _p₁ q1 q2 c1 s1 i => ropeFirstSpecOf q1 q2 c1 s1 i) ∧
+    (ropeSecondIO Q cos sin Q_row_stride cos_row_stride sin_row_stride seqlen
+        head_dim n_heads BLOCK_SIZE
+      ⊨ fun _p₀ _p₁ q1 q2 c1 s1 i => ropeSecondSpecOf q1 q2 c1 s1 i) := by
+  constructor
+  · refine InPlaceMaskedTileKernelIO.Implements.intro _ ?_ ?_ ?_
+    · exact rope_first_flattenOk Q cos sin Q_row_stride cos_row_stride
+        sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
+    · intro bounds s h1 h2 h3 h4 h5
+      exact rope_first_traceSafe Q cos sin Q_row_stride cos_row_stride
+        sin_row_stride seqlen head_dim n_heads BLOCK_SIZE bounds s
+        (fun i hi => h1 (i, PUnit.unit) hi) (fun i hi => h2 (i, PUnit.unit) hi)
+        (fun i hi => h3 (i, PUnit.unit) hi) (fun i hi => h4 (i, PUnit.unit) hi)
+        (fun i hi => h5 (i, PUnit.unit) hi)
+    · intro s₀ q1 q2 c1 s1 hp1 hp2 hp3 hp4
+      obtain ⟨s', hexec, hval, hframe⟩ :=
+        rope_first_region_run Q cos sin Q_row_stride cos_row_stride sin_row_stride
+          seqlen head_dim n_heads BLOCK_SIZE s₀ q1 q2 c1 s1
+          (fun i hi => hp1 i hi) (fun i hi => hp2 i hi) (fun i hi => hp3 i hi)
+          (fun i hi => hp4 i hi)
+      refine ⟨s', hexec, hval, fun r o hcond => hframe r o ?_⟩
+      rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun i hi => h (i, PUnit.unit) hi
+  · refine InPlaceMaskedTileKernelIO.Implements.intro _ ?_ ?_ ?_
+    · exact rope_second_flattenOk Q cos sin Q_row_stride cos_row_stride
+        sin_row_stride seqlen head_dim n_heads BLOCK_SIZE
+    · intro bounds s h1 h2 h3 h4 h5
+      exact rope_second_traceSafe Q cos sin Q_row_stride cos_row_stride
+        sin_row_stride seqlen head_dim n_heads BLOCK_SIZE bounds s
+        (fun i hi => h1 (i, PUnit.unit) hi) (fun i hi => h2 (i, PUnit.unit) hi)
+        (fun i hi => h3 (i, PUnit.unit) hi) (fun i hi => h4 (i, PUnit.unit) hi)
+        (fun i hi => h5 (i, PUnit.unit) hi)
+    · intro s₀ q1 q2 c1 s1 hp1 hp2 hp3 hp4
+      obtain ⟨s', hexec, hval, hframe⟩ :=
+        rope_second_region_run Q cos sin Q_row_stride cos_row_stride sin_row_stride
+          seqlen head_dim n_heads BLOCK_SIZE s₀ q1 q2 c1 s1
+          (fun i hi => hp1 i hi) (fun i hi => hp2 i hi) (fun i hi => hp3 i hi)
+          (fun i hi => hp4 i hi)
+      refine ⟨s', hexec, hval, fun r o hcond => hframe r o ?_⟩
+      rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun i hi => h (i, PUnit.unit) hi
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FastRopeEmbedding
