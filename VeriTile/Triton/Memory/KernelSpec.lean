@@ -16123,8 +16123,31 @@ def tilePos (shape : TileShape) (i : TileIndex shape) :
 that index back. -/
 @[simp] theorem get_tilePos (shape : TileShape) (i : TileIndex shape) :
     (TileShape.allIndices shape).get (tilePos shape i) = i := by
-  simpa [tilePos] using
-    List.getElem_idxOf_of_mem (TileShape.mem_allIndices shape i)
+  simp [tilePos]
+
+/-- The other round-trip: a lane's position is the lane itself. This one is
+where `TileShape.allIndices_nodup` is actually needed — without duplicate-
+freeness two distinct lanes could share a position and the enumeration would
+not be a bijection. -/
+@[simp] theorem tilePos_get (shape : TileShape)
+    (j : Fin (TileShape.allIndices shape).length) :
+    tilePos shape ((TileShape.allIndices shape).get j) = j := by
+  apply Fin.ext
+  simp only [tilePos, List.get_eq_getElem]
+  exact List.Nodup.idxOf_getElem (TileShape.allIndices_nodup shape) _ _
+
+/-- Transport a lane-wise obligation between the core's `Fin`-indexed
+enumeration and tile indices. The `←` direction is just instantiation; the
+`→` direction is exactly what `tilePos` was introduced for. -/
+theorem forall_tileIndex_iff {shape : TileShape} (p : TileIndex shape → Prop) :
+    (∀ j : Fin (TileShape.allIndices shape).length,
+        p ((TileShape.allIndices shape).get j)) ↔ ∀ i : TileIndex shape, p i := by
+  constructor
+  · intro h i
+    have hi := h (tilePos shape i)
+    rwa [get_tilePos] at hi
+  · intro h j
+    exact h _
 
 namespace MaskedTileKernelIO₁
 
@@ -16188,6 +16211,103 @@ private def toU (io : MaskedTileKernelIO₁) : UKernelIO where
     io.writeMask p₀ ((TileShape.allIndices io.shape).get j)
   swin := fun t _ _ _ _ _ => t.elim0
   smask := fun t _ _ _ _ _ => t.elim0
+
+/-- Assembly lemma — the tile-indexed sibling of
+`MaskedKernelIO₁.Implements.intro`. The three obligations are the family's
+usual ones (`FlattenOk`, the safety walk, the region-model Hoare triple);
+the only difference is that every lane-wise obligation ranges over
+`TileIndex io.shape` and every address comes from a window *function*, so
+nothing in the statement forces a contiguous footprint. -/
+theorem Implements.intro (io : MaskedTileKernelIO₁)
+    {f : (TileIndex io.shape → ℝ) → TileIndex io.shape → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ i : TileIndex io.shape, io.mask s.pid i →
+        io.read s.pid i < bounds io.inp) →
+      (∀ i : TileIndex io.shape, io.writeMask s.pid i →
+        io.write s.pid i < bounds io.out) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs : TileIndex io.shape → ℝ),
+      (∀ i : TileIndex io.shape, io.mask s₀.pid i →
+        s₀.readMem io.inp (io.read s₀.pid i) = xs i) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ i : TileIndex io.shape, io.writeMask s₀.pid i →
+            s1.readMem io.out (io.write s₀.pid i) = f xs i)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ i : TileIndex io.shape, io.writeMask s₀.pid i →
+                o ≠ io.write s₀.pid i) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  -- assemble the unified-core triple once, then convert it back into the
+  -- family statement; the two `tilePos` round-trips are the whole content of
+  -- the conversion
+  have hcore : io.toU.Implements
+      (fun _p₀ _p₁ vals _o j =>
+        f (fun i => vals (⟨0, by decide⟩ : Fin 1) (tilePos io.shape i))
+          ((TileShape.allIndices io.shape).get j)) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob _hsb
+      have hib' : ∀ i : TileIndex io.shape, io.mask s.pid i →
+          io.read s.pid i < bounds io.inp := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        exact hib (⟨0, by decide⟩ : Fin 1) j
+      have hob' : ∀ i : TileIndex io.shape, io.writeMask s.pid i →
+          io.write s.pid i < bounds io.out := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        exact hob (⟨0, by decide⟩ : Fin 1) j
+      exact hts bounds s hib' hob'
+    · intro s₀ vals _hundef hpins
+      have hpins' : ∀ i : TileIndex io.shape, io.mask s₀.pid i →
+          s₀.readMem io.inp (io.read s₀.pid i)
+            = vals (⟨0, by decide⟩ : Fin 1) (tilePos io.shape i) := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        rw [tilePos_get]
+        exact hpins (⟨0, by decide⟩ : Fin 1) j
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun i => vals (⟨0, by decide⟩ : Fin 1) (tilePos io.shape i))
+          hpins'
+      refine ⟨s1, hexec, fun _o j hj => hval _ hj, ?_⟩
+      intro r o' hoc _hsc
+      have hoc' : ∀ i : TileIndex io.shape, io.writeMask s₀.pid i →
+          r ≠ io.out ∨ o' ≠ io.write s₀.pid i := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        exact hoc (⟨0, by decide⟩ : Fin 1) j
+      refine hframe r o' ?_
+      by_cases hro : r = io.out
+      · subst hro
+        refine Or.inr fun i hi => ?_
+        rcases hoc' i hi with hne | hno
+        · exact absurd rfl hne
+        · exact hno
+      · exact Or.inl hro
+  intro A hd hregs hcov pid h1 h2 xs s₀ hpid hu hx
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid (s₀.pids 1) (s₀.pids 2)
+      (fun _ j => xs ((TileShape.allIndices io.shape).get j)) s₀ hpid rfl rfl hu
+      (fun _i j hj => h1 _ hj) (fun _o j hj => h2 _ hj) (fun t => t.elim0)
+      (fun _i j hj => hx _ hj)
+  have hxs :
+      (fun i => xs ((TileShape.allIndices io.shape).get (tilePos io.shape i)))
+        = xs :=
+    funext fun i => by rw [get_tilePos]
+  refine ⟨s', hexec, ?_, ?_⟩
+  · refine (forall_tileIndex_iff _).mp ?_
+    intro j hj
+    refine (hval (⟨0, by decide⟩ : Fin 1) j hj).trans ?_
+    show f (fun i => xs ((TileShape.allIndices io.shape).get (tilePos io.shape i)))
+        ((TileShape.allIndices io.shape).get j)
+      = f xs ((TileShape.allIndices io.shape).get j)
+    rw [hxs]
+  · intro r' o' hcond
+    refine hframe r' o' ?_
+    rcases hcond with hflat | hout
+    · exact Or.inl hflat
+    · exact Or.inr ⟨fun _o j hj => hout _ hj, fun t => t.elim0⟩
 
 end MaskedTileKernelIO₁
 
