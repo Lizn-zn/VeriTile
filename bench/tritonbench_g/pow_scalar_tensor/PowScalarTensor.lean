@@ -1286,7 +1286,7 @@ specification pow_scalar_tensor_one_tile_io_correctness (val0 : ℝ)
     (hStride : 0 < out0_stride0) :
     powOneTileIO val0 in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks
         tiles_per_cta tile_size0
-      ⊨ fun xs i => Real.rpow val0 (xs i) := by
+      ⊨ fun _pid xs i => Real.rpow val0 (xs i) := by
   refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
   · exact pow_one_tile_flattenOk val0 in0_ptr out0_ptr in0_stride0 out0_stride0
       s0 num_tasks tiles_per_cta tile_size0

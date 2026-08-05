@@ -24,7 +24,16 @@ program of its grid.
 ## Proof architecture
 
 ```
-max_kernel_output_summary                       ← TOP THEOREM (the 2D value/index kernel)
+max_kernel_1_io_correctness                     ← TOP THEOREM (`⊨`, first-stage block max)
+  ├─ max_kernel_1_flattenOk                     inside the flat-memory bridge
+  ├─ max_kernel_1_traceSafe                     per-execution address safety
+  └─ max_kernel_1_region_run                    region-model run
+       ├─ max_kernel_1_terminates
+       ├─ max_kernel_1_correct                  per-block readback (shared, below)
+       ├─ maxKernel1Spec_eq_of                  memory spec = value spec under the pins
+       └─ max_kernel_1_frame                    cell-level frame (only `mid[pid]` is touched)
+
+max_kernel_output_summary                       per-write-map summary (the 2D value/index kernel)
   ├─ (toAlgorithm? = Except.ok _)               surface lowers to the algorithm layer
   └─ max_kernel_compute_correct                 ← ComputeCorrect.OutputPairWhere over the
        │                                          masked value/index stores
@@ -48,6 +57,7 @@ transcription. `other=-float("inf")` masked lanes are modeled as `⊥`
 namespace VeriTile.Bench.TritonBenchG.MaxReduction
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedTileKernelIO₁
 
 set_option maxHeartbeats 5000000
 
@@ -341,5 +351,211 @@ specification max_kernel_output_summary
   · simp [max_kernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
   · exact max_kernel_compute_correct inp out_value out_index M N K BLOCK_M BLOCK_N
       s hOutInj hOutRegions
+
+/-! ## ════════ `⊨` IO face for the first-stage block max ════════ -/
+
+section IOFace
+
+/-- Value-level first-stage max spec: the `Tile.reduceMax` of the tile that holds
+`xs` on the active lanes (`pid·BLOCK_SIZE + i < M`) and `⊥` elsewhere — the
+`other=-float("inf")` padding. Written over the *loaded values* rather than over
+memory, which is what the IO surface quantifies. -/
+noncomputable def maxTileSpecOf (M BLOCK_SIZE pid : Nat)
+    (xs : TileIndex [BLOCK_SIZE] → ℝ) : ℝ :=
+  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+      ⟨fun idx =>
+        if pid * BLOCK_SIZE + idx.1.val < M then some (xs idx) else none⟩ with
+  | some out => WithBot.unbotD 0 (out.data PUnit.unit)
+  | none => 0
+
+/-- The memory-level and value-level first-stage specs agree once the active
+lanes of the input window are pinned to `xs`. -/
+theorem maxKernel1Spec_eq_of (inp : RegionName) (M BLOCK_SIZE : Nat)
+    (s : BlockState) (xs : TileIndex [BLOCK_SIZE] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_SIZE], s.pid * BLOCK_SIZE + idx.1.val < M →
+      s.readMem inp (s.pid * BLOCK_SIZE + idx.1.val) = xs idx) :
+    maxKernel1Spec s inp M BLOCK_SIZE = maxTileSpecOf M BLOCK_SIZE s.pid xs := by
+  have htile : maxKernel1InputTile s inp M BLOCK_SIZE
+      = ⟨fun idx : TileIndex [BLOCK_SIZE] =>
+          if s.pid * BLOCK_SIZE + idx.1.val < M then some (xs idx)
+          else none⟩ := by
+    refine congrArg Tile.mk (funext fun idx => ?_)
+    simp only [maxKernel1InputTile]
+    by_cases h : s.pid * BLOCK_SIZE + idx.1.val < M
+    · rw [if_pos h, if_pos h, hx idx h]
+    · rw [if_neg h, if_neg h]
+  rw [maxKernel1Spec, maxTileSpecOf, htile]
+
+/-- `Op.FlattenOk` of a `reduceMax` reduces to its argument's obligation.
+Stated as its own lemma and used as a *term*: the per-case equation does not
+fire under `simp` on a `reduceMax` node, only under `rw`, and `rw` only succeeds
+in an isolated goal. -/
+private theorem flattenOk_reduceMax {shape : TileShape}
+    (ax : Fin shape.length) (keepDims : Bool) (e : Op .real shape)
+    (h : e.FlattenOk) : (Op.reduceMax ax keepDims e).FlattenOk := by
+  rw [Op.FlattenOk]
+  exact h
+
+/-- `Op.FlattenOk` of a register reference is vacuous. -/
+private theorem flattenOk_ref (dtype : TileDType) (shape : TileShape)
+    (name : RegName) : (Op.ref dtype shape name).FlattenOk := by
+  rw [Op.FlattenOk]
+  trivial
+
+/-- `Op.SafeAt` of a `reduceMax` is its argument's obligation (same `rw`-only
+caveat as `flattenOk_reduceMax`). -/
+private theorem safeAt_reduceMax {shape : TileShape} (bounds : RegionBounds)
+    (s : BlockState) (ax : Fin shape.length) (keepDims : Bool)
+    (e : Op .real shape) (h : Op.SafeAt bounds s e) :
+    Op.SafeAt bounds s (Op.reduceMax ax keepDims e) := by
+  rw [Op.SafeAt]
+  exact h
+
+/-- `Op.SafeAt` of a register reference is vacuous. -/
+private theorem safeAt_ref (bounds : RegionBounds) (s : BlockState)
+    (dtype : TileDType) (shape : TileShape) (name : RegName) :
+    Op.SafeAt bounds s (Op.ref dtype shape name) := by
+  rw [Op.SafeAt]
+  trivial
+
+/-- The first-stage kernel sits inside the flat-memory bridge's covered
+fragment. -/
+theorem max_kernel_1_flattenOk (inp mid : RegionName) (M BLOCK_SIZE : Nat) :
+    ((max_kernel_1 inp mid M BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [max_kernel_1, ComputeKernel.toAlgKernel, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  exact flattenOk_reduceMax _ _ _ (flattenOk_ref _ _ _)
+
+/-- Termination of the first-stage kernel (needs a non-degenerate tile: with
+`BLOCK_SIZE = 0` the `tl.max` reduction has no axis to reduce and the kernel
+faults). -/
+theorem max_kernel_1_terminates (inp mid : RegionName) (M BLOCK_SIZE : Nat)
+    (hB : 0 < BLOCK_SIZE) (s : BlockState) :
+    ∃ s1, exec (max_kernel_1 inp mid M BLOCK_SIZE) s = some s1 := by
+  simp [exec, max_kernel_1, stepStmts, stepStmt, evalOp.eq_def, Tile.bop,
+    Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+    TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt, hB]
+
+/-- Cell-level frame of the first-stage kernel: the only cell it touches is
+`mid[pid]`. -/
+theorem max_kernel_1_frame (inp mid : RegionName) (M BLOCK_SIZE : Nat)
+    (hB : 0 < BLOCK_SIZE) (s s' : BlockState)
+    (hExec : exec (max_kernel_1 inp mid M BLOCK_SIZE) s = some s') :
+    ∀ (r : RegionName) (o : Nat), (r ≠ mid ∨ o ≠ s.pid) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, max_kernel_1, stepStmts, stepStmt, evalOp.eq_def, Tile.bop,
+    Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+    TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt, hB] at hExec
+  subst hExec
+  rw [BlockState.writeMem_mem, if_neg ?_]
+  · simp
+  · rintro ⟨h1, h2⟩
+    rcases hcond with h | h
+    · exact h h1
+    · exact h h2
+
+/-- Per-execution safety walk for the first-stage kernel: the masked load
+addresses `inp` at `pid·BLOCK_SIZE + i`, active exactly on `< M`; the scalar
+store addresses `mid` at `pid`. -/
+theorem max_kernel_1_traceSafe (inp mid : RegionName) (M BLOCK_SIZE : Nat)
+    (hB : 0 < BLOCK_SIZE) (bounds : RegionBounds) (s : BlockState)
+    (hIn : ∀ i : Fin BLOCK_SIZE, s.pid * BLOCK_SIZE + i.val < M →
+      s.pid * BLOCK_SIZE + i.val < bounds inp)
+    (hMid : s.pid < bounds mid) :
+    ((max_kernel_1 inp mid M BLOCK_SIZE).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, max_kernel_1, Stmt.TraceSafeList, Stmt.TraceSafe,
+    Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active, MemAccess.SafeAt,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    Op.PointerAddressesSafeOn, Op.MemorySafe, stepStmt, evalOp, evalOp.eq_def,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt, hB]
+  -- what survives: the load window's bound, the `reduceMax` node (simp cannot
+  -- peel it), and the scalar store's bound
+  exact ⟨fun a ha => hIn a ha,
+    safeAt_reduceMax _ _ _ _ _ (safeAt_ref _ _ _ _ _), hMid⟩
+
+/-- Region-model run of the first-stage kernel, in the shape
+`MaskedTileKernelIO₁.Implements.intro` consumes. -/
+theorem max_kernel_1_region_run (inp mid : RegionName) (M BLOCK_SIZE : Nat)
+    (hB : 0 < BLOCK_SIZE) (s₀ : BlockState)
+    (xs : TileIndex [BLOCK_SIZE] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_SIZE],
+      s₀.pid * BLOCK_SIZE + idx.1.val < M →
+      s₀.readMem inp (s₀.pid * BLOCK_SIZE + idx.1.val) = xs idx) :
+    ∃ s1, exec (max_kernel_1 inp mid M BLOCK_SIZE) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BLOCK_SIZE], idx.1.val = 0 →
+          s1.readMem mid s₀.pid = maxTileSpecOf M BLOCK_SIZE s₀.pid xs)
+      ∧ (∀ (r : RegionName) (o : Nat), (r ≠ mid ∨ o ≠ s₀.pid) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := max_kernel_1_terminates inp mid M BLOCK_SIZE hB s₀
+  refine ⟨s1, hexec, ?_,
+    max_kernel_1_frame inp mid M BLOCK_SIZE hB s₀ s1 hexec⟩
+  intro _idx _
+  rw [max_kernel_1_correct inp mid M BLOCK_SIZE s₀ s1 hexec,
+    maxKernel1Spec_eq_of inp M BLOCK_SIZE s₀ xs hx]
+
+/-- IO signature of `max_kernel_1` on the tile-indexed surface: every lane of
+the `BLOCK_SIZE` window reads `inp` at `pid·BLOCK_SIZE + i` and is read-active on
+the `< M` guard, while **only lane 0** is write-active and it writes the single
+cell `mid[pid]` — the block's max. A single-cell store expressed as a one-lane
+write mask over the read tile is exactly what a reduction's IO signature is. -/
+def maxKernel1IO (inp mid : RegionName) (M BLOCK_SIZE : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := max_kernel_1 inp mid M BLOCK_SIZE
+  inp := inp
+  out := mid
+  shape := [BLOCK_SIZE]
+  read := fun pid idx => pid * BLOCK_SIZE + idx.1.val
+  write := fun pid _ => pid
+  mask := fun pid idx => pid * BLOCK_SIZE + idx.1.val < M
+  writeMask := fun _ idx => idx.1.val = 0
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `max_reduction.py`'s `max_kernel_1`:
+for every disjoint flat placement of the two buffers, every program id whose
+active lanes are in bounds, and every launch state whose input window holds `xs`
+at the active lanes, the translated pointer kernel terminates, `mid[pid]` holds
+the genuine block max — `Tile.reduceMax` of `xs` over the active lanes, with the
+`other=-float("inf")` padding modeled as `⊥` — and every other memory cell is
+unchanged.
+
+This is the first *reduction* on an `io ⊨ f` face, and it is what the spec `f`'s
+program-id argument is for: the reduced index set is `{i | pid·BLOCK_SIZE + i < M}`,
+so the value is irreducibly pid-dependent (the tail block reduces fewer lanes
+than a full block) and a pid-independent spec would be falsifiable.
+
+Dimension-general in `M` and `BLOCK_SIZE`. Honest side-condition:
+`0 < BLOCK_SIZE` — with an empty tile `tl.max` has no axis to reduce and the
+kernel faults, so termination genuinely fails there. -/
+specification max_kernel_1_io_correctness
+    (inp mid : RegionName) (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE) :
+    maxKernel1IO inp mid M BLOCK_SIZE
+      ⊨ fun pid xs _ => maxTileSpecOf M BLOCK_SIZE pid xs := by
+  refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact max_kernel_1_flattenOk inp mid M BLOCK_SIZE
+  · intro bounds s h1 h2
+    exact max_kernel_1_traceSafe inp mid M BLOCK_SIZE hB bounds s
+      (fun i hi => h1 (i, PUnit.unit) hi)
+      (h2 (⟨0, hB⟩, PUnit.unit) rfl)
+  · intro s₀ xs hin
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      max_kernel_1_region_run inp mid M BLOCK_SIZE hB s₀ xs
+        (fun idx hact => hin idx hact)
+    refine ⟨s1, hexec, hval, ?_⟩
+    intro r o hcond
+    refine hframe r o ?_
+    rcases hcond with h | h
+    · exact Or.inl h
+    -- a non-degenerate tile always has a write-active lane, which turns the
+    -- skin's lane-wise disjunct into the single-cell one
+    · exact Or.inr (h (⟨0, hB⟩, PUnit.unit) rfl)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.MaxReduction
