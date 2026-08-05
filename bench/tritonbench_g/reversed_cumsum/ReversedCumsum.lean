@@ -62,6 +62,7 @@ scatter requires only active-lane collision freedom (taken as a hypothesis).
 namespace VeriTile.Bench.TritonBenchG.ReversedCumsum
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 
@@ -748,5 +749,194 @@ specification reversed_cumsum_output_summary_general
     s_s_h s_s_t s_s_d T S BT BS, ?_⟩
   exact reversed_cumsum_single_block_surface_active_closed_form SReg Z
     s_s_h s_s_t s_s_d T S BT BS s hNoCollision
+
+/-! ## ════════ `⊨` IO face for the masked block store ════════
+
+The summary above is stated per *declared write map*. This section restates the
+`BC → Z` block store on the audit-once IO surface
+`Masked3DTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat memory**
+placement.
+
+The slice owns a `[BT, BS]` block whose address is built from **all three** program
+axes (`i_s`, `i_bh`, `i_t`) — the shape the three-axis tile skin exists for. Read and
+write share the one address, and both are gated by the kernel's own
+`offs_t < T ∧ offs_s < S` guard. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+theorem block_store_flattenOk (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    ((reversed_cumsum_store_slice BC Z s_s_h s_s_t s_s_d T S BT
+      BS).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [reversed_cumsum_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  refine ⟨?_, ?_⟩ <;> simp [Op.FlattenOk.eq_def]
+
+theorem block_store_terminates (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState) :
+    ∃ s1, exec (reversed_cumsum_store_slice BC Z s_s_h s_s_t s_s_d T S BT BS)
+      s = some s1 := by
+  simp [exec, reversed_cumsum_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt]
+
+theorem block_store_frame (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (s s' : BlockState)
+    (hExec : exec (reversed_cumsum_store_slice BC Z s_s_h s_s_t s_s_d T S BT
+      BS) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Z ∨ ∀ idx : TileIndex [BT, BS], active s T S BT BS idx →
+        o ≠ tileOffset s s_s_h s_s_t s_s_d BT BS idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, reversed_cumsum_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Z)
+    (fun idx : TileIndex [BT, BS] =>
+      s.pids 1 * s_s_h + (s.pids 2 * BT + idx.1.val) * s_s_t
+        + (s.pids 0 * BS + idx.2.1.val) * s_s_d)
+    _ (fun idx : TileIndex [BT, BS] =>
+      s.pids 2 * BT + idx.1.val < T ∧ s.pids 0 * BS + idx.2.1.val < S) r o
+    (TileShape.allIndices [BT, BS]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem block_store_traceSafe (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BT, BS], active s T S BT BS idx →
+      tileOffset s s_s_h s_s_t s_s_d BT BS idx < bounds BC)
+    (hout : ∀ idx : TileIndex [BT, BS], active s T S BT BS idx →
+      tileOffset s s_s_h s_s_t s_s_d BT BS idx < bounds Z) :
+    ((reversed_cumsum_store_slice BC Z s_s_h s_s_t s_s_d T S BT
+      BS).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, reversed_cumsum_store_slice, Stmt.TraceSafeList,
+    Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+    MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt]
+  -- the surviving goals are the four `expandDim` nodes (simp cannot peel them)
+  -- and the two window bounds; `and_intros` flattens the nesting so the shapes
+  -- can be dispatched without guessing it
+  and_intros
+  all_goals first
+    | simp [Op.SafeAt.eq_def]
+    | exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+    | exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+
+/-- Region-model run of the masked block store. -/
+theorem block_store_region_run (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BT, BS] => tileOffset s₀ s_s_h s_s_t s_s_d BT BS idx))
+    (xs : TileIndex [BT, BS] → ℝ)
+    (hx : ∀ idx : TileIndex [BT, BS], active s₀ T S BT BS idx →
+      s₀.readMem BC (tileOffset s₀ s_s_h s_s_t s_s_d BT BS idx) = xs idx) :
+    ∃ s1, exec (reversed_cumsum_store_slice BC Z s_s_h s_s_t s_s_d T S BT BS)
+        s₀ = some s1
+      ∧ (∀ idx : TileIndex [BT, BS], active s₀ T S BT BS idx →
+          s1.readMem Z (tileOffset s₀ s_s_h s_s_t s_s_d BT BS idx) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Z ∨ ∀ idx : TileIndex [BT, BS], active s₀ T S BT BS idx →
+            o ≠ tileOffset s₀ s_s_h s_s_t s_s_d BT BS idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := block_store_terminates BC Z s_s_h s_s_t s_s_d T S BT BS s₀
+  refine ⟨s1, hexec, ?_, block_store_frame BC Z s_s_h s_s_t s_s_d T S BT BS s₀ s1
+    hexec⟩
+  intro idx hact
+  have h := reversed_cumsum_store_slice_correct BC Z s_s_h s_s_t s_s_d T S BT
+    BS s₀ hOutInj idx
+  have h' : s1.readMem Z (tileOffset s₀ s_s_h s_s_t s_s_d BT BS idx)
+      = if active s₀ T S BT BS idx then
+          storeValue s₀ BC s_s_h s_s_t s_s_d T S BT BS idx
+        else s₀.readMem Z (tileOffset s₀ s_s_h s_s_t s_s_d BT BS idx) := by
+    simpa [hexec] using h
+  rw [h', if_pos hact, storeValue, if_pos hact]
+  simpa using hx idx hact
+
+/-- IO signature of the masked block store on the three-axis tile surface: the
+`[BT, BS]` block's one address is built from all three program axes, and the same
+address serves the read and the write. -/
+def blockStoreIO (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := reversed_cumsum_store_slice BC Z s_s_h s_s_t s_s_d T S BT BS
+  inp := BC
+  out := Z
+  shape := [BT, BS]
+  read := fun p₀ p₁ p₂ idx =>
+    p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t + (p₀ * BS + idx.2.1.val) * s_s_d
+  write := fun p₀ p₁ p₂ idx =>
+    p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t + (p₀ * BS + idx.2.1.val) * s_s_d
+  mask := fun p₀ _p₁ p₂ idx =>
+    p₂ * BT + idx.1.val < T ∧ p₀ * BS + idx.2.1.val < S
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `reversed_cumsum.py`'s masked block
+store: for every disjoint flat placement of `BC` / `Z`, every program coordinate
+whose active lanes are in bounds, and every launch state whose `BC` block holds `xs`
+at the active lanes, the translated pointer kernel terminates, every active lane of
+the `Z` block holds `xs idx`, and every other memory cell is unchanged.
+
+The block address is built from **all three** program axes (`i_s`, `i_bh`, `i_t`) —
+the shape the three-axis tile skin exists for. Dimension-general in the three
+strides, `T`, `S`, `BT`, `BS`. Honest side-condition: output-address injectivity at
+every program coordinate, the same hypothesis the per-write-map summary takes. -/
+specification reversed_cumsum_block_store_io_correctness (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BT, BS] =>
+        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
+          + (p₀ * BS + idx.2.1.val) * s_s_d)) :
+    blockStoreIO BC Z s_s_h s_s_t s_s_d T S BT BS
+      ⊨ fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact block_store_flattenOk BC Z s_s_h s_s_t s_s_d T S BT BS
+  · intro bounds s h1 h2
+    exact block_store_traceSafe BC Z s_s_h s_s_t s_s_d T S BT BS bounds s
+      (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+  · intro s₀ xs hin
+    exact block_store_region_run BC Z s_s_h s_s_t s_s_d T S BT BS s₀
+      (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+      (fun idx hact => hin idx hact)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.ReversedCumsum
