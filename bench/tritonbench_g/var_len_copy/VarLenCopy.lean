@@ -21,14 +21,25 @@ grid.
 ## Proof architecture
 
 ```
-var_len_copy_kernel_triton_small_length_output_summary    ← TOP THEOREM
+var_len_copy_one_chunk_io_correctness                    ← TOP THEOREM (`⊨`, one chunk)
+  ├─ var_len_one_chunk_flattenOk                           inside the flat-memory bridge
+  ├─ var_len_one_chunk_traceSafe                           per-execution address safety
+  └─ var_len_one_chunk_region_run                          region-model run
+       ├─ var_len_one_chunk_terminates
+       ├─ var_len_copy_one_chunk_correct                    per-lane readback (shared, below)
+       ├─ destOffset_inj                                    output injectivity, discharged
+       └─ var_len_one_chunk_frame                           cell-level frame
+
+var_len_copy_kernel_triton_small_length_output_summary    per-write-map summary
   ├─ (toAlgorithm? = Except.ok _)                          surface lowers (incl. the for-loop)
   └─ var_len_copy_kernel_triton_small_length_compute_correct  ← ComputeCorrect over the copy
        └─ var_len_copy_kernel_triton_small_length_correct     algorithm-layer readback per lane
 ```
 The per-chunk slice `var_len_copy_one_chunk_{correct,compute_correct}` proves a
 single fixed chunk index; it is an independent proof that parallels (rather than
-feeds) the single-iteration full-kernel proof.
+feeds) the single-iteration full-kernel proof. The `⊨` face above sits on that
+slice, and additionally pins the flat-memory placement and the value-dependent
+metadata window.
 
 ## Modeling boundary
 
@@ -46,6 +57,7 @@ lanes of one program alias).
 namespace VeriTile.Bench.TritonBenchG.VarLenCopy
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Meta3MaskedTileKernelIO₁
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -442,5 +454,244 @@ specification var_len_copy_kernel_triton_small_length_output_summary
   · exact var_len_copy_kernel_triton_small_length_compute_correct
       old_a_start old_a_len old_a_location new_a_start new_a_location BLOCK_SIZE
       s hBS hLen hLenPos hOutInj
+
+/-! ## ════════ `⊨` IO face for the one-chunk copy ════════
+
+The summary above is stated per *declared write map*. This section restates the
+one-chunk slice on the audit-once IO surface
+`Meta3MaskedTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat
+memory** placement.
+
+This is the variable-length genre: the kernel first loads three `.nat` scalars —
+the segment `length`, the source base `old_start`, the destination base
+`new_start` — and *then* uses them in the data window's address **and** in its
+mask. No pid-only window can express that, which is why the metadata skin exists;
+the three scalars are universally quantified in the statement and pinned by the
+launch state, so the headline reads "for whatever the metadata says, the copy is
+that copy". -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+/-- The destination window is injective outright — it is `base + lane` — so the
+one-chunk readback's `hOutInj` precondition is a theorem here, not a hypothesis
+the headline carries. -/
+private theorem destOffset_inj (s : BlockState) (new_a_start : RegionName)
+    (chunk BLOCK_SIZE : Nat) :
+    Function.Injective
+      (fun i : Fin BLOCK_SIZE => destOffset s new_a_start chunk BLOCK_SIZE i) := by
+  intro a b h
+  simp only [destOffset] at h
+  exact Fin.ext (Nat.add_left_cancel h)
+
+/-- The one-chunk slice sits inside the flat-memory bridge's covered fragment. -/
+theorem var_len_one_chunk_flattenOk
+    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (chunk BLOCK_SIZE : Nat) :
+    ((var_len_copy_one_chunk old_a_start old_a_len old_a_location new_a_start
+      new_a_location chunk BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [var_len_copy_one_chunk, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+
+/-- Termination of the one-chunk slice. -/
+theorem var_len_one_chunk_terminates
+    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (chunk BLOCK_SIZE : Nat) (s : BlockState) :
+    ∃ s1, exec (var_len_copy_one_chunk old_a_start old_a_len old_a_location
+      new_a_start new_a_location chunk BLOCK_SIZE) s = some s1 := by
+  simp [exec, var_len_copy_one_chunk, stepStmts, stepStmt, evalOp.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt]
+
+/-- Cell-level frame of the one-chunk slice. -/
+theorem var_len_one_chunk_frame
+    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (chunk BLOCK_SIZE : Nat) (s s' : BlockState)
+    (hExec : exec (var_len_copy_one_chunk old_a_start old_a_len old_a_location
+      new_a_start new_a_location chunk BLOCK_SIZE) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ new_a_location ∨ ∀ i : Fin BLOCK_SIZE,
+        active s old_a_len chunk BLOCK_SIZE i →
+        o ≠ destOffset s new_a_start chunk BLOCK_SIZE i) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, var_len_copy_one_chunk, stepStmts, stepStmt, evalOp.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := new_a_location)
+    (fun i : TileIndex [BLOCK_SIZE] =>
+      s.readMemValue .nat new_a_start (s.pids 0) + chunk * BLOCK_SIZE + i.1.val)
+    _ (fun i : TileIndex [BLOCK_SIZE] =>
+      i.1.val < s.readMemValue .nat old_a_len (s.pids 0)) r o
+    (TileShape.allIndices [BLOCK_SIZE]) ?_]
+  · simp [preStoreState]
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun i _ hi => Ne.symm (h i.1 hi)
+
+/-- Per-execution safety walk for the one-chunk slice. -/
+theorem var_len_one_chunk_traceSafe
+    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (chunk BLOCK_SIZE : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hlen : s.pids 0 < bounds old_a_len)
+    (hos : s.pids 0 < bounds old_a_start)
+    (hns : s.pids 0 < bounds new_a_start)
+    (hsrc : ∀ i : Fin BLOCK_SIZE, active s old_a_len chunk BLOCK_SIZE i →
+      sourceOffset s old_a_start chunk BLOCK_SIZE i < bounds old_a_location)
+    (hdst : ∀ i : Fin BLOCK_SIZE, active s old_a_len chunk BLOCK_SIZE i →
+      destOffset s new_a_start chunk BLOCK_SIZE i < bounds new_a_location) :
+    ((var_len_copy_one_chunk old_a_start old_a_len old_a_location new_a_start
+      new_a_location chunk BLOCK_SIZE).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, var_len_copy_one_chunk, Stmt.TraceSafeList,
+    Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+    MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt]
+  exact ⟨hlen, hos, hns, fun a ha => hsrc a ha, fun a ha => hdst a ha⟩
+
+/-- Region-model run of the one-chunk slice, in the shape
+`Meta3MaskedTileKernelIO₁.Implements.intro` consumes. -/
+theorem var_len_one_chunk_region_run
+    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (chunk BLOCK_SIZE : Nat) (s₀ : BlockState) (len olds news : Nat)
+    (hlen : s₀.readMemValue .nat old_a_len s₀.pid = len)
+    (hos : s₀.readMemValue .nat old_a_start s₀.pid = olds)
+    (hns : s₀.readMemValue .nat new_a_start s₀.pid = news)
+    (xs : TileIndex [BLOCK_SIZE] → ℝ)
+    (hx : ∀ i : TileIndex [BLOCK_SIZE], i.1.val < len →
+      s₀.readMem old_a_location (olds + chunk * BLOCK_SIZE + i.1.val) = xs i) :
+    ∃ s1, exec (var_len_copy_one_chunk old_a_start old_a_len old_a_location
+        new_a_start new_a_location chunk BLOCK_SIZE) s₀ = some s1
+      ∧ (∀ i : TileIndex [BLOCK_SIZE], i.1.val < len →
+          s1.readMem new_a_location (news + chunk * BLOCK_SIZE + i.1.val)
+            = xs i)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ new_a_location ∨ ∀ i : TileIndex [BLOCK_SIZE], i.1.val < len →
+            o ≠ news + chunk * BLOCK_SIZE + i.1.val) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := var_len_one_chunk_terminates old_a_start old_a_len
+    old_a_location new_a_start new_a_location chunk BLOCK_SIZE s₀
+  refine ⟨s1, hexec, ?_, ?_⟩
+  · intro i hi
+    have h := var_len_copy_one_chunk_correct old_a_start old_a_len
+      old_a_location new_a_start new_a_location chunk BLOCK_SIZE s₀ s1
+      (destOffset_inj s₀ new_a_start chunk BLOCK_SIZE) hexec i.1
+    rw [show destOffset s₀ new_a_start chunk BLOCK_SIZE i.1
+          = news + chunk * BLOCK_SIZE + i.1.val from by
+        simp only [destOffset, newStart, hns]] at h
+    rw [h, if_pos (show active s₀ old_a_len chunk BLOCK_SIZE i.1 from by
+        simpa [active, segmentLength, hlen] using hi),
+      show sourceOffset s₀ old_a_start chunk BLOCK_SIZE i.1
+          = olds + chunk * BLOCK_SIZE + i.1.val from by
+        simp only [sourceOffset, oldStart, hos],
+      hx i hi]
+  · intro r o hcond
+    refine var_len_one_chunk_frame old_a_start old_a_len old_a_location
+      new_a_start new_a_location chunk BLOCK_SIZE s₀ s1 hexec r o ?_
+    rcases hcond with h | h
+    · exact Or.inl h
+    · refine Or.inr fun i hact => ?_
+      have hi : i.val < len := by simpa [active, segmentLength, hlen] using hact
+      have := h (i, PUnit.unit) hi
+      simpa [destOffset, newStart, hns] using this
+
+/-- IO signature of the one-chunk slice on the **three-metadata** surface: the
+segment length, the source base and the destination base are read at the
+program's own cell, and both data windows plus the mask are functions of them. -/
+def varLenOneChunkIO
+    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (chunk BLOCK_SIZE : Nat) : Meta3MaskedTileKernelIO₁ where
+  kernel := var_len_copy_one_chunk old_a_start old_a_len old_a_location
+    new_a_start new_a_location chunk BLOCK_SIZE
+  mbuf1 := old_a_len
+  mbuf2 := old_a_start
+  mbuf3 := new_a_start
+  inp := old_a_location
+  out := new_a_location
+  shape := [BLOCK_SIZE]
+  mwin1 := fun pid => pid
+  mwin2 := fun pid => pid
+  mwin3 := fun pid => pid
+  read := fun _pid _len olds _news i => olds + chunk * BLOCK_SIZE + i.1.val
+  write := fun _pid _len _olds news i => news + chunk * BLOCK_SIZE + i.1.val
+  mask := fun _pid len _olds _news i => i.1.val < len
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `var_len_copy.py`'s
+`var_len_copy_kernel_triton`, one-chunk slice: for every disjoint flat placement
+of the five buffers, every program id whose metadata cells and active data lanes
+are in bounds, **whatever** the three metadata scalars say, and every launch state
+whose source window holds `xs`, the translated pointer kernel terminates, every
+active destination lane holds the copied value `xs i`, and every other memory cell
+is unchanged.
+
+The three scalars are universally quantified and pinned by the launch state, so
+the mask (`lane < length`) and both window bases (`old_start` / `new_start`) are
+value-dependent — the shape the metadata skin exists for.
+
+Dimension-general in `BLOCK_SIZE` and the chunk index, with **no**
+side-condition: the destination window is `base + lane`, so the one-chunk
+readback's output-injectivity precondition is discharged by `destOffset_inj`
+rather than assumed. -/
+specification var_len_copy_one_chunk_io_correctness
+    (old_a_start old_a_len old_a_location new_a_start new_a_location : RegionName)
+    (chunk BLOCK_SIZE : Nat) :
+    varLenOneChunkIO old_a_start old_a_len old_a_location new_a_start
+        new_a_location chunk BLOCK_SIZE
+      ⊨ fun _pid _len _olds _news xs i => xs i := by
+  refine Meta3MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact var_len_one_chunk_flattenOk old_a_start old_a_len old_a_location
+      new_a_start new_a_location chunk BLOCK_SIZE
+  · intro bounds s len olds news hm1 hm2 hm3 hb1 hb2 hb3 hsrc hdst
+    -- substituting the three pins turns the metadata scalars back into the
+    -- `readMemValue` forms the per-slice lemma is phrased in, and `BlockState.pid`
+    -- is reducibly `pids 0`, so the two phrasings are the same term
+    subst hm1
+    subst hm2
+    subst hm3
+    exact var_len_one_chunk_traceSafe old_a_start old_a_len old_a_location
+      new_a_start new_a_location chunk BLOCK_SIZE bounds s hb1 hb2 hb3
+      (fun i hact => hsrc (i, PUnit.unit) hact)
+      (fun i hact => hdst (i, PUnit.unit) hact)
+  · intro s₀ len olds news xs hm1 hm2 hm3 hx
+    exact var_len_one_chunk_region_run old_a_start old_a_len old_a_location
+      new_a_start new_a_location chunk BLOCK_SIZE s₀ len olds news hm1 hm2 hm3 xs
+      (fun i hi => hx i hi)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.VarLenCopy
