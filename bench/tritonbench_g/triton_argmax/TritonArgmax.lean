@@ -21,10 +21,19 @@ grid.
 
 ## Proof architecture
 
-This is a multi-kernel port; there is no single top theorem. Each verified
-program has its own compute-facing correctness theorem:
+This is a multi-kernel port. The file's headline is the stage-1 `⊨` face, which
+pins **both** of that kernel's output channels at once plus the flat-memory
+placement; the other programs keep their per-write-map compute-facing theorems:
 
 ```
+argmax_kernel_1_io_correctness                 ← TOP THEOREM (`⊨`, value + index)
+  ├─ argmax1_flattenOk                           inside the flat-memory bridge
+  ├─ argmax1_traceSafe                           per-execution address safety
+  ├─ argmax1_terminates
+  ├─ argmax1_{value,index}_readback              per-channel readback
+  ├─ argmaxKernel1{Value,Index}Spec_eq_of        memory spec = value spec
+  └─ argmax1_frame                               cell-level frame (two stores)
+
 argmax_kernel_1_value_compute_correct            stage-1 max value channel
   └─ argmaxKernel1ValueSpec  (reduceMax over masked block)
 argmax_kernel_1_index_compute_correct            stage-1 argmax index channel
@@ -56,6 +65,7 @@ injectivity) are explicit hypotheses. The specs reference `Tile.reduceMax` /
 namespace VeriTile.Bench.TritonBenchG.TritonArgmax
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.ValueIndexTileKernelIO
 
 set_option maxHeartbeats 5000000
 
@@ -556,5 +566,260 @@ specification argmax_kernel_dim_single_block_compute_correct
   simpa [argmaxKernelDimSingleBlockSpec, argmaxKernelArgmaxSpec,
         argmaxKernelInputTile, argmaxKernelOutOffset, Tile.argBestDrop,
         TileShape.axisDim, TileShape.insertAxisIndex, hBN, hActive] using hScatter
+
+/-! ## ════════ `⊨` IO face for the first-stage argmax ════════
+
+The summaries above are stated per *declared write map*, one per output channel.
+This section restates the first stage on the audit-once IO surface
+`ValueIndexTileKernelIO.Implements` (`⊨`), which pins **both** stores at once plus
+the flat-memory placement.
+
+`argmax_kernel_1` is the reduce-with-indices genre: `tl.max(..., return_indices=True)`
+writes a real value to `mid_value[pid]` and an integer position to
+`mid_index[pid]`. Every other skin has a single `.float` output, so this kernel had
+no io face at all; the pair skin gives the value channel `.float` and the index
+channel `.nat` (the store writes a nat-typed cell).
+
+The read tile is the `BLOCK_SIZE` window at `pid·BLOCK_SIZE + i`, active on
+`< M`; **only lane 0 is write-active** and both its addresses are `pid` — the
+usual reduction signature (a single-cell store as a one-lane write mask over the
+read tile).
+
+A bonus: the per-write-map value summary needs `mid_value ≠ mid_index` explicitly,
+so the nat store cannot clobber the real one. On this surface that is already part
+of the allocation contract (`A.Disjoint` over the three-region list), so the
+headline carries no such hypothesis. -/
+
+section IOFace
+
+/-- Value-level first-stage max, over the loaded values. -/
+noncomputable def argmaxValueSpecOf (M BLOCK_SIZE pid : Nat)
+    (xs : TileIndex [BLOCK_SIZE] → ℝ) : ℝ :=
+  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+      ⟨fun idx =>
+        if pid * BLOCK_SIZE + idx.1.val < M then some (xs idx) else none⟩ with
+  | some out => WithBot.unbotD 0 (out.data PUnit.unit)
+  | none => 0
+
+/-- Value-level first-stage argmax (after the `+ pid · BLOCK_SIZE` shift). -/
+noncomputable def argmaxIndexSpecOf (M BLOCK_SIZE pid : Nat)
+    (xs : TileIndex [BLOCK_SIZE] → ℝ) : Nat :=
+  (Tile.argMaxDrop (shape := [BLOCK_SIZE]) ⟨0, by simp⟩
+    ⟨fun idx =>
+      if pid * BLOCK_SIZE + idx.1.val < M then some (xs idx) else none⟩).data
+      PUnit.unit
+    + pid * BLOCK_SIZE
+
+/-- The input tile is determined by the pinned lane values. -/
+theorem argmaxKernel1InputTile_eq_of (inp : RegionName) (M BLOCK_SIZE : Nat)
+    (s : BlockState) (xs : TileIndex [BLOCK_SIZE] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_SIZE], s.pid * BLOCK_SIZE + idx.1.val < M →
+      s.readMem inp (s.pid * BLOCK_SIZE + idx.1.val) = xs idx) :
+    argmaxKernel1InputTile s inp M BLOCK_SIZE
+      = ⟨fun idx : TileIndex [BLOCK_SIZE] =>
+          if s.pid * BLOCK_SIZE + idx.1.val < M then some (xs idx) else none⟩ := by
+  refine congrArg Tile.mk (funext fun idx => ?_)
+  simp only [argmaxKernel1InputTile]
+  by_cases h : s.pid * BLOCK_SIZE + idx.1.val < M
+  · rw [if_pos h, if_pos h, hx idx h]
+  · rw [if_neg h, if_neg h]
+
+/-- Memory-level and value-level value specs agree under the pins. -/
+theorem argmaxKernel1ValueSpec_eq_of (inp : RegionName) (M BLOCK_SIZE : Nat)
+    (s : BlockState) (xs : TileIndex [BLOCK_SIZE] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_SIZE], s.pid * BLOCK_SIZE + idx.1.val < M →
+      s.readMem inp (s.pid * BLOCK_SIZE + idx.1.val) = xs idx) :
+    argmaxKernel1ValueSpec s inp M BLOCK_SIZE
+      = argmaxValueSpecOf M BLOCK_SIZE s.pid xs := by
+  rw [argmaxKernel1ValueSpec, argmaxValueSpecOf,
+    argmaxKernel1InputTile_eq_of inp M BLOCK_SIZE s xs hx]
+
+/-- Memory-level and value-level index specs agree under the pins. -/
+theorem argmaxKernel1IndexSpec_eq_of (inp : RegionName) (M BLOCK_SIZE : Nat)
+    (s : BlockState) (xs : TileIndex [BLOCK_SIZE] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_SIZE], s.pid * BLOCK_SIZE + idx.1.val < M →
+      s.readMem inp (s.pid * BLOCK_SIZE + idx.1.val) = xs idx) :
+    argmaxKernel1IndexSpec s inp M BLOCK_SIZE
+      = argmaxIndexSpecOf M BLOCK_SIZE s.pid xs := by
+  rw [argmaxKernel1IndexSpec, argmaxIndexSpecOf,
+    argmaxKernel1InputTile_eq_of inp M BLOCK_SIZE s xs hx]
+
+/-- The first stage sits inside the flat-memory bridge's covered fragment. -/
+theorem argmax1_flattenOk (inp mid_value : RegionName)
+    (mid_index : Region .int) (M BLOCK_SIZE : Nat) :
+    ((argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE
+      Bool.false).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [argmax_kernel_1, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  -- the `reduceMax` / `argMax` nodes: `Op.FlattenOk`'s per-case equations do not
+  -- fire under `simp` on them, but `.eq_def` is fine on this small residual
+  refine ⟨?_, ?_⟩ <;> simp [Op.FlattenOk.eq_def]
+
+/-- Termination of the first stage (a non-degenerate reduction axis is genuinely
+needed: with `BLOCK_SIZE = 0` the `tl.max` has no axis and the kernel faults). -/
+theorem argmax1_terminates (inp mid_value : RegionName)
+    (mid_index : Region .int) (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE)
+    (s : BlockState) :
+    ∃ s1, exec (argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false)
+      s = some s1 := by
+  simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+    Tile.argMaxDrop, Tile.argBestDrop, TileShape.axisDim, TileShape.eraseAxis,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt, hB]
+
+/-- Cell-level frame of the first stage: the only cells it touches are
+`mid_value[pid]` and `mid_index[pid]`. -/
+theorem argmax1_frame (inp mid_value : RegionName) (mid_index : Region .int)
+    (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE) (s s' : BlockState)
+    (hExec : exec (argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE
+      Bool.false) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ mid_value ∨ o ≠ s.pid) →
+      (r ≠ (Region.cast mid_index : RegionName) ∨ o ≠ s.pid) →
+      s'.mem r o = s.mem r o := by
+  intro r o hv hi
+  simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+    Tile.argMaxDrop, Tile.argBestDrop, TileShape.axisDim, TileShape.eraseAxis,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt, hB] at hExec
+  subst hExec
+  show (if r = (Region.cast mid_index : RegionName) ∧ o = s.pids 0 then _
+      else _) = _
+  rw [if_neg (fun hc => by rcases hi with h | h; exacts [h hc.1, h hc.2]),
+    BlockState.writeMem_mem,
+    if_neg (fun hc => by rcases hv with h | h; exacts [h hc.1, h hc.2])]
+  simp
+
+/-- Per-execution safety walk for the first stage. -/
+theorem argmax1_traceSafe (inp mid_value : RegionName)
+    (mid_index : Region .int) (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ i : Fin BLOCK_SIZE, s.pid * BLOCK_SIZE + i.val < M →
+      s.pid * BLOCK_SIZE + i.val < bounds inp)
+    (hv : s.pid < bounds mid_value)
+    (hi : s.pid < bounds (Region.cast mid_index : RegionName)) :
+    ((argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE
+      Bool.false).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, argmax_kernel_1, Stmt.TraceSafeList, Stmt.TraceSafe,
+    Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe,
+    MemAccess.SafeAt, MemAccess.MemorySafe, memAccessMemorySafe,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    Op.PointerAddressesSafeOn, Op.MemorySafe, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, Option.bind, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax,
+    Tile.reduceMaxDrop, Tile.argMaxDrop, Tile.argBestDrop, TileShape.axisDim,
+    TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, hB]
+  -- what survives: the load window's bound, the `reduceMax` / `argMax` nodes
+  -- (simp cannot peel them), and the two single-cell store bounds
+  refine ⟨fun a ha => hin a ha, ⟨?_, ?_⟩, hv, hi⟩ <;> simp [Op.SafeAt.eq_def]
+
+/-- Per-lane value readback of the first stage from a successful run. The
+`hRegions` hypothesis is the same one the per-write-map value summary takes: it
+stops the nat index store from clobbering the real value store. -/
+theorem argmax1_value_readback (inp mid_value : RegionName)
+    (mid_index : Region .int) (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE)
+    (hRegions : mid_value ≠ (Region.cast mid_index : RegionName))
+    (s s' : BlockState)
+    (hExec : exec (argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE
+      Bool.false) s = some s') :
+    s'.readMem mid_value s.pid = argmaxKernel1ValueSpec s inp M BLOCK_SIZE := by
+  simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+    TileShape.axisDim, TileShape.eraseAxis, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt, argmaxKernel1ValueSpec, argmaxKernel1InputTile,
+    hB] at hExec ⊢
+  cases hExec
+  rw [BlockState.writeMemTyped_nat_readMem_of_ne _ _ _ _ _ _ (by
+    intro ⟨h1, _⟩
+    exact hRegions h1)]
+  simp
+  congr
+
+/-- Per-lane index readback of the first stage from a successful run. -/
+theorem argmax1_index_readback (inp mid_value : RegionName)
+    (mid_index : Region .int) (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE)
+    (s s' : BlockState)
+    (hExec : exec (argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE
+      Bool.false) s = some s') :
+    s'.readMemValue .nat (Region.cast mid_index : RegionName) s.pid
+      = argmaxKernel1IndexSpec s inp M BLOCK_SIZE := by
+  simp [exec, argmax_kernel_1, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop,
+    Tile.argMaxDrop, Tile.argBestDrop, TileShape.axisDim, TileShape.eraseAxis,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    argmaxKernel1IndexSpec, argmaxKernel1InputTile, hB] at hExec ⊢
+  cases hExec
+  simp [BlockState.writeMemTyped_nat_readMemValue_nat]
+
+/-- IO signature of the first stage on the **value + index** surface: the
+`BLOCK_SIZE` read window is active on `< M`, and only lane `0` is write-active,
+writing `mid_value[pid]` and `mid_index[pid]`. -/
+def argmax1IO (inp mid_value : RegionName) (mid_index : Region .int)
+    (M BLOCK_SIZE : Nat) : ValueIndexTileKernelIO where
+  kernel := argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false
+  inp := inp
+  outVal := mid_value
+  outIdx := mid_index
+  shape := [BLOCK_SIZE]
+  read := fun pid idx => pid * BLOCK_SIZE + idx.1.val
+  writeVal := fun pid _ => pid
+  writeIdx := fun pid _ => pid
+  mask := fun pid idx => pid * BLOCK_SIZE + idx.1.val < M
+  writeMask := fun _pid idx => idx.1.val = 0
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `triton_argmax.py`'s
+`argmax_kernel_1` (`INT64_INDEX = false`): for every disjoint flat placement of
+`inp` / `mid_value` / `mid_index`, every program id whose active lanes are in
+bounds, and every launch state whose input window holds `xs`, the translated
+pointer kernel terminates, `mid_value[pid]` holds the genuine block max and
+`mid_index[pid]` the genuine block argmax (after the `+ pid · BLOCK_SIZE` shift,
+with `other=-float("inf")` modeled as `⊥`), and every other memory cell is
+unchanged.
+
+This is the first **value + index pair** on an `io ⊨ f` face: two outputs of
+*different channel types* — `.float` and `.nat` — pinned by one relation.
+
+Dimension-general in `M` and `BLOCK_SIZE`. Honest side-conditions:
+`0 < BLOCK_SIZE` (an empty reduction axis makes `tl.max` fault, and it is the
+write-active lane witness) and `mid_value ≠ mid_index` (the nat index store must
+not clobber the real value store) — the same pair the per-write-map summaries
+carry. -/
+specification argmax_kernel_1_io_correctness (inp mid_value : RegionName)
+    (mid_index : Region .int) (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE)
+    (hRegions : mid_value ≠ (Region.cast mid_index : RegionName)) :
+    ValueIndexTileKernelIO.Implements
+      (argmax1IO inp mid_value mid_index M BLOCK_SIZE)
+      (fun pid xs _ => argmaxValueSpecOf M BLOCK_SIZE pid xs)
+      (fun pid xs _ => argmaxIndexSpecOf M BLOCK_SIZE pid xs) := by
+  refine ValueIndexTileKernelIO.Implements.intro _ ?_ ?_ ?_
+  · exact argmax1_flattenOk inp mid_value mid_index M BLOCK_SIZE
+  · intro bounds s h1 h2 h3
+    exact argmax1_traceSafe inp mid_value mid_index M BLOCK_SIZE hB bounds s
+      (fun i hi => h1 (i, PUnit.unit) hi) (h2 (⟨0, hB⟩, PUnit.unit) rfl)
+      (h3 (⟨0, hB⟩, PUnit.unit) rfl)
+  · intro s₀ xs hin
+    obtain ⟨s1, hexec⟩ := argmax1_terminates inp mid_value mid_index M BLOCK_SIZE
+      hB s₀
+    refine ⟨s1, hexec, ?_, ?_, ?_⟩
+    · intro _ _
+      show s1.readMem mid_value s₀.pid = _
+      rw [argmax1_value_readback inp mid_value mid_index M BLOCK_SIZE hB
+          hRegions s₀ s1 hexec,
+        argmaxKernel1ValueSpec_eq_of inp M BLOCK_SIZE s₀ xs
+          (fun idx hidx => hin idx hidx)]
+    · intro _ _
+      show s1.readMemValue .nat (Region.cast mid_index : RegionName) s₀.pid = _
+      rw [argmax1_index_readback inp mid_value mid_index M BLOCK_SIZE hB s₀ s1
+          hexec,
+        argmaxKernel1IndexSpec_eq_of inp M BLOCK_SIZE s₀ xs
+          (fun idx hidx => hin idx hidx)]
+    · intro r o hv hi
+      exact argmax1_frame inp mid_value mid_index M BLOCK_SIZE hB s₀ s1 hexec r o
+        (hv (⟨0, hB⟩, PUnit.unit) rfl) (hi (⟨0, hB⟩, PUnit.unit) rfl)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.TritonArgmax
