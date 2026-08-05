@@ -64,6 +64,7 @@ contributions.
 namespace VeriTile.Bench.TritonBenchG.LayerNormOps
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedTileKernelIO₁
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -5339,5 +5340,194 @@ theorem layer_norm_bwd_surface_zero_rows_dw_zero_compute_correct
 
 end Correct_without_Rounding
 
+
+/-! ## ════════ `⊨` IO face for the two forward scalar stores ════════
+
+The summaries above are stated per *declared write map*. This section restates the
+`Mean` / `Rstd` row stores on the audit-once IO surface
+`MaskedTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat memory**
+placement.
+
+No new skin was needed: a **single-cell** kernel is the tile skin at `shape := []`.
+`TileIndex []` is `PUnit`, so the lane set is exactly one lane and the window
+functions degenerate to the one address this program owns. -/
+
+section IOFace
+
+/-- Cell-level frame of a single-cell store. -/
+private theorem writeMem_frame (region : RegionName) (off : Nat) (v : ℝ)
+    (s : BlockState) (r : RegionName) (o : Nat) (h : r ≠ region ∨ o ≠ off) :
+    (s.writeMem region off v).mem r o = s.mem r o := by
+  rw [BlockState.writeMem_mem, if_neg ?_]
+  rintro ⟨h1, h2⟩
+  rcases h with h | h
+  · exact h h1
+  · exact h h2
+
+/-! ### `layer_norm_ops_fwd_mean_store_slice` -/
+
+theorem fwd_mean_store_flattenOk (MeanPre Mean : RegionName) :
+    ((layer_norm_ops_fwd_mean_store_slice MeanPre Mean).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [layer_norm_ops_fwd_mean_store_slice, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+theorem fwd_mean_store_terminates (MeanPre Mean : RegionName) (s : BlockState) :
+    ∃ s1, exec (layer_norm_ops_fwd_mean_store_slice MeanPre Mean) s = some s1 := by
+  simp [exec, layer_norm_ops_fwd_mean_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add]
+
+theorem fwd_mean_store_frame (MeanPre Mean : RegionName) (s s' : BlockState)
+    (hExec : exec (layer_norm_ops_fwd_mean_store_slice MeanPre Mean) s = some s') :
+    ∀ (r : RegionName) (o : Nat), (r ≠ Mean ∨ o ≠ meanRowOffset s) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, layer_norm_ops_fwd_mean_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add] at hExec
+  subst hExec
+  rw [writeMem_frame Mean _ _ _ r o (by
+    rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr h)]
+  simp
+
+theorem fwd_mean_store_traceSafe (MeanPre Mean : RegionName) (bounds : RegionBounds) (s : BlockState)
+    (hin : meanRowOffset s < bounds MeanPre)
+    (hout : meanRowOffset s < bounds Mean) :
+    ((layer_norm_ops_fwd_mean_store_slice MeanPre Mean).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, layer_norm_ops_fwd_mean_store_slice, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add]
+  exact ⟨hin, hout⟩
+
+theorem fwd_mean_store_region_run (MeanPre Mean : RegionName) (s₀ : BlockState)
+    (xs : TileIndex ([] : TileShape) → ℝ)
+    (hx : s₀.readMem MeanPre (meanRowOffset s₀) = xs PUnit.unit) :
+    ∃ s1, exec (layer_norm_ops_fwd_mean_store_slice MeanPre Mean) s₀ = some s1
+      ∧ s1.readMem Mean (meanRowOffset s₀) = xs PUnit.unit
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Mean ∨ o ≠ meanRowOffset s₀) → s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := fwd_mean_store_terminates MeanPre Mean s₀
+  refine ⟨s1, hexec, ?_, fwd_mean_store_frame MeanPre Mean s₀ s1 hexec⟩
+  rw [layer_norm_ops_fwd_mean_store_slice_correct MeanPre Mean s₀ s1 hexec, meanStoreSpec]
+  exact hx
+
+/-- IO signature of `layer_norm_ops_fwd_mean_store_slice` at `shape := []`. -/
+def fwd_mean_storeIO (MeanPre Mean : RegionName) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean
+  inp := MeanPre
+  out := Mean
+  shape := []
+  read := fun pid _ => pid
+  write := fun pid _ => pid
+  mask := fun _pid _ => True
+
+/-! ### `layer_norm_ops_fwd_rstd_store_slice` -/
+
+theorem fwd_rstd_store_flattenOk (RstdPre Rstd : RegionName) :
+    ((layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [layer_norm_ops_fwd_rstd_store_slice, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+theorem fwd_rstd_store_terminates (RstdPre Rstd : RegionName) (s : BlockState) :
+    ∃ s1, exec (layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd) s = some s1 := by
+  simp [exec, layer_norm_ops_fwd_rstd_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add]
+
+theorem fwd_rstd_store_frame (RstdPre Rstd : RegionName) (s s' : BlockState)
+    (hExec : exec (layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd) s = some s') :
+    ∀ (r : RegionName) (o : Nat), (r ≠ Rstd ∨ o ≠ meanRowOffset s) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, layer_norm_ops_fwd_rstd_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add] at hExec
+  subst hExec
+  rw [writeMem_frame Rstd _ _ _ r o (by
+    rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr h)]
+  simp
+
+theorem fwd_rstd_store_traceSafe (RstdPre Rstd : RegionName) (bounds : RegionBounds) (s : BlockState)
+    (hin : meanRowOffset s < bounds RstdPre)
+    (hout : meanRowOffset s < bounds Rstd) :
+    ((layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, layer_norm_ops_fwd_rstd_store_slice, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add]
+  exact ⟨hin, hout⟩
+
+theorem fwd_rstd_store_region_run (RstdPre Rstd : RegionName) (s₀ : BlockState)
+    (xs : TileIndex ([] : TileShape) → ℝ)
+    (hx : s₀.readMem RstdPre (meanRowOffset s₀) = xs PUnit.unit) :
+    ∃ s1, exec (layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd) s₀ = some s1
+      ∧ s1.readMem Rstd (meanRowOffset s₀) = xs PUnit.unit
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Rstd ∨ o ≠ meanRowOffset s₀) → s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := fwd_rstd_store_terminates RstdPre Rstd s₀
+  refine ⟨s1, hexec, ?_, fwd_rstd_store_frame RstdPre Rstd s₀ s1 hexec⟩
+  rw [layer_norm_ops_fwd_rstd_store_slice_correct RstdPre Rstd s₀ s1 hexec, rstdStoreSpec]
+  exact hx
+
+/-- IO signature of `layer_norm_ops_fwd_rstd_store_slice` at `shape := []`. -/
+def fwd_rstd_storeIO (RstdPre Rstd : RegionName) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd
+  inp := RstdPre
+  out := Rstd
+  shape := []
+  read := fun pid _ => pid
+  write := fun pid _ => pid
+  mask := fun _pid _ => True
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `layer_norm_ops.py`'s two forward scalar
+row stores: for every disjoint flat placement of the source and destination row
+buffers, every program id whose row cell is in bounds, and every launch state whose
+source cell holds `xs`, each slice terminates, the destination row cell holds `xs`,
+and every other memory cell is unchanged.
+
+Both are the tile skin at `shape := []` — a single-cell copy is the degenerate
+masked tile copy — so no new library surface was needed. -/
+specification layer_norm_ops_scalar_stores_io_correctness
+    (MeanPre Mean RstdPre Rstd : RegionName) :
+    (fwd_mean_storeIO MeanPre Mean ⊨ fun _pid xs _ => xs PUnit.unit) ∧
+    (fwd_rstd_storeIO RstdPre Rstd ⊨ fun _pid xs _ => xs PUnit.unit) := by
+  constructor
+  · refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+    · exact fwd_mean_store_flattenOk MeanPre Mean
+    · intro bounds s h1 h2
+      exact fwd_mean_store_traceSafe MeanPre Mean bounds s
+        (h1 PUnit.unit trivial) (h2 PUnit.unit trivial)
+    · intro s₀ xs hin
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        fwd_mean_store_region_run MeanPre Mean s₀ xs (hin PUnit.unit trivial)
+      exact ⟨s1, hexec, fun _ _ => hval,
+        fun r o hcond => hframe r o (by
+          rcases hcond with h | h
+          · exact Or.inl h
+          · exact Or.inr (h PUnit.unit trivial))⟩
+  · refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+    · exact fwd_rstd_store_flattenOk RstdPre Rstd
+    · intro bounds s h1 h2
+      exact fwd_rstd_store_traceSafe RstdPre Rstd bounds s
+        (h1 PUnit.unit trivial) (h2 PUnit.unit trivial)
+    · intro s₀ xs hin
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        fwd_rstd_store_region_run RstdPre Rstd s₀ xs (hin PUnit.unit trivial)
+      exact ⟨s1, hexec, fun _ _ => hval,
+        fun r o hcond => hframe r o (by
+          rcases hcond with h | h
+          · exact Or.inl h
+          · exact Or.inr (h PUnit.unit trivial))⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.LayerNormOps

@@ -58,6 +58,7 @@ Output/output disjointness among `Y`, `Mean`, `RSTD` is assumed (`Y ≠ Mean`,
 namespace VeriTile.Bench.TritonBenchG.LayerNormLiger
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedTileKernelIO₁
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -630,5 +631,212 @@ specification layer_norm_liger_forward_output_summary
   · exact layer_norm_liger_forward_all_outputs_compute_correct Y X W B
       Mean RSTD Y_row_stride X_row_stride Mean_row_stride RSTD_row_stride
       n_cols BLOCK_SIZE eps s hYMean hYRSTD hMeanY hMeanRSTD hRSTDY hOutInj
+
+/-! ## ════════ `⊨` IO face for the two scalar store slices ════════
+
+The summaries above are stated per *declared write map*. This section restates both
+scalar-copy slices on the audit-once IO surface
+`MaskedTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat memory**
+placement.
+
+No new skin was needed, and that is the point worth recording: a **single-cell**
+kernel is the tile skin at `shape := []`. `TileIndex []` is `PUnit`, so the lane set
+is exactly one lane (`TileShape.allIndices [] = [PUnit.unit]`) and the window
+functions degenerate to "the one address this program owns". A scalar copy is the
+degenerate case of a masked tile copy, not a separate genre. -/
+
+section IOFace
+
+/-- Cell-level frame of a single-cell store. -/
+private theorem writeMem_frame (region : RegionName) (off : Nat) (v : ℝ)
+    (s : BlockState) (r : RegionName) (o : Nat) (h : r ≠ region ∨ o ≠ off) :
+    (s.writeMem region off v).mem r o = s.mem r o := by
+  rw [BlockState.writeMem_mem, if_neg ?_]
+  rintro ⟨h1, h2⟩
+  rcases h with h | h
+  · exact h h1
+  · exact h h2
+
+/-! ### Mean Store -/
+
+theorem mean_store_flattenOk (MeanPre Mean : RegionName) (Mean_row_stride : Nat) :
+    ((layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [layer_norm_liger_forward_mean_store_slice, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+theorem mean_store_terminates (MeanPre Mean : RegionName) (Mean_row_stride : Nat) (s : BlockState) :
+    ∃ s1, exec (layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride) s = some s1 := by
+  simp [exec, layer_norm_liger_forward_mean_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul]
+
+theorem mean_store_frame (MeanPre Mean : RegionName) (Mean_row_stride : Nat) (s s' : BlockState)
+    (hExec : exec (layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Mean ∨ o ≠ meanRowOffset s Mean_row_stride) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, layer_norm_liger_forward_mean_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul] at hExec
+  subst hExec
+  rw [writeMem_frame Mean _ _ _ r o (by
+    rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr h)]
+  simp
+
+theorem mean_store_traceSafe (MeanPre Mean : RegionName) (Mean_row_stride : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : meanRowOffset s Mean_row_stride < bounds MeanPre)
+    (hout : meanRowOffset s Mean_row_stride < bounds Mean) :
+    ((layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, layer_norm_liger_forward_mean_store_slice, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add, NumericDType.mul]
+  exact ⟨hin, hout⟩
+
+theorem mean_store_region_run (MeanPre Mean : RegionName) (Mean_row_stride : Nat) (s₀ : BlockState)
+    (xs : TileIndex ([] : TileShape) → ℝ)
+    (hx : s₀.readMem MeanPre (meanRowOffset s₀ Mean_row_stride) = xs PUnit.unit) :
+    ∃ s1, exec (layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride) s₀ = some s1
+      ∧ s1.readMem Mean (meanRowOffset s₀ Mean_row_stride) = xs PUnit.unit
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Mean ∨ o ≠ meanRowOffset s₀ Mean_row_stride) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := mean_store_terminates MeanPre Mean Mean_row_stride s₀
+  refine ⟨s1, hexec, ?_, mean_store_frame MeanPre Mean Mean_row_stride s₀ s1 hexec⟩
+  rw [layer_norm_liger_forward_mean_store_slice_correct MeanPre Mean Mean_row_stride s₀ s1 hexec, meanStoreSpec]
+  exact hx
+
+/-- IO signature of `layer_norm_liger_forward_mean_store_slice` at `shape := []`: the single lane owns the one row
+cell this program copies. -/
+def mean_storeIO (MeanPre Mean : RegionName) (Mean_row_stride : Nat) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride
+  inp := MeanPre
+  out := Mean
+  shape := []
+  read := fun pid _ => pid * Mean_row_stride
+  write := fun pid _ => pid * Mean_row_stride
+  mask := fun _pid _ => True
+
+/-! ### Rstd Store -/
+
+theorem rstd_store_flattenOk (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) :
+    ((layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [layer_norm_liger_forward_rstd_store_slice, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+theorem rstd_store_terminates (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) (s : BlockState) :
+    ∃ s1, exec (layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride) s = some s1 := by
+  simp [exec, layer_norm_liger_forward_rstd_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul]
+
+theorem rstd_store_frame (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) (s s' : BlockState)
+    (hExec : exec (layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ RSTD ∨ o ≠ meanRowOffset s RSTD_row_stride) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, layer_norm_liger_forward_rstd_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul] at hExec
+  subst hExec
+  rw [writeMem_frame RSTD _ _ _ r o (by
+    rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr h)]
+  simp
+
+theorem rstd_store_traceSafe (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : meanRowOffset s RSTD_row_stride < bounds RSTDPre)
+    (hout : meanRowOffset s RSTD_row_stride < bounds RSTD) :
+    ((layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, layer_norm_liger_forward_rstd_store_slice, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, NumericDType.add, NumericDType.mul]
+  exact ⟨hin, hout⟩
+
+theorem rstd_store_region_run (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) (s₀ : BlockState)
+    (xs : TileIndex ([] : TileShape) → ℝ)
+    (hx : s₀.readMem RSTDPre (meanRowOffset s₀ RSTD_row_stride) = xs PUnit.unit) :
+    ∃ s1, exec (layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride) s₀ = some s1
+      ∧ s1.readMem RSTD (meanRowOffset s₀ RSTD_row_stride) = xs PUnit.unit
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ RSTD ∨ o ≠ meanRowOffset s₀ RSTD_row_stride) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := rstd_store_terminates RSTDPre RSTD RSTD_row_stride s₀
+  refine ⟨s1, hexec, ?_, rstd_store_frame RSTDPre RSTD RSTD_row_stride s₀ s1 hexec⟩
+  rw [layer_norm_liger_forward_rstd_store_slice_correct RSTDPre RSTD RSTD_row_stride s₀ s1 hexec, rstdStoreSpec]
+  exact hx
+
+/-- IO signature of `layer_norm_liger_forward_rstd_store_slice` at `shape := []`: the single lane owns the one row
+cell this program copies. -/
+def rstd_storeIO (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride
+  inp := RSTDPre
+  out := RSTD
+  shape := []
+  read := fun pid _ => pid * RSTD_row_stride
+  write := fun pid _ => pid * RSTD_row_stride
+  mask := fun _pid _ => True
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `layer_norm_liger.py`'s two scalar row
+stores: for every disjoint flat placement of the source and destination row
+buffers, every program id whose row cell is in bounds, and every launch state whose
+source cell holds `xs`, each slice terminates, the destination row cell holds `xs`,
+and every other memory cell is unchanged.
+
+Both are the tile skin at `shape := []` — a single-cell copy is the degenerate
+masked tile copy — so no new library surface was needed. Dimension-general in the
+row stride, with no side-condition. -/
+specification layer_norm_liger_scalar_stores_io_correctness
+    (MeanPre Mean RSTDPre RSTD : RegionName)
+    (Mean_row_stride RSTD_row_stride : Nat) :
+    (mean_storeIO MeanPre Mean Mean_row_stride
+      ⊨ fun _pid xs _ => xs PUnit.unit) ∧
+    (rstd_storeIO RSTDPre RSTD RSTD_row_stride
+      ⊨ fun _pid xs _ => xs PUnit.unit) := by
+  constructor
+  · refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+    · exact mean_store_flattenOk MeanPre Mean Mean_row_stride
+    · intro bounds s h1 h2
+      exact mean_store_traceSafe MeanPre Mean Mean_row_stride bounds s
+        (h1 PUnit.unit trivial) (h2 PUnit.unit trivial)
+    · intro s₀ xs hin
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        mean_store_region_run MeanPre Mean Mean_row_stride s₀ xs
+          (hin PUnit.unit trivial)
+      exact ⟨s1, hexec, fun _ _ => hval,
+        fun r o hcond => hframe r o (by
+          rcases hcond with h | h
+          · exact Or.inl h
+          · exact Or.inr (h PUnit.unit trivial))⟩
+  · refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+    · exact rstd_store_flattenOk RSTDPre RSTD RSTD_row_stride
+    · intro bounds s h1 h2
+      exact rstd_store_traceSafe RSTDPre RSTD RSTD_row_stride bounds s
+        (h1 PUnit.unit trivial) (h2 PUnit.unit trivial)
+    · intro s₀ xs hin
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        rstd_store_region_run RSTDPre RSTD RSTD_row_stride s₀ xs
+          (hin PUnit.unit trivial)
+      exact ⟨s1, hexec, fun _ _ => hval,
+        fun r o hcond => hframe r o (by
+          rcases hcond with h | h
+          · exact Or.inl h
+          · exact Or.inr (h PUnit.unit trivial))⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.LayerNormLiger
