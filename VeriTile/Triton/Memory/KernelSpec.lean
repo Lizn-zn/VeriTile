@@ -16311,4 +16311,258 @@ theorem Implements.intro (io : MaskedTileKernelIO₁)
 
 end MaskedTileKernelIO₁
 
+
+/-! ## Tile-indexed masked IO, two inputs and two program axes
+
+`MaskedTile2DKernelIO₂` is to `Masked2DKernelIO₂` what `MaskedTileKernelIO₁` is
+to `MaskedKernelIO₁`: same two-pid, two-input, lane-masked Hoare triple, with
+lanes ranging over `TileIndex shape` instead of `Fin B`. `Masked2DKernelIO₂`
+already carries **full address functions** (not `base + lane`), so the only
+thing this adds is the lane type — which is exactly what a genuine 2-D tile
+kernel needs: no `Fin (BLOCK_M * BLOCK_N)` ↔ `TileIndex [BLOCK_M, BLOCK_N]`
+flattening anywhere in the statement or the proof.
+
+The second input keeps `Masked2DKernelIO₂`'s independent `read2` / `read2Mask`
+pair, which is what makes an **unmasked broadcast scalar** expressible: point
+`read2` at the scalar's offset for every lane and take `read2Mask := fun _ _ _ =>
+True`, and the pin hypothesis says every lane of `ys` holds that one cell.
+
+Scratch channels are omitted, as in `MaskedTileKernelIO₁`. -/
+
+/-- Two-input / one-output masked IO with two program axes, whose lanes are
+**tile indices** and whose windows are full address functions. -/
+structure MaskedTile2DKernelIO₂ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- First input buffer. -/
+  in1 : RegionName
+  /-- Second input buffer. -/
+  in2 : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- The tile footprint each program instance owns. -/
+  shape : TileShape
+  /-- Lane `i`'s `in1` read address for program `(pid₀, pid₁)`. -/
+  read1 : Nat → Nat → TileIndex shape → Nat
+  /-- Lane `i`'s `in2` read address. -/
+  read2 : Nat → Nat → TileIndex shape → Nat
+  /-- Lane `i`'s write address. -/
+  write : Nat → Nat → TileIndex shape → Nat
+  /-- Program `(pid₀, pid₁)`'s **`in1` read-active** lanes. -/
+  mask : Nat → Nat → TileIndex shape → Prop
+  /-- Program `(pid₀, pid₁)`'s **`in2` read-active** lanes; defaults to `mask`.
+  A broadcast scalar read is the `fun _ _ _ => True` instance. -/
+  read2Mask : Nat → Nat → TileIndex shape → Prop := mask
+  /-- Program `(pid₀, pid₁)`'s **write-active** lanes; defaults to `mask`. -/
+  writeMask : Nat → Nat → TileIndex shape → Prop := mask
+
+namespace MaskedTile2DKernelIO₂
+
+/-- `io.Implements f` — the tile-indexed sibling of
+`Masked2DKernelIO₂.Implements`. The spec `f` takes both pids for the same
+reason that family's does: on a tiled axis a per-block value is irreducibly
+block-dependent, so a pid-independent spec would be falsifiable. Pid-independent
+kernels ignore the two arguments. -/
+def Implements (io : MaskedTile2DKernelIO₂)
+    (f : Nat → Nat → (TileIndex io.shape → ℝ) → (TileIndex io.shape → ℝ) →
+      TileIndex io.shape → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.in1, io.in2, io.out] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid₀ pid₁ : Nat,
+    (∀ i : TileIndex io.shape, io.mask pid₀ pid₁ i →
+      io.read1 pid₀ pid₁ i < A.extent io.in1) →
+    (∀ i : TileIndex io.shape, io.read2Mask pid₀ pid₁ i →
+      io.read2 pid₀ pid₁ i < A.extent io.in2) →
+    (∀ i : TileIndex io.shape, io.writeMask pid₀ pid₁ i →
+      io.write pid₀ pid₁ i < A.extent io.out) →
+  ∀ (xs ys : TileIndex io.shape → ℝ) (s₀ : BlockState),
+    s₀.pids 0 = pid₀ →
+    s₀.pids 1 = pid₁ →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ i : TileIndex io.shape, io.mask pid₀ pid₁ i →
+      s₀.readMem io.in1 (io.read1 pid₀ pid₁ i) = xs i) →
+    (∀ i : TileIndex io.shape, io.read2Mask pid₀ pid₁ i →
+      s₀.readMem io.in2 (io.read2 pid₀ pid₁ i) = ys i) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ i : TileIndex io.shape, io.writeMask pid₀ pid₁ i →
+          s'.readMem A.flat (A.addr io.out (io.write pid₀ pid₁ i))
+            = f pid₀ pid₁ xs ys i)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ∀ i : TileIndex io.shape, io.writeMask pid₀ pid₁ i →
+              o' ≠ A.addr io.out (io.write pid₀ pid₁ i)) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => MaskedTile2DKernelIO₂.Implements
+
+/-- Embed into the unified core: two float tile channels with independent
+windows and masks, one output, no scratch. Lanes are enumerated by
+`TileShape.allIndices`. -/
+private def toU (io : MaskedTile2DKernelIO₂) : UKernelIO where
+  kernel := io.kernel
+  nIn := 2
+  nOut := 1
+  nScr := 0
+  bufs := [io.in1, io.in2, io.out]
+  ity := fun _ => .float
+  iarity := fun _ => (TileShape.allIndices io.shape).length
+  ibuf := fun i => match i with
+    | ⟨0, _⟩ => io.in1
+    | _ => io.in2
+  oty := fun _ => .float
+  oarity := fun _ => (TileShape.allIndices io.shape).length
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun i _ p₀ p₁ _ => match i with
+    | ⟨0, _⟩ => fun j => io.read1 p₀ p₁ ((TileShape.allIndices io.shape).get j)
+    | _ => fun j => io.read2 p₀ p₁ ((TileShape.allIndices io.shape).get j)
+  imask := fun i _ p₀ p₁ _ => match i with
+    | ⟨0, _⟩ => fun j => io.mask p₀ p₁ ((TileShape.allIndices io.shape).get j)
+    | _ => fun j =>
+        io.read2Mask p₀ p₁ ((TileShape.allIndices io.shape).get j)
+  owin := fun _ _ p₀ p₁ _ j =>
+    io.write p₀ p₁ ((TileShape.allIndices io.shape).get j)
+  omask := fun _ _ p₀ p₁ _ j =>
+    io.writeMask p₀ p₁ ((TileShape.allIndices io.shape).get j)
+  swin := fun t _ _ _ _ _ => t.elim0
+  smask := fun t _ _ _ _ _ => t.elim0
+
+/-- Assembly lemma — the tile-indexed sibling of
+`Masked2DKernelIO₂.Implements.intro`. Same three obligations; every lane-wise
+obligation ranges over `TileIndex io.shape` and every address comes from a
+window *function*, so nothing forces a contiguous footprint. -/
+theorem Implements.intro (io : MaskedTile2DKernelIO₂)
+    {f : Nat → Nat → (TileIndex io.shape → ℝ) → (TileIndex io.shape → ℝ) →
+      TileIndex io.shape → ℝ}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      (∀ i : TileIndex io.shape, io.mask (s.pids 0) (s.pids 1) i →
+        io.read1 (s.pids 0) (s.pids 1) i < bounds io.in1) →
+      (∀ i : TileIndex io.shape, io.read2Mask (s.pids 0) (s.pids 1) i →
+        io.read2 (s.pids 0) (s.pids 1) i < bounds io.in2) →
+      (∀ i : TileIndex io.shape, io.writeMask (s.pids 0) (s.pids 1) i →
+        io.write (s.pids 0) (s.pids 1) i < bounds io.out) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (xs ys : TileIndex io.shape → ℝ),
+      (∀ i : TileIndex io.shape, io.mask (s₀.pids 0) (s₀.pids 1) i →
+        s₀.readMem io.in1 (io.read1 (s₀.pids 0) (s₀.pids 1) i) = xs i) →
+      (∀ i : TileIndex io.shape, io.read2Mask (s₀.pids 0) (s₀.pids 1) i →
+        s₀.readMem io.in2 (io.read2 (s₀.pids 0) (s₀.pids 1) i) = ys i) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ i : TileIndex io.shape, io.writeMask (s₀.pids 0) (s₀.pids 1) i →
+            s1.readMem io.out (io.write (s₀.pids 0) (s₀.pids 1) i)
+              = f (s₀.pids 0) (s₀.pids 1) xs ys i)
+        ∧ (∀ r o,
+            (r ≠ io.out ∨
+              ∀ i : TileIndex io.shape, io.writeMask (s₀.pids 0) (s₀.pids 1) i →
+                o ≠ io.write (s₀.pids 0) (s₀.pids 1) i) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  have hcore : io.toU.Implements
+      (fun p₀ p₁ vals _o j =>
+        f p₀ p₁ (fun i => vals (⟨0, by decide⟩ : Fin 2) (tilePos io.shape i))
+          (fun i => vals (⟨1, by decide⟩ : Fin 2) (tilePos io.shape i))
+          ((TileShape.allIndices io.shape).get j)) := by
+    refine UKernelIO.Implements.intro _ hok ?_ ?_
+    · intro bounds s vals _hpins hib hob _hsb
+      have h1 : ∀ i : TileIndex io.shape, io.mask (s.pids 0) (s.pids 1) i →
+          io.read1 (s.pids 0) (s.pids 1) i < bounds io.in1 := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        exact hib (⟨0, by decide⟩ : Fin 2) j
+      have h2 : ∀ i : TileIndex io.shape,
+          io.read2Mask (s.pids 0) (s.pids 1) i →
+          io.read2 (s.pids 0) (s.pids 1) i < bounds io.in2 := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        exact hib (⟨1, by decide⟩ : Fin 2) j
+      have h3 : ∀ i : TileIndex io.shape,
+          io.writeMask (s.pids 0) (s.pids 1) i →
+          io.write (s.pids 0) (s.pids 1) i < bounds io.out := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        exact hob (⟨0, by decide⟩ : Fin 1) j
+      exact hts bounds s h1 h2 h3
+    · intro s₀ vals _hundef hpins
+      have hx : ∀ i : TileIndex io.shape,
+          io.mask (s₀.pids 0) (s₀.pids 1) i →
+          s₀.readMem io.in1 (io.read1 (s₀.pids 0) (s₀.pids 1) i)
+            = vals (⟨0, by decide⟩ : Fin 2) (tilePos io.shape i) := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        rw [tilePos_get]
+        exact hpins (⟨0, by decide⟩ : Fin 2) j
+      have hy : ∀ i : TileIndex io.shape,
+          io.read2Mask (s₀.pids 0) (s₀.pids 1) i →
+          s₀.readMem io.in2 (io.read2 (s₀.pids 0) (s₀.pids 1) i)
+            = vals (⟨1, by decide⟩ : Fin 2) (tilePos io.shape i) := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        rw [tilePos_get]
+        exact hpins (⟨1, by decide⟩ : Fin 2) j
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        hrun s₀ (fun i => vals (⟨0, by decide⟩ : Fin 2) (tilePos io.shape i))
+          (fun i => vals (⟨1, by decide⟩ : Fin 2) (tilePos io.shape i)) hx hy
+      refine ⟨s1, hexec, fun _o j hj => hval _ hj, ?_⟩
+      intro r o' hoc _hsc
+      have hoc' : ∀ i : TileIndex io.shape,
+          io.writeMask (s₀.pids 0) (s₀.pids 1) i →
+          r ≠ io.out ∨ o' ≠ io.write (s₀.pids 0) (s₀.pids 1) i := by
+        refine (forall_tileIndex_iff _).mp ?_
+        intro j
+        exact hoc (⟨0, by decide⟩ : Fin 1) j
+      refine hframe r o' ?_
+      by_cases hro : r = io.out
+      · subst hro
+        refine Or.inr fun i hi => ?_
+        rcases hoc' i hi with hne | hno
+        · exact absurd rfl hne
+        · exact hno
+      · exact Or.inl hro
+  intro A hd hregs hcov pid₀ pid₁ h1 h2 h3 xs ys s₀ hp₀ hp₁ hu hx hy
+  obtain ⟨s', hexec, hval, hframe⟩ :=
+    hcore A hd hregs hcov pid₀ pid₁ (s₀.pids 2)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j => xs ((TileShape.allIndices io.shape).get j)
+        | _ => fun j => ys ((TileShape.allIndices io.shape).get j))
+      s₀ hp₀ hp₁ rfl hu
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => h1 _ hj
+        | ⟨_ + 1, _⟩ => fun j hj => h2 _ hj)
+      (fun _o j hj => h3 _ hj) (fun t => t.elim0)
+      (fun i => match i with
+        | ⟨0, _⟩ => fun j hj => hx _ hj
+        | ⟨_ + 1, _⟩ => fun j hj => hy _ hj)
+  have hxs :
+      (fun i => xs ((TileShape.allIndices io.shape).get (tilePos io.shape i)))
+        = xs :=
+    funext fun i => by rw [get_tilePos]
+  have hys :
+      (fun i => ys ((TileShape.allIndices io.shape).get (tilePos io.shape i)))
+        = ys :=
+    funext fun i => by rw [get_tilePos]
+  refine ⟨s', hexec, ?_, ?_⟩
+  · refine (forall_tileIndex_iff _).mp ?_
+    intro j hj
+    refine (hval (⟨0, by decide⟩ : Fin 1) j hj).trans ?_
+    show f pid₀ pid₁
+        (fun i => xs ((TileShape.allIndices io.shape).get (tilePos io.shape i)))
+        (fun i => ys ((TileShape.allIndices io.shape).get (tilePos io.shape i)))
+        ((TileShape.allIndices io.shape).get j)
+      = f pid₀ pid₁ xs ys ((TileShape.allIndices io.shape).get j)
+    rw [hxs, hys]
+  · intro r' o' hcond
+    refine hframe r' o' ?_
+    rcases hcond with hflat | hout
+    · exact Or.inl hflat
+    · exact Or.inr ⟨fun _o j hj => hout _ hj, fun t => t.elim0⟩
+
+end MaskedTile2DKernelIO₂
+
 end VeriTile.Triton
