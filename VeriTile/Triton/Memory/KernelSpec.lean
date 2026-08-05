@@ -16102,6 +16102,30 @@ structure MaskedTileKernelIO₁ where
   /-- Program `pid`'s **write-active** lanes; defaults to `mask`. -/
   writeMask : Nat → TileIndex shape → Prop := mask
 
+/-- Decidable equality on tile indices, by induction on the shape. Needed to
+locate a tile index inside `TileShape.allIndices`. -/
+instance instDecidableEqTileIndex : ∀ (shape : TileShape), DecidableEq (TileIndex shape)
+  | [] => fun _ _ => isTrue (by rfl)
+  | _ :: rest =>
+      have : DecidableEq (TileIndex rest) := instDecidableEqTileIndex rest
+      inferInstanceAs (DecidableEq (Fin _ × TileIndex rest))
+
+/-- The position of a tile index inside `TileShape.allIndices`. This is the
+**data-level** inverse of the enumeration: `mem_allIndices` only gives
+existence, which is not enough to transport a core lane function back to a
+tile-indexed one. -/
+def tilePos (shape : TileShape) (i : TileIndex shape) :
+    Fin (TileShape.allIndices shape).length :=
+  ⟨(TileShape.allIndices shape).idxOf i,
+    List.idxOf_lt_length_of_mem (TileShape.mem_allIndices shape i)⟩
+
+/-- Round-trip: reading the enumeration at a tile index's own position gives
+that index back. -/
+@[simp] theorem get_tilePos (shape : TileShape) (i : TileIndex shape) :
+    (TileShape.allIndices shape).get (tilePos shape i) = i := by
+  simpa [tilePos] using
+    List.getElem_idxOf_of_mem (TileShape.mem_allIndices shape i)
+
 namespace MaskedTileKernelIO₁
 
 /-- `io.Implements f` — the tile-indexed sibling of
