@@ -27,7 +27,14 @@ every program of its grid.
 ## Proof architecture
 
 ```
-relu_strided_buffer_output_summary_general                    ← TOP THEOREM
+relu_strided_buffer_one_tile_io_correctness                   ← TOP THEOREM
+  ├─ relu_one_tile_flattenOk                    inside the flat-memory bridge
+  ├─ relu_one_tile_traceSafe                    block-pointer safety walk
+  │    └─ perTile_traceSafe                     shared per-tile body
+  └─ relu_one_tile_region_run                   region-model run + cell frame
+       └─ perTile_steps                         (shared engine, below)
+
+relu_strided_buffer_output_summary_general       both branches, per write map
   ├─ relu_one_tile_surface_toAlgorithm_supported     one-tile surface lowers
   ├─ relu_grid_stride_surface_toAlgorithm_supported  grid-stride surface lowers
   ├─ relu_one_tile_compute_correct              one_tile_per_cta=true branch
@@ -82,13 +89,17 @@ their only rank-1 value) are instantiated in the `boundary_check=(...)` /
 namespace VeriTile.Bench.TritonBenchG.ReluStridedBuffer
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
-/-! **★ Main theorem:** `relu_strided_buffer_output_summary_general`
-(dimension-general `s0`, `in0_stride0`, `out0_stride0`, `tile_size0`,
-`tiles_per_cta`); the Python benchmark shapes are instantiations. -/
+/-! **★ Main theorem:** `relu_strided_buffer_one_tile_io_correctness` — the
+`one_tile_per_cta = true` branch on the tile-indexed IO surface (`⊨`), which
+additionally pins the flat-memory placement. `relu_strided_buffer_output_summary_general`
+below it keeps the per-write-map summary of **both** constexpr branches. Both
+are dimension-general in `s0`, `in0_stride0`, `out0_stride0`, `tile_size0`,
+`tiles_per_cta`; the Python benchmark shapes are instantiations. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -370,14 +381,46 @@ private theorem outAddr_tileIndex_injective (T : Nat)
     Fin.ext (Nat.add_left_cancel (Nat.eq_of_mul_eq_mul_right hStride h))
   cases hab; cases u; cases u'; rfl
 
+/-- **Cell-level** frame of a masked scatter: a cell the fold never writes —
+either because it lives in a different region, or because no active lane
+targets its offset — keeps its `mem` value verbatim (not merely its decoded
+`readMem` value). `bench` files are standalone, so this induction is a private
+copy rather than an import. -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
 /-! ## One tile of work — shared by both branches
 
 `perTile_steps` executes the seven shared statements (`tile_id0` bookkeeping →
 block-ptr load → `relu_forward` → block-ptr store) from any state whose
 `tile_id` register holds `T`, and characterizes the result: active lanes of
 tile `T` receive the genuine ReLU value, everything else — other `out0` cells,
-other regions, and all registers except the six per-tile scratch registers —
-is untouched. -/
+other regions, all registers except the six per-tile scratch registers, and
+(cell-level, for the flat-memory IO face) every `mem` cell off the written
+window — is untouched. -/
 
 set_option maxHeartbeats 1000000 in
 theorem perTile_steps
@@ -400,7 +443,11 @@ theorem perTile_steps
       ∧ (∀ (dtype : TileDType) (shape : TileShape) (name : RegName),
           name ≠ "tile_id0" → name ≠ "offset0" → name ≠ "in0_bptr" →
           name ≠ "in0" → name ≠ "out0" → name ≠ "out0_bptr" →
-          t'.regs dtype shape name = t.regs dtype shape name) := by
+          t'.regs dtype shape name = t.regs dtype shape name)
+      ∧ (∀ (R : RegionName) (o : Nat),
+          (R ≠ out0_ptr ∨ ∀ i : Fin tile_size0, taskIndex T tile_size0 i < s0 →
+            o ≠ taskIndex T tile_size0 i * out0_stride0) →
+          t'.mem R o = t.mem R o) := by
   -- the intermediate register values (raw evaluation results)
   set offV : Tile .nat [] :=
     Tile.bop (NumericDType.mul .nat) Broadcast.nil V (Tile.scalar tile_size0)
@@ -476,7 +523,7 @@ theorem perTile_steps
       out0_stride0 tile_size0 (T * tile_size0) "out0_bptr" "out0" outT t6
       (by simp [ht6, houtBP]) (by simp [ht6, ht5]))]
     exact stepStmts.nil
-  refine ⟨_, hstep, ?_, ?_, ?_, ?_⟩
+  refine ⟨_, hstep, ?_, ?_, ?_, ?_, ?_⟩
   · -- active lanes: genuine ReLU value
     intro i hi
     simp only [taskIndex] at hi ⊢
@@ -516,6 +563,20 @@ theorem perTile_steps
     intro dtype shape name h1 h2 h3 h4 h5 h6
     rw [BlockState.foldl_writeMem_prop_masked_regs]
     simp [ht6, ht5, ht4, ht3, ht2, ht1, h1, h2, h3, h4, h5, h6]
+  · -- cell-level frame off the written window (the flat-memory IO face)
+    intro R o hcond
+    rw [foldl_writeMem_frame
+      (region := out0_ptr)
+      (fun idx : TileIndex [tile_size0] =>
+        (T * tile_size0 + idx.1.val) * out0_stride0)
+      (fun idx : TileIndex [tile_size0] => (outT.data idx).unbotD 0)
+      (fun idx : TileIndex [tile_size0] => T * tile_size0 + idx.1.val < s0)
+      R o (TileShape.allIndices [tile_size0]) ?_]
+    · simp [ht6, ht5, ht4, ht3, ht2, ht1]
+    · rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun idx _ hidx =>
+          Ne.symm (h idx.1 (by simpa [taskIndex] using hidx))
 
 /-- Raw evaluated `tl.cdiv(s0, tile_size0)` register value (assigned to
 `num_tiles0`, never read back by either branch). -/
@@ -697,7 +758,7 @@ theorem gs_loop_readback
         (Tile.scalar P) (Tile.bop (NumericDType.mul .nat) Broadcast.nil
           (Tile.scalar c) (Tile.scalar C)) with haddV
       set tA := tJ.setReg "tile_id" .nat [] addV with htA
-      obtain ⟨t', hstepBody, hact, hpresOut, hpresReg, hregs⟩ :=
+      obtain ⟨t', hstepBody, hact, hpresOut, hpresReg, hregs, _⟩ :=
         perTile_steps in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0
           hStride (P + c * C) tA addV (by simp [htA]) (by rw [haddV]; rfl)
       have hbody : stepStmts
@@ -840,7 +901,7 @@ theorem relu_grid_stride_compute_correct
     s' hExec p.1.val p.2 p.1.isLt hActive
   simpa using h
 
-/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+/-! ### ════════ Per-write-map summary, both constexpr branches ════════ -/
 
 /-- **Dimension-general** correctness summary for `relu_strided_buffer.py`'s
 `relu_forward_kernel_rank_1`, against the **genuine closed form**
@@ -911,5 +972,293 @@ specification relu_strided_buffer_output_summary_general
       s0 num_tasks tiles_per_cta tile_size0 s hStride hDisj hGrid⟩
 
 end Correct_without_Rounding
+
+/-! # ════════ `⊨` IO face — the flat-memory placement ════════
+
+The summary above is stated per *declared write map*. This section restates the
+`one_tile_per_cta = true` branch on the audit-once IO surface
+`MaskedTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat
+memory** placement: for every disjoint placement of the two buffers, every
+program id whose active lanes are in bounds, and every launch state whose input
+window holds `xs` at the active lanes, the translated pointer kernel terminates,
+every active output lane holds `relu (xs i)`, and every other memory **cell** is
+unchanged.
+
+This is the first port on the **tile-indexed** skin. The contiguous
+`MaskedKernelIO₁` cannot express this footprint at all: the lane addresses are
+`t·in0_stride0` / `t·out0_stride0` for a task index `t`, i.e. two *different*
+strides on the two buffers, and neither is forced to be `1`. `MaskedTileKernelIO₁`
+takes the address functions verbatim.
+
+The spec function is the pure `TiledActivation.relu` oracle applied to the
+loaded lane value — on this surface the loads are quantified over as `xs`, so
+the statement is a closed form in the *values*, not in memory. -/
+
+section IOFace
+
+/-- The one-tile branch sits inside the flat-memory bridge's covered fragment
+(block pointers included). -/
+theorem relu_one_tile_flattenOk
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat) :
+    ((relu_forward_kernel_rank_1_one_tile_surface in0_ptr out0_ptr
+      in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+      tile_size0).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [relu_forward_kernel_rank_1_one_tile_surface, ComputeKernel.toAlgKernel,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+/-- Inversion of a successful `assign` step: it fixes the assigned value and
+the successor state. The exact-semantics twin of `stepStmtR_assign_inv`. -/
+private theorem stepStmt_assign_inv' {dtype : TileDType} {shape : TileShape}
+    {name : RegName} {e : Op dtype shape} {s s' : BlockState}
+    (h : stepStmt (.assign dtype shape name e) s = some s') :
+    ∃ v, evalOp e s = some v ∧ s' = s.setReg name dtype shape v := by
+  cases hv : evalOp e s with
+  | none => simp [stepStmt, hv] at h
+  | some v =>
+      refine ⟨v, rfl, ?_⟩
+      rw [stepStmt_assign_eq_some hv] at h
+      exact (Option.some.inj h).symm
+
+/-- Per-execution safety walk for the shared per-tile body: the two
+`tl.make_block_ptr` assigns and the three register-only assigns impose nothing;
+the block-pointer load's and the block-pointer store's active lanes are exactly
+the `boundary_check=(0,)` guard `T·tile_size0 + i < s0`, in bounds by the read /
+write window bounds. -/
+theorem perTile_traceSafe
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 tile_size0 : Nat)
+    (bounds : RegionBounds) (T : Nat) (t : BlockState) (V : Tile .nat [])
+    (hT : t.regs .nat [] "tile_id" = some V)
+    (hV : V.data PUnit.unit = T)
+    (hin : ∀ i : Fin tile_size0, T * tile_size0 + i.val < s0 →
+      (T * tile_size0 + i.val) * in0_stride0 < bounds in0_ptr)
+    (hout : ∀ i : Fin tile_size0, T * tile_size0 + i.val < s0 →
+      (T * tile_size0 + i.val) * out0_stride0 < bounds out0_ptr) :
+    Stmt.TraceSafeList bounds
+      (perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0)
+      t := by
+  set offV : Tile .nat [] :=
+    Tile.bop (NumericDType.mul .nat) Broadcast.nil V (Tile.scalar tile_size0)
+    with hoffV
+  have hoffData : offV.data PUnit.unit = T * tile_size0 := by
+    rw [hoffV, Tile.bop_data]
+    show NumericDType.mul .nat (V.data PUnit.unit) tile_size0 = T * tile_size0
+    rw [hV]
+    rfl
+  simp only [perTileStmts]
+  -- `tile_id0 = tile_id`
+  refine Stmt.TraceSafeList.cons_intro
+    (by simp only [Stmt.TraceSafe, Op.SafeAt]) (fun t1 ht1 => ?_)
+  rw [stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "tile_id") t = some V by simp [hT])] at ht1
+  obtain rfl := Option.some.inj ht1
+  -- `offset0 = tile_id0 * tile_size0`
+  refine Stmt.TraceSafeList.cons_intro
+    (by simp only [Stmt.TraceSafe, Op.SafeAt, and_self]) (fun t2 ht2 => ?_)
+  rw [stepStmt_assign_eq_some
+    (show evalOp (Op.mul NumericDType.nat Broadcast.nil
+        (Op.ref .nat [] "tile_id0") (Op.constNat tile_size0))
+        (t.setReg "tile_id0" .nat [] V) = some offV by
+      simp [hoffV])] at ht2
+  obtain rfl := Option.some.inj ht2
+  -- `in0_bptr = tl.make_block_ptr(...)`
+  refine Stmt.TraceSafeList.cons_intro
+    (by simp only [Stmt.TraceSafe, Op.SafeAt, List.mem_cons, List.not_mem_nil,
+      or_false, forall_eq, and_self]) (fun t3 ht3 => ?_)
+  rw [stepStmt_assign_eq_some
+    (makeBlockPtr_1d_eval in0_ptr s0 in0_stride0 tile_size0 "offset0"
+      ((t.setReg "tile_id0" .nat [] V).setReg "offset0" .nat [] offV) offV
+      (T * tile_size0) (by simp) hoffData)] at ht3
+  obtain rfl := Option.some.inj ht3
+  -- the boundary-checked block-pointer load
+  refine Stmt.TraceSafeList.cons_intro ?_ (fun t4 ht4 => ?_)
+  · simp only [Stmt.TraceSafe, Op.SafeAt, MaskOpt.Active, Op.MemorySafe,
+      MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe]
+    refine ⟨trivial, trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOp_ref, BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro hib
+    simp only [TileShape.indexToList, BlockPtr.address_1d, Nat.zero_add]
+    refine hin idx.1 ?_
+    simpa [TileShape.indexToList] using hib
+  · obtain ⟨v4, -, rfl⟩ := stepStmt_assign_inv' ht4
+    -- `out0 = tl.where(in0 > 0, in0, 0)`
+    refine Stmt.TraceSafeList.cons_intro
+      (by simp only [Stmt.TraceSafe, Op.SafeAt, and_self]) (fun t5 ht5 => ?_)
+    obtain ⟨v5, -, rfl⟩ := stepStmt_assign_inv' ht5
+    -- `out0_bptr = tl.make_block_ptr(...)`
+    refine Stmt.TraceSafeList.cons_intro
+      (by simp only [Stmt.TraceSafe, Op.SafeAt, List.mem_cons, List.not_mem_nil,
+        or_false, forall_eq, and_self]) (fun t6 ht6 => ?_)
+    rw [stepStmt_assign_eq_some
+      (makeBlockPtr_1d_eval out0_ptr s0 out0_stride0 tile_size0 "offset0" _ offV
+        (T * tile_size0) (by simp) hoffData)] at ht6
+    obtain rfl := Option.some.inj ht6
+    -- the boundary-checked block-pointer store
+    refine Stmt.TraceSafeList.cons_intro ?_
+      (fun _ _ => Stmt.TraceSafeList.nil_intro)
+    simp only [Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+      MaskOpt.MemorySafe, Op.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+      memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+      memAccessActiveAddressSafe]
+    refine ⟨trivial, trivial, trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOp_ref, BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro hib
+    simp only [TileShape.indexToList, BlockPtr.address_1d, Nat.zero_add]
+    refine hout idx.1 ?_
+    simpa [TileShape.indexToList] using hib
+
+/-- Per-execution safety walk for the whole one-tile kernel: the three prologue
+assigns impose nothing, and the per-tile body is `perTile_traceSafe` at
+`T = pid`. -/
+theorem relu_one_tile_traceSafe
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ i : Fin tile_size0, taskIndex (s.pids 0) tile_size0 i < s0 →
+      taskIndex (s.pids 0) tile_size0 i * in0_stride0 < bounds in0_ptr)
+    (hout : ∀ i : Fin tile_size0, taskIndex (s.pids 0) tile_size0 i < s0 →
+      taskIndex (s.pids 0) tile_size0 i * out0_stride0 < bounds out0_ptr) :
+    ((relu_forward_kernel_rank_1_one_tile_surface in0_ptr out0_ptr
+        in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+        tile_size0).toAlgKernel).TraceSafe bounds s := by
+  unfold Kernel.TraceSafe
+  rw [oneTile_body_eq]
+  refine Stmt.TraceSafeList.cons_intro
+    (by simp only [Stmt.TraceSafe, Op.SafeAt]) (fun t1 ht1 => ?_)
+  rw [stepStmt_assign_eq_some (evalOp_programId 0 s)] at ht1
+  obtain rfl := Option.some.inj ht1
+  refine Stmt.TraceSafeList.cons_intro
+    (by simp only [numTiles0Stmt, Stmt.TraceSafe, Op.SafeAt, and_self])
+    (fun t2 ht2 => ?_)
+  rw [numTiles0_step s0 tile_size0 _] at ht2
+  obtain rfl := Option.some.inj ht2
+  refine Stmt.TraceSafeList.cons_intro
+    (by simp only [Stmt.TraceSafe, Op.SafeAt]) (fun t3 ht3 => ?_)
+  rw [stepStmt_assign_eq_some
+    (show evalOp (Op.ref .nat [] "pid")
+        ((s.setReg "pid" .nat [] (Tile.scalar (s.pids 0))).setReg
+          "num_tiles0" .nat [] (numTiles0Val s0 tile_size0))
+      = some (Tile.scalar (s.pids 0)) by simp)] at ht3
+  obtain rfl := Option.some.inj ht3
+  refine perTile_traceSafe in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+    tile_size0 bounds (s.pids 0) _ (Tile.scalar (s.pids 0))
+    (BlockState.setReg_same _ _ _ _ _) rfl
+    (fun i hi => hin i hi) (fun i hi => hout i hi)
+
+/-- Region-model run of the one-tile branch, in the shape
+`MaskedTileKernelIO₁.Implements.intro` consumes: termination, the per-lane
+readback against the pinned load values, and the **cell-level** frame. -/
+theorem relu_one_tile_region_run
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
+    (hStride : 0 < out0_stride0)
+    (s₀ : BlockState) (xs : TileIndex [tile_size0] → ℝ)
+    (hx : ∀ i : TileIndex [tile_size0],
+      taskIndex (s₀.pids 0) tile_size0 i.1 < s0 →
+      s₀.readMem in0_ptr (taskIndex (s₀.pids 0) tile_size0 i.1 * in0_stride0)
+        = xs i) :
+    ∃ s1, exec ((relu_forward_kernel_rank_1_one_tile_surface in0_ptr out0_ptr
+        in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+        tile_size0).toAlgKernel) s₀ = some s1
+      ∧ (∀ i : TileIndex [tile_size0],
+          taskIndex (s₀.pids 0) tile_size0 i.1 < s0 →
+          s1.readMem out0_ptr
+              (taskIndex (s₀.pids 0) tile_size0 i.1 * out0_stride0)
+            = TiledActivation.relu (xs i))
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ out0_ptr ∨ ∀ i : TileIndex [tile_size0],
+            taskIndex (s₀.pids 0) tile_size0 i.1 < s0 →
+            o ≠ taskIndex (s₀.pids 0) tile_size0 i.1 * out0_stride0) →
+          s1.mem r o = s₀.mem r o) := by
+  set sp3 := ((s₀.setReg "pid" .nat [] (Tile.scalar (s₀.pids 0))).setReg
+      "num_tiles0" .nat [] (numTiles0Val s0 tile_size0)).setReg
+      "tile_id" .nat [] (Tile.scalar (s₀.pids 0)) with hsp3
+  obtain ⟨t', hstep, hact, _, _, _, hcell⟩ :=
+    perTile_steps in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0
+      hStride (s₀.pids 0) sp3 (Tile.scalar (s₀.pids 0)) (by simp [hsp3]) rfl
+  have hexec : exec ((relu_forward_kernel_rank_1_one_tile_surface in0_ptr
+      out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+      tile_size0).toAlgKernel) s₀ = some t' := by
+    rw [show exec ((relu_forward_kernel_rank_1_one_tile_surface in0_ptr out0_ptr
+          in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+          tile_size0).toAlgKernel) s₀
+        = stepStmts ((relu_forward_kernel_rank_1_one_tile_surface in0_ptr
+          out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+          tile_size0).toAlgKernel).body s₀ from rfl,
+      oneTile_body_eq]
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s₀))]
+    rw [stepStmts.cons_some (numTiles0_step s0 tile_size0 _)]
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (show evalOp (Op.ref .nat [] "pid")
+          ((s₀.setReg "pid" .nat [] (Tile.scalar (s₀.pids 0))).setReg
+            "num_tiles0" .nat [] (numTiles0Val s0 tile_size0))
+        = some (Tile.scalar (s₀.pids 0)) by simp))]
+    exact hstep
+  refine ⟨t', hexec, ?_, ?_⟩
+  · intro i hi
+    rw [hact i.1 hi]
+    simp only [reluSpec, hsp3, BlockState.setReg_readMem]
+    rw [hx i hi]
+  · intro r o hcond
+    rw [hcell r o ?_]
+    · simp [hsp3]
+    · rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun i hi => h (i, PUnit.unit) hi
+
+/-- IO signature of the `one_tile_per_cta = true` branch on the **tile-indexed**
+surface: lane `i` of program `pid` covers task `t = pid·tile_size0 + i`, reads
+`in0_ptr` at `t·in0_stride0`, writes `out0_ptr` at `t·out0_stride0`, and is
+active exactly on the `boundary_check=(0,)` guard `t < s0`. -/
+def reluOneTileIO (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := relu_forward_kernel_rank_1_one_tile_surface in0_ptr out0_ptr
+    in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0
+  inp := in0_ptr
+  out := out0_ptr
+  shape := [tile_size0]
+  read := fun pid i => taskIndex pid tile_size0 i.1 * in0_stride0
+  write := fun pid i => taskIndex pid tile_size0 i.1 * out0_stride0
+  mask := fun pid i => taskIndex pid tile_size0 i.1 < s0
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `relu_strided_buffer.py`'s
+`relu_forward_kernel_rank_1`, `one_tile_per_cta = true` branch: for every
+disjoint flat placement of the two buffers, every program id whose active lanes
+are in bounds, and every launch state whose input window holds `xs`, the
+translated pointer kernel terminates, every active lane of the output tile holds
+`relu (xs i) = max 0 (xs i)`, and every other memory cell is unchanged.
+
+Dimension-general in `s0`, both strides, `tile_size0`; the only side-condition
+is `0 < out0_stride0` (store-footprint injectivity — a torch stride of a
+non-degenerate rank-1 buffer is ≥ 1). The strided, two-stride footprint is
+carried verbatim by `MaskedTileKernelIO₁`'s address functions. -/
+specification relu_strided_buffer_one_tile_io_correctness
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
+    (hStride : 0 < out0_stride0) :
+    reluOneTileIO in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks
+        tiles_per_cta tile_size0
+      ⊨ fun xs i => TiledActivation.relu (xs i) := by
+  refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact relu_one_tile_flattenOk in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+      num_tasks tiles_per_cta tile_size0
+  · intro bounds s h1 h2
+    exact relu_one_tile_traceSafe in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+      num_tasks tiles_per_cta tile_size0 bounds s
+      (fun i hi => h1 (i, PUnit.unit) hi) (fun i hi => h2 (i, PUnit.unit) hi)
+  · intro s₀ xs hin
+    exact relu_one_tile_region_run in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+      num_tasks tiles_per_cta tile_size0 hStride s₀ xs hin
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.ReluStridedBuffer
