@@ -72,6 +72,7 @@ composition of these faces with the (trusted) loop scheduling.
 namespace VeriTile.Bench.TritonBenchG.FlashDecode2Phi
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 set_option maxHeartbeats 1000000
@@ -897,5 +898,212 @@ specification flash_decode2_phi_normalization_output_summary_general
 
 end Correct_without_Rounding
 
+
+/-! ## ════════ `⊨` IO face for the masked final writeback ════════
+
+The summary above is stated per *declared write map*. This section restates the
+masked `Final → Out` writeback on the audit-once IO surface
+`Masked3DTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat memory**
+placement.
+
+This is the twin of `flash_decode2_llama`'s final store — two program axes, different
+strides on the two buffers — with the kernel's `offs_d < head_dim` guard on both the
+load and the store. Zero new library surface: the three-axis tile skin already takes
+a mask. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+theorem phi_final_store_flattenOk (Final Out : RegionName)
+    (head_dim stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) :
+    ((flash_decode2_phi_final_store_slice Final Out head_dim stride_final_b
+      stride_final_h stride_final_d stride_obs stride_oh stride_od
+      BLOCK_DMODEL).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [flash_decode2_phi_final_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+
+theorem phi_final_store_terminates (Final Out : RegionName)
+    (head_dim stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (s : BlockState) :
+    ∃ s1, exec (flash_decode2_phi_final_store_slice Final Out head_dim
+      stride_final_b stride_final_h stride_final_d stride_obs stride_oh stride_od
+      BLOCK_DMODEL) s = some s1 := by
+  simp [exec, flash_decode2_phi_final_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt]
+
+theorem phi_final_store_frame (Final Out : RegionName)
+    (head_dim stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (s s' : BlockState)
+    (hExec : exec (flash_decode2_phi_final_store_slice Final Out head_dim
+      stride_final_b stride_final_h stride_final_d stride_obs stride_oh stride_od
+      BLOCK_DMODEL) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Out ∨ ∀ i : Fin BLOCK_DMODEL, active s head_dim i →
+        o ≠ outOffset s stride_obs stride_oh stride_od i) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, flash_decode2_phi_final_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Out)
+    (fun i : TileIndex [BLOCK_DMODEL] =>
+      s.pids 0 * stride_obs + s.pids 1 * stride_oh + i.1.val * stride_od)
+    _ (fun i : TileIndex [BLOCK_DMODEL] => i.1.val < head_dim) r o
+    (TileShape.allIndices [BLOCK_DMODEL]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun i _ hi => Ne.symm (h i.1 hi)
+
+theorem phi_final_store_traceSafe (Final Out : RegionName)
+    (head_dim stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ i : Fin BLOCK_DMODEL, active s head_dim i →
+      finalOffset s stride_final_b stride_final_h stride_final_d i < bounds Final)
+    (hout : ∀ i : Fin BLOCK_DMODEL, active s head_dim i →
+      outOffset s stride_obs stride_oh stride_od i < bounds Out) :
+    ((flash_decode2_phi_final_store_slice Final Out head_dim stride_final_b
+      stride_final_h stride_final_d stride_obs stride_oh stride_od
+      BLOCK_DMODEL).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, flash_decode2_phi_final_store_slice,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+    ComparableDType.lt]
+  and_intros
+  all_goals first
+    | exact fun a ha => hin a ha
+    | exact fun a ha => hout a ha
+
+/-- Region-model run of the masked final writeback. -/
+theorem phi_final_store_region_run (Final Out : RegionName)
+    (head_dim stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_DMODEL => outOffset s₀ stride_obs stride_oh stride_od i))
+    (xs : TileIndex [BLOCK_DMODEL] → ℝ)
+    (hx : ∀ i : TileIndex [BLOCK_DMODEL], active s₀ head_dim i.1 →
+      s₀.readMem Final
+          (finalOffset s₀ stride_final_b stride_final_h stride_final_d i.1)
+        = xs i) :
+    ∃ s1, exec (flash_decode2_phi_final_store_slice Final Out head_dim
+        stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+        stride_od BLOCK_DMODEL) s₀ = some s1
+      ∧ (∀ i : TileIndex [BLOCK_DMODEL], active s₀ head_dim i.1 →
+          s1.readMem Out (outOffset s₀ stride_obs stride_oh stride_od i.1) = xs i)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Out ∨ ∀ i : Fin BLOCK_DMODEL, active s₀ head_dim i →
+            o ≠ outOffset s₀ stride_obs stride_oh stride_od i) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := phi_final_store_terminates Final Out head_dim
+    stride_final_b stride_final_h stride_final_d stride_obs stride_oh stride_od
+    BLOCK_DMODEL s₀
+  refine ⟨s1, hexec, ?_, phi_final_store_frame Final Out head_dim stride_final_b
+    stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL s₀
+    s1 hexec⟩
+  intro i hact
+  have h := flash_decode2_phi_final_store_slice_correct Final Out head_dim
+    stride_final_b stride_final_h stride_final_d stride_obs stride_oh stride_od
+    BLOCK_DMODEL s₀ hOutInj i.1
+  have h' : s1.readMem Out (outOffset s₀ stride_obs stride_oh stride_od i.1)
+      = if active s₀ head_dim i.1 then
+          finalStoreValue s₀ Final head_dim stride_final_b stride_final_h
+            stride_final_d i.1
+        else s₀.readMem Out (outOffset s₀ stride_obs stride_oh stride_od i.1) := by
+    simpa [hexec] using h
+  rw [h', if_pos hact, finalStoreValue, if_pos hact]
+  simpa using hx i hact
+
+/-- IO signature of the masked final writeback on the three-axis tile surface. -/
+def phiFinalStoreIO (Final Out : RegionName)
+    (head_dim stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) : Masked3DTileKernelIO₁ where
+  kernel := flash_decode2_phi_final_store_slice Final Out head_dim stride_final_b
+    stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL
+  inp := Final
+  out := Out
+  shape := [BLOCK_DMODEL]
+  read := fun p₀ p₁ _p₂ i =>
+    p₀ * stride_final_b + p₁ * stride_final_h + i.1.val * stride_final_d
+  write := fun p₀ p₁ _p₂ i =>
+    p₀ * stride_obs + p₁ * stride_oh + i.1.val * stride_od
+  mask := fun _p₀ _p₁ _p₂ i => i.1.val < head_dim
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `flash_decode2_phi.py`'s masked final
+writeback: for every disjoint flat placement of `Final` / `Out`, every program
+coordinate whose active lanes are in bounds, and every launch state whose `Final` row
+holds `xs` at the active lanes, the translated pointer kernel terminates, every
+active lane of the `Out` row holds `xs i`, and every other memory cell is unchanged.
+
+The twin of `flash_decode2_llama`'s final store, with the kernel's
+`offs_d < head_dim` guard on both accesses. Dimension-general in `head_dim`, all six
+strides and `BLOCK_DMODEL`. Honest side-condition: output-address injectivity at
+every program coordinate, the same hypothesis the per-write-map summary takes. -/
+specification flash_decode2_phi_final_store_io_correctness (Final Out : RegionName)
+    (head_dim stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BLOCK_DMODEL =>
+        p₀ * stride_obs + p₁ * stride_oh + i.val * stride_od)) :
+    phiFinalStoreIO Final Out head_dim stride_final_b stride_final_h stride_final_d
+        stride_obs stride_oh stride_od BLOCK_DMODEL
+      ⊨ fun _p₀ _p₁ xs i => xs i := by
+  refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact phi_final_store_flattenOk Final Out head_dim stride_final_b
+      stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL
+  · intro bounds s h1 h2
+    exact phi_final_store_traceSafe Final Out head_dim stride_final_b
+      stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL
+      bounds s (fun i hact => h1 (i, PUnit.unit) hact)
+      (fun i hact => h2 (i, PUnit.unit) hact)
+  · intro s₀ xs hin
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      phi_final_store_region_run Final Out head_dim stride_final_b stride_final_h
+        stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL s₀
+        (hOutInj (s₀.pids 0) (s₀.pids 1)) xs (fun i hact => hin i hact)
+    exact ⟨s1, hexec, fun i hact => hval i hact,
+      fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr fun i hact => h (i, PUnit.unit) hact)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FlashDecode2Phi
