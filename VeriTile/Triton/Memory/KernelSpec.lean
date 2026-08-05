@@ -16064,4 +16064,107 @@ theorem ImplementsR.intro (io : StreamMasked3DKernelIO₃ₓ₃)
 end StreamMasked3DKernelIO₃ₓ₃
 
 
+/-! ## Tile-indexed masked IO — non-contiguous footprints
+
+The masked families above address memory as **base + lane**
+(`read pid + j.val`), which can only describe a *contiguous* window. Kernels
+whose footprint is a genuine tile — `row * stride + col` and friends — cannot
+be described that way at all.
+
+`MaskedTileKernelIO₁` lifts that restriction the cheap way: the unified core
+already takes a full per-lane address function (`UKernelIO.iwin` / `owin`), so
+this is another **thin wrapper**, not a new core and not a new flattening
+bridge. Lanes are `TileIndex shape`; `read` / `write` are full address
+functions; `toU` enumerates the lanes through `TileShape.allIndices`.
+
+Scratch channels are deliberately omitted — the tile-footprint ports do not use
+them, and leaving them out keeps the `toU` plumbing short. Add them the same way
+`MaskedKernelIO₁` does if a consumer ever needs them. -/
+
+/-- One-input / one-output masked IO whose lanes are **tile indices** and whose
+windows are full address functions. -/
+structure MaskedTileKernelIO₁ where
+  /-- The kernel being specified. -/
+  kernel : ComputeKernel
+  /-- Input buffer. -/
+  inp : RegionName
+  /-- Output buffer. -/
+  out : RegionName
+  /-- The tile footprint each program instance owns. -/
+  shape : TileShape
+  /-- Lane `i`'s read address for program `pid` — a full address function, not
+  a base offset. -/
+  read : Nat → TileIndex shape → Nat
+  /-- Lane `i`'s write address for program `pid`. -/
+  write : Nat → TileIndex shape → Nat
+  /-- Program `pid`'s **read-active** lanes. -/
+  mask : Nat → TileIndex shape → Prop
+  /-- Program `pid`'s **write-active** lanes; defaults to `mask`. -/
+  writeMask : Nat → TileIndex shape → Prop := mask
+
+namespace MaskedTileKernelIO₁
+
+/-- `io.Implements f` — the tile-indexed sibling of
+`MaskedKernelIO₁.Implements`: same Hoare triple, with lanes ranging over
+`TileIndex io.shape` and addresses given by the window functions. -/
+def Implements (io : MaskedTileKernelIO₁)
+    (f : (TileIndex io.shape → ℝ) → TileIndex io.shape → ℝ) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.inp, io.out] →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    (∀ i : TileIndex io.shape, io.mask pid i →
+      io.read pid i < A.extent io.inp) →
+    (∀ i : TileIndex io.shape, io.writeMask pid i →
+      io.write pid i < A.extent io.out) →
+  ∀ (xs : TileIndex io.shape → ℝ) (s₀ : BlockState),
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ i : TileIndex io.shape, io.mask pid i →
+      s₀.readMem io.inp (io.read pid i) = xs i) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ i : TileIndex io.shape, io.writeMask pid i →
+          s'.readMem A.flat (A.addr io.out (io.write pid i)) = f xs i)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ∀ i : TileIndex io.shape, io.writeMask pid i →
+              o' ≠ A.addr io.out (io.write pid i)) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => MaskedTileKernelIO₁.Implements
+
+/-- Embed into the unified core. Lanes are enumerated by
+`TileShape.allIndices`, so the core's `Fin`-indexed windows carry the tile
+addresses verbatim. -/
+private def toU (io : MaskedTileKernelIO₁) : UKernelIO where
+  kernel := io.kernel
+  nIn := 1
+  nOut := 1
+  nScr := 0
+  bufs := [io.inp, io.out]
+  ity := fun _ => .float
+  iarity := fun _ => (TileShape.allIndices io.shape).length
+  ibuf := fun _ => io.inp
+  oty := fun _ => .float
+  oarity := fun _ => (TileShape.allIndices io.shape).length
+  obuf := fun _ => io.out
+  obuf_mem := fun _ => by simp
+  sarity := fun t => t.elim0
+  sbuf := fun t => t.elim0
+  iwin := fun _ _ p₀ _ _ j =>
+    io.read p₀ ((TileShape.allIndices io.shape).get j)
+  imask := fun _ _ p₀ _ _ j =>
+    io.mask p₀ ((TileShape.allIndices io.shape).get j)
+  owin := fun _ _ p₀ _ _ j =>
+    io.write p₀ ((TileShape.allIndices io.shape).get j)
+  omask := fun _ _ p₀ _ _ j =>
+    io.writeMask p₀ ((TileShape.allIndices io.shape).get j)
+  swin := fun t _ _ _ _ _ => t.elim0
+  smask := fun t _ _ _ _ _ => t.elim0
+
+end MaskedTileKernelIO₁
+
 end VeriTile.Triton
