@@ -70,6 +70,7 @@ this marker (registered in `proof_blockers.md`).
 namespace VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedKernelIO₁
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -743,5 +744,222 @@ specification softmax_backward_kernel_non_inner_one_tile_compute_correct
   simpa [hActive] using h
 
 end BackwardNonInner
+
+/-! ## ════════ `⊨` IO face for the inner one-tile forward slice ════════
+
+`softmaxFlaggemsSpec` reads the input region directly, which is the right shape
+for a `Realizes_without_Rounding` face but not for the IO surface: there the
+spec must be a function of the **input tile** the precondition pins, since the
+launch state is quantified away. `softmaxFlaggemsSpecOf` is that restatement —
+same body, with the row tile built from `xs` instead of from memory — and
+`softmaxFlaggemsSpec_eq_of` bridges them definitionally.
+
+Inactive lanes carry `⊥` in the row tile (matching the kernel's
+`other=-float("inf")` load), so the reduction ranges over the active prefix
+only; `softmaxFlaggemsSpecOf_congr` is what makes that precise: the value
+depends on `xs` **only at active lanes**, which is exactly what the IO
+precondition supplies. -/
+
+/-- The stable-softmax readout of an already-built row tile. Factored out so the
+row tile is an explicit argument (a `let` would elaborate to a `have`, which
+blocks rewriting the row). -/
+noncomputable def softmaxOfRow
+    (TILE_N : Nat) (row : Tile .real [TILE_N]) (idx : Fin TILE_N) : ℝ :=
+  match Tile.reduceMax (shape := [TILE_N]) ⟨0, by simp⟩ Bool.false row with
+  | some rowMax =>
+      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
+      let e := Tile.uop WithBot.realExp shifted
+      let z := Tile.reduceSum (shape := [TILE_N]) ⟨0, by simp⟩ Bool.false e
+      WithBot.unbotD 0
+        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR e z).data
+          (idx, PUnit.unit))
+  | none => 0
+
+/-- The inner one-tile softmax value as a function of the input *tile*. -/
+noncomputable def softmaxFlaggemsSpecOf
+    (N TILE_N : Nat) (xs : Fin TILE_N → ℝ) (idx : Fin TILE_N) : ℝ :=
+  softmaxOfRow TILE_N
+    { data := fun i => if i.1.val < N then some (xs i.1) else none } idx
+
+/-- The memory-reading spec is the tile-function spec at the row the state
+holds. Definitional: both build the same row tile. -/
+theorem softmaxFlaggemsSpec_eq_of
+    (s : BlockState) (input_ptr : RegionName) (N TILE_N : Nat)
+    (idx : Fin TILE_N) :
+    softmaxFlaggemsSpec s input_ptr N TILE_N idx
+      = softmaxFlaggemsSpecOf N TILE_N
+          (fun j => s.readMem input_ptr (linearOffset s N j)) idx := rfl
+
+/-- The value depends on the input tile only at **active** lanes. -/
+theorem softmaxFlaggemsSpecOf_congr (N TILE_N : Nat) (xs ys : Fin TILE_N → ℝ)
+    (h : ∀ j : Fin TILE_N, j.val < N → xs j = ys j) (idx : Fin TILE_N) :
+    softmaxFlaggemsSpecOf N TILE_N xs idx
+      = softmaxFlaggemsSpecOf N TILE_N ys idx := by
+  have hfun :
+      (fun i : TileIndex [TILE_N] => if i.1.val < N then some (xs i.1) else none)
+        = (fun i : TileIndex [TILE_N] =>
+            if i.1.val < N then some (ys i.1) else none) := by
+    funext k
+    split_ifs with hk
+    · rw [h k.1 hk]
+    · rfl
+  unfold softmaxFlaggemsSpecOf
+  exact congrArg
+    (fun f => softmaxOfRow TILE_N ({ data := f } : Tile .real [TILE_N]) idx) hfun
+
+theorem softmax_kernel_inner_one_tile_flattenOk
+    (output_ptr input_ptr : RegionName) (N TILE_N : Nat) :
+    ((softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N
+      ).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [softmax_kernel_inner_one_tile, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk,
+    Op.FlattenOk.eq_def]
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk: the masked row load and the masked row store both
+address `pid * N + j`, active only when `j < N`, so the bounds contract is
+lane-wise. -/
+theorem softmax_kernel_inner_one_tile_traceSafe
+    (output_ptr input_ptr : RegionName) (N TILE_N : Nat) (hT : 0 < TILE_N)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ j : Fin TILE_N, j.val < N → s.pid * N + j.val < bounds input_ptr)
+    (hout : ∀ j : Fin TILE_N, j.val < N → s.pid * N + j.val < bounds output_ptr) :
+    Kernel.TraceSafe bounds
+      ((softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N
+        ).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp only [BlockState.pid_eq] at hin hout
+  simp [softmax_kernel_inner_one_tile, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, Stmt.TraceSafeList, Stmt.TraceSafe,
+    Op.SafeAt.eq_def, MaskOpt.SafeAt, MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+    MaskOpt.Active, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.uop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, NumericDType.div,
+    ComparableDType.lt, WithBot.realExp,
+    Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop,
+    TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex, hT]
+  exact ⟨fun a ha => hin a ha, fun a ha => hout a ha⟩
+
+/-- Masked-scatter frame off the written lanes. A private six-line induction:
+the library ships only the *unmasked* unhit frame, and bench files cannot import
+each other. The hypothesis is restricted to **active** lanes because only those
+are written. -/
+theorem foldl_writeMem_masked_unhit {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (l : List α) (off : Nat) (ho : ∀ k ∈ l, P k → offsetFn k ≠ off) :
+    ∀ s : BlockState,
+      ((l.foldl (fun acc k =>
+          if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+          s).mem region off) = s.mem region off := by
+  induction l with
+  | nil => intro s; rfl
+  | cons hd tl ih =>
+      intro s
+      rw [List.foldl_cons, ih (fun k hk => ho k (List.mem_cons_of_mem hd hk))]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem,
+          if_neg (fun hc => ho hd (List.mem_cons_self) hP hc.2.symm)]
+      · rw [if_neg hP]
+
+set_option maxHeartbeats 1600000 in
+theorem softmax_kernel_inner_one_tile_frame
+    (output_ptr input_ptr : RegionName) (N TILE_N : Nat) (hT : 0 < TILE_N)
+    (s s' : BlockState)
+    (hExec : exec (softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N)
+        s = some s') :
+    ∀ r o, (r ≠ output_ptr ∨ ∀ j : Fin TILE_N, j.val < N →
+        o ≠ s.pid * N + j.val) →
+      s'.mem r o = s.mem r o := by
+  simp [exec, softmax_kernel_inner_one_tile, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.uop,
+        Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum,
+        Tile.reduceSumDrop, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, NumericDType.div, ComparableDType.lt,
+        WithBot.realExp, TileShape.axisDim, TileShape.eraseAxis,
+        TileShape.insertAxisIndex, hT] at hExec
+  intro r o hcond
+  rw [← hExec]
+  by_cases hr : r = output_ptr
+  · subst hr
+    rcases hcond with hne | hno
+    · exact absurd rfl hne
+    · refine foldl_writeMem_masked_unhit
+        (P := fun idx : TileIndex [TILE_N] => idx.1.val < N)
+        _ _ _ o (fun k _ hk => ?_) _
+      simpa [BlockState.pid] using (hno k.1 hk).symm
+  · exact BlockState.foldl_writeMem_prop_masked_mem_preserve_other_region
+      _ _ _ _ r hr o _
+
+set_option maxHeartbeats 1600000 in
+/-- **The region-model masked Hoare triple** — the `hrun` obligation. -/
+theorem softmax_kernel_inner_one_tile_region_run
+    (output_ptr input_ptr : RegionName) (N TILE_N : Nat) (hT : 0 < TILE_N)
+    (s₀ : BlockState) (xs : Fin TILE_N → ℝ)
+    (hx : ∀ j : Fin TILE_N, j.val < N →
+      s₀.readMem input_ptr (s₀.pid * N + j.val) = xs j) :
+    ∃ s1, exec ((softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N
+        ).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin TILE_N, j.val < N →
+          s1.readMem output_ptr (s₀.pid * N + j.val)
+            = softmaxFlaggemsSpecOf N TILE_N xs j)
+      ∧ (∀ r o,
+          (r ≠ output_ptr ∨ ∀ j : Fin TILE_N, j.val < N →
+            o ≠ s₀.pid * N + j.val) →
+          s1.mem r o = s₀.mem r o) := by
+  cases hsrc : exec ((softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N
+      ).toAlgKernel) s₀ with
+  | none =>
+      exact absurd hsrc (by
+        simp [exec, softmax_kernel_inner_one_tile, ComputeKernel.toAlgKernel,
+          stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.cop, Tile.uop,
+          Tile.ptrAdd, Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceSum,
+          Tile.reduceSumDrop, NumericDType.add, NumericDType.mul,
+          NumericDType.sub, NumericDType.div, ComparableDType.lt,
+          WithBot.realExp, TileShape.axisDim, TileShape.eraseAxis,
+          TileShape.insertAxisIndex, hT])
+  | some s1 =>
+      refine ⟨s1, rfl, fun j hj => ?_, ?_⟩
+      · have h := softmax_kernel_inner_one_tile_correct output_ptr input_ptr
+          N TILE_N s₀ s1 (by simpa using hsrc) j
+        rw [if_pos hj] at h
+        rw [show s₀.pid * N + j.val = linearOffset s₀ N j from rfl, h,
+          softmaxFlaggemsSpec_eq_of]
+        exact softmaxFlaggemsSpecOf_congr N TILE_N _ xs
+          (fun k hk => hx k hk) j
+      · exact softmax_kernel_inner_one_tile_frame output_ptr input_ptr N TILE_N
+          hT s₀ s1 (by simpa using hsrc)
+
+/-- `softmax_kernel_inner_one_tile`'s masked **IO signature**: one row per
+program, read and written at `pid * N`, active lanes `j < N`. -/
+def softmaxFlaggemsInnerIO (output_ptr input_ptr : RegionName)
+    (N TILE_N : Nat) : MaskedKernelIO₁ where
+  kernel := softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N
+  inp := input_ptr
+  out := output_ptr
+  B := TILE_N
+  read := fun pid => pid * N
+  write := fun pid => pid * N
+  mask := fun _ j => j.val < N
+
+/-- **The headline on the IO surface**: the inner one-tile FlagGems softmax
+implements the exact stable softmax over the active row prefix. `0 < TILE_N` is
+required — the `max` reduce is only defined on non-empty tiles. -/
+specification softmax_kernel_inner_one_tile_correctness
+    (output_ptr input_ptr : RegionName) (N TILE_N : Nat) (hT : 0 < TILE_N) :
+    softmaxFlaggemsInnerIO output_ptr input_ptr N TILE_N
+      ⊨ fun xs i => softmaxFlaggemsSpecOf N TILE_N xs i := by
+  refine MaskedKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact softmax_kernel_inner_one_tile_flattenOk output_ptr input_ptr N TILE_N
+  · intro bounds s h1 h2 _
+    exact softmax_kernel_inner_one_tile_traceSafe output_ptr input_ptr N TILE_N
+      hT bounds s h1 h2
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      softmax_kernel_inner_one_tile_region_run output_ptr input_ptr N TILE_N hT
+        s₀ xs hx
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
 end VeriTile.Bench.TritonBenchG.SoftmaxFlaggems
