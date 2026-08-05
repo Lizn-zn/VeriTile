@@ -1247,7 +1247,7 @@ specification relu_strided_buffer_one_tile_io_correctness
     (hStride : 0 < out0_stride0) :
     reluOneTileIO in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks
         tiles_per_cta tile_size0
-      ⊨ fun xs i => TiledActivation.relu (xs i) := by
+      ⊨ fun _pid xs i => TiledActivation.relu (xs i) := by
   refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
   · exact relu_one_tile_flattenOk in0_ptr out0_ptr in0_stride0 out0_stride0 s0
       num_tasks tiles_per_cta tile_size0

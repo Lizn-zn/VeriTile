@@ -16153,9 +16153,16 @@ namespace MaskedTileKernelIO₁
 
 /-- `io.Implements f` — the tile-indexed sibling of
 `MaskedKernelIO₁.Implements`: same Hoare triple, with lanes ranging over
-`TileIndex io.shape` and addresses given by the window functions. -/
+`TileIndex io.shape` and addresses given by the window functions.
+
+The spec `f` takes the **program id**, for the same reason
+`Masked2DKernelIO₁`'s does: as soon as `io.mask` is pid-dependent — the usual
+tail-masked tiling — a *reduction* over the active lanes is irreducibly
+pid-dependent (a full block reduces a different index set than the tail
+block), so a pid-independent spec would be falsifiable. Pointwise kernels
+simply ignore the argument. -/
 def Implements (io : MaskedTileKernelIO₁)
-    (f : (TileIndex io.shape → ℝ) → TileIndex io.shape → ℝ) : Prop :=
+    (f : Nat → (TileIndex io.shape → ℝ) → TileIndex io.shape → ℝ) : Prop :=
   ∀ A : FlatAlloc,
     A.Disjoint →
     A.regions = [io.inp, io.out] →
@@ -16174,7 +16181,7 @@ def Implements (io : MaskedTileKernelIO₁)
       exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
         = some s'
       ∧ (∀ i : TileIndex io.shape, io.writeMask pid i →
-          s'.readMem A.flat (A.addr io.out (io.write pid i)) = f xs i)
+          s'.readMem A.flat (A.addr io.out (io.write pid i)) = f pid xs i)
       ∧ (∀ r' o',
           (r' ≠ A.flat ∨
             ∀ i : TileIndex io.shape, io.writeMask pid i →
@@ -16219,7 +16226,7 @@ the only difference is that every lane-wise obligation ranges over
 `TileIndex io.shape` and every address comes from a window *function*, so
 nothing in the statement forces a contiguous footprint. -/
 theorem Implements.intro (io : MaskedTileKernelIO₁)
-    {f : (TileIndex io.shape → ℝ) → TileIndex io.shape → ℝ}
+    {f : Nat → (TileIndex io.shape → ℝ) → TileIndex io.shape → ℝ}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
     (hts : ∀ (bounds : RegionBounds) (s : BlockState),
       (∀ i : TileIndex io.shape, io.mask s.pid i →
@@ -16232,7 +16239,7 @@ theorem Implements.intro (io : MaskedTileKernelIO₁)
         s₀.readMem io.inp (io.read s₀.pid i) = xs i) →
       ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
         ∧ (∀ i : TileIndex io.shape, io.writeMask s₀.pid i →
-            s1.readMem io.out (io.write s₀.pid i) = f xs i)
+            s1.readMem io.out (io.write s₀.pid i) = f s₀.pid xs i)
         ∧ (∀ r o,
             (r ≠ io.out ∨
               ∀ i : TileIndex io.shape, io.writeMask s₀.pid i →
@@ -16243,8 +16250,8 @@ theorem Implements.intro (io : MaskedTileKernelIO₁)
   -- family statement; the two `tilePos` round-trips are the whole content of
   -- the conversion
   have hcore : io.toU.Implements
-      (fun _p₀ _p₁ vals _o j =>
-        f (fun i => vals (⟨0, by decide⟩ : Fin 1) (tilePos io.shape i))
+      (fun p₀ _p₁ vals _o j =>
+        f p₀ (fun i => vals (⟨0, by decide⟩ : Fin 1) (tilePos io.shape i))
           ((TileShape.allIndices io.shape).get j)) := by
     refine UKernelIO.Implements.intro _ hok ?_ ?_
     · intro bounds s vals _hpins hib hob _hsb
@@ -16299,9 +16306,10 @@ theorem Implements.intro (io : MaskedTileKernelIO₁)
   · refine (forall_tileIndex_iff _).mp ?_
     intro j hj
     refine (hval (⟨0, by decide⟩ : Fin 1) j hj).trans ?_
-    show f (fun i => xs ((TileShape.allIndices io.shape).get (tilePos io.shape i)))
+    show f pid
+        (fun i => xs ((TileShape.allIndices io.shape).get (tilePos io.shape i)))
         ((TileShape.allIndices io.shape).get j)
-      = f xs ((TileShape.allIndices io.shape).get j)
+      = f pid xs ((TileShape.allIndices io.shape).get j)
     rw [hxs]
   · intro r' o' hcond
     refine hframe r' o' ?_
