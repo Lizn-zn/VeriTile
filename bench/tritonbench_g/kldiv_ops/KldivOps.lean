@@ -61,6 +61,7 @@ namespace VeriTile.Bench.TritonBenchG.KldivOps
 
 open VeriTile.Triton
 open scoped VeriTile.Triton.MaskedKernelIO₂
+open scoped VeriTile.Triton.MaskedKernelIO₁
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -700,6 +701,446 @@ specification kldiv_forward_log_target_none_correctness
     obtain ⟨s1, hexec, hval, hframe⟩ := kldiv_forward_log_target_none_region_run
       y_ptr gt_ptr loss_ptr y_stride gt_stride loss_stride n_cols BLOCK_SIZE
       s₀ ys gts hy hgt
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
+
+theorem kldiv_forward_default_none_flattenOk
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ) :
+    ((kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+      y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [kldiv_forward_default_none, ComputeKernel.toAlgKernel,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk: both masked loads and the masked store address
+their own buffer's window at `pid * stride + j`, active only when `j < n_cols`,
+so the bounds contract is lane-wise. -/
+theorem kldiv_forward_default_none_traceSafe
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (bounds : RegionBounds) (s : BlockState)
+    (hy : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * y_stride + j.val < bounds y_ptr)
+    (hgt : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * gt_stride + j.val < bounds gt_ptr)
+    (hout : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * loss_stride + j.val < bounds loss_ptr) :
+    Kernel.TraceSafe bounds
+      ((kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+        y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [kldiv_forward_default_none, ComputeKernel.toAlgKernel,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe, MemAccess.SafeAt,
+    MaskOpt.Active, BlockState.setReg, Op.PointerAddressesSafeOn,
+    Op.MemorySafe]
+  refine ⟨fun a ha => ?_, fun a ha => ?_, fun a ha => ?_⟩ <;>
+    rw [← Int.natCast_mul, Int.toNat_natCast]
+  · simpa [BlockState.pid] using hy a ha
+  · simpa [BlockState.pid] using hgt a ha
+  · simpa [BlockState.pid] using hout a ha
+
+set_option maxHeartbeats 1600000 in
+/-- The slice touches nothing but its own active output lanes. -/
+theorem kldiv_forward_default_none_frame
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (s s' : BlockState)
+    (hExec : exec (kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+        y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps) s = some s') :
+    ∀ r o, (r ≠ loss_ptr ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+        o ≠ s.pid * loss_stride + j.val) →
+      s'.mem r o = s.mem r o := by
+  simp [exec, kldiv_forward_default_none, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt, -ComparableDType.real_gt_eq_true] at hExec
+  intro r o hcond
+  rw [← hExec]
+  by_cases hr : r = loss_ptr
+  · subst hr
+    rcases hcond with hne | hno
+    · exact absurd rfl hne
+    · refine foldl_writeMem_masked_unhit
+        (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
+        _ _ _ o (fun k _ hk => ?_) _
+      rw [← Int.natCast_mul, Int.toNat_natCast]
+      simpa [BlockState.pid] using (hno k.1 hk).symm
+  · exact BlockState.foldl_writeMem_prop_masked_mem_preserve_other_region
+      _ _ _ _ r hr o _
+
+set_option maxHeartbeats 1600000 in
+/-- **The region-model masked Hoare triple** — termination, active-lane output
+values, and frame off the active output lanes, from any launch state whose input
+windows are loaded at the active lanes only. This is the `hrun` obligation of
+`MaskedKernelIO₂.Implements.intro`. -/
+theorem kldiv_forward_default_none_region_run
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (s₀ : BlockState) (ys gts : Fin BLOCK_SIZE → ℝ)
+    (hy : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem y_ptr (s₀.pid * y_stride + j.val) = ys j)
+    (hgt : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem gt_ptr (s₀.pid * gt_stride + j.val) = gts j) :
+    ∃ s1, exec ((kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+        y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+          s1.readMem loss_ptr (s₀.pid * loss_stride + j.val)
+            = gts j * (Real.log (max (gts j) eps) - ys j))
+      ∧ (∀ r o,
+          (r ≠ loss_ptr ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+            o ≠ s₀.pid * loss_stride + j.val) →
+          s1.mem r o = s₀.mem r o) := by
+  have hInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => linearOffset s₀ loss_stride i) := by
+    intro a b h
+    exact Fin.ext (Nat.add_left_cancel h)
+  cases hsrc : exec ((kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+      y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps).toAlgKernel) s₀ with
+  | none =>
+      exact absurd hsrc (by
+        simp [exec, kldiv_forward_default_none, ComputeKernel.toAlgKernel,
+          stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.ptrAdd,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt, -ComparableDType.real_gt_eq_true])
+  | some s1 =>
+      refine ⟨s1, rfl, fun j hj => ?_, ?_⟩
+      · have h := kldiv_forward_default_none_correct y_ptr gt_ptr loss_ptr
+          y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps s₀ s1 hInj
+          (by simpa using hsrc) j
+        rw [if_pos hj] at h
+        simpa [linearOffset, forwardDefaultSpec, inOffset, hy j hj, hgt j hj]
+          using h
+      · exact kldiv_forward_default_none_frame y_ptr gt_ptr loss_ptr
+          y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps s₀ s1
+          (by simpa using hsrc)
+
+/-- `kldiv_forward_default_none`'s masked **IO signature** — the whole
+kernel-specific audit surface of the headline: which buffer is which argument,
+where program `pid` reads each input tile and writes its output tile (each at
+its **own** stride), and the active-lane predicate `j < n_cols`. The windows and
+mask are declared, not parsed from the kernel: they formalize the host-side
+launch convention (`ptr += pid * stride; offsets = arange; mask = offsets <
+n_cols`), and the headline **proves** the kernel's actual addressing and masking
+match them. Buffer sizes are not signature content: the headline quantifies over
+every allocation whose extents cover the active lanes. -/
+def kldivForwardDefaultIO (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ) : MaskedKernelIO₂ where
+  kernel := kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+    y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps
+  in1 := y_ptr
+  in2 := gt_ptr
+  out := loss_ptr
+  B := BLOCK_SIZE
+  read1 := fun pid => pid * y_stride
+  read2 := fun pid => pid * gt_stride
+  write := fun pid => pid * loss_stride
+  mask := fun _pid j => j.val < n_cols
+
+/-- **The headline on the IO surface**: the `log_target = False` (default),
+`reduction = None` forward slice implements `y_true · (log(max(y_true, eps)) − y)` on its
+masked IO signature — for every disjoint flat placement of the three buffers,
+every program id whose active lanes are in bounds, and every launch state whose
+input windows hold `ys`/`gts` at the active lanes, the translated pointer kernel
+terminates, every active output lane holds the spec value, and every other
+memory cell is unchanged.
+
+This is the audit-once surface; the `Realizes_without_Rounding` face above
+states the same computation against a declared write map but does not pin the
+flat placement. -/
+specification kldiv_forward_default_none_correctness
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ) :
+    kldivForwardDefaultIO y_ptr gt_ptr loss_ptr
+        y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps
+      ⊨ fun ys gts i => gts i * (Real.log (max (gts i) eps) - ys i) := by
+  refine MaskedKernelIO₂.Implements.intro _ ?_ ?_ ?_
+  · exact kldiv_forward_default_none_flattenOk y_ptr gt_ptr loss_ptr
+      y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps
+  · intro bounds s h1 h2 h3 _
+    exact kldiv_forward_default_none_traceSafe y_ptr gt_ptr loss_ptr
+      y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps bounds s h1 h2 h3
+  · intro s₀ ys gts hy hgt
+    obtain ⟨s1, hexec, hval, hframe⟩ := kldiv_forward_default_none_region_run
+      y_ptr gt_ptr loss_ptr y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps
+      s₀ ys gts hy hgt
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
+
+/-! ## ════════ `⊨` IO faces for the backward slices ════════
+
+Both backward slices are one-in / one-out, so they land on `MaskedKernelIO₁`.
+The `TraceSafe` walk is the same pointer-register shape as the forward slice
+(`Op.PointerAddressesSafeOn` + `Op.MemorySafe`, then the `Int.toNat` cleanup),
+and the frame again cases on the region before applying the masked-unhit
+lemma. -/
+
+theorem kldiv_backward_default_flattenOk
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) :
+    ((kldiv_backward_default target_ptr new_grads_ptr
+      target_stride new_grads_stride n_cols BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [kldiv_backward_default, ComputeKernel.toAlgKernel,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+set_option maxHeartbeats 1600000 in
+theorem kldiv_backward_default_traceSafe
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * target_stride + j.val < bounds target_ptr)
+    (hout : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * new_grads_stride + j.val < bounds new_grads_ptr) :
+    Kernel.TraceSafe bounds
+      ((kldiv_backward_default target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [kldiv_backward_default, ComputeKernel.toAlgKernel,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe, MemAccess.SafeAt,
+    MaskOpt.Active, BlockState.setReg, Op.PointerAddressesSafeOn,
+    Op.MemorySafe]
+  refine ⟨fun a ha => ?_, fun a ha => ?_⟩ <;>
+    rw [← Int.natCast_mul, Int.toNat_natCast]
+  · simpa [BlockState.pid] using hin a ha
+  · simpa [BlockState.pid] using hout a ha
+
+set_option maxHeartbeats 1600000 in
+theorem kldiv_backward_default_frame
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hExec : exec (kldiv_backward_default target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE) s = some s') :
+    ∀ r o, (r ≠ new_grads_ptr ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+        o ≠ s.pid * new_grads_stride + j.val) →
+      s'.mem r o = s.mem r o := by
+  simp [exec, kldiv_backward_default, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt] at hExec
+  intro r o hcond
+  rw [← hExec]
+  by_cases hr : r = new_grads_ptr
+  · subst hr
+    rcases hcond with hne | hno
+    · exact absurd rfl hne
+    · refine foldl_writeMem_masked_unhit
+        (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
+        _ _ _ o (fun k _ hk => ?_) _
+      rw [← Int.natCast_mul, Int.toNat_natCast]
+      simpa [BlockState.pid] using (hno k.1 hk).symm
+  · exact BlockState.foldl_writeMem_prop_masked_mem_preserve_other_region
+      _ _ _ _ r hr o _
+
+set_option maxHeartbeats 1600000 in
+theorem kldiv_backward_default_region_run
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
+    (s₀ : BlockState) (ts : Fin BLOCK_SIZE → ℝ)
+    (hin : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem target_ptr (s₀.pid * target_stride + j.val) = ts j) :
+    ∃ s1, exec ((kldiv_backward_default target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+          s1.readMem new_grads_ptr (s₀.pid * new_grads_stride + j.val)
+            = ts j * (0.0 - 1))
+      ∧ (∀ r o,
+          (r ≠ new_grads_ptr ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+            o ≠ s₀.pid * new_grads_stride + j.val) →
+          s1.mem r o = s₀.mem r o) := by
+  have hInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => linearOffset s₀ new_grads_stride i) := by
+    intro a b h
+    exact Fin.ext (Nat.add_left_cancel h)
+  cases hsrc : exec ((kldiv_backward_default target_ptr new_grads_ptr
+      target_stride new_grads_stride n_cols BLOCK_SIZE).toAlgKernel) s₀ with
+  | none =>
+      exact absurd hsrc (by
+        simp [exec, kldiv_backward_default, ComputeKernel.toAlgKernel,
+          stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.ptrAdd,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt])
+  | some s1 =>
+      refine ⟨s1, rfl, fun j hj => ?_, ?_⟩
+      · have h := kldiv_backward_default_correct target_ptr new_grads_ptr
+          target_stride new_grads_stride n_cols BLOCK_SIZE s₀ s1 hInj
+          (by simpa using hsrc) j
+        rw [if_pos hj] at h
+        simpa [linearOffset, defaultSpec, inOffset, hin j hj] using h
+      · exact kldiv_backward_default_frame target_ptr new_grads_ptr
+          target_stride new_grads_stride n_cols BLOCK_SIZE s₀ s1
+          (by simpa using hsrc)
+
+/-- `kldiv_backward_default`'s masked one-in/one-out **IO signature**. -/
+def kldivBackwardDefaultIO (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) : MaskedKernelIO₁ where
+  kernel := kldiv_backward_default target_ptr new_grads_ptr
+    target_stride new_grads_stride n_cols BLOCK_SIZE
+  inp := target_ptr
+  out := new_grads_ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * target_stride
+  write := fun pid => pid * new_grads_stride
+  mask := fun _pid j => j.val < n_cols
+
+/-- **The headline on the IO surface** for the `log_target = False` backward
+slice: the gradient is `−target` on every active lane. -/
+specification kldiv_backward_default_correctness
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) :
+    kldivBackwardDefaultIO target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE
+      ⊨ fun ts i => ts i * (0.0 - 1) := by
+  refine MaskedKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact kldiv_backward_default_flattenOk target_ptr new_grads_ptr
+      target_stride new_grads_stride n_cols BLOCK_SIZE
+  · intro bounds s h1 h2 _
+    exact kldiv_backward_default_traceSafe target_ptr new_grads_ptr
+      target_stride new_grads_stride n_cols BLOCK_SIZE bounds s h1 h2
+  · intro s₀ ts hin
+    obtain ⟨s1, hexec, hval, hframe⟩ := kldiv_backward_default_region_run
+      target_ptr new_grads_ptr target_stride new_grads_stride n_cols BLOCK_SIZE
+      s₀ ts hin
+    exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
+
+theorem kldiv_backward_log_target_flattenOk
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) :
+    ((kldiv_backward_log_target target_ptr new_grads_ptr
+      target_stride new_grads_stride n_cols BLOCK_SIZE).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [kldiv_backward_log_target, ComputeKernel.toAlgKernel,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+
+set_option maxHeartbeats 1600000 in
+theorem kldiv_backward_log_target_traceSafe
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * target_stride + j.val < bounds target_ptr)
+    (hout : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s.pid * new_grads_stride + j.val < bounds new_grads_ptr) :
+    Kernel.TraceSafe bounds
+      ((kldiv_backward_log_target target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE).toAlgKernel) s := by
+  unfold Kernel.TraceSafe
+  simp [kldiv_backward_log_target, ComputeKernel.toAlgKernel,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.cop, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, NumericDType.sub, ComparableDType.lt, WithBot.realExp,
+    MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe, MemAccess.SafeAt,
+    MaskOpt.Active, BlockState.setReg, Op.PointerAddressesSafeOn,
+    Op.MemorySafe]
+  refine ⟨fun a ha => ?_, fun a ha => ?_⟩ <;>
+    rw [← Int.natCast_mul, Int.toNat_natCast]
+  · simpa [BlockState.pid] using hin a ha
+  · simpa [BlockState.pid] using hout a ha
+
+set_option maxHeartbeats 1600000 in
+theorem kldiv_backward_log_target_frame
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
+    (s s' : BlockState)
+    (hExec : exec (kldiv_backward_log_target target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE) s = some s') :
+    ∀ r o, (r ≠ new_grads_ptr ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+        o ≠ s.pid * new_grads_stride + j.val) →
+      s'.mem r o = s.mem r o := by
+  simp [exec, kldiv_backward_log_target, stepStmts, stepStmt, evalOp,
+        evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.uop, Tile.ptrAdd,
+        NumericDType.add, NumericDType.mul, NumericDType.sub,
+        ComparableDType.lt, WithBot.realExp] at hExec
+  intro r o hcond
+  rw [← hExec]
+  by_cases hr : r = new_grads_ptr
+  · subst hr
+    rcases hcond with hne | hno
+    · exact absurd rfl hne
+    · refine foldl_writeMem_masked_unhit
+        (P := fun idx : TileIndex [BLOCK_SIZE] => idx.1.val < n_cols)
+        _ _ _ o (fun k _ hk => ?_) _
+      rw [← Int.natCast_mul, Int.toNat_natCast]
+      simpa [BlockState.pid] using (hno k.1 hk).symm
+  · exact BlockState.foldl_writeMem_prop_masked_mem_preserve_other_region
+      _ _ _ _ r hr o _
+
+set_option maxHeartbeats 1600000 in
+theorem kldiv_backward_log_target_region_run
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat)
+    (s₀ : BlockState) (ts : Fin BLOCK_SIZE → ℝ)
+    (hin : ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+      s₀.readMem target_ptr (s₀.pid * target_stride + j.val) = ts j) :
+    ∃ s1, exec ((kldiv_backward_log_target target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+          s1.readMem new_grads_ptr (s₀.pid * new_grads_stride + j.val)
+            = 0.0 - Real.exp (ts j))
+      ∧ (∀ r o,
+          (r ≠ new_grads_ptr ∨ ∀ j : Fin BLOCK_SIZE, j.val < n_cols →
+            o ≠ s₀.pid * new_grads_stride + j.val) →
+          s1.mem r o = s₀.mem r o) := by
+  have hInj : Function.Injective
+      (fun i : Fin BLOCK_SIZE => linearOffset s₀ new_grads_stride i) := by
+    intro a b h
+    exact Fin.ext (Nat.add_left_cancel h)
+  cases hsrc : exec ((kldiv_backward_log_target target_ptr new_grads_ptr
+      target_stride new_grads_stride n_cols BLOCK_SIZE).toAlgKernel) s₀ with
+  | none =>
+      exact absurd hsrc (by
+        simp [exec, kldiv_backward_log_target, ComputeKernel.toAlgKernel,
+          stepStmts, stepStmt, evalOp.eq_def, Tile.bop, Tile.uop, Tile.ptrAdd,
+          NumericDType.add, NumericDType.mul, NumericDType.sub,
+          ComparableDType.lt, WithBot.realExp])
+  | some s1 =>
+      refine ⟨s1, rfl, fun j hj => ?_, ?_⟩
+      · have h := kldiv_backward_log_target_correct target_ptr new_grads_ptr
+          target_stride new_grads_stride n_cols BLOCK_SIZE s₀ s1 hInj
+          (by simpa using hsrc) j
+        rw [if_pos hj] at h
+        simpa [linearOffset, logTargetSpec, inOffset, hin j hj] using h
+      · exact kldiv_backward_log_target_frame target_ptr new_grads_ptr
+          target_stride new_grads_stride n_cols BLOCK_SIZE s₀ s1
+          (by simpa using hsrc)
+
+/-- `kldiv_backward_log_target`'s masked one-in/one-out **IO signature**. -/
+def kldivBackwardLogTargetIO (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) : MaskedKernelIO₁ where
+  kernel := kldiv_backward_log_target target_ptr new_grads_ptr
+    target_stride new_grads_stride n_cols BLOCK_SIZE
+  inp := target_ptr
+  out := new_grads_ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * target_stride
+  write := fun pid => pid * new_grads_stride
+  mask := fun _pid j => j.val < n_cols
+
+/-- **The headline on the IO surface** for the `log_target = True` backward
+slice: the gradient is `−exp(target)` on every active lane. -/
+specification kldiv_backward_log_target_correctness
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) :
+    kldivBackwardLogTargetIO target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE
+      ⊨ fun ts i => 0.0 - Real.exp (ts i) := by
+  refine MaskedKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact kldiv_backward_log_target_flattenOk target_ptr new_grads_ptr
+      target_stride new_grads_stride n_cols BLOCK_SIZE
+  · intro bounds s h1 h2 _
+    exact kldiv_backward_log_target_traceSafe target_ptr new_grads_ptr
+      target_stride new_grads_stride n_cols BLOCK_SIZE bounds s h1 h2
+  · intro s₀ ts hin
+    obtain ⟨s1, hexec, hval, hframe⟩ := kldiv_backward_log_target_region_run
+      target_ptr new_grads_ptr target_stride new_grads_stride n_cols BLOCK_SIZE
+      s₀ ts hin
     exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
 end VeriTile.Bench.TritonBenchG.KldivOps
