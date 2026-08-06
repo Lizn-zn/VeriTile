@@ -47,6 +47,7 @@ injective (`hOutInj` on `matrixOffset` / `matrixOffsetShift`).
 namespace VeriTile.Bench.TritonBenchG.NestedLoopsProcessing
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedTileKernelIO₁
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -1069,5 +1070,174 @@ specification nested3_output_summary_general
     nested3_second_i_second_j_second_k_a1_store_compute_correct in_ptr out_ptr stride_m stride_n s hInj42,
     nested3_second_i_second_j_second_k_a2_store_compute_correct in_ptr out_ptr stride_m stride_n s hInj44,
     nested3_second_i_second_j_second_k_a3_store_compute_correct in_ptr out_ptr stride_m stride_n s hInj46⟩
+
+/-! ## ════════ `⊨` IO face for the `a1` 2×2 store ════════
+
+The first loop body's `a1` store is a straight-line, *unmasked* 2×2 tile memcpy:
+read and write share the strided address `i·stride_m + j·stride_n`. That is
+`MaskedTileKernelIO₁`'s shape at the degenerate mask `True`. -/
+
+section IOFace
+
+/-- Cell-level frame of an unmasked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame_unmasked {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k))
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl, BlockState.writeMem_mem, if_neg ?_]
+      rintro ⟨h1, h2⟩
+      rcases hc with h | h
+      · exact h h1
+      · exact h hd List.mem_cons_self h2.symm
+
+theorem a1Store_flattenOk (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat) :
+    ((nested3_first_a1_store in_ptr out_ptr stride_m stride_n).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [nested3_first_a1_store, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem a1Store_terminates (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
+    (s : BlockState) :
+    ∃ s1, exec (nested3_first_a1_store in_ptr out_ptr stride_m stride_n) s
+      = some s1 := by
+  simp [exec, nested3_first_a1_store, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind, Option.map,
+    Tile.bop, Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+    TileShape.insertAxis, TileShape.dropInsertedIndex]
+
+theorem a1Store_frame (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
+    (s s' : BlockState)
+    (hExec : exec (nested3_first_a1_store in_ptr out_ptr stride_m stride_n) s
+      = some s') :
+    ∀ (r : RegionName) (n : Nat),
+      (r ≠ out_ptr ∨ ∀ idx : TileIndex [2, 2],
+        n ≠ matrixOffset stride_m stride_n idx) →
+      s'.mem r n = s.mem r n := by
+  intro r n hcond
+  simp only [matrixOffset, rowIndex, colIndex] at hcond
+  simp [exec, nested3_first_a1_store, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind, Option.map,
+    Tile.bop, Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+    TileShape.insertAxis, TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame_unmasked (region := out_ptr)
+    (fun i : TileIndex [2, 2] => i.1.val * stride_m + i.2.1.val * stride_n)
+    _ r n (TileShape.allIndices [2, 2]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ => Ne.symm (h idx)
+
+theorem a1Store_traceSafe (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [2, 2],
+      matrixOffset stride_m stride_n idx < bounds in_ptr)
+    (hout : ∀ idx : TileIndex [2, 2],
+      matrixOffset stride_m stride_n idx < bounds out_ptr) :
+    ((nested3_first_a1_store in_ptr out_ptr stride_m stride_n).toAlgKernel).TraceSafe
+      bounds s := by
+  simp only [matrixOffset, rowIndex, colIndex] at hin hout
+  simp [Kernel.TraceSafe, nested3_first_a1_store, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeList,
+    Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+    MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+    TileShape.insertAxis, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try simp [Op.SafeAt.eq_def]
+  -- the four lanes of the 2×2 window, on both buffers
+  all_goals try (simpa using hin (0, 0, PUnit.unit))
+  all_goals try (simpa using hin (0, 1, PUnit.unit))
+  all_goals try (simpa using hin (1, 0, PUnit.unit))
+  all_goals try (simpa using hin (1, 1, PUnit.unit))
+  all_goals try (simpa using hout (0, 0, PUnit.unit))
+  all_goals try (simpa using hout (0, 1, PUnit.unit))
+  all_goals try (simpa using hout (1, 0, PUnit.unit))
+  all_goals try (simpa using hout (1, 1, PUnit.unit))
+
+/-- Region-model run of the `a1` store. -/
+theorem a1Store_region_run (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
+    (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [2, 2] => matrixOffset stride_m stride_n idx))
+    (xs : TileIndex [2, 2] → ℝ)
+    (hx : ∀ idx : TileIndex [2, 2],
+      s₀.readMem in_ptr (matrixOffset stride_m stride_n idx) = xs idx) :
+    ∃ s1, exec (nested3_first_a1_store in_ptr out_ptr stride_m stride_n) s₀
+        = some s1
+      ∧ (∀ idx : TileIndex [2, 2],
+          s1.readMem out_ptr (matrixOffset stride_m stride_n idx) = xs idx)
+      ∧ (∀ (r : RegionName) (n : Nat),
+          (r ≠ out_ptr ∨ ∀ idx : TileIndex [2, 2],
+            n ≠ matrixOffset stride_m stride_n idx) →
+          s1.mem r n = s₀.mem r n) := by
+  obtain ⟨s1, hexec⟩ := a1Store_terminates in_ptr out_ptr stride_m stride_n s₀
+  refine ⟨s1, hexec, fun idx => ?_,
+    a1Store_frame in_ptr out_ptr stride_m stride_n s₀ s1 hexec⟩
+  rw [nested3_first_a1_store_correct in_ptr out_ptr stride_m stride_n s₀ s1
+    hOutInj hexec idx, hx idx]
+
+/-- IO signature of the `a1` 2×2 store. -/
+def a1StoreIO (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := nested3_first_a1_store in_ptr out_ptr stride_m stride_n
+  inp := in_ptr
+  out := out_ptr
+  shape := [2, 2]
+  read := fun _pid idx => idx.1.val * stride_m + idx.2.1.val * stride_n
+  write := fun _pid idx => idx.1.val * stride_m + idx.2.1.val * stride_n
+  mask := fun _pid _idx => True
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `nested_loops_processing.py`'s first
+`a1` writeback: for every disjoint flat placement of `in_ptr` / `out_ptr` whose
+2×2 strided window is in bounds, and every launch state whose `in_ptr` window
+holds `xs`, the kernel terminates, every lane of the `out_ptr` window holds
+`xs idx`, and every other memory cell is unchanged.
+
+The store is unmasked, so the mask is `True` and the readback is total on the
+window. General in both strides; honest side-condition = window injectivity, the
+same hypothesis the per-write-map summary takes (`stride_m = stride_n` aliases
+the two diagonal lanes). The tile extents are literal `2 × 2` because the Python
+kernel's `tl.arange(0, 2)` are literals. -/
+specification nested3_first_a1_store_io_correctness
+    (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [2, 2] =>
+        idx.1.val * stride_m + idx.2.1.val * stride_n)) :
+    a1StoreIO in_ptr out_ptr stride_m stride_n ⊨ fun _pid xs idx => xs idx := by
+  refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact a1Store_flattenOk in_ptr out_ptr stride_m stride_n
+  · intro bounds s h1 h2
+    exact a1Store_traceSafe in_ptr out_ptr stride_m stride_n bounds s
+      (fun idx => h1 idx trivial) (fun idx => h2 idx trivial)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      a1Store_region_run in_ptr out_ptr stride_m stride_n s₀ hOutInj xs
+        (fun idx => hx idx trivial)
+    exact ⟨s1, hexec, fun idx _ => hval idx, fun r n hc => hframe r n (by
+      rcases hc with hr | hn
+      · exact Or.inl hr
+      · exact Or.inr fun idx => hn idx trivial)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.NestedLoopsProcessing
