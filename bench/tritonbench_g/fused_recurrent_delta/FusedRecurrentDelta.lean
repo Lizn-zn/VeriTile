@@ -185,6 +185,7 @@ pointer initializations are parenthesized into the ℕ domain
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentDelta
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileShapedKernelIO₂
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -3441,6 +3442,242 @@ specification fused_recurrent_delta_output_summary_general
       beta do_ dq IS_HEADWISE_BETA m s_qk_h s_vo_h B H T K V BK BV scale s hDkInj
 
 end Correct_without_Rounding
+
+/-! ## ════════ `⊨` IO face for the output step ════════
+
+One loop body's output store is a **contraction**: it reads the `[BV, BK]` state
+tile `HNext` and the `[BK]` time-`t` row of `q`, and writes the `[BV]` time-`t`
+row of `o`, all addressed off the three program axes `(i_v, i_k, i_bh)`. That is
+`Masked3DTileShapedKernelIO₂`'s shape — per-channel tile shapes, three axes — with
+the `tl.sum(_, axis = 1)` living entirely inside the spec function. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+set_option maxHeartbeats 1000000 in
+theorem outputStep_flattenOk (HNext q o : RegionName)
+    (t s_qk_h s_vo_h B H K V BK BV : Nat) (scale : ℝ) :
+    ((fused_recurrent_delta_output_step_slice HNext q o t s_qk_h s_vo_h B H K V
+      BK BV scale).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [fused_recurrent_delta_output_step_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+set_option maxHeartbeats 1000000 in
+theorem outputStep_terminates (HNext q o : RegionName)
+    (t s_qk_h s_vo_h B H K V BK BV : Nat) (scale : ℝ) (s : BlockState) :
+    ∃ s1, exec (fused_recurrent_delta_output_step_slice HNext q o t s_qk_h s_vo_h
+      B H K V BK BV scale) s = some s1 := by
+  simp [exec, fused_recurrent_delta_output_step_slice, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+
+set_option maxHeartbeats 1000000 in
+theorem outputStep_frame (HNext q o : RegionName)
+    (t s_qk_h s_vo_h B H K V BK BV : Nat) (scale : ℝ) (s s' : BlockState)
+    (hExec : exec (fused_recurrent_delta_output_step_slice HNext q o t s_qk_h
+      s_vo_h B H K V BK BV scale) s = some s') :
+    ∀ (r : RegionName) (n : Nat),
+      (r ≠ o ∨ ∀ jv : Fin BV, activeV s V BV jv →
+        n ≠ outOffset s t s_vo_h B H V BV jv) →
+      s'.mem r n = s.mem r n := by
+  intro r n hcond
+  simp only [activeV, vIndex, outOffset] at hcond
+  simp [exec, fused_recurrent_delta_output_step_slice, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := o)
+    (fun i : TileIndex [BV] =>
+      (s.pids 2 + s.pids 1 * B * H) * s_vo_h + s.pids 0 * BV + i.1.val + t * V)
+    _ (fun i : TileIndex [BV] => s.pids 0 * BV + i.1.val < V) r n
+    (TileShape.allIndices [BV]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx.1 hidx)
+
+set_option maxHeartbeats 1000000 in
+theorem outputStep_traceSafe (HNext q o : RegionName)
+    (t s_qk_h s_vo_h B H K V BK BV : Nat) (scale : ℝ)
+    (bounds : RegionBounds) (s : BlockState)
+    (hstate : ∀ idx : TileIndex [BV, BK], activeKV s K V BK BV idx →
+      stateOffset s K V BK BV idx < bounds HNext)
+    (hq : ∀ jk : Fin BK, activeK s K BK jk →
+      s.pids 2 * s_qk_h + s.pids 1 * BK + jk.val + t * K < bounds q)
+    (hout : ∀ jv : Fin BV, activeV s V BV jv →
+      outOffset s t s_vo_h B H V BV jv < bounds o) :
+    ((fused_recurrent_delta_output_step_slice HNext q o t s_qk_h s_vo_h B H K V
+      BK BV scale).toAlgKernel).TraceSafe bounds s := by
+  simp only [activeKV, activeK, activeV, kIndex, vIndex, stateOffset,
+    outOffset] at hstate hq hout
+  simp [Kernel.TraceSafe, fused_recurrent_delta_output_step_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b h1 h2 => hstate (a, b, PUnit.unit) ⟨h1, h2⟩
+  all_goals try exact fun a h => hq a h
+  all_goals try exact fun a h => hout a h
+  all_goals simp [Op.SafeAt.eq_def]
+
+set_option maxHeartbeats 1000000 in
+/-- Region-model run of the output store. -/
+theorem outputStep_region_run (HNext q o : RegionName)
+    (t s_qk_h s_vo_h B H K V BK BV : Nat) (scale : ℝ) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun jv : Fin BV => outOffset s₀ t s_vo_h B H V BV jv))
+    (xs : TileIndex [BV, BK] → ℝ) (ys : TileIndex [BK] → ℝ)
+    (hx : ∀ idx : TileIndex [BV, BK], activeKV s₀ K V BK BV idx →
+      s₀.readMem HNext (stateOffset s₀ K V BK BV idx) = xs idx)
+    (hy : ∀ jk : TileIndex [BK], activeK s₀ K BK jk.1 →
+      s₀.readMem q (s₀.pids 2 * s_qk_h + s₀.pids 1 * BK + jk.1.val + t * K)
+        = ys jk) :
+    ∃ s1, exec (fused_recurrent_delta_output_step_slice HNext q o t s_qk_h s_vo_h
+        B H K V BK BV scale) s₀ = some s1
+      ∧ (∀ jv : TileIndex [BV], activeV s₀ V BV jv.1 →
+          s1.readMem o (outOffset s₀ t s_vo_h B H V BV jv.1)
+            = ∑ jk : Fin BK,
+                if s₀.pids 1 * BK + jk.val < K then
+                  xs (jv.1, jk, PUnit.unit) * (scale * ys (jk, PUnit.unit))
+                else 0)
+      ∧ (∀ (r : RegionName) (n : Nat),
+          (r ≠ o ∨ ∀ jv : Fin BV, activeV s₀ V BV jv →
+            n ≠ outOffset s₀ t s_vo_h B H V BV jv) →
+          s1.mem r n = s₀.mem r n) := by
+  obtain ⟨s1, hexec⟩ := outputStep_terminates HNext q o t s_qk_h s_vo_h B H K V
+    BK BV scale s₀
+  refine ⟨s1, hexec, ?_, outputStep_frame HNext q o t s_qk_h s_vo_h B H K V BK BV
+    scale s₀ s1 hexec⟩
+  intro jv hact
+  have h := fused_recurrent_delta_output_step_slice_correct HNext q o t s_qk_h
+    s_vo_h B H K V BK BV scale s₀ hOutInj jv.1
+  have hval : s1.readMem o (outOffset s₀ t s_vo_h B H V BV jv.1)
+      = if activeV s₀ V BV jv.1 then
+          outputStepSpec s₀ HNext q t s_qk_h K V BK BV scale jv.1
+        else s₀.readMem o (outOffset s₀ t s_vo_h B H V BV jv.1) := by
+    simpa [hexec] using h
+  rw [hval, if_pos hact, outputStepSpec]
+  refine Finset.sum_congr rfl fun jk _ => ?_
+  by_cases hk : activeK s₀ K BK jk
+  · rw [if_pos hk, if_pos (by simpa [activeK, kIndex] using hk),
+      hx (jv.1, jk, PUnit.unit) ⟨hk, hact⟩, qVal, kVal,
+      hy (jk, PUnit.unit) hk]
+  · rw [if_neg hk, if_neg (by simpa [activeK, kIndex] using hk)]
+
+/-- IO signature of the output store: the `[BV, BK]` state tile and the `[BK]`
+`q` row contract into the `[BV]` `o` row. -/
+noncomputable def outputStepIO (HNext q o : RegionName)
+    (t s_qk_h s_vo_h B H K V BK BV : Nat) :
+    Masked3DTileShapedKernelIO₂ where
+  kernel := fused_recurrent_delta_output_step_slice HNext q o t s_qk_h s_vo_h B H
+    K V BK BV 1
+  in1 := HNext
+  in2 := q
+  out := o
+  shape1 := [BV, BK]
+  shape2 := [BK]
+  shapeOut := [BV]
+  read1 := fun p₀ p₁ p₂ idx =>
+    p₂ * K * V + (p₁ * BK + idx.2.1.val) * V + (p₀ * BV + idx.1.val)
+  read2 := fun _p₀ p₁ p₂ jk => p₂ * s_qk_h + p₁ * BK + jk.1.val + t * K
+  write := fun p₀ p₁ p₂ jv =>
+    (p₂ + p₁ * B * H) * s_vo_h + p₀ * BV + jv.1.val + t * V
+  mask1 := fun p₀ p₁ _p₂ idx =>
+    p₁ * BK + idx.2.1.val < K ∧ p₀ * BV + idx.1.val < V
+  mask2 := fun _p₀ p₁ _p₂ jk => p₁ * BK + jk.1.val < K
+  writeMask := fun p₀ _p₁ _p₂ jv => p₀ * BV + jv.1.val < V
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `fused_recurrent_delta_rule.py`'s
+output store: for every disjoint flat placement of `HNext` / `q` / `o`, every
+program coordinate whose active lanes are in bounds, and every launch state whose
+`HNext` state tile holds `xs` and whose `q` row holds `ys` on their active lanes,
+the kernel terminates, every write-active lane of the `o` row holds the guarded
+contraction `Σ_{j_k} ⟦i_k·BK + j_k < K⟧ · xs[j_v, j_k] · ys[j_k]`, and every other
+memory cell is unchanged.
+
+The `mask_bk` guard inside the sum is not a proof convenience: it is what Python's
+`other = 0` loads do, and dropping it would make the face false for partial key
+tiles. Dimension-general in `K`, `V`, `BK`, `BV`, `B`, `H` and the strides; stated
+at `scale = 1`, where the kernel's `b_q = tl.load(...) * scale` is the loaded row
+itself — the general-`scale` face is the same statement with `ys` scaled, already
+carried by `fused_recurrent_delta_output_step_slice_correct`. Honest
+side-condition: output-address injectivity at every program coordinate. -/
+specification fused_recurrent_delta_output_step_io_correctness
+    (HNext q o : RegionName) (t s_qk_h s_vo_h B H K V BK BV : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun jv : Fin BV =>
+        (p₂ + p₁ * B * H) * s_vo_h + p₀ * BV + jv.val + t * V)) :
+    outputStepIO HNext q o t s_qk_h s_vo_h B H K V BK BV
+      ⊨ fun _p₀ p₁ xs ys jv =>
+          ∑ jk : Fin BK,
+            if p₁ * BK + jk.val < K then
+              xs (jv.1, jk, PUnit.unit) * ys (jk, PUnit.unit)
+            else 0 := by
+  refine Masked3DTileShapedKernelIO₂.Implements.intro _ ?_ ?_ ?_
+  · exact outputStep_flattenOk HNext q o t s_qk_h s_vo_h B H K V BK BV 1
+  · intro bounds s h1 h2 h3
+    exact outputStep_traceSafe HNext q o t s_qk_h s_vo_h B H K V BK BV 1 bounds s
+      (fun idx hact => h1 idx hact) (fun jk hact => h2 (jk, PUnit.unit) hact)
+      (fun jv hact => h3 (jv, PUnit.unit) hact)
+  · intro s₀ xs ys hx hy
+    have h := outputStep_region_run HNext q o t s_qk_h s_vo_h B H K V BK BV 1 s₀
+      (by
+        have := hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)
+        simpa [outOffset] using this) xs ys
+      (fun idx hact => hx idx hact) (fun jk hact => hy jk hact)
+    obtain ⟨s1, hexec, hval, hframe⟩ := h
+    refine ⟨s1, hexec, fun jv hact => ?_, fun r n hc => hframe r n ?_⟩
+    · refine (hval jv hact).trans (Finset.sum_congr rfl fun jk _ => ?_)
+      by_cases hk : s₀.pids 1 * BK + jk.val < K
+      · rw [if_pos hk, if_pos hk, one_mul]
+      · rw [if_neg hk, if_neg hk]
+    · rcases hc with hr | hn
+      · exact Or.inl hr
+      · exact Or.inr fun jv hact => hn (jv, PUnit.unit) hact
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentDelta
 
