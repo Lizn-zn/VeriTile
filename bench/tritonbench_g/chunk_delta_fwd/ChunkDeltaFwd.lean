@@ -94,6 +94,7 @@ one.
 namespace VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -2063,6 +2064,283 @@ specification chunk_delta_fwd_exec_genuine
     rfl
 
 end Correct_without_Rounding
+
+/-! ## ════════ `⊨` IO face for the per-chunk `h` writeback ════════
+
+The launched kernel is a two-level loop (`i_t` over chunks, `i_c` inside), so its
+own `⊨` face would need a full nested-`forRange` safety walk. Its per-chunk state
+writeback
+
+```python
+        p_h = tl.make_block_ptr(base=h + i_bh*s_h_h + i_t*K*V, shape=(K, V),
+                                strides=(s_h_t, 1), offsets=(i_k*BK, i_v*BV),
+                                block_shape=(BK, BV), order=(1, 0))
+        tl.store(p_h, b_h.to(p_h.dtype.element_ty), boundary_check=[0, 1])
+```
+
+is a masked `[BK, BV]` memcpy of the carry register at the flat window `hOffset`,
+so `chunk_delta_h_state_store_slice` transcribes it with the loop variable `i_t`
+as a `Nat` parameter and the carry register materialized into a scratch region
+`HPre`. Two documented modeling choices, both already used by the twin surface in
+`chunk_gated_attention`: the block pointer's `boundary_check = [0, 1]` is written
+as the equivalent lane mask `(offs_k < K) & (offs_v < V)`, and **`HPre` is a
+fiction region** — it stands for the register `b_h`, not for a Python tensor, so
+this is a statement about the writeback, not about the recurrence (whose math the
+port's own closed-form summary carries).
+
+That shape is `Masked3DTileKernelIO₁` — no new library surface. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+/-- The per-chunk `h` writeback of `chunk_delta_rule_fwd_h_surface`, with the
+carry register materialized into `HPre` and the loop variable `i_t` a parameter. -/
+def chunk_delta_h_state_store_slice
+    (HPre h : RegionName) (i_t s_h_h s_h_t K V BK BV : Nat) :
+    ComputeKernel := triton {
+  i_k = tl.program_id(0)
+  i_v = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
+  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
+  mask = (offs_k[:, None] < $(K)) & (offs_v[None, :] < $(V))
+  b_h = tl.load(HPre + i_bh * $(s_h_h) + $(i_t) * $(K) * $(V) +
+      offs_k[:, None] * $(s_h_t) + offs_v[None, :],
+    mask=mask, other=0.0)
+  tl.store(h + i_bh * $(s_h_h) + $(i_t) * $(K) * $(V) +
+      offs_k[:, None] * $(s_h_t) + offs_v[None, :],
+    (b_h).to(h.dtype.element_ty), mask=mask)
+}
+
+/-- The per-lane value the writeback stores: the materialized carry on an active
+lane, `0` elsewhere (the `other = 0.0` of the load). -/
+noncomputable def hStoreValue (s : BlockState) (HPre : RegionName)
+    (i_t s_h_h s_h_t K V BK BV : Nat) (idx : TileIndex [BK, BV]) : ℝ :=
+  WithBot.unbotD 0
+    (if active s K V BK BV idx then
+      some (s.readMem HPre (hOffset s i_t s_h_h s_h_t K V BK BV idx))
+    else some (0.0 : ℝ))
+
+theorem chunk_delta_h_state_store_slice_correct
+    (HPre h : RegionName) (i_t s_h_h s_h_t K V BK BV : Nat) (s : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        hOffset s i_t s_h_h s_h_t K V BK BV idx)) :
+    ∀ idx : TileIndex [BK, BV],
+      let outAddr := hOffset s i_t s_h_h s_h_t K V BK BV idx
+      (exec (chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK BV)
+          s).map (·.readMem h outAddr)
+        = some (if active s K V BK BV idx then
+            hStoreValue s HPre i_t s_h_h s_h_t K V BK BV idx
+          else s.readMem h outAddr) := by
+  intro idx
+  simp [exec, chunk_delta_h_state_store_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    kIndex, vIndex, active, hOffset, TileShape.dropInsertedIndex]
+  let offsetFn : TileIndex [BK, BV] → Nat :=
+    fun idx => s.pids 2 * s_h_h + i_t * K * V +
+      (s.pids 0 * BK + idx.1.val) * s_h_t + (s.pids 1 * BV + idx.2.1.val)
+  let valueFn : TileIndex [BK, BV] → ℝ :=
+    fun idx => WithBot.unbotD 0
+      (if s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V then
+        some (s.readMem HPre (offsetFn idx))
+      else some (0.0 : ℝ))
+  let P : TileIndex [BK, BV] → Prop :=
+    fun idx => s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, hOffset, kIndex, vIndex] using hOutInj
+  change (List.foldl
+      (fun (acc : BlockState) i =>
+        if P i then acc.writeMem h (offsetFn i) (valueFn i) else acc)
+      _ (TileShape.allIndices [BK, BV])).readMem h (offsetFn idx) =
+    if P idx then hStoreValue s HPre i_t s_h_h s_h_t K V BK BV idx
+    else s.readMem h (offsetFn idx)
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj idx]
+  by_cases hActive : s.pids 0 * BK + idx.1.val < K ∧
+      s.pids 1 * BV + idx.2.1.val < V
+  · rfl
+  · rfl
+
+theorem h_state_flattenOk (HPre h : RegionName)
+    (i_t s_h_h s_h_t K V BK BV : Nat) :
+    ((chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V
+      BK BV).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [chunk_delta_h_state_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem h_state_terminates (HPre h : RegionName)
+    (i_t s_h_h s_h_t K V BK BV : Nat) (s : BlockState) :
+    ∃ s1, exec (chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK BV)
+      s = some s1 := by
+  simp [exec, chunk_delta_h_state_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    TileShape.dropInsertedIndex]
+
+theorem h_state_frame (HPre h : RegionName) (i_t s_h_h s_h_t K V BK BV : Nat)
+    (s s' : BlockState)
+    (hExec : exec (chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK
+      BV) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ h ∨ ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+        o ≠ hOffset s i_t s_h_h s_h_t K V BK BV idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp only [active, kIndex, vIndex, hOffset] at hcond
+  simp [exec, chunk_delta_h_state_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := h)
+    (fun idx : TileIndex [BK, BV] => s.pids 2 * s_h_h + i_t * K * V
+      + (s.pids 0 * BK + idx.1.val) * s_h_t + (s.pids 1 * BV + idx.2.1.val))
+    _ (fun idx : TileIndex [BK, BV] =>
+      s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V)
+    r o (TileShape.allIndices [BK, BV]) ?_]
+  · simp
+  · rcases hcond with hc | hc
+    · exact Or.inl hc
+    · exact Or.inr fun idx _ hidx => Ne.symm (hc idx hidx)
+
+theorem h_state_traceSafe (HPre h : RegionName)
+    (i_t s_h_h s_h_t K V BK BV : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+      hOffset s i_t s_h_h s_h_t K V BK BV idx < bounds HPre)
+    (hout : ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+      hOffset s i_t s_h_h s_h_t K V BK BV idx < bounds h) :
+    ((chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V
+      BK BV).toAlgKernel).TraceSafe bounds s := by
+  simp only [active, kIndex, vIndex, hOffset] at hin hout
+  simp [Kernel.TraceSafe, chunk_delta_h_state_store_slice, Stmt.TraceSafeList,
+    Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+    MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try simp [Op.SafeAt.eq_def]
+
+/-- Region-model run of the per-chunk `h` writeback. -/
+theorem h_state_region_run (HPre h : RegionName)
+    (i_t s_h_h s_h_t K V BK BV : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        hOffset s₀ i_t s_h_h s_h_t K V BK BV idx))
+    (xs : TileIndex [BK, BV] → ℝ)
+    (hx : ∀ idx : TileIndex [BK, BV], active s₀ K V BK BV idx →
+      s₀.readMem HPre (hOffset s₀ i_t s_h_h s_h_t K V BK BV idx) = xs idx) :
+    ∃ s1, exec (chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK BV)
+        s₀ = some s1
+      ∧ (∀ idx : TileIndex [BK, BV], active s₀ K V BK BV idx →
+          s1.readMem h (hOffset s₀ i_t s_h_h s_h_t K V BK BV idx) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ h ∨ ∀ idx : TileIndex [BK, BV], active s₀ K V BK BV idx →
+            o ≠ hOffset s₀ i_t s_h_h s_h_t K V BK BV idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := h_state_terminates HPre h i_t s_h_h s_h_t K V BK BV s₀
+  refine ⟨s1, hexec, ?_,
+    h_state_frame HPre h i_t s_h_h s_h_t K V BK BV s₀ s1 hexec⟩
+  intro idx hact
+  have hc := chunk_delta_h_state_store_slice_correct HPre h i_t s_h_h s_h_t K V
+    BK BV s₀ hOutInj idx
+  have hval : s1.readMem h (hOffset s₀ i_t s_h_h s_h_t K V BK BV idx)
+      = if active s₀ K V BK BV idx then
+          hStoreValue s₀ HPre i_t s_h_h s_h_t K V BK BV idx
+        else s₀.readMem h (hOffset s₀ i_t s_h_h s_h_t K V BK BV idx) := by
+    simpa [hexec] using hc
+  rw [hval, if_pos hact, hStoreValue, if_pos hact]
+  simpa using hx idx hact
+
+/-- IO signature of the per-chunk `h` writeback on the three-axis tile surface. -/
+def h_stateIO (HPre h : RegionName) (i_t s_h_h s_h_t K V BK BV : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK BV
+  inp := HPre
+  out := h
+  shape := [BK, BV]
+  read := fun p₀ p₁ p₂ idx =>
+    p₂ * s_h_h + i_t * K * V + (p₀ * BK + idx.1.val) * s_h_t
+      + (p₁ * BV + idx.2.1.val)
+  write := fun p₀ p₁ p₂ idx =>
+    p₂ * s_h_h + i_t * K * V + (p₀ * BK + idx.1.val) * s_h_t
+      + (p₁ * BV + idx.2.1.val)
+  mask := fun p₀ p₁ _p₂ idx =>
+    p₀ * BK + idx.1.val < K ∧ p₁ * BV + idx.2.1.val < V
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `chunk_delta_rule_fwd_h_surface`'s
+per-chunk `h` writeback: for every disjoint flat placement of `HPre` / `h`, every
+program coordinate whose active lanes are in bounds, and every launch state whose
+`HPre` block holds `xs` at the active lanes, the writeback terminates, every
+active lane of `h` holds `xs idx`, and every other memory cell is unchanged.
+
+**Scope.** `HPre` is a **fiction region**: it stands for the kernel's carry
+register `b_h`, not for a Python tensor — the same idiom as
+`fused_recurrent_retention`'s `HSeed`. The delta-rule recurrence that produces the
+carry keeps its own closed-form summary above; this face is the writeback's
+contract, and the two meet at the carry. The block pointer's
+`boundary_check = [0, 1]` is transcribed as the equivalent lane mask, exactly as
+in the twin `chunk_gated_attention` surface.
+
+Dimension-general in `i_t`, `s_h_h`, `s_h_t`, `K`, `V`, `BK` and `BV`. Honest
+side-condition: address injectivity at every program coordinate, the same
+hypothesis the per-write-map summaries take. -/
+specification chunk_delta_h_state_store_io_correctness
+    (HPre h : RegionName) (i_t s_h_h s_h_t K V BK BV : Nat)
+    (hInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        p₂ * s_h_h + i_t * K * V + (p₀ * BK + idx.1.val) * s_h_t
+          + (p₁ * BV + idx.2.1.val))) :
+    h_stateIO HPre h i_t s_h_h s_h_t K V BK BV
+      ⊨ fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact h_state_flattenOk HPre h i_t s_h_h s_h_t K V BK BV
+  · intro bounds s h1 h2
+    exact h_state_traceSafe HPre h i_t s_h_h s_h_t K V BK BV bounds s
+      (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+  · intro s₀ xs hin
+    exact h_state_region_run HPre h i_t s_h_h s_h_t K V BK BV s₀
+      (hInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+      (fun idx hact => hin idx hact)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
 
