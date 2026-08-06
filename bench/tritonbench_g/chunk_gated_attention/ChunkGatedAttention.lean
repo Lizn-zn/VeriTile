@@ -132,6 +132,7 @@ is a function of the *initial* state, so aliasing cannot falsify a face.
 namespace VeriTile.Bench.TritonBenchG.ChunkGatedAttention
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 
@@ -1595,6 +1596,295 @@ specification chunk_gated_attention_cum_slice_output_summary_general
       s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV idx
 
 end Correct_without_Rounding
+
+
+/-! ## ════════ `⊨` IO face for the two state writebacks ════════
+
+The summaries above are stated per *declared write map*. This section restates both
+masked state writebacks on the audit-once IO surface
+`Masked3DTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat memory**
+placement.
+
+Zero new library surface: both slices are masked `[BK, BV]` tile memcpys whose one
+address (the same on the source and the destination) is built from all three program
+axes (`i_v`, `i_k`, `i_bh`), gated by the kernels' own
+`offs_k < KSize ∧ offs_v < VSize`. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+theorem h_state_flattenOk (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat) :
+    ((chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [chunk_gated_attention_h_state_store_slice, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem h_state_terminates (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (s : BlockState) :
+    ∃ s1, exec (chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV) s = some s1 := by
+  simp [exec, chunk_gated_attention_h_state_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    TileShape.dropInsertedIndex]
+
+theorem h_state_frame (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (s s' : BlockState)
+    (hExec : exec (chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ H ∨ ∀ idx : TileIndex [BK, BV], stateActive s KSize VSize BK BV idx →
+        o ≠ hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, chunk_gated_attention_h_state_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := H)
+    (fun idx : TileIndex [BK, BV] => s.pids 2 * s_h_h + i_t * KSize * VSize
+        + (s.pids 1 * BK + idx.1.val) * s_h_t
+        + (s.pids 0 * BV + idx.2.1.val) * s_h_d)
+    _ (fun idx : TileIndex [BK, BV] =>
+      s.pids 1 * BK + idx.1.val < KSize ∧ s.pids 0 * BV + idx.2.1.val < VSize)
+    r o (TileShape.allIndices [BK, BV]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem h_state_traceSafe (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BK, BV], stateActive s KSize VSize BK BV idx →
+      hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx < bounds BH)
+    (hout : ∀ idx : TileIndex [BK, BV], stateActive s KSize VSize BK BV idx →
+      hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx < bounds H) :
+    ((chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, chunk_gated_attention_h_state_store_slice, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try (simp [Op.SafeAt.eq_def]; done)
+
+theorem h_state_region_run (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => hStateOffset s₀ i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx))
+    (xs : TileIndex [BK, BV] → ℝ)
+    (hx : ∀ idx : TileIndex [BK, BV], stateActive s₀ KSize VSize BK BV idx →
+      s₀.readMem BH (hStateOffset s₀ i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx) = xs idx) :
+    ∃ s1, exec (chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BK, BV], stateActive s₀ KSize VSize BK BV idx →
+          s1.readMem H (hStateOffset s₀ i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ H ∨ ∀ idx : TileIndex [BK, BV],
+            stateActive s₀ KSize VSize BK BV idx → o ≠ hStateOffset s₀ i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := h_state_terminates BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV s₀
+  refine ⟨s1, hexec, ?_, h_state_frame BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV s₀ s1 hexec⟩
+  intro idx hact
+  have h := chunk_gated_attention_h_state_store_slice_correct BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV s₀ hOutInj idx
+  have hval : s1.readMem H (hStateOffset s₀ i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx)
+      = if stateActive s₀ KSize VSize BK BV idx then hStateStoreValue s₀ BH i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx
+        else s₀.readMem H (hStateOffset s₀ i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx) := by
+    simpa [hexec] using h
+  rw [hval, if_pos hact, hStateStoreValue, if_pos hact]
+  simpa using hx idx hact
+
+/-- IO signature of `chunk_gated_attention_h_state_store_slice` on the three-axis tile surface. -/
+def h_stateIO (BH H : RegionName) (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV
+  inp := BH
+  out := H
+  shape := [BK, BV]
+  read := fun p₀ p₁ p₂ idx => p₂ * s_h_h + i_t * KSize * VSize + (p₁ * BK + idx.1.val) * s_h_t
+      + (p₀ * BV + idx.2.1.val) * s_h_d
+  write := fun p₀ p₁ p₂ idx => p₂ * s_h_h + i_t * KSize * VSize + (p₁ * BK + idx.1.val) * s_h_t
+      + (p₀ * BV + idx.2.1.val) * s_h_d
+  mask := fun p₀ p₁ _p₂ idx =>
+    p₁ * BK + idx.1.val < KSize ∧ p₀ * BV + idx.2.1.val < VSize
+
+theorem final_state_flattenOk (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat) :
+    ((chunk_gated_attention_final_state_store_slice BHFinal Ht KSize VSize BK BV).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [chunk_gated_attention_final_state_store_slice, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem final_state_terminates (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat)
+    (s : BlockState) :
+    ∃ s1, exec (chunk_gated_attention_final_state_store_slice BHFinal Ht KSize VSize BK BV) s = some s1 := by
+  simp [exec, chunk_gated_attention_final_state_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    TileShape.dropInsertedIndex]
+
+theorem final_state_frame (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat)
+    (s s' : BlockState)
+    (hExec : exec (chunk_gated_attention_final_state_store_slice BHFinal Ht KSize VSize BK BV) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Ht ∨ ∀ idx : TileIndex [BK, BV], finalActive s KSize VSize BK BV idx →
+        o ≠ finalStateOffset s KSize VSize BK BV idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, chunk_gated_attention_final_state_store_slice, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Ht)
+    (fun idx : TileIndex [BK, BV] => s.pids 2 * KSize * VSize + (s.pids 1 * BK + idx.1.val) * VSize
+        + (s.pids 0 * BV + idx.2.1.val))
+    _ (fun idx : TileIndex [BK, BV] =>
+      s.pids 1 * BK + idx.1.val < KSize ∧ s.pids 0 * BV + idx.2.1.val < VSize)
+    r o (TileShape.allIndices [BK, BV]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem final_state_traceSafe (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BK, BV], finalActive s KSize VSize BK BV idx →
+      finalStateOffset s KSize VSize BK BV idx < bounds BHFinal)
+    (hout : ∀ idx : TileIndex [BK, BV], finalActive s KSize VSize BK BV idx →
+      finalStateOffset s KSize VSize BK BV idx < bounds Ht) :
+    ((chunk_gated_attention_final_state_store_slice BHFinal Ht KSize VSize BK BV).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, chunk_gated_attention_final_state_store_slice, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try (simp [Op.SafeAt.eq_def]; done)
+
+theorem final_state_region_run (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat)
+    (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s₀ KSize VSize BK BV idx))
+    (xs : TileIndex [BK, BV] → ℝ)
+    (hx : ∀ idx : TileIndex [BK, BV], finalActive s₀ KSize VSize BK BV idx →
+      s₀.readMem BHFinal (finalStateOffset s₀ KSize VSize BK BV idx) = xs idx) :
+    ∃ s1, exec (chunk_gated_attention_final_state_store_slice BHFinal Ht KSize VSize BK BV) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BK, BV], finalActive s₀ KSize VSize BK BV idx →
+          s1.readMem Ht (finalStateOffset s₀ KSize VSize BK BV idx) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Ht ∨ ∀ idx : TileIndex [BK, BV],
+            finalActive s₀ KSize VSize BK BV idx → o ≠ finalStateOffset s₀ KSize VSize BK BV idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := final_state_terminates BHFinal Ht KSize VSize BK BV s₀
+  refine ⟨s1, hexec, ?_, final_state_frame BHFinal Ht KSize VSize BK BV s₀ s1 hexec⟩
+  intro idx hact
+  have h := chunk_gated_attention_final_state_store_slice_correct BHFinal Ht KSize VSize BK BV s₀ hOutInj idx
+  have hval : s1.readMem Ht (finalStateOffset s₀ KSize VSize BK BV idx)
+      = if finalActive s₀ KSize VSize BK BV idx then finalStateStoreValue s₀ BHFinal KSize VSize BK BV idx
+        else s₀.readMem Ht (finalStateOffset s₀ KSize VSize BK BV idx) := by
+    simpa [hexec] using h
+  rw [hval, if_pos hact, finalStateStoreValue, if_pos hact]
+  simpa using hx idx hact
+
+/-- IO signature of `chunk_gated_attention_final_state_store_slice` on the three-axis tile surface. -/
+def final_stateIO (BHFinal Ht : RegionName) (KSize VSize BK BV : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := chunk_gated_attention_final_state_store_slice BHFinal Ht KSize VSize BK BV
+  inp := BHFinal
+  out := Ht
+  shape := [BK, BV]
+  read := fun p₀ p₁ p₂ idx => p₂ * KSize * VSize + (p₁ * BK + idx.1.val) * VSize
+      + (p₀ * BV + idx.2.1.val)
+  write := fun p₀ p₁ p₂ idx => p₂ * KSize * VSize + (p₁ * BK + idx.1.val) * VSize
+      + (p₀ * BV + idx.2.1.val)
+  mask := fun p₀ p₁ _p₂ idx =>
+    p₁ * BK + idx.1.val < KSize ∧ p₀ * BV + idx.2.1.val < VSize
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `chunk_gated_attention.py`'s two masked
+state writebacks (the per-chunk `H` store and the `STORE_FINAL_STATE` `Ht` store):
+for every disjoint flat placement of the source and destination buffers, every
+program coordinate whose active lanes are in bounds, and every launch state whose
+source block holds `xs` at the active lanes, each slice terminates, every active lane
+of the destination holds `xs idx`, and every other memory cell is unchanged.
+
+Both are masked `[BK, BV]` memcpys whose single address is built from all three
+program axes (`i_v`, `i_k`, `i_bh`) — no new library surface. Dimension-general in
+`i_t`, the three `s_h_*` strides, `KSize`, `VSize`, `BK` and `BV`. Honest
+side-condition: address injectivity at every program coordinate, the same hypothesis
+the per-write-map summaries take. -/
+specification chunk_gated_attention_state_stores_io_correctness
+    (BH H BHFinal Ht : RegionName)
+    (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (hInj1 : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        p₂ * s_h_h + i_t * KSize * VSize + (p₁ * BK + idx.1.val) * s_h_t
+          + (p₀ * BV + idx.2.1.val) * s_h_d))
+    (hInj2 : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        p₂ * KSize * VSize + (p₁ * BK + idx.1.val) * VSize
+          + (p₀ * BV + idx.2.1.val))) :
+    (h_stateIO BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV
+      ⊨ fun _p₀ _p₁ xs idx => xs idx) ∧
+    (final_stateIO BHFinal Ht KSize VSize BK BV
+      ⊨ fun _p₀ _p₁ xs idx => xs idx) := by
+  constructor
+  · refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+    · exact h_state_flattenOk BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV
+    · intro bounds s h1 h2
+      exact h_state_traceSafe BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV
+        bounds s (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+    · intro s₀ xs hin
+      exact h_state_region_run BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV s₀
+        (hInj1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+        (fun idx hact => hin idx hact)
+  · refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+    · exact final_state_flattenOk BHFinal Ht KSize VSize BK BV
+    · intro bounds s h1 h2
+      exact final_state_traceSafe BHFinal Ht KSize VSize BK BV bounds s
+        (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+    · intro s₀ xs hin
+      exact final_state_region_run BHFinal Ht KSize VSize BK BV s₀
+        (hInj2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+        (fun idx hact => hin idx hact)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention
 
