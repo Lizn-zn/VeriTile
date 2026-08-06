@@ -119,6 +119,7 @@ function of the *initial* state, so aliasing cannot falsify a face.
 namespace VeriTile.Bench.TritonBenchG.ChunkGateRecurrence
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 
@@ -1715,6 +1716,185 @@ specification chunk_gate_recurrence_output_summary_general
       (by omega) hDaccTail
 
 end Correct_without_Rounding
+
+
+/-! ## ════════ `⊨` IO face for the forward output store ════════
+
+The summary above is stated per *declared write map*. This section restates the
+forward `Acc → O` chunk store on the audit-once IO surface
+`Masked3DTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat memory**
+placement.
+
+Zero new library surface: the slice is an unmasked `[BLOCK_MODEL_K, BLOCK_MODEL_V]`
+tile copy whose two addresses are built from **all three** program axes
+(`offset_bh`, `offset_d`, `offset_s`) with different leading factors on the two
+buffers — exactly what the three-axis tile skin's window functions take. -/
+
+section IOFace
+
+/-- Cell-level frame of an unmasked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame_unmasked {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k => acc.writeMem region (offsetFn k) (valueFn k))
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl, BlockState.writeMem_mem, if_neg ?_]
+      rintro ⟨h1, h2⟩
+      rcases hc with h | h
+      · exact h h1
+      · exact h hd List.mem_cons_self h2.symm
+
+theorem fwd_store_flattenOk (Acc O : RegionName) (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat) :
+    ((chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [chunk_gate_recurrence_forward_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem fwd_store_terminates (Acc O : RegionName) (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat) (s : BlockState) :
+    ∃ s1, exec (chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V) s = some s1 := by
+  simp [exec, chunk_gate_recurrence_forward_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, TileShape.dropInsertedIndex]
+
+theorem fwd_store_frame (Acc O : RegionName) (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat) (s s' : BlockState)
+    (hExec : exec (chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ O ∨ ∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
+        o ≠ outOffset s NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, chunk_gate_recurrence_forward_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+    TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame_unmasked (region := O)
+    (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
+      s.pids 0 * NUM_BLOCK * D_MODEL_K * D_MODEL_V
+        + s.pids 1 * D_MODEL_V * BLOCK_MODEL_K + idx.1.val * D_MODEL_V
+        + s.pids 2 * BLOCK_MODEL_V + idx.2.1.val)
+    _ r o (TileShape.allIndices [BLOCK_MODEL_K, BLOCK_MODEL_V]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ => Ne.symm (h idx)
+
+theorem fwd_store_traceSafe (Acc O : RegionName) (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
+      accOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx
+        < bounds Acc)
+    (hout : ∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
+      outOffset s NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx < bounds O) :
+    ((chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V).toAlgKernel).TraceSafe
+      bounds s := by
+  simp [Kernel.TraceSafe, chunk_gate_recurrence_forward_store_slice,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, NumericDType.add,
+    NumericDType.mul, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b => hin (a, b, PUnit.unit)
+  all_goals try exact fun a b => hout (a, b, PUnit.unit)
+  all_goals try (simp [Op.SafeAt.eq_def]; done)
+
+/-- Region-model run of the forward output store. -/
+theorem fwd_store_region_run (Acc O : RegionName) (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
+        outOffset s₀ NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx))
+    (xs : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
+      s₀.readMem Acc
+          (accOffset s₀ D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx)
+        = xs idx) :
+    ∃ s1, exec (chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
+          s1.readMem O (outOffset s₀ NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ O ∨ ∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
+            o ≠ outOffset s₀ NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := fwd_store_terminates Acc O NUM_BLOCK D_MODEL_K D_MODEL_V
+    BLOCK_MODEL_K BLOCK_MODEL_V s₀
+  refine ⟨s1, hexec, ?_, fwd_store_frame Acc O NUM_BLOCK D_MODEL_K D_MODEL_V
+    BLOCK_MODEL_K BLOCK_MODEL_V s₀ s1 hexec⟩
+  intro idx
+  have h := chunk_gate_recurrence_forward_store_slice_correct Acc O NUM_BLOCK
+    D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V s₀ hOutInj idx
+  have h' : s1.readMem O (outOffset s₀ NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx)
+      = s₀.readMem Acc
+        (accOffset s₀ D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx) := by
+    simpa [hexec] using h
+  rw [h', hx idx]
+
+/-- IO signature of the forward output store on the three-axis tile surface. -/
+def fwdStoreIO (Acc O : RegionName) (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat) : Masked3DTileKernelIO₁ where
+  kernel := chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V
+  inp := Acc
+  out := O
+  shape := [BLOCK_MODEL_K, BLOCK_MODEL_V]
+  read := fun p₀ p₁ p₂ idx =>
+    p₀ * D_MODEL_K * D_MODEL_V + p₁ * D_MODEL_V * BLOCK_MODEL_K
+      + idx.1.val * D_MODEL_V + p₂ * BLOCK_MODEL_V + idx.2.1.val
+  write := fun p₀ p₁ p₂ idx =>
+    p₀ * NUM_BLOCK * D_MODEL_K * D_MODEL_V + p₁ * D_MODEL_V * BLOCK_MODEL_K
+      + idx.1.val * D_MODEL_V + p₂ * BLOCK_MODEL_V + idx.2.1.val
+  mask := fun _p₀ _p₁ _p₂ _ => True
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `chunk_gate_recurrence.py`'s forward
+output chunk store: for every disjoint flat placement of `Acc` / `O`, every program
+coordinate whose lanes are in bounds, and every launch state whose `Acc` chunk holds
+`xs`, the translated pointer kernel terminates, every lane of the `O` chunk holds
+`xs idx`, and every other memory cell is unchanged.
+
+Both windows are built from all three program axes with different leading factors on
+the two buffers. Dimension-general in `NUM_BLOCK`, `D_MODEL_K`, `D_MODEL_V` and the
+two block sizes. Honest side-condition: output-address injectivity at every program
+coordinate, the same hypothesis the per-write-map summary takes. -/
+specification chunk_gate_recurrence_forward_store_io_correctness
+    (Acc O : RegionName) (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
+        p₀ * NUM_BLOCK * D_MODEL_K * D_MODEL_V + p₁ * D_MODEL_V * BLOCK_MODEL_K
+          + idx.1.val * D_MODEL_V + p₂ * BLOCK_MODEL_V + idx.2.1.val)) :
+    fwdStoreIO Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V ⊨ fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact fwd_store_flattenOk Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
+      BLOCK_MODEL_V
+  · intro bounds s h1 h2
+    exact fwd_store_traceSafe Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
+      BLOCK_MODEL_V bounds s (fun idx => h1 idx trivial) (fun idx => h2 idx trivial)
+  · intro s₀ xs hin
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      fwd_store_region_run Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
+        BLOCK_MODEL_V s₀ (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+        (fun idx => hin idx trivial)
+    exact ⟨s1, hexec, fun idx _ => hval idx,
+      fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr fun idx => h idx trivial)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.ChunkGateRecurrence
 
