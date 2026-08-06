@@ -71,6 +71,7 @@ softmax). The self-referential `produced…Value` carriers are retired.
 namespace VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 
@@ -3933,6 +3934,386 @@ specification block_sparse_attn_output_closed_form_summary_general
     rw [hOut2 idx, if_pos (show s.pids 0 * BLOCK_M + idx.1.val < total_seq_len from hActive)]
     exact bsa_streaming_eq_closedFormG s Q K V C BLOCK_M BLOCK_D BLOCK_N num_heads num_kv_heads num_layout
       sqb sqh sqm skb skh skn svb svh svn scale (end_l - start_l) hBN hN start_l BLOCK_D idx (hVis0 idx hActive)
+
+
+/-! ## ════════ `⊨` IO face for the two output-block stores ════════
+
+The summaries above are stated per *declared write map*. This section restates both
+output-block stores on the audit-once IO surface
+`Masked3DTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat memory**
+placement. Zero new library surface: both slices are masked `[BLOCK_M, BLOCK_D]` tile
+copies whose two addresses are built from the two program axes — with `pid₁` split
+into `(batch, head)` by `/ num_heads` and `% num_heads`, which the window *functions*
+absorb without comment. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+theorem out_store_flattenOk (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) :
+    ((block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+      BLOCK_D).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [block_sparse_attn_output_store_slice, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem out_store_terminates (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (s : BlockState) :
+    ∃ s1, exec (block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len stride_acc_b
+      stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D) s = some s1 := by
+  simp [exec, block_sparse_attn_output_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, TileShape.dropInsertedIndex]
+
+theorem out_store_frame (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (s s' : BlockState)
+    (hExec : exec (block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len stride_acc_b
+      stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+        active s total_seq_len BLOCK_M idx →
+        o ≠ outOffset s num_heads stride_ob stride_oh stride_om BLOCK_M idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, block_sparse_attn_output_store_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Out)
+    (fun i : TileIndex [BLOCK_M, BLOCK_D] =>
+      s.pids 1 / num_heads * stride_ob + s.pids 1 % num_heads * stride_oh
+        + (s.pids 0 * BLOCK_M + i.1.val) * stride_om + i.2.1.val)
+    _ (fun i : TileIndex [BLOCK_M, BLOCK_D] =>
+      s.pids 0 * BLOCK_M + i.1.val < total_seq_len) r o
+    (TileShape.allIndices [BLOCK_M, BLOCK_D]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem out_store_traceSafe (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      accOffset s num_heads stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        BLOCK_M idx < bounds Acc)
+    (hout : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      outOffset s num_heads stride_ob stride_oh stride_om BLOCK_M idx
+        < bounds Out) :
+    ((block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+      BLOCK_D).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, block_sparse_attn_output_store_slice, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha => hin (a, b, PUnit.unit) ha
+  all_goals try exact fun a b ha => hout (a, b, PUnit.unit) ha
+  all_goals try (simp [Op.SafeAt.eq_def]; done)
+
+theorem out_store_region_run (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        outOffset s₀ num_heads stride_ob stride_oh stride_om BLOCK_M idx))
+    (xs : TileIndex [BLOCK_M, BLOCK_D] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s₀ total_seq_len BLOCK_M idx →
+      s₀.readMem Acc (accOffset s₀ num_heads stride_acc_b stride_acc_h
+        stride_acc_m stride_acc_d BLOCK_M idx) = xs idx) :
+    ∃ s1, exec (block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len stride_acc_b
+        stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+        BLOCK_M BLOCK_D) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+          active s₀ total_seq_len BLOCK_M idx →
+          s1.readMem Out (outOffset s₀ num_heads stride_ob stride_oh stride_om
+            BLOCK_M idx) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+            active s₀ total_seq_len BLOCK_M idx →
+            o ≠ outOffset s₀ num_heads stride_ob stride_oh stride_om
+              BLOCK_M idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := out_store_terminates Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D s₀
+  refine ⟨s1, hexec, ?_, out_store_frame Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D s₀ s1 hexec⟩
+  intro idx hact
+  have h := block_sparse_attn_output_store_slice_correct Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D s₀ hOutInj idx
+  have h' : s1.readMem Out (outOffset s₀ num_heads stride_ob stride_oh stride_om
+        BLOCK_M idx)
+      = if active s₀ total_seq_len BLOCK_M idx then
+          accStoreValue s₀ Acc num_heads total_seq_len stride_acc_b
+            stride_acc_h stride_acc_m stride_acc_d BLOCK_M idx
+        else s₀.readMem Out (outOffset s₀ num_heads stride_ob stride_oh stride_om
+          BLOCK_M idx) := by
+    simpa [hexec] using h
+  rw [h', if_pos hact, accStoreValue, if_pos hact]
+  simpa using hx idx hact
+
+/-- IO signature of `block_sparse_attn_output_store_slice` on the three-axis tile surface. -/
+def out_storeIO (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) : Masked3DTileKernelIO₁ where
+  kernel := block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+    stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+  inp := Acc
+  out := Out
+  shape := [BLOCK_M, BLOCK_D]
+  read := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_acc_b + p₁ % num_heads * stride_acc_h
+      + (p₀ * BLOCK_M + idx.1.val) * stride_acc_m + idx.2.1.val * stride_acc_d
+  write := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+      + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val
+  mask := fun p₀ _p₁ _p₂ idx => p₀ * BLOCK_M + idx.1.val < total_seq_len
+
+theorem out2_store_flattenOk (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) :
+    ((block_sparse_attn_output_store_second_slice Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+      BLOCK_D).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [block_sparse_attn_output_store_second_slice, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem out2_store_terminates (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (s : BlockState) :
+    ∃ s1, exec (block_sparse_attn_output_store_second_slice Acc2 Out num_heads total_seq_len stride_acc_b
+      stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D) s = some s1 := by
+  simp [exec, block_sparse_attn_output_store_second_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, TileShape.dropInsertedIndex]
+
+theorem out2_store_frame (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (s s' : BlockState)
+    (hExec : exec (block_sparse_attn_output_store_second_slice Acc2 Out num_heads total_seq_len stride_acc_b
+      stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+        active s total_seq_len BLOCK_M idx →
+        o ≠ out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, block_sparse_attn_output_store_second_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Out)
+    (fun i : TileIndex [BLOCK_M, BLOCK_D] =>
+      s.pids 1 / num_heads * stride_ob + s.pids 1 % num_heads * stride_oh
+        + (s.pids 0 * BLOCK_M + i.1.val) * stride_om + BLOCK_D + i.2.1.val)
+    _ (fun i : TileIndex [BLOCK_M, BLOCK_D] =>
+      s.pids 0 * BLOCK_M + i.1.val < total_seq_len) r o
+    (TileShape.allIndices [BLOCK_M, BLOCK_D]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem out2_store_traceSafe (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      accOffset s num_heads stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        BLOCK_M idx < bounds Acc2)
+    (hout : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx
+        < bounds Out) :
+    ((block_sparse_attn_output_store_second_slice Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+      BLOCK_D).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, block_sparse_attn_output_store_second_slice, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.ptrAdd, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha => hin (a, b, PUnit.unit) ha
+  all_goals try exact fun a b ha => hout (a, b, PUnit.unit) ha
+  all_goals try (simp [Op.SafeAt.eq_def]; done)
+
+theorem out2_store_region_run (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        out2Offset s₀ num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx))
+    (xs : TileIndex [BLOCK_M, BLOCK_D] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s₀ total_seq_len BLOCK_M idx →
+      s₀.readMem Acc2 (accOffset s₀ num_heads stride_acc_b stride_acc_h
+        stride_acc_m stride_acc_d BLOCK_M idx) = xs idx) :
+    ∃ s1, exec (block_sparse_attn_output_store_second_slice Acc2 Out num_heads total_seq_len stride_acc_b
+        stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+        BLOCK_M BLOCK_D) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+          active s₀ total_seq_len BLOCK_M idx →
+          s1.readMem Out (out2Offset s₀ num_heads stride_ob stride_oh stride_om
+            BLOCK_M BLOCK_D idx) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+            active s₀ total_seq_len BLOCK_M idx →
+            o ≠ out2Offset s₀ num_heads stride_ob stride_oh stride_om
+              BLOCK_M BLOCK_D idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := out2_store_terminates Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D s₀
+  refine ⟨s1, hexec, ?_, out2_store_frame Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D s₀ s1 hexec⟩
+  intro idx hact
+  have h := block_sparse_attn_output_store_second_slice_correct Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D s₀ hOutInj idx
+  have h' : s1.readMem Out (out2Offset s₀ num_heads stride_ob stride_oh stride_om
+        BLOCK_M BLOCK_D idx)
+      = if active s₀ total_seq_len BLOCK_M idx then
+          accStoreValue s₀ Acc2 num_heads total_seq_len stride_acc_b
+            stride_acc_h stride_acc_m stride_acc_d BLOCK_M idx
+        else s₀.readMem Out (out2Offset s₀ num_heads stride_ob stride_oh stride_om
+          BLOCK_M BLOCK_D idx) := by
+    simpa [hexec] using h
+  rw [h', if_pos hact, accStoreValue, if_pos hact]
+  simpa using hx idx hact
+
+/-- IO signature of `block_sparse_attn_output_store_second_slice` on the three-axis tile surface. -/
+def out2_storeIO (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) : Masked3DTileKernelIO₁ where
+  kernel := block_sparse_attn_output_store_second_slice Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+    stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+  inp := Acc2
+  out := Out
+  shape := [BLOCK_M, BLOCK_D]
+  read := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_acc_b + p₁ % num_heads * stride_acc_h
+      + (p₀ * BLOCK_M + idx.1.val) * stride_acc_m + idx.2.1.val * stride_acc_d
+  write := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+      + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val
+  mask := fun p₀ _p₁ _p₂ idx => p₀ * BLOCK_M + idx.1.val < total_seq_len
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `block_sparse_attn.py`'s two output-block
+stores: for every disjoint flat placement of the source and `Out` buffers, every
+program coordinate whose active lanes are in bounds, and every launch state whose
+accumulator tile holds `xs` at the active lanes, each slice terminates, every active
+lane of the output block holds `xs idx`, and every other memory cell is unchanged.
+
+`pid₁` is split into `(batch, head)` by `/ num_heads` and `% num_heads`; the window
+*functions* absorb that with no new library surface. The second slice differs only by
+the `+ BLOCK_D` column shift of its write window.
+
+Dimension-general in `num_heads`, `total_seq_len`, all seven strides, `BLOCK_M` and
+`BLOCK_D`. Honest side-condition: output-address injectivity at every program
+coordinate, the same hypothesis the per-write-map summaries take. -/
+specification block_sparse_attn_output_stores_io_correctness
+    (Acc Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat)
+    (hInj1 : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val))
+    (hInj2 : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val)) :
+    (out_storeIO Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+      ⊨ fun _p₀ _p₁ xs idx => xs idx) ∧
+    (out2_storeIO Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+      ⊨ fun _p₀ _p₁ xs idx => xs idx) := by
+  constructor
+  · refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+    · exact out_store_flattenOk Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+          BLOCK_D
+    · intro bounds s h1 h2
+      exact out_store_traceSafe Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+          BLOCK_D bounds s
+        (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+    · intro s₀ xs hin
+      exact out_store_region_run Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+          BLOCK_D s₀
+        (hInj1 (s₀.pids 0) (s₀.pids 1)) xs (fun idx hact => hin idx hact)
+  · refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+    · exact out2_store_flattenOk Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+          BLOCK_D
+    · intro bounds s h1 h2
+      exact out2_store_traceSafe Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+          BLOCK_D bounds s
+        (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+    · intro s₀ xs hin
+      exact out2_store_region_run Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+          stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M
+          BLOCK_D s₀
+        (hInj2 (s₀.pids 0) (s₀.pids 1)) xs (fun idx hact => hin idx hact)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
 
