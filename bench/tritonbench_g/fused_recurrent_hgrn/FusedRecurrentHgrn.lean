@@ -88,6 +88,7 @@ is needed. What is **outside** every claim in this file:
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedTileShapedKernelIO₂
 
 set_option linter.unusedSimpArgs false
 
@@ -1493,6 +1494,233 @@ specification fused_recurrent_hgrn_output_summary_general
       hT hSeed
 
 end Correct_without_Rounding
+
+
+/-! ## ════════ `⊨` IO face for the backward `dx` step store ════════
+
+The summary above is stated per *declared write map*. This section restates the
+backward `dx` step store on the audit-once IO surface
+`MaskedTileShapedKernelIO₂.Implements` (`⊨`), which additionally pins the **flat
+memory** placement.
+
+Zero new library surface: the slice reads two `[BD]` tiles (`DHPrev` and `DO`) at the
+same row window, adds them, and stores the sum to `DX` at that window, gated by the
+kernel's own `offs_d < D`. Two inputs of the same shape is exactly what the
+per-channel-shape skin's degenerate case is. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+/-- `Op.SafeAt` of a masked region load, unfolded once. Used as a *term*: the
+per-case equation does not fire under `simp` on a `.load` node whose dtype is the
+computed `ComputeDType.fp32.eraseDType`. -/
+private theorem safeAt_load_region_maskOther {d : TileDType} {shape : TileShape}
+    (bounds : RegionBounds) (s : BlockState) (R : RegionName)
+    (off : Op .nat shape) (m : Op .bool shape) (other : Op d shape)
+    (h1 : Op.SafeAt bounds s off) (h2 : Op.SafeAt bounds s m)
+    (h3 : Op.SafeAt bounds s other)
+    (h4 : MemAccess.ActiveAddressSafe bounds (MemAccess.region R off) s
+      ((MaskOpt.maskOther m other).Active s)) :
+    Op.SafeAt bounds s
+      (Op.load d (MemAccess.region R off) (MaskOpt.maskOther m other)) := by
+  rw [Op.SafeAt]
+  exact ⟨h1, ⟨h2, h3⟩, h4⟩
+
+/-- `Op.SafeAt` of a register reference is vacuous. -/
+private theorem safeAt_ref (bounds : RegionBounds) (s : BlockState)
+    (dtype : TileDType) (shape : TileShape) (name : RegName) :
+    Op.SafeAt bounds s (Op.ref dtype shape name) := by
+  rw [Op.SafeAt]
+  trivial
+
+/-- The row window is injective outright — it is `base + lane` — so the readback's
+`hOutInj` precondition is a theorem here, not a hypothesis the headline carries. -/
+private theorem outOffset_inj (s : BlockState) (i_t T D BD : Nat) :
+    Function.Injective (fun i : Fin BD => outOffset s i_t T D BD i) := by
+  intro a b h
+  simp only [outOffset, dIndex] at h
+  exact Fin.ext (Nat.add_left_cancel (Nat.add_left_cancel h))
+
+theorem bwd_dx_flattenOk (DHPrev DO DX : RegionName) (i_t T D BD : Nat) :
+    ((fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX i_t T D
+      BD).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [fused_recurrent_hgrn_bwd_dx_step_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem bwd_dx_terminates (DHPrev DO DX : RegionName) (i_t T D BD : Nat)
+    (s : BlockState) :
+    ∃ s1, exec (fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX i_t T D
+      BD) s = some s1 := by
+  simp [exec, fused_recurrent_hgrn_bwd_dx_step_store_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast]
+
+theorem bwd_dx_frame (DHPrev DO DX : RegionName) (i_t T D BD : Nat)
+    (s s' : BlockState)
+    (hExec : exec (fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX i_t
+      T D BD) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ DX ∨ ∀ i : Fin BD, active s D BD i → o ≠ outOffset s i_t T D BD i) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, fused_recurrent_hgrn_bwd_dx_step_store_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := DX)
+    (fun i : TileIndex [BD] => (s.pids 1 * T + i_t) * D + (s.pids 0 * BD + i.1.val))
+    _ (fun i : TileIndex [BD] => s.pids 0 * BD + i.1.val < D) r o
+    (TileShape.allIndices [BD]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun i _ hi => Ne.symm (h i.1 hi)
+
+theorem bwd_dx_traceSafe (DHPrev DO DX : RegionName) (i_t T D BD : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (h1 : ∀ i : Fin BD, active s D BD i → outOffset s i_t T D BD i < bounds DHPrev)
+    (h2 : ∀ i : Fin BD, active s D BD i → outOffset s i_t T D BD i < bounds DO)
+    (h3 : ∀ i : Fin BD, active s D BD i → outOffset s i_t T D BD i < bounds DX) :
+    ((fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX i_t T D
+      BD).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, fused_recurrent_hgrn_bwd_dx_step_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt,
+    MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast]
+  and_intros
+  all_goals try exact fun a ha => h1 a ha
+  all_goals try exact fun a ha => h2 a ha
+  all_goals try exact fun a ha => h3 a ha
+  all_goals try (simp [Op.SafeAt.eq_def]; done)
+  -- the masked `.load` nodes: computed dtype blocks `simp`, so peel by hand
+  all_goals
+    refine safeAt_load_region_maskOther _ _ _ _ _ _
+      (by simp [Op.SafeAt.eq_def]) (safeAt_ref _ _ _ _ _)
+      (by simp [Op.SafeAt.eq_def]) ?_
+  all_goals
+    simp [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop,
+      Tile.cop, NumericDType.add, NumericDType.mul, ComparableDType.lt]
+  all_goals try exact fun a ha => h1 a ha
+  all_goals try exact fun a ha => h2 a ha
+  all_goals try exact fun a ha => h3 a ha
+
+/-- Region-model run of the backward `dx` step store. -/
+theorem bwd_dx_region_run (DHPrev DO DX : RegionName) (i_t T D BD : Nat)
+    (s₀ : BlockState) (xs ys : TileIndex [BD] → ℝ)
+    (hx : ∀ i : TileIndex [BD], active s₀ D BD i.1 →
+      s₀.readMem DHPrev (outOffset s₀ i_t T D BD i.1) = xs i)
+    (hy : ∀ i : TileIndex [BD], active s₀ D BD i.1 →
+      s₀.readMem DO (outOffset s₀ i_t T D BD i.1) = ys i) :
+    ∃ s1, exec (fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX i_t T D
+        BD) s₀ = some s1
+      ∧ (∀ i : TileIndex [BD], active s₀ D BD i.1 →
+          s1.readMem DX (outOffset s₀ i_t T D BD i.1) = xs i + ys i)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ DX ∨ ∀ i : Fin BD, active s₀ D BD i →
+            o ≠ outOffset s₀ i_t T D BD i) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := bwd_dx_terminates DHPrev DO DX i_t T D BD s₀
+  refine ⟨s1, hexec, ?_, bwd_dx_frame DHPrev DO DX i_t T D BD s₀ s1 hexec⟩
+  intro i hact
+  have h := fused_recurrent_hgrn_bwd_dx_step_store_slice_correct DHPrev DO DX i_t
+    T D BD s₀ (outOffset_inj s₀ i_t T D BD) i.1
+  have hval : s1.readMem DX (outOffset s₀ i_t T D BD i.1)
+      = if active s₀ D BD i.1 then bwdDxStepValue s₀ DHPrev DO i_t T D BD i.1
+        else s₀.readMem DX (outOffset s₀ i_t T D BD i.1) := by
+    simpa [hexec] using h
+  rw [hval, if_pos hact, bwdDxStepValue, hx i hact, hy i hact]
+
+/-- IO signature of the backward `dx` step store: two `[BD]` reads at the row window,
+one write at the same window. -/
+def bwdDxIO (DHPrev DO DX : RegionName) (i_t T D BD : Nat) :
+    MaskedTileShapedKernelIO₂ where
+  kernel := fused_recurrent_hgrn_bwd_dx_step_store_slice DHPrev DO DX i_t T D BD
+  in1 := DHPrev
+  in2 := DO
+  out := DX
+  shape1 := [BD]
+  shape2 := [BD]
+  shapeOut := [BD]
+  read1 := fun p₀ p₁ i => (p₁ * T + i_t) * D + (p₀ * BD + i.1.val)
+  read2 := fun p₀ p₁ i => (p₁ * T + i_t) * D + (p₀ * BD + i.1.val)
+  write := fun p₀ p₁ o => (p₁ * T + i_t) * D + (p₀ * BD + o.1.val)
+  mask1 := fun p₀ _p₁ i => p₀ * BD + i.1.val < D
+  mask2 := fun p₀ _p₁ i => p₀ * BD + i.1.val < D
+  writeMask := fun p₀ _p₁ o => p₀ * BD + o.1.val < D
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `fused_recurrent_hgrn.py`'s backward `dx`
+step store: for every disjoint flat placement of the three buffers, every program
+coordinate whose active lanes are in bounds, and every launch state whose two source
+rows hold `xs` / `ys` at the active lanes, the translated pointer kernel terminates,
+every active lane of `DX` holds `xs i + ys i`, and every other memory cell is
+unchanged.
+
+Dimension-general in `i_t`, `T`, `D` and `BD`, with **no** side-condition: the row
+window is `base + lane`, so the readback's output-injectivity precondition is
+discharged by `outOffset_inj` rather than assumed. -/
+specification fused_recurrent_hgrn_bwd_dx_io_correctness
+    (DHPrev DO DX : RegionName) (i_t T D BD : Nat) :
+    bwdDxIO DHPrev DO DX i_t T D BD
+      ⊨ fun _p₀ _p₁ xs ys o => xs o + ys o := by
+  refine MaskedTileShapedKernelIO₂.Implements.intro _ ?_ ?_ ?_
+  · exact bwd_dx_flattenOk DHPrev DO DX i_t T D BD
+  · intro bounds s h1 h2 h3
+    exact bwd_dx_traceSafe DHPrev DO DX i_t T D BD bounds s
+      (fun i hact => h1 (i, PUnit.unit) hact)
+      (fun i hact => h2 (i, PUnit.unit) hact)
+      (fun i hact => h3 (i, PUnit.unit) hact)
+  · intro s₀ xs ys hx hy
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      bwd_dx_region_run DHPrev DO DX i_t T D BD s₀ xs ys
+        (fun i hact => hx i hact) (fun i hact => hy i hact)
+    exact ⟨s1, hexec, fun o hact => hval o hact,
+      fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr fun i hact => h (i, PUnit.unit) hact)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentHgrn
 
