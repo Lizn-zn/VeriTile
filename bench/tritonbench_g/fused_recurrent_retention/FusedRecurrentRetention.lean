@@ -149,6 +149,7 @@ phase-2 pointer rebasing.
 namespace VeriTile.Bench.TritonBenchG.FusedRecurrentRetention
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -2194,6 +2195,264 @@ specification fused_recurrent_retention_output_summary_general
       m s_qk_h s_vo_h B H DK DV BK BV T scale s hmT hOutInj hDPrev
 
 end Correct_without_Rounding
+
+
+/-! ## ════════ `⊨` IO face for the `USE_INITIAL_STATE` seed store ════════
+
+The summary above is stated per *declared write map*. This section restates the seed
+store's `USE_INITIAL_STATE = true` branch on the audit-once IO surface
+`Masked3DTileKernelIO₁.Implements` (`⊨`), which additionally pins the **flat memory**
+placement.
+
+Zero new library surface: on that flag the slice is a masked `[BV, BK]` tile memcpy
+from `initial_state` to `HSeed` — one address, the same on both buffers, built from
+all three program axes (`i_v`, `i_k`, `i_bh`) and gated by the kernel's own
+`mask_bk[None, :] & mask_bv[:, None]`. (The `false` branch stores the zero tile and
+keeps its per-write-map face; a constant store has no input channel to quantify.) -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+/-- `Op.SafeAt` of a masked region load, unfolded once (the `.load` node's dtype is
+the computed `ComputeDType.fp32.eraseDType`, which blocks `simp`). -/
+private theorem safeAt_load_region_maskOther {d : TileDType} {shape : TileShape}
+    (bounds : RegionBounds) (s : BlockState) (R : RegionName)
+    (off : Op .nat shape) (m : Op .bool shape) (other : Op d shape)
+    (h1 : Op.SafeAt bounds s off) (h2 : Op.SafeAt bounds s m)
+    (h3 : Op.SafeAt bounds s other)
+    (h4 : MemAccess.ActiveAddressSafe bounds (MemAccess.region R off) s
+      ((MaskOpt.maskOther m other).Active s)) :
+    Op.SafeAt bounds s
+      (Op.load d (MemAccess.region R off) (MaskOpt.maskOther m other)) := by
+  rw [Op.SafeAt]
+  exact ⟨h1, ⟨h2, h3⟩, h4⟩
+
+/-- `Op.SafeAt` of a register reference is vacuous. -/
+private theorem safeAt_ref (bounds : RegionBounds) (s : BlockState)
+    (dtype : TileDType) (shape : TileShape) (name : RegName) :
+    Op.SafeAt bounds s (Op.ref dtype shape name) := by
+  rw [Op.SafeAt]
+  trivial
+
+/-- `Op.SafeAt` of a broadcast literal is vacuous. -/
+private theorem safeAt_broadcast_const (bounds : RegionBounds) (s : BlockState)
+    (c : ℝ) (shape : TileShape) :
+    Op.SafeAt bounds s (Op.broadcast (Op.const c) shape) := by
+  rw [Op.SafeAt, Op.SafeAt]
+  trivial
+
+/-- `Op.SafeAt` of an addition, unfolded once. -/
+private theorem safeAt_add {dtype : TileDType} {a b out : TileShape}
+    (bounds : RegionBounds) (s : BlockState) (nd : NumericDType dtype)
+    (br : Broadcast a b out) (e1 : Op dtype a) (e2 : Op dtype b)
+    (h1 : Op.SafeAt bounds s e1) (h2 : Op.SafeAt bounds s e2) :
+    Op.SafeAt bounds s (Op.add nd br e1 e2) := by
+  rw [Op.SafeAt]
+  exact ⟨h1, h2⟩
+
+/-- `Op.SafeAt` of a masked *pointer* load, unfolded once. -/
+private theorem safeAt_load_ptr_maskOther {d : TileDType} {shape : TileShape}
+    (bounds : RegionBounds) (s : BlockState)
+    (ptr : Op .ptr shape) (m : Op .bool shape) (other : Op d shape)
+    (h1 : Op.SafeAt bounds s ptr) (h2 : Op.SafeAt bounds s m)
+    (h3 : Op.SafeAt bounds s other)
+    (h4 : MemAccess.ActiveAddressSafe bounds
+      (MemAccess.ptr ptr : MemAccess d shape) s
+      ((MaskOpt.maskOther m other).Active s)) :
+    Op.SafeAt bounds s
+      (Op.load d (MemAccess.ptr ptr : MemAccess d shape)
+        (MaskOpt.maskOther m other)) := by
+  rw [Op.SafeAt]
+  exact ⟨h1, ⟨h2, h3⟩, h4⟩
+
+theorem seed_flattenOk (initial_state HSeed : RegionName) (DK DV BK BV : Nat) :
+    ((fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK BV
+      Bool.true).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [fused_recurrent_retention_seed_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem seed_terminates (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (s : BlockState) :
+    ∃ s1, exec (fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK
+      BV Bool.true) s = some s1 := by
+  simp [exec, fused_recurrent_retention_seed_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+
+theorem seed_frame (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (s s' : BlockState)
+    (hExec : exec (fused_recurrent_retention_seed_slice initial_state HSeed DK DV
+      BK BV Bool.true) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ HSeed ∨ ∀ idx : TileIndex [BV, BK], activeKV s DK DV BK BV idx →
+        o ≠ stateOffset s DK DV BK BV idx.2.1 idx.1) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, fused_recurrent_retention_seed_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := HSeed)
+    (fun i : TileIndex [BV, BK] =>
+      s.pids 2 * DK * DV + (s.pids 1 * BK + i.2.1.val) * DV
+        + (s.pids 0 * BV + i.1.val))
+    _ (fun i : TileIndex [BV, BK] =>
+      s.pids 1 * BK + i.2.1.val < DK ∧ s.pids 0 * BV + i.1.val < DV) r o
+    (TileShape.allIndices [BV, BK]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem seed_traceSafe (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BV, BK], activeKV s DK DV BK BV idx →
+      stateOffset s DK DV BK BV idx.2.1 idx.1 < bounds initial_state)
+    (hout : ∀ idx : TileIndex [BV, BK], activeKV s DK DV BK BV idx →
+      stateOffset s DK DV BK BV idx.2.1 idx.1 < bounds HSeed) :
+    ((fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK BV
+      Bool.true).toAlgKernel).TraceSafe bounds s := by
+  simp only [activeKV, activeK, activeV, stateOffset, kIdx, vIdx] at hin hout
+  simp [Kernel.TraceSafe, fused_recurrent_retention_seed_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+  and_intros
+  -- the `HSeed` store's active-address bound
+  all_goals try exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try (simp [Op.SafeAt.eq_def]; done)
+  -- `h += tl.load(p_init_s, mask=mask_kv, other=0)`: the `.load` node's dtype is
+  -- the computed `ComputeDType.fp32.eraseDType`, which blocks `simp`; peel the
+  -- `add` and the pointer load by hand, then bound the loaded addresses.
+  all_goals
+    refine safeAt_add _ _ _ _ _ _ (safeAt_ref _ _ _ _ _) ?_
+  all_goals
+    refine safeAt_load_ptr_maskOther _ _ _ _ _ (safeAt_ref _ _ _ _ _)
+      (safeAt_ref _ _ _ _ _) (safeAt_broadcast_const _ _ _ _) ?_
+  all_goals
+    simp [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      Op.PointerAddressesSafeOn, Op.MemorySafe,
+      MaskOpt.Active, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop,
+      Tile.cop, Tile.expandDim, Tile.ptrAdd, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, TileShape.dropInsertedIndex]
+  all_goals try exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+
+/-- Region-model run of the seed store (`USE_INITIAL_STATE = true`). -/
+theorem seed_region_run (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BV, BK] => stateOffset s₀ DK DV BK BV idx.2.1 idx.1))
+    (xs : TileIndex [BV, BK] → ℝ)
+    (hx : ∀ idx : TileIndex [BV, BK], activeKV s₀ DK DV BK BV idx →
+      s₀.readMem initial_state (stateOffset s₀ DK DV BK BV idx.2.1 idx.1)
+        = xs idx) :
+    ∃ s1, exec (fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK
+        BV Bool.true) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BV, BK], activeKV s₀ DK DV BK BV idx →
+          s1.readMem HSeed (stateOffset s₀ DK DV BK BV idx.2.1 idx.1) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ HSeed ∨ ∀ idx : TileIndex [BV, BK], activeKV s₀ DK DV BK BV idx →
+            o ≠ stateOffset s₀ DK DV BK BV idx.2.1 idx.1) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := seed_terminates initial_state HSeed DK DV BK BV s₀
+  refine ⟨s1, hexec, ?_, seed_frame initial_state HSeed DK DV BK BV s₀ s1 hexec⟩
+  intro idx hact
+  have h := fused_recurrent_retention_seed_slice_correct initial_state HSeed DK DV
+    BK BV Bool.true s₀ hOutInj idx
+  have hval : s1.readMem HSeed (stateOffset s₀ DK DV BK BV idx.2.1 idx.1)
+      = if activeKV s₀ DK DV BK BV idx then
+          stateSeed s₀ initial_state Bool.true DK DV BK BV idx.2.1 idx.1
+        else s₀.readMem HSeed (stateOffset s₀ DK DV BK BV idx.2.1 idx.1) := by
+    simpa [hexec] using h
+  rw [hval, if_pos hact, stateSeed]
+  simpa using hx idx hact
+
+/-- IO signature of the seed store on the three-axis tile surface. -/
+def seedIO (initial_state HSeed : RegionName) (DK DV BK BV : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK BV
+    Bool.true
+  inp := initial_state
+  out := HSeed
+  shape := [BV, BK]
+  read := fun p₀ p₁ p₂ idx =>
+    p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)
+  write := fun p₀ p₁ p₂ idx =>
+    p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)
+  mask := fun p₀ p₁ _p₂ idx =>
+    p₁ * BK + idx.2.1.val < DK ∧ p₀ * BV + idx.1.val < DV
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `fused_recurrent_retention.py`'s
+`USE_INITIAL_STATE` seed store: for every disjoint flat placement of
+`initial_state` / `HSeed`, every program coordinate whose active lanes are in bounds,
+and every launch state whose `initial_state` block holds `xs` at the active lanes, the
+translated pointer kernel terminates, every active lane of `HSeed` holds `xs idx`, and
+every other memory cell is unchanged.
+
+Dimension-general in `DK`, `DV`, `BK` and `BV`. Honest side-condition: address
+injectivity at every program coordinate, the same hypothesis the per-write-map summary
+takes. The `USE_INITIAL_STATE = false` branch stores the zero tile and keeps its
+per-write-map face — a constant store has no input channel to quantify over. -/
+specification fused_recurrent_retention_seed_io_correctness
+    (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BV, BK] =>
+        p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val))) :
+    seedIO initial_state HSeed DK DV BK BV
+      ⊨ fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact seed_flattenOk initial_state HSeed DK DV BK BV
+  · intro bounds s h1 h2
+    exact seed_traceSafe initial_state HSeed DK DV BK BV bounds s
+      (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+  · intro s₀ xs hin
+    exact seed_region_run initial_state HSeed DK DV BK BV s₀
+      (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+      (fun idx hact => hin idx hact)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentRetention
 
