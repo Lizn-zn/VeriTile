@@ -96,6 +96,7 @@ through the DSL's tuple-form `tmp2, _ = tl.broadcast(tmp1, tmp3_mean)`
 namespace VeriTile.Bench.TritonBenchG.FusedLayernormTriton
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Scalar2Tile3KernelIO
 
 set_option maxHeartbeats 4000000
 set_option linter.unusedSimpArgs false
@@ -827,5 +828,303 @@ specification fused_layernorm_triton_output_summary_general
   intro s' hmean hrstd
   exact fused_layernorm_triton_normalize_slice_compute_correct in_out_ptr0
     in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK s' hmean hrstd
+
+/-! ## ════════ `⊨` IO face for the normalize slice ════════
+
+The summary above is stated per *declared write map* and takes the mean/rstd cells'
+closed forms as hypotheses. This section restates the normalize slice on the
+audit-once IO surface `Scalar2Tile3KernelIO.Implements` (`⊨`), which pins the **flat
+memory** placement and — because the two per-row scalars are *channels* here rather
+than assumed closed forms — carries **no** side-condition at all: the spec is
+`((x − mean) · rstd) · w + b` over exactly the values the kernel loaded. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+/-- `Op.SafeAt` of a real→real `castFloat` is its argument's obligation. Stated as
+its own lemma and used as a *term*: the per-case equation does not fire under `simp`
+on a `castFloat` node, and `rw` only succeeds in an isolated goal. -/
+private theorem safeAt_castFloat {shape : TileShape} (bounds : RegionBounds)
+    (s : BlockState) (e : Op .real shape) (h : Op.SafeAt bounds s e) :
+    Op.SafeAt bounds s
+      (Op.castFloat FloatDType.real FloatDType.real e) := by
+  rw [Op.SafeAt]
+  exact h
+
+/-- `Op.SafeAt` of a register reference is vacuous. -/
+private theorem safeAt_ref (bounds : RegionBounds) (s : BlockState)
+    (dtype : TileDType) (shape : TileShape) (name : RegName) :
+    Op.SafeAt bounds s (Op.ref dtype shape name) := by
+  rw [Op.SafeAt]
+  trivial
+
+/-- `Op.SafeAt` of a masked region load, unfolded once. Stated as its own lemma and
+used as a *term*: the per-case equation does not fire under `simp` on a `.load` node
+whose dtype is the computed `ComputeDType.fp32.eraseDType`. -/
+private theorem safeAt_load_region_maskOther {d : TileDType} {shape : TileShape}
+    (bounds : RegionBounds) (s : BlockState) (R : RegionName)
+    (off : Op .nat shape) (m : Op .bool shape) (other : Op d shape)
+    (h1 : Op.SafeAt bounds s off) (h2 : Op.SafeAt bounds s m)
+    (h3 : Op.SafeAt bounds s other)
+    (h4 : MemAccess.ActiveAddressSafe bounds (MemAccess.region R off) s
+      ((MaskOpt.maskOther m other).Active s)) :
+    Op.SafeAt bounds s
+      (Op.load d (MemAccess.region R off) (MaskOpt.maskOther m other)) := by
+  rw [Op.SafeAt]
+  exact ⟨h1, ⟨h2, h3⟩, h4⟩
+
+/-- Readback of the normalize slice **in terms of the loaded values**: no closed-form
+hypothesis about the mean/rstd cells, just the cells themselves. -/
+theorem fused_normalize_readback_of_loads
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) (s : BlockState) :
+    ∀ i : Fin RBLOCK,
+      (exec (fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK) s).map
+          (·.readMem out_ptr1 (yOffset s rnumel RBLOCK i))
+        = some (if activeLane s rnumel RBLOCK i then
+            ((s.readMem in_ptr0 (rIndex s RBLOCK i + rnumel * s.pids 0)
+                  - s.readMem out_ptr0 (s.pids 0))
+                * s.readMem in_out_ptr0 (s.pids 0))
+              * s.readMem in_ptr1 (rIndex s RBLOCK i)
+              + s.readMem in_ptr2 (rIndex s RBLOCK i)
+          else s.readMem out_ptr1 (yOffset s rnumel RBLOCK i)) := by
+  intro i
+  simp [exec, fused_layernorm_triton_normalize_slice, stepStmts, stepStmt,
+        evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+        Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
+        NumericDType.sub, ComparableDType.lt, FloatDType.cast,
+        activeLane, rIndex, yOffset,
+        ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  let offsetFn : TileIndex [RBLOCK] → Nat :=
+    fun idx => s.pids 1 * RBLOCK + idx.1.val + rnumel * s.pids 0
+  have hOffsetInj : Function.Injective offsetFn := by
+    rintro ⟨a, u⟩ ⟨b, v⟩ hab
+    simp only [offsetFn] at hab
+    have hfin : a = b := Fin.ext (by omega)
+    cases hfin; cases u; cases v; rfl
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffsetInj
+        (i, PUnit.unit)]
+  by_cases hi : s.pids 1 * RBLOCK + i.val < rnumel
+  · simp [hi]
+  · simp [hi, offsetFn]
+
+theorem fused_normalize_terminates
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) (s : BlockState) :
+    ∃ s1, exec (fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK) s = some s1 := by
+  simp [exec, fused_layernorm_triton_normalize_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt, FloatDType.cast, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
+theorem fused_normalize_frame
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) (s s' : BlockState)
+    (hExec : exec (fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ out_ptr1 ∨ ∀ i : Fin RBLOCK, activeLane s rnumel RBLOCK i →
+        o ≠ yOffset s rnumel RBLOCK i) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp [exec, fused_layernorm_triton_normalize_slice, stepStmts, stepStmt,
+    evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
+    ComparableDType.lt, FloatDType.cast, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := out_ptr1)
+    (fun idx : TileIndex [RBLOCK] =>
+      s.pids 1 * RBLOCK + idx.1.val + rnumel * s.pids 0)
+    _ (fun idx : TileIndex [RBLOCK] => s.pids 1 * RBLOCK + idx.1.val < rnumel)
+    r o (TileShape.allIndices [RBLOCK]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx.1 hidx)
+
+theorem fused_normalize_traceSafe
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hm : s.pids 0 < bounds out_ptr0)
+    (hr : s.pids 0 < bounds in_out_ptr0)
+    (hx : ∀ i : Fin RBLOCK, activeLane s rnumel RBLOCK i →
+      rIndex s RBLOCK i + rnumel * s.pids 0 < bounds in_ptr0)
+    (hw : ∀ i : Fin RBLOCK, activeLane s rnumel RBLOCK i →
+      rIndex s RBLOCK i < bounds in_ptr1)
+    (hb : ∀ i : Fin RBLOCK, activeLane s rnumel RBLOCK i →
+      rIndex s RBLOCK i < bounds in_ptr2)
+    (hy : ∀ i : Fin RBLOCK, activeLane s rnumel RBLOCK i →
+      yOffset s rnumel RBLOCK i < bounds out_ptr1) :
+    ((fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK).toAlgKernel).TraceSafe bounds s := by
+  simp [Kernel.TraceSafe, fused_layernorm_triton_normalize_slice,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop,
+    Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul,
+    NumericDType.sub, ComparableDType.lt, FloatDType.cast]
+  and_intros
+  all_goals try exact hm
+  all_goals try exact hr
+  all_goals try exact fun a ha => hx a ha
+  all_goals try exact fun a ha => hw a ha
+  all_goals try exact fun a ha => hb a ha
+  all_goals try exact fun a ha => hy a ha
+  all_goals try exact safeAt_castFloat _ _ _ (safeAt_ref _ _ _ _ _)
+  all_goals try (simp [Op.SafeAt.eq_def]; done)
+  -- what is left: the three masked tile loads, whose `.load` node carries the
+  -- computed `ComputeDType.fp32.eraseDType` dtype and so blocks `simp`
+  all_goals
+    refine safeAt_load_region_maskOther _ _ _ _ _ _
+      (by simp [Op.SafeAt.eq_def]) (safeAt_ref _ _ _ _ _)
+      (by simp [Op.SafeAt.eq_def]) ?_
+  all_goals
+    simp [MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, evalOp, evalOp.eq_def, Option.bind, Option.map, Tile.bop,
+      Tile.cop, NumericDType.add, NumericDType.mul, ComparableDType.lt]
+  all_goals try exact fun a ha => hx a ha
+  all_goals try exact fun a ha => hw a ha
+  all_goals try exact fun a ha => hb a ha
+
+/-- Region-model run of the normalize slice. -/
+theorem fused_normalize_region_run
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) (s₀ : BlockState) (m1 m2 : ℝ)
+    (xs ws bs : TileIndex [RBLOCK] → ℝ)
+    (hm1 : s₀.readMem out_ptr0 (s₀.pids 0) = m1)
+    (hm2 : s₀.readMem in_out_ptr0 (s₀.pids 0) = m2)
+    (hx : ∀ i : TileIndex [RBLOCK], activeLane s₀ rnumel RBLOCK i.1 →
+      s₀.readMem in_ptr0 (rIndex s₀ RBLOCK i.1 + rnumel * s₀.pids 0) = xs i)
+    (hw : ∀ i : TileIndex [RBLOCK], activeLane s₀ rnumel RBLOCK i.1 →
+      s₀.readMem in_ptr1 (rIndex s₀ RBLOCK i.1) = ws i)
+    (hb : ∀ i : TileIndex [RBLOCK], activeLane s₀ rnumel RBLOCK i.1 →
+      s₀.readMem in_ptr2 (rIndex s₀ RBLOCK i.1) = bs i) :
+    ∃ s1, exec (fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK) s₀ = some s1
+      ∧ (∀ i : TileIndex [RBLOCK], activeLane s₀ rnumel RBLOCK i.1 →
+          s1.readMem out_ptr1 (yOffset s₀ rnumel RBLOCK i.1)
+            = ((xs i - m1) * m2) * ws i + bs i)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ out_ptr1 ∨ ∀ i : Fin RBLOCK, activeLane s₀ rnumel RBLOCK i →
+            o ≠ yOffset s₀ rnumel RBLOCK i) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := fused_normalize_terminates out_ptr0 in_out_ptr0 in_ptr0
+    in_ptr1 in_ptr2 out_ptr1 rnumel RBLOCK s₀
+  refine ⟨s1, hexec, ?_, fused_normalize_frame out_ptr0 in_out_ptr0 in_ptr0 in_ptr1
+    in_ptr2 out_ptr1 rnumel RBLOCK s₀ s1 hexec⟩
+  intro i hact
+  have h := fused_normalize_readback_of_loads out_ptr0 in_out_ptr0 in_ptr0 in_ptr1
+    in_ptr2 out_ptr1 rnumel RBLOCK s₀ i.1
+  have h' : s1.readMem out_ptr1 (yOffset s₀ rnumel RBLOCK i.1)
+      = if activeLane s₀ rnumel RBLOCK i.1 then
+          ((s₀.readMem in_ptr0 (rIndex s₀ RBLOCK i.1 + rnumel * s₀.pids 0)
+                - s₀.readMem out_ptr0 (s₀.pids 0))
+              * s₀.readMem in_out_ptr0 (s₀.pids 0))
+            * s₀.readMem in_ptr1 (rIndex s₀ RBLOCK i.1)
+            + s₀.readMem in_ptr2 (rIndex s₀ RBLOCK i.1)
+        else s₀.readMem out_ptr1 (yOffset s₀ rnumel RBLOCK i.1) := by
+    simpa [hexec] using h
+  rw [h', if_pos hact, hm1, hm2, hx i hact, hw i hact, hb i hact]
+
+/-- IO signature of the normalize slice: two per-row scalars, three tile reads, one
+tile write, over the two program axes. -/
+def fusedNormalizeIO
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) : Scalar2Tile3KernelIO where
+  kernel := fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK
+  sbuf1 := out_ptr0
+  sbuf2 := in_out_ptr0
+  tbuf1 := in_ptr0
+  tbuf2 := in_ptr1
+  tbuf3 := in_ptr2
+  out := out_ptr1
+  shape := [RBLOCK]
+  swin1 := fun p₀ _p₁ => p₀
+  swin2 := fun p₀ _p₁ => p₀
+  read1 := fun p₀ p₁ i => p₁ * RBLOCK + i.1.val + rnumel * p₀
+  read2 := fun _p₀ p₁ i => p₁ * RBLOCK + i.1.val
+  read3 := fun _p₀ p₁ i => p₁ * RBLOCK + i.1.val
+  write := fun p₀ p₁ i => p₁ * RBLOCK + i.1.val + rnumel * p₀
+  mask := fun _p₀ p₁ i => p₁ * RBLOCK + i.1.val < rnumel
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `fused_layernorm_triton.py`'s normalize loop
+iteration: for every disjoint flat placement of the six buffers, every program
+coordinate whose scalar cells and active tile lanes are in bounds, and every launch
+state whose two per-row scalars hold `m₁` / `m₂` and whose three tile windows hold
+`xs` / `ws` / `bs` at the active lanes, the translated pointer kernel terminates,
+every active output lane holds `((xs i − m₁) · m₂) · ws i + bs i`, and every other
+memory cell is unchanged.
+
+Stronger than the per-write-map summary in one specific way: that one must **assume**
+the mean/rstd cells already hold the reduction's closed forms, because its spec
+`rowYSpec` is phrased over memory. Here the two scalars are channels, so the spec is
+phrased over the values the kernel loaded and the headline carries **no**
+side-condition — the output-offset injectivity the readback needs is discharged
+inline (`base + lane`, by `omega`).
+
+Dimension-general in `rnumel` and `RBLOCK`. -/
+specification fused_layernorm_triton_normalize_io_correctness
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) :
+    fusedNormalizeIO out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 rnumel
+        RBLOCK
+      ⊨ fun _p₀ _p₁ m1 m2 xs ws bs i => ((xs i - m1) * m2) * ws i + bs i := by
+  refine Scalar2Tile3KernelIO.Implements.intro _ ?_ ?_ ?_
+  · unfold Kernel.FlattenOk
+    simp [fusedNormalizeIO, fused_layernorm_triton_normalize_slice,
+      ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+      ComputeOp.toAlgorithm?, StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+    and_intros <;> simp [Op.FlattenOk.eq_def]
+  · intro bounds s hb1 hb2 h1 h2 h3 h4
+    exact fused_normalize_traceSafe out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2
+      out_ptr1 rnumel RBLOCK bounds s hb1 hb2
+      (fun i hact => h1 (i, PUnit.unit) hact)
+      (fun i hact => h2 (i, PUnit.unit) hact)
+      (fun i hact => h3 (i, PUnit.unit) hact)
+      (fun i hact => h4 (i, PUnit.unit) hact)
+  · intro s₀ m1 m2 xs ws bs hm1 hm2 hx hw hb
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      fused_normalize_region_run out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2
+        out_ptr1 rnumel RBLOCK s₀ m1 m2 xs ws bs hm1 hm2
+        (fun i hact => hx i hact) (fun i hact => hw i hact)
+        (fun i hact => hb i hact)
+    exact ⟨s1, hexec, fun i hact => hval i hact,
+      fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr fun i hact => h (i, PUnit.unit) hact)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FusedLayernormTriton
