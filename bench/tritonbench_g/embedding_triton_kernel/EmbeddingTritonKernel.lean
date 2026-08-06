@@ -51,6 +51,7 @@ realized write map.
 namespace VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.GatherTileKernelIO
 
 set_option maxHeartbeats 5000000
 set_option linter.unusedSimpArgs false
@@ -1525,4 +1526,392 @@ specification embedding_kernel_output_summary
   exact embedding_kernel_compute_correct weight input_ids out
     vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
     hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN s hOutInj hOne hInputOutNe hWeightOutNe
+/-! ## ════════ `⊨` IO face for one loop body ════════
+
+The launched kernel is a `range(0, BLOCK_N, BLOCK_NN)` loop, so its `⊨` face would
+need a full `forRange` safety walk. What the *body* does, though, is a
+straight-line masked **gather**: load a `[BLOCK_NN]` row of token ids, use them as
+row indices into `weight`, store a `[BLOCK_NN, BLOCK_DMODEL]` tile into `out`.
+`embedding_body_slice` transcribes one body with the loop variable `start_nn` as a
+`Nat` parameter — the same hand-cut single-step idiom the fused-recurrent ports
+use — and that slice is what goes on the IO surface. -/
+
+section IOFace
+
+/-- One body of the `range(0, BLOCK_N, BLOCK_NN)` loop of `embedding_kernel`,
+with the loop variable `start_nn` as a parameter. Statement for statement the
+Python loop body, including the `other = vob_end_id` sentinel on the token load
+(which makes an out-of-context lane fail `id_mask`) and the ℕ-truncated
+`token_ids - vob_start_id`.
+
+Two mechanical changes, both value-preserving: the pinned loop offset is folded
+into the base (`start_n = pid·BLOCK_N + start_nn`, so `offs_seq = start_n +
+tl.arange(0, BLOCK_NN)` is Python's `start_nn + offs_nn` lane for lane — the
+resulting lane address is exactly `seqLaneIndex`), and the intermediate `offs_nn`
+register disappears with it. -/
+def embedding_body_slice
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat) :
+    ComputeKernel := triton {
+  start_n = tl.program_id(0) * $(BLOCK_N) + $(start_nn)
+  offs_seq = start_n + tl.arange(0, $(BLOCK_NN))
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  n_ctx_mask = offs_seq < $(n_ctx)
+  token_ids = tl.load($((input_ids : Region .nat)) + offs_seq, mask=n_ctx_mask, other=$(vob_end_id))
+  id_mask = (token_ids >= $(vob_start_id)) & (token_ids < $(vob_end_id))
+  token_ids = token_ids - $(vob_start_id)
+  dim_mask = offs_d < $(hiden_size)
+  load_mask = id_mask[:, None] & dim_mask[None, :]
+  store_mask = n_ctx_mask[:, None] & dim_mask[None, :]
+  vecs = tl.load(weight + token_ids[:, None] * $(stride_weight_seq) + offs_d[None, :],
+    mask=load_mask, other=0.0)
+  tl.store(out + offs_seq[:, None] * $(stride_out_seq) + offs_d[None, :], vecs, mask=store_mask)
+}
+
+theorem embedding_body_slice_toAlgorithm_supported
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat) :
+    ∃ alg, (embedding_body_slice weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN start_nn).toAlgorithm? = Except.ok alg := by
+  simp [embedding_body_slice, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+
+theorem embedding_body_slice_correct
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        outOffset2D s stride_out_seq BLOCK_N start_nn idx))
+    (hExec : exec (embedding_body_slice weight input_ids out vob_start_id
+      vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+      BLOCK_N BLOCK_NN start_nn) s = some s') :
+    ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL
+        idx →
+      s'.readMem out (outOffset2D s stride_out_seq BLOCK_N start_nn idx) =
+        embeddingSpec2D s weight input_ids vob_start_id vob_end_id
+          stride_weight_seq BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL idx := by
+  intro idx hactive
+  simp [exec, embedding_body_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Tile.bop, Tile.cop,
+    Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+    Bool.and_eq_true, Option.bind] at hExec
+  subst hExec
+  have hOffInj : Function.Injective
+      (fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        (s.pids 0 * BLOCK_N + start_nn + i.1.val) * stride_out_seq +
+          i.2.1.val) := by
+    simpa [outOffset2D, seqLaneIndex, dimIndex] using hOutInj
+  have hPi : s.pids 0 * BLOCK_N + start_nn + idx.1.val < n_ctx ∧
+      idx.2.1.val < hiden_size := hactive
+  simp only [outOffset2D, seqLaneIndex, dimIndex]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffInj idx,
+    if_pos hPi]
+  rcases hPi with ⟨hSeq, hDim⟩
+  simp [embeddingSpec2D, tokenRaw2D, tokenIndex2D, weightOffset2D, seqLaneIndex,
+    dimIndex, hSeq, hDim]
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+theorem embeddingBody_flattenOk
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat) :
+    ((embedding_body_slice weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN start_nn).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [embedding_body_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem embeddingBody_terminates
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat) (s : BlockState) :
+    ∃ s1, exec (embedding_body_slice weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN start_nn) s = some s1 := by
+  simp [exec, embedding_body_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Tile.bop, Tile.cop,
+    Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+    Bool.and_eq_true, Option.bind]
+
+theorem embeddingBody_frame
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (s s' : BlockState)
+    (hExec : exec (embedding_body_slice weight input_ids out vob_start_id
+      vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+      BLOCK_N BLOCK_NN start_nn) s = some s') :
+    ∀ (r : RegionName) (n : Nat),
+      (r ≠ out ∨ ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL
+          idx → n ≠ outOffset2D s stride_out_seq BLOCK_N start_nn idx) →
+      s'.mem r n = s.mem r n := by
+  intro r n hcond
+  simp only [storeActive2D, outOffset2D, seqLaneIndex, dimIndex] at hcond
+  simp [exec, embedding_body_slice, stepStmts, stepStmt, evalOp, evalOp.eq_def,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Tile.bop, Tile.cop,
+    Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+    Bool.and_eq_true, Option.bind] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := out)
+    (fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+      (s.pids 0 * BLOCK_N + start_nn + i.1.val) * stride_out_seq + i.2.1.val)
+    _ (fun i : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+      s.pids 0 * BLOCK_N + start_nn + i.1.val < n_ctx ∧
+        i.2.1.val < hiden_size) r n
+    (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem embeddingBody_traceSafe
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hidx : ∀ i : Fin BLOCK_NN, s.pids 0 * BLOCK_N + start_nn + i.val < n_ctx →
+      s.pids 0 * BLOCK_N + start_nn + i.val < bounds input_ids)
+    (hw : ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      s.pids 0 * BLOCK_N + start_nn + idx.1.val < n_ctx →
+      (vob_start_id ≤ tokenRaw2D s input_ids BLOCK_N start_nn idx.1 ∧
+          tokenRaw2D s input_ids BLOCK_N start_nn idx.1 < vob_end_id) ∧
+        idx.2.1.val < hiden_size →
+      weightOffset2D s input_ids vob_start_id stride_weight_seq BLOCK_N start_nn
+        idx < bounds weight)
+    (hout : ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL
+        idx → outOffset2D s stride_out_seq BLOCK_N start_nn idx < bounds out) :
+    ((embedding_body_slice weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN start_nn).toAlgKernel).TraceSafe bounds s := by
+  simp only [storeActive2D, outOffset2D, seqLaneIndex, dimIndex, tokenRaw2D,
+    weightOffset2D, tokenIndex2D] at hw hout
+  simp [Kernel.TraceSafe, embedding_body_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeList,
+    Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt, MaskOpt.Active,
+    MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, TileShape.dropInsertedIndex,
+    NumericDType.add, NumericDType.sub, NumericDType.mul, ComparableDType.lt,
+    ComparableDType.ge, Bool.and_eq_true]
+  and_intros
+  all_goals try exact fun a h => hidx a h
+  all_goals try simp [Op.SafeAt.eq_def]
+  -- the store's window
+  all_goals try exact fun a b h1 h2 => hout (a, b, PUnit.unit) ⟨h1, h2⟩
+  -- the gather's window: on an out-of-context lane the `other = vob_end_id`
+  -- sentinel fails `id_mask` outright, so only in-context lanes need a bound
+  all_goals
+    intro a b h1 h2 h3
+    by_cases hn : s.pids 0 * BLOCK_N + start_nn + a.val < n_ctx
+    · simp only [if_pos hn] at h1 h2 ⊢
+      exact hw (a, b, PUnit.unit) hn ⟨⟨h1, h2⟩, h3⟩
+    · simp only [if_neg hn] at h2
+      exact absurd h2 (lt_irrefl _)
+
+/-- Region-model run of one loop body. -/
+theorem embeddingBody_region_run
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        outOffset2D s₀ stride_out_seq BLOCK_N start_nn idx))
+    (ids : TileIndex [BLOCK_NN] → Nat)
+    (xs : TileIndex [BLOCK_NN, BLOCK_DMODEL] → ℝ)
+    (hid : ∀ i : TileIndex [BLOCK_NN],
+      s₀.pids 0 * BLOCK_N + start_nn + i.1.val < n_ctx →
+      s₀.readMemValue .nat input_ids (s₀.pids 0 * BLOCK_N + start_nn + i.1.val)
+        = ids i)
+    (hx : ∀ j : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      (vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+          ids (j.1, PUnit.unit) < vob_end_id) ∧ j.2.1.val < hiden_size →
+      s₀.readMem weight
+          ((ids (j.1, PUnit.unit) - vob_start_id) * stride_weight_seq
+            + j.2.1.val) = xs j) :
+    ∃ s1, exec (embedding_body_slice weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN start_nn) s₀ = some s1
+      ∧ (∀ j : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+          s₀.pids 0 * BLOCK_N + start_nn + j.1.val < n_ctx ∧
+            j.2.1.val < hiden_size →
+          s1.readMem out
+              ((s₀.pids 0 * BLOCK_N + start_nn + j.1.val) * stride_out_seq
+                + j.2.1.val)
+            = if vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+                  ids (j.1, PUnit.unit) < vob_end_id then xs j else 0)
+      ∧ (∀ (r : RegionName) (n : Nat),
+          (r ≠ out ∨ ∀ j : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+            (s₀.pids 0 * BLOCK_N + start_nn + j.1.val < n_ctx ∧
+              j.2.1.val < hiden_size) →
+            n ≠ (s₀.pids 0 * BLOCK_N + start_nn + j.1.val) * stride_out_seq
+              + j.2.1.val) →
+          s1.mem r n = s₀.mem r n) := by
+  obtain ⟨s1, hexec⟩ := embeddingBody_terminates weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+    BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn s₀
+  refine ⟨s1, hexec, ?_, ?_⟩
+  · intro j hact
+    have h := embedding_body_slice_correct weight input_ids out vob_start_id
+      vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+      BLOCK_N BLOCK_NN start_nn s₀ s1 hOutInj hexec j hact
+    have hraw : tokenRaw2D s₀ input_ids BLOCK_N start_nn j.1
+        = ids (j.1, PUnit.unit) := hid (j.1, PUnit.unit) hact.1
+    simp only [outOffset2D, seqLaneIndex, dimIndex] at h
+    rw [h, embeddingSpec2D, hraw]
+    by_cases hidm : vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+        ids (j.1, PUnit.unit) < vob_end_id
+    · rw [if_pos hidm, if_pos hidm]
+      have hwadr : weightOffset2D s₀ input_ids vob_start_id stride_weight_seq
+          BLOCK_N start_nn j
+          = (ids (j.1, PUnit.unit) - vob_start_id) * stride_weight_seq
+            + j.2.1.val := by
+        simp only [weightOffset2D, tokenIndex2D, dimIndex, hraw]
+      rw [hwadr, hx j ⟨hidm, hact.2⟩]
+      simp
+    · rw [if_neg hidm, if_neg hidm]
+      norm_num
+  · intro r n hc
+    refine embeddingBody_frame weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN start_nn s₀ s1 hexec r n ?_
+    rcases hc with hr | hn
+    · exact Or.inl hr
+    · exact Or.inr fun j hj => hn j hj
+
+/-- IO signature of one loop body: the `[BLOCK_NN]` token-id row is a `.nat`
+channel, and the `weight` window is a **gather** through it. -/
+def bodyIO (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat) :
+    GatherTileKernelIO where
+  kernel := embedding_body_slice weight input_ids out vob_start_id vob_end_id
+    stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+    BLOCK_NN start_nn
+  idxbuf := input_ids
+  inp := weight
+  out := out
+  shapeIdx := [BLOCK_NN]
+  shape := [BLOCK_NN, BLOCK_DMODEL]
+  readx := fun pid i => pid * BLOCK_N + start_nn + i.1.val
+  read := fun _pid ids j =>
+    (ids (j.1, PUnit.unit) - vob_start_id) * stride_weight_seq + j.2.1.val
+  write := fun pid j =>
+    (pid * BLOCK_N + start_nn + j.1.val) * stride_out_seq + j.2.1.val
+  maskx := fun pid i => pid * BLOCK_N + start_nn + i.1.val < n_ctx
+  readMask := fun _pid ids j =>
+    (vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+      ids (j.1, PUnit.unit) < vob_end_id) ∧ j.2.1.val < hiden_size
+  writeMask := fun pid j =>
+    pid * BLOCK_N + start_nn + j.1.val < n_ctx ∧ j.2.1.val < hiden_size
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for one body of `embedding_kernel`'s
+`range(0, BLOCK_N, BLOCK_NN)` loop: for every disjoint flat placement of
+`input_ids` / `weight` / `out`, every program id whose windows are in bounds,
+every token-id row `ids` and weight tile `xs` the launch state holds on the
+active lanes, the body terminates, every store-active cell of `out` holds
+
+    if vob_start_id ≤ ids[row] < vob_end_id then xs[row, col] else 0
+
+and every other memory cell is unchanged.
+
+The token ids are a **channel**, not an assumption: the face quantifies over what
+`input_ids` may hold and the `weight` window is a *gather* through it
+(`(ids[row] − vob_start_id)·stride_weight_seq + col`), which is what
+`GatherTileKernelIO` exists for. The out-of-vocabulary branch is Python's
+`id_mask`, and it is genuine: an out-of-context lane loads the `other =
+vob_end_id` sentinel, which fails `id_mask` outright, so no out-of-bounds row of
+`weight` is ever addressed.
+
+Dimension-general in `n_ctx`, `hiden_size`, `BLOCK_N`, `BLOCK_NN`,
+`BLOCK_DMODEL`, both strides and the vocabulary window, and general in the loop
+variable `start_nn`. Honest side-condition: destination injectivity at every
+program id, the same hypothesis the launched kernel's summary takes. -/
+specification embedding_body_io_correctness
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hOutInj : ∀ pid : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        (pid * BLOCK_N + start_nn + idx.1.val) * stride_out_seq
+          + idx.2.1.val)) :
+    bodyIO weight input_ids out vob_start_id vob_end_id stride_weight_seq
+        stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn
+      ⊨ fun _pid ids xs j =>
+          if vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+              ids (j.1, PUnit.unit) < vob_end_id then xs j else 0 := by
+  refine GatherTileKernelIO.Implements.intro _ ?_ ?_ ?_
+  · exact embeddingBody_flattenOk weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN start_nn
+  · intro bounds s ids hidpin hbx hbr hbw
+    simp only [bodyIO] at hidpin hbx hbr hbw
+    refine embeddingBody_traceSafe weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN start_nn bounds s (fun i hi => hbx (i, PUnit.unit) hi) ?_ ?_
+    · intro idx hn hactive
+      have hraw : tokenRaw2D s input_ids BLOCK_N start_nn idx.1
+          = ids (idx.1, PUnit.unit) := hidpin (idx.1, PUnit.unit) hn
+      have := hbr idx (by rw [← hraw]; exact hactive)
+      simpa [weightOffset2D, tokenIndex2D, dimIndex, hraw] using this
+    · intro idx hactive
+      exact hbw idx hactive
+  · intro s₀ ids xs hidpin hxpin
+    simp only [bodyIO] at hidpin hxpin
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      embeddingBody_region_run weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN start_nn s₀
+        (by
+          have := hOutInj (s₀.pids 0)
+          simpa [outOffset2D, seqLaneIndex, dimIndex] using this)
+        ids xs (fun i hi => hidpin i hi) (fun j hj => hxpin j hj)
+    exact ⟨s1, hexec, fun j hj => hval j hj, fun r n hc => hframe r n hc⟩
+
+end IOFace
+
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
