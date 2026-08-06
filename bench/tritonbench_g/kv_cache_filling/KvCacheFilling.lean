@@ -59,6 +59,7 @@ The launch-time `num_warps` setting is not modeled.
 namespace VeriTile.Bench.TritonBenchG.KvCacheFilling
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Meta1MaskedTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 
@@ -1009,5 +1010,236 @@ specification fill_kv_cache_output_summary_general
       KV_BLOCK_IDX stride_vss stride_vsh stride_vsd stride_vcn stride_vcb
       stride_vch stride_vcd stride_boff num_heads head_dim_v BLOCK_H BLOCK_DV s
       hVInj⟩
+
+/-! ## ════════ `⊨` IO face for the quant-metadata writeback ════════
+
+`_fwd_kernel_quant_meta`'s store is metadata-driven: a single `.nat` cell of
+`BlockOffsets` selects the destination page, and every store address is built from
+it (`block_off·stride_mn + BIDX·stride_mb + h·stride_mh + SZD·stride_md`). That is
+`Meta1MaskedTileKernelIO₁`'s shape — one metadata scalar, one `[BLOCK_H]` float
+tile in, one out — so the page-table cell becomes a *channel* rather than an
+assumption about a closed form. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+theorem metaStore_flattenOk (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) :
+    ((fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets BIDX KV_BLOCK_IDX
+      SZD stride_mn stride_mb stride_mh stride_md stride_boff num_heads
+      BLOCK_H).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [fill_quant_meta_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+
+theorem metaStore_terminates (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) (s : BlockState) :
+    ∃ s1, exec (fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets BIDX
+      KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H) s = some s1 := by
+  simp [exec, fill_quant_meta_store_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+
+theorem metaStore_frame (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) (s s' : BlockState)
+    (hExec : exec (fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets BIDX
+      KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H) s = some s') :
+    ∀ (r : RegionName) (n : Nat),
+      (r ≠ MetaOut ∨ ∀ i : Fin BLOCK_H, metaActive s num_heads BLOCK_H i →
+        n ≠ metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
+          stride_mh stride_md stride_boff i) →
+      s'.mem r n = s.mem r n := by
+  intro r n hcond
+  simp only [metaActive, metaOffset, blockOff] at hcond
+  simp [exec, fill_quant_meta_store_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := MetaOut)
+    (fun i : TileIndex [BLOCK_H] =>
+      s.readMemValue .nat BlockOffsets (s.pids 0 * stride_boff + KV_BLOCK_IDX) *
+          stride_mn + BIDX * stride_mb + i.1.val * stride_mh + SZD * stride_md)
+    _ (fun i : TileIndex [BLOCK_H] => i.1.val < num_heads) r n
+    (TileShape.allIndices [BLOCK_H]) ?_]
+  · simp [BlockState.readMemValue]
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · refine Or.inr fun idx _ hidx => Ne.symm ?_
+      simpa [BlockState.readMemValue] using h idx.1 hidx
+
+theorem metaStore_traceSafe (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hmeta : s.pids 0 * stride_boff + KV_BLOCK_IDX < bounds BlockOffsets)
+    (hin : ∀ i : Fin BLOCK_H, metaActive s num_heads BLOCK_H i →
+      i.val < bounds MetaPre)
+    (hout : ∀ i : Fin BLOCK_H, metaActive s num_heads BLOCK_H i →
+      metaOffset s BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
+        stride_mh stride_md stride_boff i < bounds MetaOut) :
+    ((fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets BIDX KV_BLOCK_IDX
+      SZD stride_mn stride_mb stride_mh stride_md stride_boff num_heads
+      BLOCK_H).toAlgKernel).TraceSafe bounds s := by
+  simp only [metaActive, metaOffset, blockOff, BlockState.readMemValue] at hin hout
+  simp [Kernel.TraceSafe, fill_quant_meta_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    BlockState.readMemValue, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact hmeta
+  all_goals try exact fun a h => hin a h
+  all_goals try exact fun a h => hout a h
+
+/-- Region-model run of the metadata store. -/
+theorem metaStore_region_run (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun i : Fin BLOCK_H =>
+        metaOffset s₀ BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn stride_mb
+          stride_mh stride_md stride_boff i))
+    (xs : TileIndex [BLOCK_H] → ℝ)
+    (hx : ∀ i : TileIndex [BLOCK_H], metaActive s₀ num_heads BLOCK_H i.1 →
+      s₀.readMem MetaPre i.1.val = xs i) :
+    ∃ s1, exec (fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets BIDX
+        KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+        num_heads BLOCK_H) s₀ = some s1
+      ∧ (∀ i : TileIndex [BLOCK_H], metaActive s₀ num_heads BLOCK_H i.1 →
+          s1.readMem MetaOut
+              (metaOffset s₀ BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn
+                stride_mb stride_mh stride_md stride_boff i.1)
+            = xs i)
+      ∧ (∀ (r : RegionName) (n : Nat),
+          (r ≠ MetaOut ∨ ∀ i : Fin BLOCK_H, metaActive s₀ num_heads BLOCK_H i →
+            n ≠ metaOffset s₀ BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn
+              stride_mb stride_mh stride_md stride_boff i) →
+          s1.mem r n = s₀.mem r n) := by
+  obtain ⟨s1, hexec⟩ := metaStore_terminates MetaPre MetaOut BlockOffsets BIDX
+    KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+    num_heads BLOCK_H s₀
+  refine ⟨s1, hexec, ?_, metaStore_frame MetaPre MetaOut BlockOffsets BIDX
+    KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+    num_heads BLOCK_H s₀ s1 hexec⟩
+  intro i hact
+  have h := fill_quant_meta_store_slice_correct MetaPre MetaOut BlockOffsets BIDX
+    KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+    num_heads BLOCK_H s₀ s1 hOutInj hexec i.1
+  rw [h, if_pos hact, metaStoreSpec, hx i hact]
+
+/-- IO signature of the metadata store: the page-table cell is a `.nat` channel,
+not an assumption. -/
+noncomputable def metaStoreIO (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) : Meta1MaskedTileKernelIO₁ where
+  kernel := fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets BIDX
+    KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+    num_heads BLOCK_H
+  mbuf := BlockOffsets
+  inp := MetaPre
+  out := MetaOut
+  shape := [BLOCK_H]
+  mwin := fun pid => pid * stride_boff + KV_BLOCK_IDX
+  read := fun _pid _m i => i.1.val
+  write := fun _pid m i =>
+    m * stride_mn + BIDX * stride_mb + i.1.val * stride_mh + SZD * stride_md
+  mask := fun _pid _m i => i.1.val < num_heads
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `_fwd_kernel_quant_meta`'s store: for
+every disjoint flat placement of `BlockOffsets` / `MetaPre` / `MetaOut`, every
+program id whose metadata cell and active lanes are in bounds, every page index
+`m` that cell may hold, and every launch state whose `MetaPre` row holds `xs` on
+the `h < num_heads` lanes, the kernel terminates, lane `h` of the selected page's
+metadata row holds `xs h`, and every other memory cell is unchanged.
+
+The page-table cell is a **channel**, universally quantified and pinned by the
+launch state — the face says nothing about what value it holds, only that the
+store lands at the page it names. Dimension-general in `num_heads`, `BLOCK_H` and
+all five strides. Honest side-condition: destination-address injectivity, the
+same hypothesis the per-write-map summary takes. -/
+specification fill_quant_meta_store_io_correctness
+    (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat)
+    (hOutInj : ∀ m : Nat, Function.Injective
+      (fun i : Fin BLOCK_H =>
+        m * stride_mn + BIDX * stride_mb + i.val * stride_mh
+          + SZD * stride_md)) :
+    metaStoreIO MetaPre MetaOut BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn
+        stride_mb stride_mh stride_md stride_boff num_heads BLOCK_H
+      ⊨ fun _pid _m xs i => xs i := by
+  refine Meta1MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact metaStore_flattenOk MetaPre MetaOut BlockOffsets BIDX KV_BLOCK_IDX SZD
+      stride_mn stride_mb stride_mh stride_md stride_boff num_heads BLOCK_H
+  · intro bounds s m hm hbm hb1 hb2
+    simp only [metaStoreIO, BlockState.pid] at hm hbm hb1 hb2
+    refine metaStore_traceSafe MetaPre MetaOut BlockOffsets BIDX KV_BLOCK_IDX SZD
+      stride_mn stride_mb stride_mh stride_md stride_boff num_heads BLOCK_H
+      bounds s hbm (fun i hact => hb1 (i, PUnit.unit) hact) ?_
+    intro i hact
+    rw [metaOffset, blockOff, hm]
+    exact hb2 (i, PUnit.unit) hact
+  · intro s₀ m xs hm hx
+    have h := metaStore_region_run MetaPre MetaOut BlockOffsets BIDX KV_BLOCK_IDX
+      SZD stride_mn stride_mb stride_mh stride_md stride_boff num_heads BLOCK_H
+      s₀ (by
+        have := hOutInj (blockOff s₀ BlockOffsets KV_BLOCK_IDX stride_boff)
+        simpa [metaOffset] using this) xs
+      (fun i hact => hx i hact)
+    obtain ⟨s1, hexec, hval, hframe⟩ := h
+    have hblk : blockOff s₀ BlockOffsets KV_BLOCK_IDX stride_boff = m := hm
+    refine ⟨s1, hexec, fun i hact => ?_, fun r n hc => hframe r n ?_⟩
+    · have := hval i hact
+      simpa [metaOffset, hblk] using this
+    · rcases hc with hr | hn
+      · exact Or.inl hr
+      · refine Or.inr fun i hact => ?_
+        have := hn (i, PUnit.unit) hact
+        simpa [metaOffset, hblk] using this
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.KvCacheFilling
