@@ -121,6 +121,7 @@ modeled inside `stateSeed`, and the faces hold for either setting of it.
 namespace VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileShaped4KernelIO
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -1105,6 +1106,269 @@ specification fused_recurrent_rwkv6_output_summary_general
       s_k_h s_v_h K V BK BV T s sFinal hkC hvC hwC hStateInj hSeed hRun
 
 end Correct_without_Rounding
+
+/-! ## ════════ `⊨` IO face for the state step ════════
+
+One loop body of the state recurrence reads four channels of three different tile
+shapes — the `[BV, BK]` state tile `BHPrev`, the `[BK]` key row, the `[BV]` value
+row and the `[BK]` decay row — and writes the `[BV, BK]` state tile `BHOut`, every
+address built from all three program axes `(i_v, i_k, i_bh)`. That is
+`Masked3DTileShaped4KernelIO`'s shape, with the outer product and the `tl.exp`
+living inside the spec function. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+set_option maxHeartbeats 1000000 in
+theorem stateStep_flattenOk (BHPrev k v w BHOut : RegionName)
+    (t s_k_h s_v_h K V BK BV : Nat) :
+    ((fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut t s_k_h s_v_h K V
+      BK BV).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [fused_recurrent_rwkv6_state_step_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+set_option maxHeartbeats 1000000 in
+theorem stateStep_terminates (BHPrev k v w BHOut : RegionName)
+    (t s_k_h s_v_h K V BK BV : Nat) (s : BlockState) :
+    ∃ s1, exec (fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut t s_k_h
+      s_v_h K V BK BV) s = some s1 := by
+  simp [exec, fused_recurrent_rwkv6_state_step_slice, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+
+set_option maxHeartbeats 1000000 in
+theorem stateStep_frame (BHPrev k v w BHOut : RegionName)
+    (t s_k_h s_v_h K V BK BV : Nat) (s s' : BlockState)
+    (hExec : exec (fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut t
+      s_k_h s_v_h K V BK BV) s = some s') :
+    ∀ (r : RegionName) (n : Nat),
+      (r ≠ BHOut ∨ ∀ idx : TileIndex [BV, BK], activeKV s K V BK BV idx →
+        n ≠ finalStateOffset s K V BK BV idx) →
+      s'.mem r n = s.mem r n := by
+  intro r n hcond
+  simp only [activeKV, active, activeK, kIndex, vIndex,
+    finalStateOffset] at hcond
+  simp [exec, fused_recurrent_rwkv6_state_step_slice, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := BHOut)
+    (fun i : TileIndex [BV, BK] =>
+      s.pids 2 * K * V + (s.pids 1 * BK + i.2.1.val) * V
+        + (s.pids 0 * BV + i.1.val))
+    _ (fun i : TileIndex [BV, BK] =>
+      s.pids 0 * BV + i.1.val < V ∧ s.pids 1 * BK + i.2.1.val < K) r n
+    (TileShape.allIndices [BV, BK]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+set_option maxHeartbeats 1000000 in
+theorem stateStep_traceSafe (BHPrev k v w BHOut : RegionName)
+    (t s_k_h s_v_h K V BK BV : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hstate : ∀ idx : TileIndex [BV, BK], activeKV s K V BK BV idx →
+      finalStateOffset s K V BK BV idx < bounds BHPrev)
+    (hk : ∀ jk : Fin BK, activeK s K BK jk →
+      s.pids 2 * s_k_h + s.pids 1 * BK + jk.val + t * K < bounds k)
+    (hv : ∀ jv : Fin BV, active s V BV jv →
+      s.pids 2 * s_v_h + s.pids 0 * BV + jv.val + t * V < bounds v)
+    (hw : ∀ jk : Fin BK, activeK s K BK jk →
+      s.pids 2 * s_k_h + s.pids 1 * BK + jk.val + t * K < bounds w)
+    (hout : ∀ idx : TileIndex [BV, BK], activeKV s K V BK BV idx →
+      finalStateOffset s K V BK BV idx < bounds BHOut) :
+    ((fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut t s_k_h s_v_h K V
+      BK BV).toAlgKernel).TraceSafe bounds s := by
+  simp only [activeKV, active, activeK, kIndex, vIndex,
+    finalStateOffset] at hstate hk hv hw hout
+  simp [Kernel.TraceSafe, fused_recurrent_rwkv6_state_step_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b h1 h2 => hstate (a, b, PUnit.unit) ⟨h1, h2⟩
+  all_goals try exact fun a b h1 h2 => hout (a, b, PUnit.unit) ⟨h1, h2⟩
+  all_goals try exact fun a h => hk a h
+  all_goals try exact fun a h => hv a h
+  all_goals try exact fun a h => hw a h
+  all_goals simp [Op.SafeAt.eq_def]
+
+set_option maxHeartbeats 1000000 in
+/-- Region-model run of the state store. -/
+theorem stateStep_region_run (BHPrev k v w BHOut : RegionName)
+    (t s_k_h s_v_h K V BK BV : Nat) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BV, BK] => finalStateOffset s₀ K V BK BV idx))
+    (xs : TileIndex [BV, BK] → ℝ) (ks : TileIndex [BK] → ℝ)
+    (vs : TileIndex [BV] → ℝ) (ws : TileIndex [BK] → ℝ)
+    (hx : ∀ idx : TileIndex [BV, BK], activeKV s₀ K V BK BV idx →
+      s₀.readMem BHPrev (finalStateOffset s₀ K V BK BV idx) = xs idx)
+    (hk : ∀ jk : TileIndex [BK], activeK s₀ K BK jk.1 →
+      s₀.readMem k (s₀.pids 2 * s_k_h + s₀.pids 1 * BK + jk.1.val + t * K)
+        = ks jk)
+    (hv : ∀ jv : TileIndex [BV], active s₀ V BV jv.1 →
+      s₀.readMem v (s₀.pids 2 * s_v_h + s₀.pids 0 * BV + jv.1.val + t * V)
+        = vs jv)
+    (hw : ∀ jk : TileIndex [BK], activeK s₀ K BK jk.1 →
+      s₀.readMem w (s₀.pids 2 * s_k_h + s₀.pids 1 * BK + jk.1.val + t * K)
+        = ws jk) :
+    ∃ s1, exec (fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut t s_k_h
+        s_v_h K V BK BV) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BV, BK], activeKV s₀ K V BK BV idx →
+          s1.readMem BHOut (finalStateOffset s₀ K V BK BV idx)
+            = xs idx * Real.exp (ws (idx.2.1, PUnit.unit))
+              + ks (idx.2.1, PUnit.unit) * vs (idx.1, PUnit.unit))
+      ∧ (∀ (r : RegionName) (n : Nat),
+          (r ≠ BHOut ∨ ∀ idx : TileIndex [BV, BK], activeKV s₀ K V BK BV idx →
+            n ≠ finalStateOffset s₀ K V BK BV idx) →
+          s1.mem r n = s₀.mem r n) := by
+  obtain ⟨s1, hexec⟩ := stateStep_terminates BHPrev k v w BHOut t s_k_h s_v_h K V
+    BK BV s₀
+  refine ⟨s1, hexec, ?_, stateStep_frame BHPrev k v w BHOut t s_k_h s_v_h K V BK
+    BV s₀ s1 hexec⟩
+  intro idx hact
+  have h := fused_recurrent_rwkv6_state_step_slice_correct BHPrev k v w BHOut t
+    s_k_h s_v_h K V BK BV s₀ hOutInj idx
+  have hval : s1.readMem BHOut (finalStateOffset s₀ K V BK BV idx)
+      = if activeKV s₀ K V BK BV idx then
+          stateStepSpec s₀ BHPrev k v w t s_k_h s_v_h K V BK BV idx
+        else s₀.readMem BHOut (finalStateOffset s₀ K V BK BV idx) := by
+    simpa [hexec] using h
+  have hk' : s₀.readMem k
+      (s₀.pids 2 * s_k_h + s₀.pids 1 * BK + idx.2.1.val + t * K)
+      = ks (idx.2.1, PUnit.unit) := hk (idx.2.1, PUnit.unit) hact.2
+  have hv' : s₀.readMem v
+      (s₀.pids 2 * s_v_h + s₀.pids 0 * BV + idx.1.val + t * V)
+      = vs (idx.1, PUnit.unit) := hv (idx.1, PUnit.unit) hact.1
+  have hw' : s₀.readMem w
+      (s₀.pids 2 * s_k_h + s₀.pids 1 * BK + idx.2.1.val + t * K)
+      = ws (idx.2.1, PUnit.unit) := hw (idx.2.1, PUnit.unit) hact.2
+  rw [hval, if_pos hact, stateStepSpec]
+  simp only [decay, kVal, vVal]
+  rw [hx idx hact, hk', hv', hw']
+
+/-- IO signature of the state step: the `[BV, BK]` state tile, the `[BK]` key and
+decay rows and the `[BV]` value row produce the next `[BV, BK]` state tile. -/
+noncomputable def stateStepIO (BHPrev k v w BHOut : RegionName)
+    (t s_k_h s_v_h K V BK BV : Nat) : Masked3DTileShaped4KernelIO where
+  kernel := fused_recurrent_rwkv6_state_step_slice BHPrev k v w BHOut t s_k_h
+    s_v_h K V BK BV
+  in1 := BHPrev
+  in2 := k
+  in3 := v
+  in4 := w
+  out := BHOut
+  shape1 := [BV, BK]
+  shape2 := [BK]
+  shape3 := [BV]
+  shape4 := [BK]
+  shapeOut := [BV, BK]
+  read1 := fun p₀ p₁ p₂ idx =>
+    p₂ * K * V + (p₁ * BK + idx.2.1.val) * V + (p₀ * BV + idx.1.val)
+  read2 := fun _p₀ p₁ p₂ jk => p₂ * s_k_h + p₁ * BK + jk.1.val + t * K
+  read3 := fun p₀ _p₁ p₂ jv => p₂ * s_v_h + p₀ * BV + jv.1.val + t * V
+  read4 := fun _p₀ p₁ p₂ jk => p₂ * s_k_h + p₁ * BK + jk.1.val + t * K
+  write := fun p₀ p₁ p₂ idx =>
+    p₂ * K * V + (p₁ * BK + idx.2.1.val) * V + (p₀ * BV + idx.1.val)
+  mask1 := fun p₀ p₁ _p₂ idx =>
+    p₀ * BV + idx.1.val < V ∧ p₁ * BK + idx.2.1.val < K
+  mask2 := fun _p₀ p₁ _p₂ jk => p₁ * BK + jk.1.val < K
+  mask3 := fun p₀ _p₁ _p₂ jv => p₀ * BV + jv.1.val < V
+  mask4 := fun _p₀ p₁ _p₂ jk => p₁ * BK + jk.1.val < K
+  writeMask := fun p₀ p₁ _p₂ idx =>
+    p₀ * BV + idx.1.val < V ∧ p₁ * BK + idx.2.1.val < K
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `fused_recurrent_rwkv6.py`'s state
+update: for every disjoint flat placement of `BHPrev` / `k` / `v` / `w` / `BHOut`,
+every program coordinate whose active lanes are in bounds, and every launch state
+whose four channels hold `xs`, `ks`, `vs`, `ws` on their active lanes, the kernel
+terminates, every write-active lane of the next state tile holds
+
+    xs[j_v, j_k] · exp(ws[j_k]) + ks[j_k] · vs[j_v]
+
+and every other memory cell is unchanged. The decay's `tl.exp` and the `k ⊗ v`
+outer product live entirely in the spec function; the four channels have three
+different tile shapes, which is what `Masked3DTileShaped4KernelIO` exists for.
+
+Dimension-general in `K`, `V`, `BK`, `BV` and both head strides. Honest
+side-condition: state-address injectivity at every program coordinate, the same
+hypothesis the per-write-map summary takes. -/
+specification fused_recurrent_rwkv6_state_step_io_correctness
+    (BHPrev k v w BHOut : RegionName) (t s_k_h s_v_h K V BK BV : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BV, BK] =>
+        p₂ * K * V + (p₁ * BK + idx.2.1.val) * V + (p₀ * BV + idx.1.val))) :
+    stateStepIO BHPrev k v w BHOut t s_k_h s_v_h K V BK BV
+      ⊨ fun _p₀ _p₁ xs ks vs ws idx =>
+          xs idx * Real.exp (ws (idx.2.1, PUnit.unit))
+            + ks (idx.2.1, PUnit.unit) * vs (idx.1, PUnit.unit) := by
+  refine Masked3DTileShaped4KernelIO.Implements.intro _ ?_ ?_ ?_
+  · exact stateStep_flattenOk BHPrev k v w BHOut t s_k_h s_v_h K V BK BV
+  · intro bounds s h1 h2 h3 h4 h5
+    exact stateStep_traceSafe BHPrev k v w BHOut t s_k_h s_v_h K V BK BV bounds s
+      (fun idx hact => h1 idx ⟨hact.1, hact.2⟩)
+      (fun jk hact => h2 (jk, PUnit.unit) hact)
+      (fun jv hact => h3 (jv, PUnit.unit) hact)
+      (fun jk hact => h4 (jk, PUnit.unit) hact)
+      (fun idx hact => h5 idx ⟨hact.1, hact.2⟩)
+  · intro s₀ xs ks vs ws hx hk hv hw
+    have h := stateStep_region_run BHPrev k v w BHOut t s_k_h s_v_h K V BK BV s₀
+      (by
+        have := hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)
+        simpa [finalStateOffset, kIndex, vIndex] using this) xs ks vs ws
+      (fun idx hact => hx idx ⟨hact.1, hact.2⟩)
+      (fun jk hact => hk jk hact) (fun jv hact => hv jv hact)
+      (fun jk hact => hw jk hact)
+    obtain ⟨s1, hexec, hval, hframe⟩ := h
+    exact ⟨s1, hexec, fun idx hact => hval idx ⟨hact.1, hact.2⟩,
+      fun r n hc => hframe r n (by
+        rcases hc with hr | hn
+        · exact Or.inl hr
+        · exact Or.inr fun idx hact => hn idx ⟨hact.1, hact.2⟩)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.FusedRwkv6Kernel
 
