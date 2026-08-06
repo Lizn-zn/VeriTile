@@ -57,6 +57,7 @@ honest side conditions, subsuming the former pinned per-case Python summaries.
 namespace VeriTile.Bench.TritonBenchG.MixedSparseAttention
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Meta1MaskedTileShapedKernelIO₂
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -4470,5 +4471,363 @@ specification mixed_sparse_attention_output_closed_form_summary_general
     BM BN BD hBN hBN16 NCTX Zc H NR NS NV sqz sqh sqm sqk skz skh skn skk svz svh svn svk soz soh som sok
     hsqk hskk hsvk hvz hvh hsok hBDsom s sm_scale hundef hactive hNCBN hpos
   exact ⟨sF, hexec, fun idx hact => hOut idx hact⟩
+
+/-! ## ════════ `⊨` IO face for the epilogue ════════
+
+The launched kernel is a twenty-loop block-sparse/column-sparse attention, and its
+own `⊨` face is out of reach (block pointers, an `fp16` read-back, and a
+denominator-positivity side condition). Its **epilogue** is not:
+
+```python
+    acc /= l_i[:, None]
+    tl.store(o_ptrs, acc.to(dtype), mask=m_mask)
+```
+
+`mixed_sparse_attention_epilogue_slice` transcribes exactly those two lines, with
+the online-softmax accumulator `acc` and the row denominators `l_i` materialized
+into scratch regions `AccPre` / `LPre`. **Those two are fiction regions** — they
+stand for the kernel's registers, not for Python tensors — the same idiom as
+`fused_recurrent_retention`'s `HSeed`. What the face buys is the writeback's own
+contract: the destination page is chosen by the *loaded* sequence length, the row
+mask is that same loaded value, and nothing outside the masked window moves.
+
+Three channels, three shapes: a `.nat` scalar (`seqlen`), a `[BLOCK_M,
+BLOCK_DMODEL]` accumulator tile, a `[BLOCK_M]` denominator row. That is
+`Meta1MaskedTileShapedKernelIO₂`. -/
+
+section IOFaceEpilogue
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+/-- The epilogue of `_triton_mixed_sparse_attn_fwd_kernel`, with the accumulator
+and the row denominators materialized into `AccPre` / `LPre`. Statement for
+statement `acc /= l_i[:, None]` followed by the masked `tl.store(o_ptrs, ...)`,
+including the `seqlen` load that both the destination page and the row mask are
+built from. -/
+def mixed_sparse_attention_epilogue_slice
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
+  seqlen = tl.load(Seqlens + off_hz // $(H))
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  qo_offset = (off_hz // $(H)) * $(stride_qz) + (off_hz % $(H)) * $(stride_qh)
+  m_mask = offs_m[:, None] < seqlen
+  acc = tl.load(AccPre + qo_offset + offs_m[:, None] * $(stride_om) +
+    offs_d[None, :] * $(stride_ok))
+  l_i = tl.load(LPre + offs_m)
+  acc = acc / l_i[:, None]
+  tl.store(Out + qo_offset + offs_m[:, None] * $(stride_om) +
+    offs_d[None, :] * $(stride_ok), (acc).to(Out.dtype.element_ty), mask=m_mask)
+}
+
+theorem epilogue_toAlgorithm_supported
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat) :
+    ∃ alg, (mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H
+      stride_qz stride_qh stride_om stride_ok BLOCK_M
+      BLOCK_DMODEL).toAlgorithm? = Except.ok alg := by
+  simp [mixed_sparse_attention_epilogue_slice, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?]
+
+theorem epilogue_flattenOk
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat) :
+    ((mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H stride_qz
+      stride_qh stride_om stride_ok BLOCK_M
+      BLOCK_DMODEL).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [mixed_sparse_attention_epilogue_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem epilogue_terminates
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat)
+    (s : BlockState) :
+    ∃ s1, exec (mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H
+      stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL) s
+      = some s1 := by
+  simp [exec, mixed_sparse_attention_epilogue_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop,
+    Tile.remap, NumericDType.add, NumericDType.mul, NumericDType.div,
+    ComparableDType.lt, FloatDType.cast, TileShape.dropInsertedIndex]
+
+theorem epilogue_correct
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx))
+    (hExec : exec (mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H
+      stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL) s
+      = some s') :
+    ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+      active s H (Region.cast Seqlens) BLOCK_M idx →
+      s'.readMem Out
+          (outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx)
+        = s.readMem AccPre
+            (outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx)
+          / s.readMem LPre (mIndex s BLOCK_M idx.1) := by
+  intro idx hact
+  simp only [active, mIndex, seqLen, offZ] at hact
+  simp [exec, mixed_sparse_attention_epilogue_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop,
+    Tile.remap, NumericDType.add, NumericDType.mul, NumericDType.div,
+    ComparableDType.lt, FloatDType.cast, TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  have hOffInj : Function.Injective
+      (fun i : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh +
+          (s.pids 0 * BLOCK_M + i.1.val) * stride_om + i.2.1.val * stride_ok) := by
+    simpa [outOffset, qoBase, offZ, offH, mIndex, dIndex] using hOutInj
+  simp only [outOffset, qoBase, offZ, offH, mIndex, dIndex]
+  rw [BlockState.scatter_readback_prop_masked_nd _ _ _ _ hOffInj idx,
+    if_pos hact]
+
+theorem epilogue_frame
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat)
+    (s s' : BlockState)
+    (hExec : exec (mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H
+      stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL) s
+      = some s') :
+    ∀ (r : RegionName) (n : Nat),
+      (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+        active s H (Region.cast Seqlens) BLOCK_M idx →
+        n ≠ outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx) →
+      s'.mem r n = s.mem r n := by
+  intro r n hcond
+  simp only [active, mIndex, seqLen, offZ, outOffset, qoBase, offH,
+    dIndex] at hcond
+  simp [exec, mixed_sparse_attention_epilogue_slice, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop,
+    Tile.remap, NumericDType.add, NumericDType.mul, NumericDType.div,
+    ComparableDType.lt, FloatDType.cast, TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Out)
+    (fun i : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      s.pids 1 / H * stride_qz + s.pids 1 % H * stride_qh +
+        (s.pids 0 * BLOCK_M + i.1.val) * stride_om + i.2.1.val * stride_ok)
+    _ (fun i : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+      s.pids 0 * BLOCK_M + i.1.val <
+        s.readMemValue .nat (Region.cast Seqlens) (s.pids 1 / H)) r n
+    (TileShape.allIndices [BLOCK_M, BLOCK_DMODEL]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem epilogue_traceSafe
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hseq : s.pids 1 / H < bounds (Region.cast Seqlens))
+    (hacc : ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+      outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx
+        < bounds AccPre)
+    (hl : ∀ i : Fin BLOCK_M, mIndex s BLOCK_M i < bounds LPre)
+    (hout : ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+      active s H (Region.cast Seqlens) BLOCK_M idx →
+      outOffset s H stride_qz stride_qh stride_om stride_ok BLOCK_M idx
+        < bounds Out) :
+    ((mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H stride_qz
+      stride_qh stride_om stride_ok BLOCK_M
+      BLOCK_DMODEL).toAlgKernel).TraceSafe bounds s := by
+  simp only [active, mIndex, seqLen, offZ, outOffset, qoBase, offH,
+    dIndex] at hacc hl hout
+  simp [Kernel.TraceSafe, mixed_sparse_attention_epilogue_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop, Tile.remap,
+    NumericDType.add, NumericDType.mul, NumericDType.div, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact hseq
+  all_goals try exact fun a b => hacc (a, b, PUnit.unit)
+  all_goals try exact fun a => hl a
+  all_goals try exact fun a b h => hout (a, b, PUnit.unit) h
+  all_goals try simp [Op.SafeAt.eq_def]
+
+/-- Region-model run of the epilogue. -/
+theorem epilogue_region_run
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat)
+    (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        outOffset s₀ H stride_qz stride_qh stride_om stride_ok BLOCK_M idx))
+    (xs : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ) (ys : TileIndex [BLOCK_M] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+      s₀.readMem AccPre
+        (outOffset s₀ H stride_qz stride_qh stride_om stride_ok BLOCK_M idx)
+        = xs idx)
+    (hy : ∀ i : TileIndex [BLOCK_M],
+      s₀.readMem LPre (mIndex s₀ BLOCK_M i.1) = ys i) :
+    ∃ s1, exec (mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H
+        stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL) s₀
+        = some s1
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+          active s₀ H (Region.cast Seqlens) BLOCK_M idx →
+          s1.readMem Out
+              (outOffset s₀ H stride_qz stride_qh stride_om stride_ok BLOCK_M
+                idx) = xs idx / ys (idx.1, PUnit.unit))
+      ∧ (∀ (r : RegionName) (n : Nat),
+          (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_DMODEL],
+            active s₀ H (Region.cast Seqlens) BLOCK_M idx →
+            n ≠ outOffset s₀ H stride_qz stride_qh stride_om stride_ok BLOCK_M
+              idx) →
+          s1.mem r n = s₀.mem r n) := by
+  obtain ⟨s1, hexec⟩ := epilogue_terminates AccPre LPre Seqlens Out H stride_qz
+    stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL s₀
+  refine ⟨s1, hexec, ?_, epilogue_frame AccPre LPre Seqlens Out H stride_qz
+    stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL s₀ s1 hexec⟩
+  intro idx hact
+  rw [epilogue_correct AccPre LPre Seqlens Out H stride_qz stride_qh stride_om
+    stride_ok BLOCK_M BLOCK_DMODEL s₀ s1 hOutInj hexec idx hact, hx idx,
+    hy (idx.1, PUnit.unit)]
+
+/-- IO signature of the epilogue: the loaded sequence length is a `.nat`
+channel, the accumulator and the row denominators are the two float channels. -/
+def epilogueIO (AccPre LPre : RegionName) (Seqlens : Region .nat)
+    (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat) :
+    Meta1MaskedTileShapedKernelIO₂ where
+  kernel := mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H
+    stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL
+  mbuf := Region.cast Seqlens
+  in1 := AccPre
+  in2 := LPre
+  out := Out
+  shape1 := [BLOCK_M, BLOCK_DMODEL]
+  shape2 := [BLOCK_M]
+  shapeOut := [BLOCK_M, BLOCK_DMODEL]
+  mwin := fun _p₀ p₁ => p₁ / H
+  read1 := fun p₀ p₁ _m idx =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh +
+      (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_ok
+  read2 := fun p₀ _p₁ _m i => p₀ * BLOCK_M + i.1.val
+  write := fun p₀ p₁ _m idx =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh +
+      (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_ok
+  mask1 := fun _p₀ _p₁ _m _idx => True
+  mask2 := fun _p₀ _p₁ _m _i => True
+  writeMask := fun p₀ _p₁ m idx => p₀ * BLOCK_M + idx.1.val < m
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for the epilogue of
+`_triton_mixed_sparse_attn_fwd_kernel`: for every disjoint flat placement of
+`Seqlens` / `AccPre` / `LPre` / `Out`, every program coordinate whose windows are
+in bounds, every sequence length `m` the `Seqlens` cell may hold, and every launch
+state whose accumulator and denominator windows hold `xs` and `ys`, the epilogue
+terminates, every row below `m` of the output tile holds `xs[i, e] / ys[i]`, and
+every other memory cell is unchanged.
+
+**Scope.** This is the writeback only. `AccPre` / `LPre` are **fiction regions**:
+they stand for the kernel's `acc` / `l_i` registers, not for Python tensors — the
+same idiom as `fused_recurrent_retention`'s `HSeed`. The twenty-loop online
+softmax that produces them keeps its own closed-form summary
+(`mixed_sparse_attention_output_closed_form_summary_general`), which is where the
+attention math is proved; the two faces meet at the accumulator.
+
+What this face does add is the writeback's own contract, stated over channels
+rather than over memory: the sequence length is *loaded*, and both the row mask
+and the destination page are built from that loaded value. Dimension-general in
+`H`, `BLOCK_M`, `BLOCK_DMODEL` and all four strides. Honest side-condition:
+destination injectivity at every program coordinate. -/
+specification mixed_sparse_attention_epilogue_io_correctness
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        p₁ / H * stride_qz + p₁ % H * stride_qh +
+          (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_ok)) :
+    epilogueIO AccPre LPre Seqlens Out H stride_qz stride_qh stride_om stride_ok
+        BLOCK_M BLOCK_DMODEL
+      ⊨ fun _p₀ _p₁ _m xs ys idx => xs idx / ys (idx.1, PUnit.unit) := by
+  refine Meta1MaskedTileShapedKernelIO₂.Implements.intro _ ?_ ?_ ?_
+  · exact epilogue_flattenOk AccPre LPre Seqlens Out H stride_qz stride_qh
+      stride_om stride_ok BLOCK_M BLOCK_DMODEL
+  · intro bounds s m hm hbm hb1 hb2 hbo
+    simp only [epilogueIO] at hm hbm hb1 hb2 hbo
+    refine epilogue_traceSafe AccPre LPre Seqlens Out H stride_qz stride_qh
+      stride_om stride_ok BLOCK_M BLOCK_DMODEL bounds s hbm ?_ ?_ ?_
+    · intro idx
+      simpa [outOffset, qoBase, offZ, offH, mIndex, dIndex] using
+        hb1 idx trivial
+    · intro i
+      simpa [mIndex] using hb2 (i, PUnit.unit) trivial
+    · intro idx hact
+      simp only [active, mIndex, seqLen, offZ] at hact
+      have := hbo idx (by rw [← hm]; exact hact)
+      simpa [outOffset, qoBase, offZ, offH, mIndex, dIndex] using this
+  · intro s₀ m xs ys hm hx hy
+    simp only [epilogueIO] at hm hx hy
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      epilogue_region_run AccPre LPre Seqlens Out H stride_qz stride_qh
+        stride_om stride_ok BLOCK_M BLOCK_DMODEL s₀
+        (by
+          have := hOutInj (s₀.pids 0) (s₀.pids 1)
+          simpa [outOffset, qoBase, offZ, offH, mIndex, dIndex] using this)
+        xs ys
+        (fun idx => by
+          simpa [outOffset, qoBase, offZ, offH, mIndex, dIndex] using
+            hx idx trivial)
+        (fun i => by simpa [mIndex] using hy i trivial)
+    refine ⟨s1, hexec, fun idx hidx => ?_, fun r n hc => hframe r n ?_⟩
+    · have hact : active s₀ H (Region.cast Seqlens) BLOCK_M idx := by
+        simp only [active, mIndex, seqLen, offZ]
+        rw [hm]
+        exact hidx
+      simpa [outOffset, qoBase, offZ, offH, mIndex, dIndex] using hval idx hact
+    · rcases hc with hr | hn
+      · exact Or.inl hr
+      · refine Or.inr fun idx hact => ?_
+        simp only [active, mIndex, seqLen, offZ] at hact
+        have := hn idx (by
+          simp only [epilogueIO]
+          rw [← hm]
+          exact hact)
+        simpa [outOffset, qoBase, offZ, offH, mIndex, dIndex] using this
+
+end IOFaceEpilogue
 
 end VeriTile.Bench.TritonBenchG.MixedSparseAttention
