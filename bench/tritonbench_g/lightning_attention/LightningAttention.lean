@@ -119,6 +119,7 @@ offset needs `BLOCK_MODEL ≤ e` (`bodyOutOffset_injective`).
 namespace VeriTile.Bench.TritonBenchG.LightningAttention
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.Masked3DTileKernelIO₁
 
 set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
@@ -1604,6 +1605,198 @@ specification lightning_attention_output_summary_general
       m n d e BLOCK BLOCK_MODEL s hBM hPrev
 
 end Correct_without_Rounding
+
+/-! ## ════════ `⊨` IO face for the backward gradient store ════════
+
+The backward gradient store `_bwd_intra_kernel`'s writeback (`GradPre → Out`) is,
+lane for lane, a masked `[BLOCK, WIDTH]` tile memcpy: read and write share the
+flat address `off_bh·n·width + off_block·width + offs_w`, and the only nontrivial
+half of the `mask = (off_block[:, None] < n) & (offs_w[None, :] < WIDTH)` predicate
+is the row bound (`offs_w : Fin WIDTH` makes the column half vacuous). That is
+exactly `Masked3DTileKernelIO₁`'s shape at two live program axes, so the port gets
+a `⊨` headline with no library work; the third axis is simply unused. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+theorem gradStore_flattenOk (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat) :
+    ((lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK
+      WIDTH).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [lightning_attention_bwd_grad_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem gradStore_terminates (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat)
+    (s : BlockState) :
+    ∃ s1, exec (lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK
+      WIDTH) s = some s1 := by
+  simp [exec, lightning_attention_bwd_grad_store_slice, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+
+theorem gradStore_frame (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat)
+    (s s' : BlockState)
+    (hExec : exec (lightning_attention_bwd_grad_store_slice GradPre Out n width
+      BLOCK WIDTH) s = some s') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s n BLOCK idx →
+        o ≠ gradTileOffset s n width BLOCK WIDTH idx) →
+      s'.mem r o = s.mem r o := by
+  intro r o hcond
+  simp only [activeGrad, gradRowIndex, gradTileOffset, gradColIndex] at hcond
+  simp [exec, lightning_attention_bwd_grad_store_slice, stepStmts, stepStmt,
+    evalOp, evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := Out)
+    (fun i : TileIndex [BLOCK, WIDTH] =>
+      s.pids 0 * n * width + (s.pids 1 * BLOCK + i.1.val) * width + i.2.1.val)
+    _ (fun i : TileIndex [BLOCK, WIDTH] => s.pids 1 * BLOCK + i.1.val < n) r o
+    (TileShape.allIndices [BLOCK, WIDTH]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx hidx)
+
+theorem gradStore_traceSafe (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s n BLOCK idx →
+      gradTileOffset s n width BLOCK WIDTH idx < bounds GradPre)
+    (hout : ∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s n BLOCK idx →
+      gradTileOffset s n width BLOCK WIDTH idx < bounds Out) :
+    ((lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK
+      WIDTH).toAlgKernel).TraceSafe bounds s := by
+  simp only [activeGrad, gradRowIndex, gradTileOffset, gradColIndex] at hin hout
+  simp [Kernel.TraceSafe, lightning_attention_bwd_grad_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt,
+    MaskOpt.SafeAt, MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt,
+    MemAccess.MemorySafe, memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+  and_intros
+  -- the load's and the store's active-address bounds
+  all_goals try exact fun a b ha => hin (a, b, PUnit.unit) ha
+  all_goals try exact fun a b ha => hout (a, b, PUnit.unit) ha
+  -- the remaining subterm walks (`.eq_def`: the `.load` node's dtype is the
+  -- computed `ComputeDType.fp32.eraseDType`, which blocks the plain equations)
+  all_goals simp [Op.SafeAt.eq_def]
+
+/-- Region-model run of the backward gradient store. -/
+theorem gradStore_region_run (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat)
+    (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BLOCK, WIDTH] =>
+        gradTileOffset s₀ n width BLOCK WIDTH idx))
+    (xs : TileIndex [BLOCK, WIDTH] → ℝ)
+    (hx : ∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s₀ n BLOCK idx →
+      s₀.readMem GradPre (gradTileOffset s₀ n width BLOCK WIDTH idx) = xs idx) :
+    ∃ s1, exec (lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK
+        WIDTH) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s₀ n BLOCK idx →
+          s1.readMem Out (gradTileOffset s₀ n width BLOCK WIDTH idx) = xs idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Out ∨ ∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s₀ n BLOCK idx →
+            o ≠ gradTileOffset s₀ n width BLOCK WIDTH idx) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hexec⟩ := gradStore_terminates GradPre Out n width BLOCK WIDTH s₀
+  refine ⟨s1, hexec, ?_,
+    gradStore_frame GradPre Out n width BLOCK WIDTH s₀ s1 hexec⟩
+  intro idx hact
+  have h := lightning_attention_bwd_grad_store_slice_correct GradPre Out n width
+    BLOCK WIDTH s₀ hOutInj idx
+  have hval : s1.readMem Out (gradTileOffset s₀ n width BLOCK WIDTH idx)
+      = if activeGrad s₀ n BLOCK idx then
+          gradStoreValue s₀ GradPre n width BLOCK WIDTH idx
+        else s₀.readMem Out (gradTileOffset s₀ n width BLOCK WIDTH idx) := by
+    simpa [hexec] using h
+  rw [hval, if_pos hact, gradStoreValue, if_pos hact]
+  simpa using hx idx hact
+
+/-- IO signature of the backward gradient store. `WIDTH` is the full column
+extent, so the column half of the Python mask is vacuous and only the row bound
+survives into `mask`. The third program axis is unused. -/
+def gradStoreIO (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK
+    WIDTH
+  inp := GradPre
+  out := Out
+  shape := [BLOCK, WIDTH]
+  read := fun p₀ p₁ _p₂ idx =>
+    p₀ * n * width + (p₁ * BLOCK + idx.1.val) * width + idx.2.1.val
+  write := fun p₀ p₁ _p₂ idx =>
+    p₀ * n * width + (p₁ * BLOCK + idx.1.val) * width + idx.2.1.val
+  mask := fun _p₀ p₁ _p₂ idx => p₁ * BLOCK + idx.1.val < n
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `lightning_attention.py`'s backward
+gradient writeback: for every disjoint flat placement of `GradPre` / `Out`, every
+program coordinate whose active lanes are in bounds, and every launch state whose
+`GradPre` block holds `xs` on the row-active lanes, the kernel terminates, every
+active lane of `Out` holds `xs idx`, and every other memory cell is unchanged.
+
+Dimension-general in `n`, `width`, `BLOCK` and `WIDTH`. Honest side-condition:
+address injectivity at every program coordinate, the same hypothesis the
+per-write-map summary takes (the store's flat address is not injective for every
+choice of `n`/`width`/`BLOCK`, so it cannot be discharged inline). -/
+specification lightning_attention_bwd_grad_store_io_correctness
+    (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK, WIDTH] =>
+        p₀ * n * width + (p₁ * BLOCK + idx.1.val) * width + idx.2.1.val)) :
+    gradStoreIO GradPre Out n width BLOCK WIDTH
+      ⊨ fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact gradStore_flattenOk GradPre Out n width BLOCK WIDTH
+  · intro bounds s h1 h2
+    exact gradStore_traceSafe GradPre Out n width BLOCK WIDTH bounds s
+      (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+  · intro s₀ xs hin
+    exact gradStore_region_run GradPre Out n width BLOCK WIDTH s₀
+      (by
+        have := hOutInj (s₀.pids 0) (s₀.pids 1)
+        simpa [gradTileOffset, gradRowIndex, gradColIndex] using this) xs
+      (fun idx hact => hin idx hact)
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.LightningAttention
 
