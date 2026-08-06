@@ -58,6 +58,7 @@ references `Tile.reduceMax` / `Tile.reduceSum` directly, not
 namespace VeriTile.Bench.TritonBenchG.SoftmaxOptimize
 
 open VeriTile.Triton
+open scoped VeriTile.Triton.MaskedTileKernelIO₁
 
 set_option linter.unusedVariables false
 
@@ -2539,6 +2540,240 @@ specification softmax_kernel_online_v2_output_summary
   simp only [ComputeCorrect.OutputReadable.read_real]
   exact softmax_kernel_online_v2_surface_exec_correct output_ptr input_ptr M N TILE_N
     hN hT hne s s' hExec j
+
+/-! ## ════════ `⊨` IO face for the one-tile softmax ════════
+
+The one-tile path (`N ≤ TILE_N`, the whole row lives in one tile) is a
+straight-line kernel: read the row window, reduce, write the same window. That is
+`MaskedTileKernelIO₁`'s shape, and since read and write share the address
+`pid·N + i`, the window is `base + lane` and the injectivity side-condition is
+discharged inline — the headline carries none.
+
+The spec function is the port's own reduction chain re-read over the **loaded
+lane values** rather than over memory: `softmaxTileSpec` is `softmaxOptimizeSpec`
+with `xs` in place of `s.readMem input_ptr (linearOffset …)`. Masked-out lanes
+(`i ≥ N`) stay `⊥` exactly as the kernel's `other = -inf` load leaves them, so the
+face is true for a partial tile, not only a full one. -/
+
+section IOFace
+
+/-- Cell-level frame of a masked scatter (private copy — `bench` files are
+standalone). -/
+private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
+/-- `softmaxOptimizeSpec`'s reduction chain, read over the **loaded lane values**
+instead of over memory. Masked-out lanes are `⊥`, exactly as the kernel's
+`other = -float("inf")` load leaves them. -/
+noncomputable def softmaxTileSpec (N TILE_N : Nat)
+    (xs : TileIndex [TILE_N] → ℝ) (idx : Fin TILE_N) : ℝ :=
+  let row : Tile .real [TILE_N] :=
+    { data := fun j => if j.1.val < N then some (xs j) else none }
+  match Tile.reduceMax (shape := [TILE_N]) ⟨0, by simp⟩ Bool.false row with
+  | some rowMax =>
+      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
+      let e := Tile.uop WithBot.realExp shifted
+      let z := Tile.reduceSum (shape := [TILE_N]) ⟨0, by simp⟩ Bool.false e
+      WithBot.unbotD 0
+        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR e z).data
+          (idx, PUnit.unit))
+  | none => 0
+
+/-- The memory-facing and value-facing specs agree once the launch state pins the
+row's active lanes. -/
+theorem softmaxOptimizeSpec_eq_tileSpec
+    (s : BlockState) (input_ptr : RegionName) (N TILE_N : Nat)
+    (xs : TileIndex [TILE_N] → ℝ)
+    (hx : ∀ j : TileIndex [TILE_N], j.1.val < N →
+      s.readMem input_ptr (linearOffset s N j.1) = xs j) :
+    ∀ idx : Fin TILE_N,
+      softmaxOptimizeSpec s input_ptr N TILE_N idx
+        = softmaxTileSpec N TILE_N xs idx := by
+  intro idx
+  have htile : softmaxOptimizeInputTile s input_ptr N TILE_N
+      = { data := fun j : TileIndex [TILE_N] =>
+            if j.1.val < N then some (xs j) else none } := by
+    unfold softmaxOptimizeInputTile
+    congr 1
+    funext j
+    by_cases hj : j.1.val < N
+    · rw [if_pos hj, if_pos hj, hx j hj]
+    · rw [if_neg hj, if_neg hj]
+  unfold softmaxOptimizeSpec softmaxTileSpec
+  rw [htile]
+
+theorem oneTile_flattenOk (output_ptr input_ptr : RegionName) (N TILE_N : Nat) :
+    ((softmax_kernel_online_v2_one_tile output_ptr input_ptr N
+      TILE_N).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [softmax_kernel_online_v2_one_tile, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+theorem oneTile_terminates (output_ptr input_ptr : RegionName) (N TILE_N : Nat)
+    (hT : 0 < TILE_N) (s : BlockState) :
+    ∃ s1, exec (softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N) s
+      = some s1 := by
+  simp [exec, softmax_kernel_online_v2_one_tile, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceMax,
+    Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+    TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+    NumericDType.mul, NumericDType.sub, NumericDType.div, ComparableDType.lt,
+    FloatDType.cast, hT]
+
+theorem oneTile_frame (output_ptr input_ptr : RegionName) (N TILE_N : Nat)
+    (hT : 0 < TILE_N) (s s' : BlockState)
+    (hExec : exec (softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N)
+      s = some s') :
+    ∀ (r : RegionName) (n : Nat),
+      (r ≠ output_ptr ∨ ∀ i : Fin TILE_N, i.val < N →
+        n ≠ linearOffset s N i) →
+      s'.mem r n = s.mem r n := by
+  intro r n hcond
+  simp only [linearOffset, BlockState.pid] at hcond
+  simp [exec, softmax_kernel_online_v2_one_tile, stepStmts, stepStmt, evalOp,
+    evalOp.eq_def, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceMax,
+    Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+    TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+    NumericDType.mul, NumericDType.sub, NumericDType.div, ComparableDType.lt,
+    FloatDType.cast, hT] at hExec
+  subst hExec
+  rw [foldl_writeMem_frame (region := output_ptr)
+    (fun i : TileIndex [TILE_N] => s.pids 0 * N + i.1.val)
+    _ (fun i : TileIndex [TILE_N] => i.1.val < N) r n
+    (TileShape.allIndices [TILE_N]) ?_]
+  · simp
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun idx _ hidx => Ne.symm (h idx.1 hidx)
+
+theorem oneTile_traceSafe (output_ptr input_ptr : RegionName) (N TILE_N : Nat)
+    (hT : 0 < TILE_N) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ i : Fin TILE_N, i.val < N → linearOffset s N i < bounds input_ptr)
+    (hout : ∀ i : Fin TILE_N, i.val < N → linearOffset s N i < bounds output_ptr) :
+    ((softmax_kernel_online_v2_one_tile output_ptr input_ptr N
+      TILE_N).toAlgKernel).TraceSafe bounds s := by
+  simp only [linearOffset, BlockState.pid] at hin hout
+  simp [Kernel.TraceSafe, softmax_kernel_online_v2_one_tile,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt, MaskOpt.SafeAt,
+    MaskOpt.Active, MaskOpt.MemorySafe, MemAccess.SafeAt, MemAccess.MemorySafe,
+    memAccessMemorySafe, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, Op.PointerAddressesSafeOn, Op.MemorySafe,
+    stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop, Tile.reduceMax,
+    Tile.reduceMaxDrop, Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+    TileShape.eraseAxis, TileShape.insertAxisIndex, NumericDType.add,
+    NumericDType.mul, NumericDType.sub, NumericDType.div, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex, hT]
+  and_intros
+  all_goals try exact fun a h => hin a h
+  all_goals try exact fun a h => hout a h
+  all_goals try simp [Op.SafeAt.eq_def]
+  all_goals try exact fun a h => hin a h
+  all_goals try exact fun a h => hout a h
+
+/-- Region-model run of the one-tile softmax. -/
+theorem oneTile_region_run (output_ptr input_ptr : RegionName) (N TILE_N : Nat)
+    (hT : 0 < TILE_N) (s₀ : BlockState) (xs : TileIndex [TILE_N] → ℝ)
+    (hx : ∀ j : TileIndex [TILE_N], j.1.val < N →
+      s₀.readMem input_ptr (linearOffset s₀ N j.1) = xs j) :
+    ∃ s1, exec (softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N) s₀
+        = some s1
+      ∧ (∀ i : Fin TILE_N, i.val < N →
+          s1.readMem output_ptr (linearOffset s₀ N i)
+            = softmaxTileSpec N TILE_N xs i)
+      ∧ (∀ (r : RegionName) (n : Nat),
+          (r ≠ output_ptr ∨ ∀ i : Fin TILE_N, i.val < N →
+            n ≠ linearOffset s₀ N i) →
+          s1.mem r n = s₀.mem r n) := by
+  obtain ⟨s1, hexec⟩ :=
+    oneTile_terminates output_ptr input_ptr N TILE_N hT s₀
+  refine ⟨s1, hexec, ?_,
+    oneTile_frame output_ptr input_ptr N TILE_N hT s₀ s1 hexec⟩
+  intro i hi
+  rw [softmax_kernel_online_v2_one_tile_correct output_ptr input_ptr N TILE_N s₀
+    s1 hexec i, if_pos hi,
+    softmaxOptimizeSpec_eq_tileSpec s₀ input_ptr N TILE_N xs hx i]
+
+/-- IO signature of the one-tile softmax. -/
+def oneTileIO (output_ptr input_ptr : RegionName) (N TILE_N : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N
+  inp := input_ptr
+  out := output_ptr
+  shape := [TILE_N]
+  read := fun pid idx => pid * N + idx.1.val
+  write := fun pid idx => pid * N + idx.1.val
+  mask := fun _pid idx => idx.1.val < N
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the IO surface** for `softmax_optimize.py`'s one-tile path:
+for every disjoint flat placement of `input_ptr` / `output_ptr`, every program id
+whose active lanes are in bounds, and every launch state whose input row holds
+`xs` on the `i < N` lanes, the kernel terminates, every active lane of the output
+row holds `softmaxTileSpec N TILE_N xs i`, and every other memory cell is
+unchanged.
+
+`softmaxTileSpec` is the port's own reduction chain — running max, shift,
+`exp`, running sum, divide — read over the **loaded lane values** instead of over
+memory, so this is a genuine input/output statement rather than a read-back of
+the kernel's own buffer. Masked-out lanes stay `⊥`, exactly as the kernel's
+`other = -float("inf")` load leaves them, which is what makes the face true for a
+partial tile (`N < TILE_N`, the case the one-tile path is *for*) and not only for
+a full one.
+
+Dimension-general in `N` and `TILE_N`. **Zero side-conditions on addresses**: the
+window is `pid·N + i`, so injectivity is discharged inline. The one honest
+hypothesis is `0 < TILE_N` — an empty tile makes `tl.max` fault, exactly as in
+Python. -/
+specification softmax_kernel_online_v2_one_tile_io_correctness
+    (output_ptr input_ptr : RegionName) (N TILE_N : Nat) (hT : 0 < TILE_N) :
+    oneTileIO output_ptr input_ptr N TILE_N
+      ⊨ fun _pid xs idx => softmaxTileSpec N TILE_N xs idx.1 := by
+  refine MaskedTileKernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact oneTile_flattenOk output_ptr input_ptr N TILE_N
+  · intro bounds s h1 h2
+    exact oneTile_traceSafe output_ptr input_ptr N TILE_N hT bounds s
+      (fun i hi => h1 (i, PUnit.unit) hi) (fun i hi => h2 (i, PUnit.unit) hi)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      oneTile_region_run output_ptr input_ptr N TILE_N hT s₀ xs
+        (fun j hj => hx j hj)
+    exact ⟨s1, hexec, fun idx hidx => hval idx.1 hidx, fun r n hc =>
+      hframe r n (by
+        rcases hc with hr | hn
+        · exact Or.inl hr
+        · exact Or.inr fun i hi => hn (i, PUnit.unit) hi)⟩
+
+end IOFace
 
 end VeriTile.Bench.TritonBenchG.SoftmaxOptimize
 
