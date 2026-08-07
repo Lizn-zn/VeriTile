@@ -837,6 +837,140 @@ specification layer_norm_liger_scalar_stores_io_correctness
           · exact Or.inl h
           · exact Or.inr (h PUnit.unit trivial))⟩
 
+/-! ### The rounding faces
+
+Both stores are single-cell copies: no arithmetic on the loaded value, and no
+`.to(...)` on either store — the cell stays `.real` end to end. So both slices are
+**cast-free** — every statement steps identically under `stepStmtsR R` and
+`stepStmts` — and the exact runs transport to `execR R` for *every* rounding
+model. -/
+
+/-- The mean store is cast-free: `execR R` is the exact stepper. -/
+private theorem mean_store_castFree (R : RoundingModel) (MeanPre Mean : RegionName)
+    (Mean_row_stride : Nat) (s : BlockState) :
+    execR R ((layer_norm_liger_forward_mean_store_slice MeanPre Mean
+        Mean_row_stride).toAlgKernel) s
+      = exec ((layer_norm_liger_forward_mean_store_slice MeanPre Mean
+        Mean_row_stride).toAlgKernel) s := by
+  simp [execR, exec, layer_norm_liger_forward_mean_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, FloatDType.cast]
+
+/-- The rstd store is cast-free: `execR R` is the exact stepper. -/
+private theorem rstd_store_castFree (R : RoundingModel) (RSTDPre RSTD : RegionName)
+    (RSTD_row_stride : Nat) (s : BlockState) :
+    execR R ((layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD
+        RSTD_row_stride).toAlgKernel) s
+      = exec ((layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD
+        RSTD_row_stride).toAlgKernel) s := by
+  simp [execR, exec, layer_norm_liger_forward_rstd_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, FloatDType.cast]
+
+/-- Per-execution safety walk of the mean store **under the rounding model**. -/
+theorem mean_store_traceSafeR (R : RoundingModel) (MeanPre Mean : RegionName)
+    (Mean_row_stride : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : meanRowOffset s Mean_row_stride < bounds MeanPre)
+    (hout : meanRowOffset s Mean_row_stride < bounds Mean) :
+    Kernel.TraceSafeR R bounds
+      ((layer_norm_liger_forward_mean_store_slice MeanPre Mean
+        Mean_row_stride).toAlgKernel) s := by
+  simp [Kernel.TraceSafeR, layer_norm_liger_forward_mean_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR,
+    MaskOpt.ActiveR, MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtsR, stepStmtR, evalOpR,
+    evalOpR.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, FloatDType.cast]
+  exact ⟨hin, hout⟩
+
+/-- Per-execution safety walk of the rstd store **under the rounding model**. -/
+theorem rstd_store_traceSafeR (R : RoundingModel) (RSTDPre RSTD : RegionName)
+    (RSTD_row_stride : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : meanRowOffset s RSTD_row_stride < bounds RSTDPre)
+    (hout : meanRowOffset s RSTD_row_stride < bounds RSTD) :
+    Kernel.TraceSafeR R bounds
+      ((layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD
+        RSTD_row_stride).toAlgKernel) s := by
+  simp [Kernel.TraceSafeR, layer_norm_liger_forward_rstd_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR,
+    MaskOpt.ActiveR, MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtsR, stepStmtR, evalOpR,
+    evalOpR.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, FloatDType.cast]
+  exact ⟨hin, hout⟩
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `layer_norm_liger.py`'s two scalar row stores: for
+**every** rounding model `R`, the same pair of Hoare triples as
+`layer_norm_liger_scalar_stores_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs PUnit.unit)`.
+
+Both are single-cell copies carrying no `.to(...)`, so both slices are cast-free
+and the exact runs transport verbatim. The content of the rounding face here is
+exactly that: *neither store introduces a rounding event of its own*, at any
+`R`. -/
+specification layer_norm_liger_scalar_stores_io_correctnessR (R : RoundingModel)
+    (MeanPre Mean RSTDPre RSTD : RegionName)
+    (Mean_row_stride RSTD_row_stride : Nat) :
+    (mean_storeIO MeanPre Mean Mean_row_stride
+      ⊨[R, FloatDType.real] fun _pid xs _ => xs PUnit.unit) ∧
+    (rstd_storeIO RSTDPre RSTD RSTD_row_stride
+      ⊨[R, FloatDType.real] fun _pid xs _ => xs PUnit.unit) := by
+  constructor
+  · refine MaskedTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+    · exact mean_store_flattenOk MeanPre Mean Mean_row_stride
+    · intro bounds s h1 h2
+      exact mean_store_traceSafeR R MeanPre Mean Mean_row_stride bounds s
+        (h1 PUnit.unit trivial) (h2 PUnit.unit trivial)
+    · intro s₀ xs hx
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        mean_store_region_run MeanPre Mean Mean_row_stride s₀ xs
+          (hx PUnit.unit trivial)
+      refine ⟨s1, ?_, ?_, fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr (h PUnit.unit trivial))⟩
+      · simp only [mean_storeIO]
+        rw [mean_store_castFree R MeanPre Mean Mean_row_stride s₀]
+        exact hexec
+      · intro _ _
+        simp only [mean_storeIO]
+        rw [BlockState.readMemAs_real]
+        simp only [meanRowOffset] at hval
+        rw [hval]
+        simp
+  · refine MaskedTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+    · exact rstd_store_flattenOk RSTDPre RSTD RSTD_row_stride
+    · intro bounds s h1 h2
+      exact rstd_store_traceSafeR R RSTDPre RSTD RSTD_row_stride bounds s
+        (h1 PUnit.unit trivial) (h2 PUnit.unit trivial)
+    · intro s₀ xs hx
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        rstd_store_region_run RSTDPre RSTD RSTD_row_stride s₀ xs
+          (hx PUnit.unit trivial)
+      refine ⟨s1, ?_, ?_, fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr (h PUnit.unit trivial))⟩
+      · simp only [rstd_storeIO]
+        rw [rstd_store_castFree R RSTDPre RSTD RSTD_row_stride s₀]
+        exact hexec
+      · intro _ _
+        simp only [rstd_storeIO]
+        rw [BlockState.readMemAs_real]
+        simp only [meanRowOffset] at hval
+        rw [hval]
+        simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.LayerNormLiger

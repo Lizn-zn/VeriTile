@@ -1238,6 +1238,99 @@ specification nested3_first_a1_store_io_correctness
       · exact Or.inl hr
       · exact Or.inr fun idx => hn idx trivial)⟩
 
+/-! ### The rounding face
+
+The store is a pure copy: no arithmetic on the loaded window, and no `.to(...)`
+on the store — the tile stays `.real` end to end. So the slice is **cast-free**
+— every statement steps identically under `stepStmtsR R` and `stepStmts` — and
+the exact run transports to `execR R` for *every* rounding model. -/
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem a1Store_castFree (R : RoundingModel) (in_ptr out_ptr : RegionName)
+    (stride_m stride_n : Nat) (s : BlockState) :
+    execR R ((nested3_first_a1_store in_ptr out_ptr stride_m stride_n).toAlgKernel) s
+      = exec ((nested3_first_a1_store in_ptr out_ptr stride_m stride_n).toAlgKernel) s := by
+  simp [execR, exec, nested3_first_a1_store, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, stepStmtsR, stepStmts,
+    stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp, evalOp.eq_def,
+    BlockState.writeMemTypedR, BlockState.writeMemAsR, Option.bind, Option.map,
+    Tile.bop, Tile.expandDim, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, FloatDType.cast, TileShape.insertAxis,
+    TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk **under the rounding model** — the `hts`
+obligation of `MaskedTileKernelIO₁.ImplementsR.intro`. -/
+theorem a1Store_traceSafeR (R : RoundingModel) (in_ptr out_ptr : RegionName)
+    (stride_m stride_n : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [2, 2],
+      matrixOffset stride_m stride_n idx < bounds in_ptr)
+    (hout : ∀ idx : TileIndex [2, 2],
+      matrixOffset stride_m stride_n idx < bounds out_ptr) :
+    Kernel.TraceSafeR R bounds
+      ((nested3_first_a1_store in_ptr out_ptr stride_m stride_n).toAlgKernel) s := by
+  simp only [matrixOffset, rowIndex, colIndex] at hin hout
+  simp [Kernel.TraceSafeR, nested3_first_a1_store, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtsR, stepStmtR, evalOpR,
+    evalOpR.eq_def, Option.bind, Option.map, Tile.bop, Tile.expandDim,
+    Tile.ptrAdd, Tile.uop, NumericDType.add, NumericDType.mul, FloatDType.cast,
+    TileShape.insertAxis, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try simp [Op.SafeAtR.eq_def]
+  -- the four lanes of the 2×2 window, on both buffers
+  all_goals try (simpa using hin (0, 0, PUnit.unit))
+  all_goals try (simpa using hin (0, 1, PUnit.unit))
+  all_goals try (simpa using hin (1, 0, PUnit.unit))
+  all_goals try (simpa using hin (1, 1, PUnit.unit))
+  all_goals try (simpa using hout (0, 0, PUnit.unit))
+  all_goals try (simpa using hout (0, 1, PUnit.unit))
+  all_goals try (simpa using hout (1, 0, PUnit.unit))
+  all_goals try (simpa using hout (1, 1, PUnit.unit))
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `nested_loops_processing.py`'s first `a1`
+writeback: for **every** rounding model `R`, the same Hoare triple as
+`nested3_first_a1_store_io_correctness`, but run under `execR R` and read back as
+`.real`-typed cells holding `R.round .real (xs idx)`.
+
+The store is a pure copy carrying no `.to(...)`, so the slice is cast-free and
+the exact run transports verbatim. The content of the rounding face here is
+exactly that: *this kernel introduces no rounding event of its own*, at any
+`R`. -/
+specification nested3_first_a1_store_io_correctnessR (R : RoundingModel)
+    (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [2, 2] =>
+        idx.1.val * stride_m + idx.2.1.val * stride_n)) :
+    a1StoreIO in_ptr out_ptr stride_m stride_n
+      ⊨[R, FloatDType.real] fun _pid xs idx => xs idx := by
+  refine MaskedTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact a1Store_flattenOk in_ptr out_ptr stride_m stride_n
+  · intro bounds s h1 h2
+    exact a1Store_traceSafeR R in_ptr out_ptr stride_m stride_n bounds s
+      (fun idx => h1 idx trivial) (fun idx => h2 idx trivial)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      a1Store_region_run in_ptr out_ptr stride_m stride_n s₀ hOutInj xs
+        (fun idx => hx idx trivial)
+    refine ⟨s1, ?_, ?_, fun r n hc => hframe r n (by
+      rcases hc with hr | hn
+      · exact Or.inl hr
+      · exact Or.inr fun idx => hn idx trivial)⟩
+    · simp only [a1StoreIO]
+      rw [a1Store_castFree R in_ptr out_ptr stride_m stride_n s₀]
+      exact hexec
+    · intro idx _
+      simp only [a1StoreIO]
+      rw [BlockState.readMemAs_real]
+      have := hval idx
+      simp only [matrixOffset, rowIndex, colIndex] at this
+      rw [this]
+      simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.NestedLoopsProcessing
