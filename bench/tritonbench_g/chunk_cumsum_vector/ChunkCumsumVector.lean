@@ -1201,6 +1201,97 @@ specification chunk_cumsum_vector_block_store_io_correctness (BC Z : RegionName)
       (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
       (fun idx hact => hin idx hact)
 
+/-! ### The rounding face
+
+The store is a pure copy: no arithmetic on the loaded block, and no `.to(...)` on
+the store either — the tile stays `.real` end to end. So the slice is
+**cast-free** — every statement steps identically under `stepStmtsR R` and
+`stepStmts` — and the exact run transports to `execR R` for *every* rounding
+model. -/
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem block_store_castFree (R : RoundingModel) (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (s : BlockState) :
+    execR R ((chunk_cumsum_vector_store_slice BC Z s_s_h s_s_t s_s_d T S BT
+        BS).toAlgKernel) s
+      = exec ((chunk_cumsum_vector_store_slice BC Z s_s_h s_s_t s_s_d T S BT
+        BS).toAlgKernel) s := by
+  simp [execR, exec, chunk_cumsum_vector_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, stepStmtsR, stepStmts,
+    stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp, evalOp.eq_def,
+    BlockState.writeMemTypedR, BlockState.writeMemAsR, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk **under the rounding model** — the `hts`
+obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem block_store_traceSafeR (R : RoundingModel) (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BT, BS], active s T S BT BS idx →
+      tileOffset s s_s_h s_s_t s_s_d BT BS idx < bounds BC)
+    (hout : ∀ idx : TileIndex [BT, BS], active s T S BT BS idx →
+      tileOffset s s_s_h s_s_t s_s_d BT BS idx < bounds Z) :
+    Kernel.TraceSafeR R bounds
+      ((chunk_cumsum_vector_store_slice BC Z s_s_h s_s_t s_s_d T S BT
+        BS).toAlgKernel) s := by
+  simp only [active, tIndex, sIndex, tileOffset] at hin hout
+  unfold Kernel.TraceSafeR
+  simp [chunk_cumsum_vector_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals first
+    | simp [Op.SafeAtR.eq_def]
+    | exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+    | exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `chunk_cumsum_vector.py`'s masked block store:
+for **every** rounding model `R`, the same masked Hoare triple as
+`chunk_cumsum_vector_block_store_io_correctness`, but run under `execR R` and
+read back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+The store is a pure copy and carries no `.to(...)`, so the slice is cast-free and
+the exact run transports verbatim. The content of the rounding face here is
+exactly that: *this kernel introduces no rounding event of its own*, at any
+`R`. -/
+specification chunk_cumsum_vector_block_store_io_correctnessR (R : RoundingModel)
+    (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BT, BS] =>
+        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
+          + (p₀ * BS + idx.2.1.val) * s_s_d)) :
+    blockStoreIO BC Z s_s_h s_s_t s_s_d T S BT BS
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact block_store_flattenOk BC Z s_s_h s_s_t s_s_d T S BT BS
+  · intro bounds s h1 h2
+    exact block_store_traceSafeR R BC Z s_s_h s_s_t s_s_d T S BT BS bounds s
+      (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      block_store_region_run BC Z s_s_h s_s_t s_s_d T S BT BS s₀
+        (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+        (fun idx hact => hx idx hact)
+    refine ⟨s1, ?_, ?_, hframe⟩
+    · simp only [blockStoreIO]
+      rw [block_store_castFree R BC Z s_s_h s_s_t s_s_d T S BT BS s₀]
+      exact hexec
+    · intro idx hidx
+      simp only [blockStoreIO]
+      rw [BlockState.readMemAs_real]
+      have := hval idx hidx
+      simp only [tileOffset, tIndex, sIndex] at this
+      rw [this]
+      simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.ChunkCumsumVector

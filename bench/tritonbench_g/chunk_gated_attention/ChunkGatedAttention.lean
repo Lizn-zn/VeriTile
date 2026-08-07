@@ -1884,6 +1884,166 @@ specification chunk_gated_attention_state_stores_io_correctness
         (hInj2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
         (fun idx hact => hin idx hact)
 
+/-! ### The rounding faces
+
+Both writebacks are pure copies: no arithmetic on the loaded block, and no
+`.to(...)` on either store — the tiles stay `.real` end to end. So both slices are
+**cast-free** — every statement steps identically under `stepStmtsR R` and
+`stepStmts` — and the exact runs transport to `execR R` for *every* rounding
+model. -/
+
+/-- The per-chunk state store is cast-free: `execR R` is the exact stepper. -/
+private theorem h_state_castFree (R : RoundingModel) (BH H : RegionName)
+    (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat) (s : BlockState) :
+    execR R ((chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t
+        s_h_d KSize VSize BK BV).toAlgKernel) s
+      = exec ((chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t
+        s_h_d KSize VSize BK BV).toAlgKernel) s := by
+  simp [execR, exec, chunk_gated_attention_h_state_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+
+/-- The final state store is cast-free: `execR R` is the exact stepper. -/
+private theorem final_state_castFree (R : RoundingModel) (BHFinal Ht : RegionName)
+    (KSize VSize BK BV : Nat) (s : BlockState) :
+    execR R ((chunk_gated_attention_final_state_store_slice BHFinal Ht KSize
+        VSize BK BV).toAlgKernel) s
+      = exec ((chunk_gated_attention_final_state_store_slice BHFinal Ht KSize
+        VSize BK BV).toAlgKernel) s := by
+  simp [execR, exec, chunk_gated_attention_final_state_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk of the per-chunk state store **under the rounding
+model** — the `hts` obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem h_state_traceSafeR (R : RoundingModel) (BH H : RegionName)
+    (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BK, BV], stateActive s KSize VSize BK BV idx →
+      hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx < bounds BH)
+    (hout : ∀ idx : TileIndex [BK, BV], stateActive s KSize VSize BK BV idx →
+      hStateOffset s i_t s_h_h s_h_t s_h_d KSize VSize BK BV idx < bounds H) :
+    Kernel.TraceSafeR R bounds
+      ((chunk_gated_attention_h_state_store_slice BH H i_t s_h_h s_h_t s_h_d
+        KSize VSize BK BV).toAlgKernel) s := by
+  simp only [stateActive, hStateOffset, kIndexState, vIndexState] at hin hout
+  unfold Kernel.TraceSafeR
+  simp [chunk_gated_attention_h_state_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try simp [Op.SafeAtR.eq_def]
+
+/-- Per-execution safety walk of the final state store **under the rounding
+model** — the `hts` obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem final_state_traceSafeR (R : RoundingModel) (BHFinal Ht : RegionName)
+    (KSize VSize BK BV : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BK, BV], finalActive s KSize VSize BK BV idx →
+      finalStateOffset s KSize VSize BK BV idx < bounds BHFinal)
+    (hout : ∀ idx : TileIndex [BK, BV], finalActive s KSize VSize BK BV idx →
+      finalStateOffset s KSize VSize BK BV idx < bounds Ht) :
+    Kernel.TraceSafeR R bounds
+      ((chunk_gated_attention_final_state_store_slice BHFinal Ht KSize VSize BK
+        BV).toAlgKernel) s := by
+  simp only [finalActive, finalStateOffset, kIndexFinal, vIndexFinal] at hin hout
+  unfold Kernel.TraceSafeR
+  simp [chunk_gated_attention_final_state_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR,
+    MaskOpt.ActiveR, MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try simp [Op.SafeAtR.eq_def]
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `chunk_gated_attention.py`'s two masked state
+writebacks: for **every** rounding model `R`, the same pair of masked Hoare triples
+as `chunk_gated_attention_state_stores_io_correctness`, but run under `execR R` and
+read back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+Both are pure copies carrying no `.to(...)`, so both slices are cast-free and the
+exact runs transport verbatim. The content of the rounding face here is exactly
+that: *neither kernel introduces a rounding event of its own*, at any `R`. -/
+specification chunk_gated_attention_state_stores_io_correctnessR
+    (R : RoundingModel) (BH H BHFinal Ht : RegionName)
+    (i_t s_h_h s_h_t s_h_d KSize VSize BK BV : Nat)
+    (hInj1 : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        p₂ * s_h_h + i_t * KSize * VSize + (p₁ * BK + idx.1.val) * s_h_t
+          + (p₀ * BV + idx.2.1.val) * s_h_d))
+    (hInj2 : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        p₂ * KSize * VSize + (p₁ * BK + idx.1.val) * VSize
+          + (p₀ * BV + idx.2.1.val))) :
+    (h_stateIO BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx) ∧
+    (final_stateIO BHFinal Ht KSize VSize BK BV
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx) := by
+  constructor
+  · refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+    · exact h_state_flattenOk BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV
+    · intro bounds s h1 h2
+      exact h_state_traceSafeR R BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV
+        bounds s (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+    · intro s₀ xs hx
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        h_state_region_run BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV s₀
+          (hInj1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+          (fun idx hact => hx idx hact)
+      refine ⟨s1, ?_, ?_, hframe⟩
+      · simp only [h_stateIO]
+        rw [h_state_castFree R BH H i_t s_h_h s_h_t s_h_d KSize VSize BK BV s₀]
+        exact hexec
+      · intro idx hidx
+        simp only [h_stateIO]
+        rw [BlockState.readMemAs_real]
+        have := hval idx hidx
+        simp only [hStateOffset, kIndexState, vIndexState] at this
+        rw [this]
+        simp
+  · refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+    · exact final_state_flattenOk BHFinal Ht KSize VSize BK BV
+    · intro bounds s h1 h2
+      exact final_state_traceSafeR R BHFinal Ht KSize VSize BK BV bounds s
+        (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+    · intro s₀ xs hx
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        final_state_region_run BHFinal Ht KSize VSize BK BV s₀
+          (hInj2 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+          (fun idx hact => hx idx hact)
+      refine ⟨s1, ?_, ?_, hframe⟩
+      · simp only [final_stateIO]
+        rw [final_state_castFree R BHFinal Ht KSize VSize BK BV s₀]
+        exact hexec
+      · intro idx hidx
+        simp only [final_stateIO]
+        rw [BlockState.readMemAs_real]
+        have := hval idx hidx
+        simp only [finalStateOffset, kIndexFinal, vIndexFinal] at this
+        rw [this]
+        simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.ChunkGatedAttention

@@ -1007,4 +1007,87 @@ specification reversed_cumsum_scalar_vec_store_io_correctness
         · exact Or.inl h
         · exact Or.inr fun i hact => h (i, PUnit.unit) hact)⟩
 
+/-! ### The rounding face
+
+The store is a pure copy: no arithmetic on the loaded vector, and the store's
+`.to(O.dtype.element_ty)` erases to `.real`. So the slice is **cast-free** — every
+statement steps identically under `stepStmtsR R` and `stepStmts` — and the exact
+run transports to `execR R` for *every* rounding model. -/
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem vec_store_castFree (R : RoundingModel) (BO O : RegionName)
+    (T BT : Nat) (s : BlockState) :
+    execR R ((reversed_cumsum_scalar_store_slice BO O T BT).toAlgKernel) s
+      = exec ((reversed_cumsum_scalar_store_slice BO O T BT).toAlgKernel) s := by
+  simp [execR, exec, reversed_cumsum_scalar_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk **under the rounding model** — the `hts`
+obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem vec_store_traceSafeR (R : RoundingModel) (BO O : RegionName) (T BT : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ i : Fin BT, active s T BT i → vecOffset s T BT i < bounds BO)
+    (hout : ∀ i : Fin BT, active s T BT i → vecOffset s T BT i < bounds O) :
+    Kernel.TraceSafeR R bounds
+      ((reversed_cumsum_scalar_store_slice BO O T BT).toAlgKernel) s := by
+  simp only [active, tIndex, vecOffset] at hin hout
+  unfold Kernel.TraceSafeR
+  simp [reversed_cumsum_scalar_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a ha => hin a ha
+  all_goals try exact fun a ha => hout a ha
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `reversed_cumsum_scalar.py`'s masked vector
+store: for **every** rounding model `R`, the same masked Hoare triple as
+`reversed_cumsum_scalar_vec_store_io_correctness`, but run under `execR R` and
+read back as `.real`-typed cells holding `R.round .real (xs i)`.
+
+The store is a pure copy — no arithmetic, and the `.to(O.dtype.element_ty)`
+erases to `.real` — so the slice is cast-free and the exact run transports
+verbatim. The content of the rounding face here is exactly that: *this kernel
+introduces no rounding event of its own*, at any `R`. -/
+specification reversed_cumsum_scalar_vec_store_io_correctnessR
+    (R : RoundingModel) (BO O : RegionName) (T BT : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BT => p₀ * T + (p₁ * BT + i.val))) :
+    vecStoreIO BO O T BT ⊨[R, FloatDType.real] fun _p₀ _p₁ xs i => xs i := by
+  refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact vec_store_flattenOk BO O T BT
+  · intro bounds s h1 h2
+    exact vec_store_traceSafeR R BO O T BT bounds s
+      (fun i hact => h1 (i, PUnit.unit) hact)
+      (fun i hact => h2 (i, PUnit.unit) hact)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      vec_store_region_run BO O T BT s₀ (hOutInj (s₀.pids 0) (s₀.pids 1)) xs
+        (fun i hact => hx i hact)
+    refine ⟨s1, ?_, ?_, fun r o hcond => hframe r o (by
+      rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun i hact => h (i, PUnit.unit) hact)⟩
+    · simp only [vecStoreIO]
+      rw [vec_store_castFree R BO O T BT s₀]
+      exact hexec
+    · intro i hi
+      simp only [vecStoreIO]
+      rw [BlockState.readMemAs_real]
+      have := hval i hi
+      simp only [vecOffset, tIndex] at this
+      rw [this]
+      simp
+
 end IOFace
