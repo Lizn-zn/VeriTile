@@ -2470,6 +2470,154 @@ specification fused_recurrent_retention_seed_io_correctness
       (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
       (fun idx hact => hin idx hact)
 
+/-! ### The rounding face
+
+The seed store carries two `.to(...)` casts, and **neither names a rounding
+grid**: `.to(tl.float32)` lowers to `Op.castFloat _ .real` (the bit-accurate fp32
+channel is a separate `round_to` surface), and `.to(HSeed.dtype.element_ty)`
+likewise erases to `.real`. The only arithmetic is `h += …` on a zero seed, and
+`Op.add` is not a rounding site. So the slice is **cast-free** — every statement
+steps identically under `stepStmtsR R` and `stepStmts` — and the exact run
+transports to `execR R` for *every* rounding model.
+
+The `R`-side safety walk needs the same four hand peels as the exact one (the
+`.load` node's dtype is the computed `ComputeDType.fp32.eraseDType`, which blocks
+`simp`), so the four private lemmas are mirrored at `Op.SafeAtR`. -/
+
+/-- `Op.SafeAtR` of a register reference is vacuous. -/
+private theorem safeAt_refR (R : RoundingModel) (bounds : RegionBounds)
+    (s : BlockState) (dtype : TileDType) (shape : TileShape) (name : RegName) :
+    Op.SafeAtR R bounds s (Op.ref dtype shape name) := by
+  rw [Op.SafeAtR]
+  trivial
+
+/-- `Op.SafeAtR` of a broadcast literal is vacuous. -/
+private theorem safeAt_broadcast_constR (R : RoundingModel)
+    (bounds : RegionBounds) (s : BlockState) (c : ℝ) (shape : TileShape) :
+    Op.SafeAtR R bounds s (Op.broadcast (Op.const c) shape) := by
+  rw [Op.SafeAtR, Op.SafeAtR]
+  trivial
+
+/-- `Op.SafeAtR` of an addition, unfolded once. -/
+private theorem safeAt_addR {dtype : TileDType} {a b out : TileShape}
+    (R : RoundingModel) (bounds : RegionBounds) (s : BlockState)
+    (nd : NumericDType dtype) (br : Broadcast a b out)
+    (e1 : Op dtype a) (e2 : Op dtype b)
+    (h1 : Op.SafeAtR R bounds s e1) (h2 : Op.SafeAtR R bounds s e2) :
+    Op.SafeAtR R bounds s (Op.add nd br e1 e2) := by
+  rw [Op.SafeAtR]
+  exact ⟨h1, h2⟩
+
+/-- `Op.SafeAtR` of a masked *pointer* load, unfolded once. -/
+private theorem safeAt_load_ptr_maskOtherR {d : TileDType} {shape : TileShape}
+    (R : RoundingModel) (bounds : RegionBounds) (s : BlockState)
+    (ptr : Op .ptr shape) (m : Op .bool shape) (other : Op d shape)
+    (h1 : Op.SafeAtR R bounds s ptr) (h2 : Op.SafeAtR R bounds s m)
+    (h3 : Op.SafeAtR R bounds s other)
+    (h4 : MemAccess.ActiveAddressSafeR R bounds
+      (MemAccess.ptr ptr : MemAccess d shape) s
+      ((MaskOpt.maskOther m other).ActiveR R s)) :
+    Op.SafeAtR R bounds s
+      (Op.load d (MemAccess.ptr ptr : MemAccess d shape)
+        (MaskOpt.maskOther m other)) := by
+  rw [Op.SafeAtR]
+  exact ⟨h1, ⟨h2, h3⟩, h4⟩
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem seed_castFree (R : RoundingModel)
+    (initial_state HSeed : RegionName) (DK DV BK BV : Nat) (s : BlockState) :
+    execR R ((fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK
+        BV Bool.true).toAlgKernel) s
+      = exec ((fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK
+        BV Bool.true).toAlgKernel) s := by
+  simp [execR, exec, fused_recurrent_retention_seed_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk **under the rounding model** — the `hts`
+obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem seed_traceSafeR (R : RoundingModel) (initial_state HSeed : RegionName)
+    (DK DV BK BV : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BV, BK], activeKV s DK DV BK BV idx →
+      stateOffset s DK DV BK BV idx.2.1 idx.1 < bounds initial_state)
+    (hout : ∀ idx : TileIndex [BV, BK], activeKV s DK DV BK BV idx →
+      stateOffset s DK DV BK BV idx.2.1 idx.1 < bounds HSeed) :
+    Kernel.TraceSafeR R bounds
+      ((fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK BV
+        Bool.true).toAlgKernel) s := by
+  simp only [activeKV, activeK, activeV, stateOffset, kIdx, vIdx] at hin hout
+  simp [Kernel.TraceSafeR, fused_recurrent_retention_seed_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    ComputeOp.toAlgorithm?, Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR,
+    MaskOpt.SafeAtR, MaskOpt.ActiveR, MemAccess.SafeAtR,
+    MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR, stepStmtsR,
+    stepStmtR, evalOpR, evalOpR.eq_def, Option.bind, Option.map, Tile.bop,
+    Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+  and_intros
+  -- the `HSeed` store's active-address bound
+  all_goals try exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try (simp [Op.SafeAtR.eq_def]; done)
+  -- `h += tl.load(p_init_s, mask=mask_kv, other=0)`: peel the `add` and the
+  -- pointer load by hand, then bound the loaded addresses.
+  all_goals
+    refine safeAt_addR _ _ _ _ _ _ _ (safeAt_refR _ _ _ _ _ _) ?_
+  all_goals
+    refine safeAt_load_ptr_maskOtherR _ _ _ _ _ _ (safeAt_refR _ _ _ _ _ _)
+      (safeAt_refR _ _ _ _ _ _) (safeAt_broadcast_constR _ _ _ _ _) ?_
+  all_goals
+    simp [MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR,
+      MaskOpt.ActiveR, evalOpR, evalOpR.eq_def, Option.bind, Option.map,
+      Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, NumericDType.add,
+      NumericDType.mul, ComparableDType.lt, TileShape.dropInsertedIndex]
+  all_goals try exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `fused_recurrent_retention.py`'s
+`USE_INITIAL_STATE` seed store: for **every** rounding model `R`, the same masked
+Hoare triple as `fused_recurrent_retention_seed_io_correctness`, but run under
+`execR R` and read back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+Neither `.to(...)` in the slice names a rounding grid and the `h += …` add is not
+a rounding site, so the slice is cast-free and the exact run transports verbatim.
+The content of the rounding face here is exactly that: *this kernel introduces no
+rounding event of its own*, at any `R` — the seeded carry reaches `HSeed`
+unquantized. -/
+specification fused_recurrent_retention_seed_io_correctnessR (R : RoundingModel)
+    (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BV, BK] =>
+        p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val))) :
+    seedIO initial_state HSeed DK DV BK BV
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact seed_flattenOk initial_state HSeed DK DV BK BV
+  · intro bounds s h1 h2
+    exact seed_traceSafeR R initial_state HSeed DK DV BK BV bounds s
+      (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      seed_region_run initial_state HSeed DK DV BK BV s₀
+        (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+        (fun idx hact => hx idx hact)
+    refine ⟨s1, ?_, ?_, hframe⟩
+    · simp only [seedIO]
+      rw [seed_castFree R initial_state HSeed DK DV BK BV s₀]
+      exact hexec
+    · intro idx hidx
+      simp only [seedIO]
+      rw [BlockState.readMemAs_real]
+      have := hval idx hidx
+      simp only [stateOffset, kIdx, vIdx] at this
+      rw [this]
+      simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.FusedRecurrentRetention

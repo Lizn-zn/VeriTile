@@ -705,6 +705,105 @@ specification flash_decode2_llama_final_store_io_correctness (Final O : RegionNa
         · exact Or.inl h
         · exact Or.inr fun i => h (i, PUnit.unit) trivial)⟩
 
+/-! ### The rounding face
+
+The writeback is a pure copy: no arithmetic on the loaded row, and no `.to(...)`
+on the store either — the tile stays `.real` end to end. So the slice is
+**cast-free** — every statement steps identically under `stepStmtsR R` and
+`stepStmts` — and the exact run transports to `execR R` for *every* rounding
+model. -/
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem final_store_castFree (R : RoundingModel) (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (s : BlockState) :
+    execR R ((flash_decode2_llama_final_store_slice Final O stride_final_b
+        stride_final_h stride_final_d stride_obs stride_oh stride_od
+        BLOCK_DMODEL).toAlgKernel) s
+      = exec ((flash_decode2_llama_final_store_slice Final O stride_final_b
+        stride_final_h stride_final_d stride_obs stride_oh stride_od
+        BLOCK_DMODEL).toAlgKernel) s := by
+  simp [execR, exec, flash_decode2_llama_final_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, FloatDType.cast]
+
+/-- Per-execution safety walk **under the rounding model** — the `hts`
+obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem final_store_traceSafeR (R : RoundingModel) (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ i : Fin BLOCK_DMODEL,
+      finalOffset s stride_final_b stride_final_h stride_final_d i
+        < bounds Final)
+    (hout : ∀ i : Fin BLOCK_DMODEL,
+      outOffset s stride_obs stride_oh stride_od i < bounds O) :
+    Kernel.TraceSafeR R bounds
+      ((flash_decode2_llama_final_store_slice Final O stride_final_b
+        stride_final_h stride_final_d stride_obs stride_oh stride_od
+        BLOCK_DMODEL).toAlgKernel) s := by
+  simp only [finalOffset, outOffset, dIndex] at hin hout
+  unfold Kernel.TraceSafeR
+  simp [flash_decode2_llama_final_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, FloatDType.cast]
+  exact ⟨fun a => hin a, fun a => hout a⟩
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `flash_decode2_llama.py`'s final writeback: for
+**every** rounding model `R`, the same Hoare triple as
+`flash_decode2_llama_final_store_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs i)`.
+
+The writeback is a pure copy and carries no `.to(...)`, so the slice is cast-free
+and the exact run transports verbatim. The content of the rounding face here is
+exactly that: *this kernel introduces no rounding event of its own*, at any
+`R`. -/
+specification flash_decode2_llama_final_store_io_correctnessR (R : RoundingModel)
+    (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BLOCK_DMODEL =>
+        p₀ * stride_obs + p₁ * stride_oh + i.val * stride_od)) :
+    finalStoreIO Final O stride_final_b stride_final_h stride_final_d stride_obs
+        stride_oh stride_od BLOCK_DMODEL
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs i => xs i := by
+  refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact final_store_flattenOk Final O stride_final_b stride_final_h
+      stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL
+  · intro bounds s h1 h2
+    exact final_store_traceSafeR R Final O stride_final_b stride_final_h
+      stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL bounds s
+      (fun i => h1 (i, PUnit.unit) trivial) (fun i => h2 (i, PUnit.unit) trivial)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      final_store_region_run Final O stride_final_b stride_final_h stride_final_d
+        stride_obs stride_oh stride_od BLOCK_DMODEL s₀
+        (hOutInj (s₀.pids 0) (s₀.pids 1)) xs (fun i => hx i trivial)
+    refine ⟨s1, ?_, ?_, fun r o hcond => hframe r o (by
+      rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun i => h (i, PUnit.unit) trivial)⟩
+    · simp only [finalStoreIO]
+      rw [final_store_castFree R Final O stride_final_b stride_final_h
+        stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL s₀]
+      exact hexec
+    · intro i _
+      simp only [finalStoreIO]
+      rw [BlockState.readMemAs_real]
+      have := hval i
+      simp only [outOffset, dIndex] at this
+      rw [this]
+      simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.FlashDecode2Llama

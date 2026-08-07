@@ -1894,6 +1894,106 @@ specification chunk_gate_recurrence_forward_store_io_correctness
         · exact Or.inl h
         · exact Or.inr fun idx => h idx trivial)⟩
 
+/-! ### The rounding face
+
+The store is a pure copy: no arithmetic on the loaded chunk, and the store's
+`.to(O.dtype.element_ty)` erases to `.real`. So the slice is **cast-free** — every
+statement steps identically under `stepStmtsR R` and `stepStmts` — and the exact
+run transports to `execR R` for *every* rounding model. -/
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem fwd_store_castFree (R : RoundingModel) (Acc O : RegionName)
+    (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
+    (s : BlockState) :
+    execR R ((chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K
+        D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V).toAlgKernel) s
+      = exec ((chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K
+        D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V).toAlgKernel) s := by
+  simp [execR, exec, chunk_gate_recurrence_forward_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk **under the rounding model** — the `hts`
+obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem fwd_store_traceSafeR (R : RoundingModel) (Acc O : RegionName)
+    (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
+      accOffset s D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx
+        < bounds Acc)
+    (hout : ∀ idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V],
+      outOffset s NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V idx
+        < bounds O) :
+    Kernel.TraceSafeR R bounds
+      ((chunk_gate_recurrence_forward_store_slice Acc O NUM_BLOCK D_MODEL_K
+        D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V).toAlgKernel) s := by
+  simp only [accOffset, outOffset, kIndex, vIndex] at hin hout
+  unfold Kernel.TraceSafeR
+  simp [chunk_gate_recurrence_forward_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b => hin (a, b, PUnit.unit)
+  all_goals try exact fun a b => hout (a, b, PUnit.unit)
+  all_goals try simp [Op.SafeAtR.eq_def]
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `chunk_gate_recurrence.py`'s forward output chunk
+store: for **every** rounding model `R`, the same Hoare triple as
+`chunk_gate_recurrence_forward_store_io_correctness`, but run under `execR R` and
+read back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+The store is a pure copy — no arithmetic, and the `.to(O.dtype.element_ty)`
+erases to `.real` — so the slice is cast-free and the exact run transports
+verbatim. The content of the rounding face here is exactly that: *this kernel
+introduces no rounding event of its own*, at any `R`. -/
+specification chunk_gate_recurrence_forward_store_io_correctnessR
+    (R : RoundingModel) (Acc O : RegionName)
+    (NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
+        p₀ * NUM_BLOCK * D_MODEL_K * D_MODEL_V + p₁ * D_MODEL_V * BLOCK_MODEL_K
+          + idx.1.val * D_MODEL_V + p₂ * BLOCK_MODEL_V + idx.2.1.val)) :
+    fwdStoreIO Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K BLOCK_MODEL_V
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact fwd_store_flattenOk Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
+      BLOCK_MODEL_V
+  · intro bounds s h1 h2
+    exact fwd_store_traceSafeR R Acc O NUM_BLOCK D_MODEL_K D_MODEL_V
+      BLOCK_MODEL_K BLOCK_MODEL_V bounds s (fun idx => h1 idx trivial)
+      (fun idx => h2 idx trivial)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      fwd_store_region_run Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
+        BLOCK_MODEL_V s₀ (hOutInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+        (fun idx => hx idx trivial)
+    refine ⟨s1, ?_, ?_, fun r o hcond => hframe r o (by
+      rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun idx => h idx trivial)⟩
+    · simp only [fwdStoreIO]
+      rw [fwd_store_castFree R Acc O NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
+        BLOCK_MODEL_V s₀]
+      exact hexec
+    · intro idx _
+      simp only [fwdStoreIO]
+      rw [BlockState.readMemAs_real]
+      have := hval idx
+      simp only [outOffset, kIndex, vIndex] at this
+      rw [this]
+      simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.ChunkGateRecurrence

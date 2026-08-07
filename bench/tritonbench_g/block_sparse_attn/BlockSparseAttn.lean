@@ -4313,6 +4313,208 @@ specification block_sparse_attn_output_stores_io_correctness
           BLOCK_D s₀
         (hInj2 (s₀.pids 0) (s₀.pids 1)) xs (fun idx hact => hin idx hact)
 
+/-! ### The rounding faces
+
+Both stores are pure copies: no arithmetic on the loaded accumulator tile, and no
+`.to(...)` on either store — the tiles stay `.real` end to end. So both slices are
+**cast-free** — every statement steps identically under `stepStmtsR R` and
+`stepStmts` — and the exact runs transport to `execR R` for *every* rounding
+model. -/
+
+/-- The first output store is cast-free: `execR R` is the exact stepper. -/
+private theorem out_store_castFree (R : RoundingModel) (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (s : BlockState) :
+    execR R ((block_sparse_attn_output_store_slice Acc Out num_heads
+        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        stride_ob stride_oh stride_om BLOCK_M BLOCK_D).toAlgKernel) s
+      = exec ((block_sparse_attn_output_store_slice Acc Out num_heads
+        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        stride_ob stride_oh stride_om BLOCK_M BLOCK_D).toAlgKernel) s := by
+  simp [execR, exec, block_sparse_attn_output_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+
+/-- The second output store is cast-free: `execR R` is the exact stepper. -/
+private theorem out2_store_castFree (R : RoundingModel) (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) (s : BlockState) :
+    execR R ((block_sparse_attn_output_store_second_slice Acc2 Out num_heads
+        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        stride_ob stride_oh stride_om BLOCK_M BLOCK_D).toAlgKernel) s
+      = exec ((block_sparse_attn_output_store_second_slice Acc2 Out num_heads
+        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        stride_ob stride_oh stride_om BLOCK_M BLOCK_D).toAlgKernel) s := by
+  simp [execR, exec, block_sparse_attn_output_store_second_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk of the first output store **under the rounding
+model** — the `hts` obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem out_store_traceSafeR (R : RoundingModel) (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      accOffset s num_heads stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        BLOCK_M idx < bounds Acc)
+    (hout : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      outOffset s num_heads stride_ob stride_oh stride_om BLOCK_M idx
+        < bounds Out) :
+    Kernel.TraceSafeR R bounds
+      ((block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len
+        stride_acc_b stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh
+        stride_om BLOCK_M BLOCK_D).toAlgKernel) s := by
+  simp only [active, accOffset, outOffset, offB, offH, mIndex, dIndex]
+    at hin hout
+  unfold Kernel.TraceSafeR
+  simp [block_sparse_attn_output_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha => hin (a, b, PUnit.unit) ha
+  all_goals try exact fun a b ha => hout (a, b, PUnit.unit) ha
+  all_goals try simp [Op.SafeAtR.eq_def]
+
+/-- Per-execution safety walk of the second output store **under the rounding
+model** — the `hts` obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem out2_store_traceSafeR (R : RoundingModel) (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      accOffset s num_heads stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        BLOCK_M idx < bounds Acc2)
+    (hout : ∀ idx : TileIndex [BLOCK_M, BLOCK_D],
+      active s total_seq_len BLOCK_M idx →
+      out2Offset s num_heads stride_ob stride_oh stride_om BLOCK_M BLOCK_D idx
+        < bounds Out) :
+    Kernel.TraceSafeR R bounds
+      ((block_sparse_attn_output_store_second_slice Acc2 Out num_heads
+        total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+        stride_ob stride_oh stride_om BLOCK_M BLOCK_D).toAlgKernel) s := by
+  simp only [active, accOffset, out2Offset, offB, offH, mIndex, dIndex]
+    at hin hout
+  unfold Kernel.TraceSafeR
+  simp [block_sparse_attn_output_store_second_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, IntegralDType.floorDiv,
+    IntegralDType.mod, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha => hin (a, b, PUnit.unit) ha
+  all_goals try exact fun a b ha => hout (a, b, PUnit.unit) ha
+  all_goals try simp [Op.SafeAtR.eq_def]
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `block_sparse_attn.py`'s two output-block stores:
+for **every** rounding model `R`, the same pair of masked Hoare triples as
+`block_sparse_attn_output_stores_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+Both are pure copies carrying no `.to(...)`, so both slices are cast-free and the
+exact runs transport verbatim. The content of the rounding face here is exactly
+that: *neither store introduces a rounding event of its own*, at any `R`. -/
+specification block_sparse_attn_output_stores_io_correctnessR (R : RoundingModel)
+    (Acc Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat)
+    (hInj1 : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val))
+    (hInj2 : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val)) :
+    (out_storeIO Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx) ∧
+    (out2_storeIO Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx) := by
+  constructor
+  · refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+    · exact out_store_flattenOk Acc Out num_heads total_seq_len stride_acc_b
+        stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+        BLOCK_M BLOCK_D
+    · intro bounds s h1 h2
+      exact out_store_traceSafeR R Acc Out num_heads total_seq_len stride_acc_b
+        stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+        BLOCK_M BLOCK_D bounds s
+        (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+    · intro s₀ xs hx
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        out_store_region_run Acc Out num_heads total_seq_len stride_acc_b
+          stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+          BLOCK_M BLOCK_D s₀ (hInj1 (s₀.pids 0) (s₀.pids 1)) xs
+          (fun idx hact => hx idx hact)
+      refine ⟨s1, ?_, ?_, hframe⟩
+      · simp only [out_storeIO]
+        rw [out_store_castFree R Acc Out num_heads total_seq_len stride_acc_b
+          stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+          BLOCK_M BLOCK_D s₀]
+        exact hexec
+      · intro idx hidx
+        simp only [out_storeIO]
+        rw [BlockState.readMemAs_real]
+        have := hval idx hidx
+        simp only [outOffset, offB, offH, mIndex, dIndex] at this
+        rw [this]
+        simp
+  · refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+    · exact out2_store_flattenOk Acc2 Out num_heads total_seq_len stride_acc_b
+        stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+        BLOCK_M BLOCK_D
+    · intro bounds s h1 h2
+      exact out2_store_traceSafeR R Acc2 Out num_heads total_seq_len stride_acc_b
+        stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+        BLOCK_M BLOCK_D bounds s
+        (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+    · intro s₀ xs hx
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        out2_store_region_run Acc2 Out num_heads total_seq_len stride_acc_b
+          stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+          BLOCK_M BLOCK_D s₀ (hInj2 (s₀.pids 0) (s₀.pids 1)) xs
+          (fun idx hact => hx idx hact)
+      refine ⟨s1, ?_, ?_, hframe⟩
+      · simp only [out2_storeIO]
+        rw [out2_store_castFree R Acc2 Out num_heads total_seq_len stride_acc_b
+          stride_acc_h stride_acc_m stride_acc_d stride_ob stride_oh stride_om
+          BLOCK_M BLOCK_D s₀]
+        exact hexec
+      · intro idx hidx
+        simp only [out2_storeIO]
+        rw [BlockState.readMemAs_real]
+        have := hval idx hidx
+        simp only [out2Offset, offB, offH, mIndex, dIndex] at this
+        rw [this]
+        simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.BlockSparseAttn
