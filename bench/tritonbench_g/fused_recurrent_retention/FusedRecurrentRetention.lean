@@ -2422,6 +2422,24 @@ def seedIO (initial_state HSeed : RegionName) (DK DV BK BV : Nat) :
   mask := fun p₀ p₁ _p₂ idx =>
     p₁ * BK + idx.2.1.val < DK ∧ p₀ * BV + idx.1.val < DV
 
+/-- **Where the seed face meets the recurrence.** The `⊨` face below quantifies
+over a channel `xs`; this says what that channel *is* for the launched kernel:
+on every kept lane it is exactly the carry the closed-form summary starts from,
+`h⁽⁰⁾ = stateClosed … 0`. So "`HSeed` is a fiction region standing for the seeded
+register" is a theorem, not a comment — the two faces meet here. -/
+theorem seed_channel_eq_stateClosed_zero
+    (initial_state k v : RegionName) (s_qk_h s_vo_h H DK DV BK BV : Nat)
+    (s : BlockState) (xs : TileIndex [BV, BK] → ℝ)
+    (hx : ∀ idx : TileIndex [BV, BK], activeKV s DK DV BK BV idx →
+      s.readMem initial_state (stateOffset s DK DV BK BV idx.2.1 idx.1)
+        = xs idx) :
+    ∀ idx : TileIndex [BV, BK], activeKV s DK DV BK BV idx →
+      stateClosed s k v initial_state Bool.true s_qk_h s_vo_h H DK DV BK BV 0
+          idx.2.1 idx.1 = xs idx := by
+  intro idx hact
+  rw [stateClosed_zero, stateSeed]
+  simpa using hx idx hact
+
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 
 /-- **The headline on the IO surface** for `fused_recurrent_retention.py`'s
