@@ -4751,6 +4751,75 @@ def epilogueIO (AccPre LPre : RegionName) (Seqlens : Region .nat)
   mask2 := fun _p₀ _p₁ _m _i => True
   writeMask := fun p₀ _p₁ m idx => p₀ * BLOCK_M + idx.1.val < m
 
+/-- **Where the epilogue face meets the online softmax.** The `⊨` face below
+quantifies over two channels; this says what they *are* for the launched kernel.
+Instantiated at the port's own seeded partials — the accumulator and denominator
+the twenty-loop phase actually produces — the epilogue's `xs / ys` collapses, by
+`msaSeeded_ratio_eq_closedFormGS`, to the genuine closed form
+`mixedSparseAttnClosedForm`. So "`AccPre` / `LPre` are fiction regions standing
+for `acc` / `l_i`" is a theorem, not a comment: the writeback face and the
+attention math meet exactly here. -/
+theorem epilogue_io_at_seeded_partials
+    (AccPre LPre : RegionName)
+    (Q K V : RegionName) (Seqlens Blocks BlockOffsets ColCounts Cols : Region .nat)
+    (Out : RegionName)
+    (BM BN BD H NR NS NV sqz sqh sqm sqk skz skh skn skk svz svh svn svk
+      som sok : Nat)
+    (hsqk : sqk = 1) (hskk : skk = 1) (hsvk : svk = 1) (hvz : svz = skz)
+    (hvh : svh = skh) (hBN16 : 16 ≤ BN)
+    (s₀ : BlockState) (sm_scale : ℝ)
+    (hNCBN : s₀.readMemValue .nat (Region.cast ColCounts)
+      (s₀.pids 1 * NR + s₀.pids 0) ≤ BN)
+    (hpos : ∀ i : Fin BM, 0 < msaDenomUpto BM BN
+      (msaCatScore0GS Q K V Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H
+        NR NS NV sqz sqh sqm sqk skz skh skn skk s₀ sm_scale) 9 i)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BM, BD] =>
+        outOffset s₀ H sqz sqh som sok BM idx))
+    (hacc : ∀ idx : TileIndex [BM, BD],
+      s₀.readMem AccPre (outOffset s₀ H sqz sqh som sok BM idx)
+        = msaOPartialSeed BM BN BD
+            (msaMPartial BM BN (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s₀ sm_scale) (msaKPtrGS K BD H skz skh skk s₀) s₀) 8)
+            (msaLPartial BM BN (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s₀ sm_scale) (msaKPtrGS K BD H skz skh skk s₀) s₀) 8)
+            (fun ii dd => msaOPartial BM BN BD
+              (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s₀ sm_scale) (msaKPtrGS K BD H skz skh skk s₀) s₀)
+              (msaVblkA0GS V Seqlens Blocks BlockOffsets BD BN H NR NS svn (msaVPtrGS V BD H skz skh svk s₀) s₀) 8 ii dd)
+            (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s₀ sm_scale) (msaKPtrGS K BD H skz skh skk s₀) s₀)
+            (msaVblkB0GS V Seqlens Blocks BlockOffsets ColCounts Cols BD BN NR NV svn (msaVPtrGS V BD H skz skh svk s₀) s₀) 1 idx.1 idx.2.1)
+    (hl : ∀ i : TileIndex [BM],
+      s₀.readMem LPre (mIndex s₀ BM i.1)
+        = msaLPartialSeed BM BN
+            (msaMPartial BM BN (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s₀ sm_scale) (msaKPtrGS K BD H skz skh skk s₀) s₀) 8)
+            (msaLPartial BM BN (msaScoreA0GS Q K Seqlens Blocks BlockOffsets BM BN BD H NR NS skn (msaQValGS Q BM BD H sqz sqh sqm sqk s₀ sm_scale) (msaKPtrGS K BD H skz skh skk s₀) s₀) 8)
+            (msaScoreB0GS Q K Seqlens Blocks BlockOffsets ColCounts Cols BM BN BD H NR NV skn (msaQValGS Q BM BD H sqz sqh sqm sqk s₀ sm_scale) (msaKPtrGS K BD H skz skh skk s₀) s₀) 1 i.1) :
+    ∃ s1, exec (mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H
+        sqz sqh som sok BM BD) s₀ = some s1
+      ∧ (∀ idx : TileIndex [BM, BD],
+          active s₀ H (Region.cast Seqlens) BM idx →
+          s1.readMem Out (outOffset s₀ H sqz sqh som sok BM idx)
+            = mixedSparseAttnClosedForm s₀ Q K V BlockOffsets Cols H
+                sqz sqh sqm skz skh skn svz svh svn NR NS NV
+                (s₀.readMemValue .nat (Region.cast Blocks)
+                  (s₀.pids 1 * NR + s₀.pids 0))
+                (s₀.readMemValue .nat (Region.cast ColCounts)
+                  (s₀.pids 1 * NR + s₀.pids 0))
+                (seqLen s₀ H (Region.cast Seqlens)) BD BM BN sm_scale idx.1
+                (dIndex idx))
+      ∧ (∀ (r : RegionName) (n : Nat),
+          (r ≠ Out ∨ ∀ idx : TileIndex [BM, BD],
+            active s₀ H (Region.cast Seqlens) BM idx →
+            n ≠ outOffset s₀ H sqz sqh som sok BM idx) →
+          s1.mem r n = s₀.mem r n) := by
+  obtain ⟨s1, hexec, hval, hframe⟩ :=
+    epilogue_region_run AccPre LPre Seqlens Out H sqz sqh som sok BM BD s₀
+      hOutInj _ _ hacc hl
+  refine ⟨s1, hexec, fun idx hact => ?_, hframe⟩
+  rw [hval idx hact]
+  exact msaSeeded_ratio_eq_closedFormGS Q K V Seqlens Blocks BlockOffsets
+    ColCounts Cols BM BN BD H NR NS NV sqz sqh sqm sqk skz skh skn skk svz svh
+    svn svk hsqk hskk hsvk hvz hvh hBN16 s₀ sm_scale idx.1 idx.2.1 hNCBN
+    (hpos idx.1)
+
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 
 /-- **The headline on the IO surface** for the epilogue of

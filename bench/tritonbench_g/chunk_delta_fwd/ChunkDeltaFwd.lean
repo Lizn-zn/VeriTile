@@ -2303,6 +2303,35 @@ def h_stateIO (HPre h : RegionName) (i_t s_h_h s_h_t K V BK BV : Nat) :
   mask := fun p₀ p₁ _p₂ idx =>
     p₀ * BK + idx.1.val < K ∧ p₁ * BV + idx.2.1.val < V
 
+/-- **Where the writeback face meets the recurrence.** Instantiating the `⊨`
+face's channel at the port's own chunk-start state: if the materialized carry
+holds `hValue` — the genuine `H_{i_t}` of the delta-rule closed form — on the
+kept lanes, then the writeback lands exactly `hValue` in `h` and touches nothing
+else. So "`HPre` is a fiction region standing for `b_h`" is a theorem, not a
+comment. -/
+theorem h_state_io_at_hValue
+    (HPre h k v d initial_state : RegionName)
+    (i_t s_h_h s_h_t s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK : Nat)
+    (USE_INITIAL_STATE : Bool) (s₀ : BlockState)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        hOffset s₀ i_t s_h_h s_h_t K V BK BV idx))
+    (hcarry : ∀ idx : TileIndex [BK, BV], active s₀ K V BK BV idx →
+      s₀.readMem HPre (hOffset s₀ i_t s_h_h s_h_t K V BK BV idx)
+        = hValue s₀ k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+            s_vo_d K V BT BV BK USE_INITIAL_STATE i_t idx) :
+    ∃ s1, exec (chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK BV)
+        s₀ = some s1
+      ∧ (∀ idx : TileIndex [BK, BV], active s₀ K V BK BV idx →
+          s1.readMem h (hOffset s₀ i_t s_h_h s_h_t K V BK BV idx)
+            = hValue s₀ k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+                s_vo_d K V BT BV BK USE_INITIAL_STATE i_t idx)
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ h ∨ ∀ idx : TileIndex [BK, BV], active s₀ K V BK BV idx →
+            o ≠ hOffset s₀ i_t s_h_h s_h_t K V BK BV idx) →
+          s1.mem r o = s₀.mem r o) :=
+  h_state_region_run HPre h i_t s_h_h s_h_t K V BK BV s₀ hOutInj _ hcarry
+
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 
 /-- **The headline on the IO surface** for `chunk_delta_rule_fwd_h_surface`'s
