@@ -5528,6 +5528,132 @@ specification layer_norm_ops_scalar_stores_io_correctness
           · exact Or.inl h
           · exact Or.inr (h PUnit.unit trivial))⟩
 
+/-! ### The rounding faces
+
+Both stores are single-cell copies: no arithmetic on the loaded value, and no
+`.to(...)` on either store — the cell stays `.real` end to end. So both slices are
+**cast-free** — every statement steps identically under `stepStmtsR R` and
+`stepStmts` — and the exact runs transport to `execR R` for *every* rounding
+model. -/
+
+/-- The mean store is cast-free: `execR R` is the exact stepper. -/
+private theorem fwd_mean_store_castFree (R : RoundingModel)
+    (MeanPre Mean : RegionName) (s : BlockState) :
+    execR R ((layer_norm_ops_fwd_mean_store_slice MeanPre Mean).toAlgKernel) s
+      = exec ((layer_norm_ops_fwd_mean_store_slice MeanPre Mean).toAlgKernel) s := by
+  simp [execR, exec, layer_norm_ops_fwd_mean_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, FloatDType.cast]
+
+/-- The rstd store is cast-free: `execR R` is the exact stepper. -/
+private theorem fwd_rstd_store_castFree (R : RoundingModel)
+    (RstdPre Rstd : RegionName) (s : BlockState) :
+    execR R ((layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd).toAlgKernel) s
+      = exec ((layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd).toAlgKernel) s := by
+  simp [execR, exec, layer_norm_ops_fwd_rstd_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd, Tile.uop,
+    NumericDType.add, FloatDType.cast]
+
+/-- Per-execution safety walk of the mean store **under the rounding model**. -/
+theorem fwd_mean_store_traceSafeR (R : RoundingModel) (MeanPre Mean : RegionName)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : meanRowOffset s < bounds MeanPre)
+    (hout : meanRowOffset s < bounds Mean) :
+    Kernel.TraceSafeR R bounds
+      ((layer_norm_ops_fwd_mean_store_slice MeanPre Mean).toAlgKernel) s := by
+  simp [Kernel.TraceSafeR, layer_norm_ops_fwd_mean_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR,
+    MaskOpt.ActiveR, MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtsR, stepStmtR, evalOpR,
+    evalOpR.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, FloatDType.cast]
+  exact ⟨hin, hout⟩
+
+/-- Per-execution safety walk of the rstd store **under the rounding model**. -/
+theorem fwd_rstd_store_traceSafeR (R : RoundingModel) (RstdPre Rstd : RegionName)
+    (bounds : RegionBounds) (s : BlockState)
+    (hin : meanRowOffset s < bounds RstdPre)
+    (hout : meanRowOffset s < bounds Rstd) :
+    Kernel.TraceSafeR R bounds
+      ((layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd).toAlgKernel) s := by
+  simp [Kernel.TraceSafeR, layer_norm_ops_fwd_rstd_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR,
+    MaskOpt.ActiveR, MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtsR, stepStmtR, evalOpR,
+    evalOpR.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, FloatDType.cast]
+  exact ⟨hin, hout⟩
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `layer_norm_ops.py`'s two forward scalar row
+stores: for **every** rounding model `R`, the same pair of Hoare triples as
+`layer_norm_ops_scalar_stores_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs PUnit.unit)`.
+
+Both are single-cell copies carrying no `.to(...)`, so both slices are cast-free
+and the exact runs transport verbatim. The content of the rounding face here is
+exactly that: *neither store introduces a rounding event of its own*, at any `R`
+— the `Mean` / `Rstd` values the backward pass reads back are bit-for-bit the
+ones the forward reduction produced. -/
+specification layer_norm_ops_scalar_stores_io_correctnessR (R : RoundingModel)
+    (MeanPre Mean RstdPre Rstd : RegionName) :
+    (fwd_mean_storeIO MeanPre Mean
+      ⊨[R, FloatDType.real] fun _pid xs _ => xs PUnit.unit) ∧
+    (fwd_rstd_storeIO RstdPre Rstd
+      ⊨[R, FloatDType.real] fun _pid xs _ => xs PUnit.unit) := by
+  constructor
+  · refine MaskedTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+    · exact fwd_mean_store_flattenOk MeanPre Mean
+    · intro bounds s h1 h2
+      exact fwd_mean_store_traceSafeR R MeanPre Mean bounds s
+        (h1 PUnit.unit trivial) (h2 PUnit.unit trivial)
+    · intro s₀ xs hx
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        fwd_mean_store_region_run MeanPre Mean s₀ xs (hx PUnit.unit trivial)
+      refine ⟨s1, ?_, ?_, fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr (h PUnit.unit trivial))⟩
+      · simp only [fwd_mean_storeIO]
+        rw [fwd_mean_store_castFree R MeanPre Mean s₀]
+        exact hexec
+      · intro _ _
+        simp only [fwd_mean_storeIO]
+        rw [BlockState.readMemAs_real]
+        simp only [meanRowOffset] at hval
+        rw [hval]
+        simp
+  · refine MaskedTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+    · exact fwd_rstd_store_flattenOk RstdPre Rstd
+    · intro bounds s h1 h2
+      exact fwd_rstd_store_traceSafeR R RstdPre Rstd bounds s
+        (h1 PUnit.unit trivial) (h2 PUnit.unit trivial)
+    · intro s₀ xs hx
+      obtain ⟨s1, hexec, hval, hframe⟩ :=
+        fwd_rstd_store_region_run RstdPre Rstd s₀ xs (hx PUnit.unit trivial)
+      refine ⟨s1, ?_, ?_, fun r o hcond => hframe r o (by
+        rcases hcond with h | h
+        · exact Or.inl h
+        · exact Or.inr (h PUnit.unit trivial))⟩
+      · simp only [fwd_rstd_storeIO]
+        rw [fwd_rstd_store_castFree R RstdPre Rstd s₀]
+        exact hexec
+      · intro _ _
+        simp only [fwd_rstd_storeIO]
+        rw [BlockState.readMemAs_real]
+        simp only [meanRowOffset] at hval
+        rw [hval]
+        simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.LayerNormOps
