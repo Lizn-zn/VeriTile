@@ -2369,6 +2369,96 @@ specification chunk_delta_h_state_store_io_correctness
       (hInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
       (fun idx hact => hin idx hact)
 
+/-! ### The rounding face
+
+The writeback is a pure copy: no arithmetic, and the store's `.to(...)` erases to
+`.real`. So the slice is **cast-free** — every statement steps identically under
+`stepStmtsR R` and `stepStmts` — and the exact run transports to `execR R` for
+every rounding model. -/
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem h_state_castFree (R : RoundingModel) (HPre h : RegionName)
+    (i_t s_h_h s_h_t K V BK BV : Nat) (s : BlockState) :
+    execR R ((chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK
+        BV).toAlgKernel) s
+      = exec ((chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK
+        BV).toAlgKernel) s := by
+  simp [execR, exec, chunk_delta_h_state_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, stepStmtsR, stepStmts,
+    stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp, evalOp.eq_def,
+    BlockState.writeMemTypedR, BlockState.writeMemAsR, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd, Tile.uop, NumericDType.add,
+    NumericDType.mul, ComparableDType.lt, FloatDType.cast,
+    TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk **under the rounding model**. -/
+theorem h_state_traceSafeR (R : RoundingModel) (HPre h : RegionName)
+    (i_t s_h_h s_h_t K V BK BV : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+      hOffset s i_t s_h_h s_h_t K V BK BV idx < bounds HPre)
+    (hout : ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+      hOffset s i_t s_h_h s_h_t K V BK BV idx < bounds h) :
+    Kernel.TraceSafeR R bounds
+      ((chunk_delta_h_state_store_slice HPre h i_t s_h_h s_h_t K V BK
+        BV).toAlgKernel) s := by
+  simp only [active, kIndex, vIndex, hOffset] at hin hout
+  unfold Kernel.TraceSafeR
+  simp [chunk_delta_h_state_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha hb => hin (a, b, PUnit.unit) ⟨ha, hb⟩
+  all_goals try exact fun a b ha hb => hout (a, b, PUnit.unit) ⟨ha, hb⟩
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for the per-chunk `h` writeback: for **every**
+rounding model `R`, the same masked Hoare triple as
+`chunk_delta_h_state_store_io_correctness`, run under `execR R` and read back as
+`.real`-typed cells holding `R.round .real (xs idx)`.
+
+The writeback is a pure copy — no arithmetic, and the store's `.to(...)` erases to
+`.real` — so the slice is cast-free and the exact run transports verbatim. The
+content of the rounding face is exactly that: *the writeback introduces no
+rounding event of its own*, at any `R`. Same scope caveat as the exact face:
+`HPre` is a fiction region standing for the carry register `b_h`. -/
+specification chunk_delta_h_state_store_io_correctnessR
+    (R : RoundingModel) (HPre h : RegionName) (i_t s_h_h s_h_t K V BK BV : Nat)
+    (hInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BK, BV] =>
+        p₂ * s_h_h + i_t * K * V + (p₀ * BK + idx.1.val) * s_h_t
+          + (p₁ * BV + idx.2.1.val))) :
+    h_stateIO HPre h i_t s_h_h s_h_t K V BK BV
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact h_state_flattenOk HPre h i_t s_h_h s_h_t K V BK BV
+  · intro bounds s h1 h2
+    exact h_state_traceSafeR R HPre h i_t s_h_h s_h_t K V BK BV bounds s
+      (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      h_state_region_run HPre h i_t s_h_h s_h_t K V BK BV s₀
+        (hInj (s₀.pids 0) (s₀.pids 1) (s₀.pids 2)) xs
+        (fun idx hact => hx idx hact)
+    have hval' : ∀ idx : TileIndex [BK, BV], active s₀ K V BK BV idx →
+        s1.readMem h (s₀.pids 2 * s_h_h + i_t * K * V
+            + (s₀.pids 0 * BK + idx.1.val) * s_h_t
+            + (s₀.pids 1 * BV + idx.2.1.val)) = xs idx := by
+      simpa [hOffset, kIndex, vIndex] using hval
+    refine ⟨s1, ?_, ?_, hframe⟩
+    · simp only [h_stateIO]
+      rw [h_state_castFree R HPre h i_t s_h_h s_h_t K V BK BV s₀]
+      exact hexec
+    · intro idx hidx
+      simp only [h_stateIO]
+      rw [BlockState.readMemAs_real, hval' idx hidx]
+      simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
