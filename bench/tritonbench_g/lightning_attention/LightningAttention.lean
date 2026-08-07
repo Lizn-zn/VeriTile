@@ -1796,6 +1796,96 @@ specification lightning_attention_bwd_grad_store_io_correctness
         simpa [gradTileOffset, gradRowIndex, gradColIndex] using this) xs
       (fun idx hact => hin idx hact)
 
+/-! ### The rounding face
+
+The writeback is a pure copy: no arithmetic, and the store's `.to(...)` erases to
+`.real`. So the kernel is **cast-free** — every statement steps identically under
+`stepStmtsR R` and `stepStmts` — and the exact run transports to `execR R` for
+*every* rounding model. -/
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem gradStore_castFree (R : RoundingModel)
+    (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat) (s : BlockState) :
+    execR R ((lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK
+        WIDTH).toAlgKernel) s
+      = exec ((lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK
+        WIDTH).toAlgKernel) s := by
+  simp [execR, exec, lightning_attention_bwd_grad_store_slice,
+    ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+    stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp,
+    evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+
+/-- Per-execution safety walk **under the rounding model** — the `hts`
+obligation of `Masked3DTileKernelIO₁.ImplementsR.intro`. -/
+theorem gradStore_traceSafeR (R : RoundingModel) (GradPre Out : RegionName)
+    (n width BLOCK WIDTH : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s n BLOCK idx →
+      gradTileOffset s n width BLOCK WIDTH idx < bounds GradPre)
+    (hout : ∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s n BLOCK idx →
+      gradTileOffset s n width BLOCK WIDTH idx < bounds Out) :
+    Kernel.TraceSafeR R bounds
+      ((lightning_attention_bwd_grad_store_slice GradPre Out n width BLOCK
+        WIDTH).toAlgKernel) s := by
+  simp only [activeGrad, gradRowIndex, gradTileOffset, gradColIndex] at hin hout
+  unfold Kernel.TraceSafeR
+  simp [lightning_attention_bwd_grad_store_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR.eq_def, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtR, evalOpR, evalOpR.eq_def,
+    Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.ptrAdd,
+    Tile.uop, NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    FloatDType.cast, TileShape.dropInsertedIndex]
+  and_intros
+  all_goals try exact fun a b ha => hin (a, b, PUnit.unit) ha
+  all_goals try exact fun a b ha => hout (a, b, PUnit.unit) ha
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for the backward gradient store: for **every**
+rounding model `R`, the same masked Hoare triple as
+`lightning_attention_bwd_grad_store_io_correctness`, but run under `execR R` and
+read back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+The writeback is a pure copy — no arithmetic, and the store's `.to(...)` erases to
+`.real` — so the slice is cast-free and the exact run transports verbatim. The
+content of the rounding face here is exactly that: *this kernel introduces no
+rounding event of its own*, at any `R`. -/
+specification lightning_attention_bwd_grad_store_io_correctnessR
+    (R : RoundingModel) (GradPre Out : RegionName) (n width BLOCK WIDTH : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK, WIDTH] =>
+        p₀ * n * width + (p₁ * BLOCK + idx.1.val) * width + idx.2.1.val)) :
+    gradStoreIO GradPre Out n width BLOCK WIDTH
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx := by
+  refine Masked3DTileKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact gradStore_flattenOk GradPre Out n width BLOCK WIDTH
+  · intro bounds s h1 h2
+    exact gradStore_traceSafeR R GradPre Out n width BLOCK WIDTH bounds s
+      (fun idx hact => h1 idx hact) (fun idx hact => h2 idx hact)
+  · intro s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      gradStore_region_run GradPre Out n width BLOCK WIDTH s₀
+        (by
+          have := hOutInj (s₀.pids 0) (s₀.pids 1)
+          simpa [gradTileOffset, gradRowIndex, gradColIndex] using this) xs
+        (fun idx hact => hx idx hact)
+    have hval' : ∀ idx : TileIndex [BLOCK, WIDTH], activeGrad s₀ n BLOCK idx →
+        s1.readMem Out (s₀.pids 0 * n * width
+            + (s₀.pids 1 * BLOCK + idx.1.val) * width + idx.2.1.val) = xs idx := by
+      simpa [gradTileOffset, gradRowIndex, gradColIndex] using hval
+    refine ⟨s1, ?_, ?_, hframe⟩
+    · simp only [gradStoreIO]
+      rw [gradStore_castFree R GradPre Out n width BLOCK WIDTH s₀]
+      exact hexec
+    · intro idx hidx
+      simp only [gradStoreIO]
+      rw [BlockState.readMemAs_real, hval' idx hidx]
+      simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.LightningAttention
