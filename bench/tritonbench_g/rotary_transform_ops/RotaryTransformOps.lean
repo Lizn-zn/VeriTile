@@ -1604,7 +1604,7 @@ theorem metaOutOffset_inj (IS_VARLEN : Bool) (s : BlockState) (CU : RegionName)
 
 open scoped MetaGroupedMasked2DKernelIO in
 /-- **The `⊨` metadata-grouped headline for `rotary_transform`.** -/
-theorem rotary_transform_ops_meta_implements
+specification rotary_transform_ops_meta_implements
     (OUT X COS SIN : RegionName) (CU_SEQLENS : Region .nat)
     (HEAD_IDX SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
       stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
