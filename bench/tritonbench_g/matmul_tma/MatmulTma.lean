@@ -890,6 +890,408 @@ specification matmul_tma_f32_io_correctness (A B C : RegionName)
         · exact Or.inl h
         · exact Or.inr fun idx => h idx trivial)⟩
 
+/-! ### ════════ `⊨[R]` rounding face for the **fp16** branch ════════
+
+Every `⊨[R]` face on a **port** in `bench/tritonbench_g` so far says *the kernel
+introduces no rounding event of its own*: the terminal cast erases to `.real`
+(`.to(X.dtype.element_ty)`, and also `.to(tl.float32)`, which the DSL
+special-cases to `Op.castFloat _ FloatDType.real` — the bit-accurate fp32
+channel is the separate `round_to` surface), so `execR R = exec` and the exact
+run transports verbatim.
+
+**This branch is different.** `.to(tl.float16)` falls through to the generic arm
+and becomes `Op.castFloat _ FloatDType.fp16`, which *is* a rounding site. So the
+face below is not a transport: it states
+
+  `C[i, j] = R.round .fp16 (Σ_{e < BLOCK_K} xs[i, e] · ys[e, j])`
+
+— the exact ℝ contraction, quantized once onto the fp16 grid.
+
+Two precedents, so this is not overclaimed:
+
+* the showcase `bench/examples/FloatDTypeCorrect.lean` already carries a
+  rounding-real `⊨[R]`, at `.fp32` via the **explicit** quantization spelling
+  `.round_to(...)`;
+* ten ports (the attention family, `triton_conv2d_fwd`, `triton_attention`) do
+  have `⊨[R]` faces over fp16 kernels — but they carry the hypothesis
+  `hfp16 : R.round .fp16 = id`, i.e. they **assume the fp16 rounding away** and
+  declare it their modeling boundary.
+
+What is new here is that this face *states* the fp16 quantization instead of
+assuming it away or erasing it: no `hfp16`, `outDType := .fp16`, and the
+rounded quantity is a **contraction** rather than an elementwise add. The same
+technique is what would let those ten ports drop `hfp16`.
+
+The value is in fact rounded **twice** — once by the `.to(tl.float16)` cast
+(site 1) and again by the fp16 typed store (site 2) — and
+`RoundingModel.round_idem`, a *defining* field of the model rather than an opt-in
+mixin, is exactly what collapses the pair to the single boundary round the
+headline states. -/
+
+/-- `evalOpR` on the block-pointer constructor: R-independent (no float
+arithmetic), the R-mirror of `makeBlockPtr_eval`. -/
+private theorem makeBlockPtr_evalR (Rm : RoundingModel) (s : BlockState)
+    (Reg : RegionName) (parentR parentC strideR strideC BR BC : Nat) :
+    evalOpR Rm (Op.makeBlockPtrDyn Reg (Op.constNat 0) [parentR, parentC] [BR, BC]
+      [strideR, strideC] [0, 0]) s
+      = some (⟨fun _ : TileIndex [BR, BC] =>
+          { region := Reg, baseOffset := 0, parentShape := [parentR, parentC],
+            blockShape := [BR, BC], strides := [strideR, strideC],
+            offsets := [0, 0] }⟩ : Tile .blockPtr [BR, BC]) := by
+  simp [evalOpR, Option.bind]
+
+/-- `evalOpR` on an unguarded block-pointer load: R-independent, the R-mirror of
+`load_blockPtr_eval`. -/
+private theorem load_blockPtr_evalR {BR BC : Nat} (Rm : RoundingModel)
+    (s : BlockState) (Reg : RegionName)
+    (parentR parentC strideR strideC : Nat) (bpName : RegName)
+    (hbp : s.regs .blockPtr [BR, BC] bpName
+      = some (⟨fun _ : TileIndex [BR, BC] =>
+          { region := Reg, baseOffset := 0, parentShape := [parentR, parentC],
+            blockShape := [BR, BC], strides := [strideR, strideC],
+            offsets := [0, 0] }⟩ : Tile .blockPtr [BR, BC])) :
+    evalOpR Rm (.load .real (.blockPtr (Op.ref .blockPtr [BR, BC] bpName) []) .none) s
+      = some (⟨fun idx : TileIndex [BR, BC] =>
+          some (s.readMem Reg (idx.1.val * strideR + idx.2.1.val * strideC))⟩
+          : Tile .real [BR, BC]) := by
+  simp only [evalOpR, evalOpR_ref, hbp, Option.bind_some, Option.bind, Option.map]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, j, u⟩ := idx
+  simp only [TileShape.indexToList, BlockState.readMemValue_real, BlockPtr.inBounds,
+    List.all_nil, if_true, BlockPtr.address_2d_zero_offsets, Nat.zero_add]
+
+/-- **The rounding site.** `evalOpR` on `(tl.dot a b).to(tl.float16)`: the `dot`
+itself is R-independent, and the cast applies the model's fp16 rounding via
+`R.cast`. Compare `castdot_eval`, whose cast is the exact `FloatDType.cast`
+round-trip. -/
+private theorem castdot_evalR {BM BN BLOCK_K : Nat} (Rm : RoundingModel)
+    (s : BlockState)
+    (at_ : Tile .real [BM, BLOCK_K]) (bt : Tile .real [BLOCK_K, BN])
+    (ha : s.regs .real [BM, BLOCK_K] "a" = some at_)
+    (hb : s.regs .real [BLOCK_K, BN] "b" = some bt) :
+    evalOpR Rm (Op.castFloat FloatDType.real FloatDType.fp16
+        (Op.dot (batch := []) (Op.ref .real [BM, BLOCK_K] "a")
+          (Op.ref .real [BLOCK_K, BN] "b"))) s
+      = some (⟨fun idx => Rm.cast FloatDType.real FloatDType.fp16
+            ((Tile.dot [] at_ bt).data idx)⟩
+          : Tile FloatDType.fp16.toTileDType ([] ++ [BM, BN])) := by
+  have hd : evalOpR Rm (Op.dot (batch := []) (Op.ref .real [BM, BLOCK_K] "a")
+      (Op.ref .real [BLOCK_K, BN] "b")) s = some (Tile.dot [] at_ bt) := by
+    simp only [evalOpR]
+    simp [evalOpR_ref, ha, hb]
+  rw [evalOpR_castFloat]
+  erw [hd]
+  rfl
+
+/-- The fp16 block-pointer store **under the rounding model**: `writeMemTypedR`
+at `.fp16` is `writeMemAsR`, so every written cell carries the model's stored
+value, and untouched cells are framed by `foldl_writeMemAsR_preserve_cell`. -/
+private theorem store_blockPtr_fp16_readbackR {BR BC : Nat} (Rm : RoundingModel)
+    (s : BlockState) (Reg : RegionName) (parentR parentC strideR strideC : Nat)
+    (cpName cName : RegName) (vt : Tile .fp16 [BR, BC])
+    (hcp : s.regs .blockPtr [BR, BC] cpName
+      = some (⟨fun _ : TileIndex [BR, BC] =>
+          { region := Reg, baseOffset := 0, parentShape := [parentR, parentC],
+            blockShape := [BR, BC], strides := [strideR, strideC],
+            offsets := [0, 0] }⟩ : Tile .blockPtr [BR, BC]))
+    (hc : s.regs .fp16 [BR, BC] cName = some vt)
+    (offsetFn : TileIndex [BR, BC] → Nat)
+    (hoff : ∀ idx : TileIndex [BR, BC],
+      offsetFn idx = idx.1.val * strideR + idx.2.1.val * strideC)
+    (hInj : Function.Injective offsetFn) :
+    ∃ s', stepStmtR Rm (Stmt.store .fp16 [BR, BC]
+        (.blockPtr (Op.ref .blockPtr [BR, BC] cpName) [])
+        (Op.ref .fp16 [BR, BC] cName) .none) s = some s'
+      ∧ (∀ idx : TileIndex [BR, BC],
+          s'.mem Reg (offsetFn idx)
+            = MemCell.of FloatDType.fp16.toTileDType
+                (FloatDType.fp16.ofReal (Rm.storeValue FloatDType.fp16 (vt.data idx))))
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ Reg ∨ ∀ idx : TileIndex [BR, BC], o ≠ offsetFn idx) →
+          s'.mem r o = s.mem r o) := by
+  set sfin := (TileShape.allIndices [BR, BC]).foldl
+      (fun acc i => acc.writeMemAsR Rm FloatDType.fp16 Reg (offsetFn i) (vt.data i))
+      s with hsfin
+  have hstep : stepStmtR Rm (Stmt.store .fp16 [BR, BC]
+        (.blockPtr (Op.ref .blockPtr [BR, BC] cpName) [])
+        (Op.ref .fp16 [BR, BC] cName) .none) s = some sfin := by
+    simp only [stepStmtR, evalOpR_ref, hc, hcp, Option.bind_some, bind,
+      BlockState.writeMemTypedR_fp16]
+    refine congrArg some ?_
+    rw [hsfin]
+    apply List.foldl_ext
+    intro acc i _
+    obtain ⟨ii, jj, u⟩ := i
+    rw [show TileShape.indexToList [BR, BC] (ii, jj, PUnit.unit) = [ii.val, jj.val] by
+          simp [TileShape.indexToList]]
+    simp only [BlockPtr.inBounds, List.all_nil, Bool.and_true, if_true,
+      BlockPtr.address_2d_zero_offsets, Nat.zero_add, hoff]
+  refine ⟨sfin, hstep, ?_, ?_⟩
+  · intro idx
+    rw [hsfin]
+    exact BlockState.scatter_memcell_R_nd Rm FloatDType.fp16 (region := Reg) s
+      offsetFn (fun i => vt.data i) hInj idx
+  · intro r o hcond
+    rw [hsfin]
+    refine BlockState.foldl_writeMemAsR_preserve_cell Rm FloatDType.fp16
+      offsetFn (fun i => vt.data i) r o (TileShape.allIndices [BR, BC]) ?_ s
+    intro k _ hk
+    rcases hcond with h | h
+    · exact h hk.1.symm
+    · exact h k hk.2.symm
+
+set_option maxHeartbeats 1000000 in
+/-- Region-model run of the fp16 branch **under `execR R`**: the exec-side
+analogue of `matmul_tma_f16_exec_closed_form`, walking the same body with the
+library's R stepping lemmas. Every output cell carries the model's fp16 stored
+value of `R.cast .real .fp16 (Σ_e A·B)`. -/
+theorem matmul_tma_f16_region_runR (Rm : RoundingModel) (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hInj : Function.Injective
+      (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn))
+    (s : BlockState) :
+    ∃ s1, execR Rm ((matmul_tma_f16_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N
+        BLOCK_K).toAlgKernel) s = some s1
+      ∧ (∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+          s1.mem C (cOffset stride_cm stride_cn idx)
+            = MemCell.of FloatDType.fp16.toTileDType
+                (FloatDType.fp16.ofReal (Rm.storeValue FloatDType.fp16
+                  (Rm.cast FloatDType.real FloatDType.fp16
+                    (some (matmulSpec s A B stride_am stride_ak stride_bk
+                      stride_bn BLOCK_K idx.1.val idx.2.1.val))))))
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ C ∨ ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+            o ≠ cOffset stride_cm stride_cn idx) →
+          s1.mem r o = s.mem r o) := by
+  set aT : Tile .real [BLOCK_M, BLOCK_K] :=
+    ⟨fun idx : TileIndex [BLOCK_M, BLOCK_K] =>
+      some (s.readMem A (idx.1.val * stride_am + idx.2.1.val * stride_ak))⟩ with haT
+  set bT : Tile .real [BLOCK_K, BLOCK_N] :=
+    ⟨fun idx : TileIndex [BLOCK_K, BLOCK_N] =>
+      some (s.readMem B (idx.1.val * stride_bk + idx.2.1.val * stride_bn))⟩ with hbT
+  set apT : Tile .blockPtr [BLOCK_M, BLOCK_K] :=
+    ⟨fun _ : TileIndex [BLOCK_M, BLOCK_K] =>
+      { region := A, baseOffset := 0, parentShape := [M, K],
+        blockShape := [BLOCK_M, BLOCK_K], strides := [stride_am, stride_ak],
+        offsets := [0, 0] }⟩ with hapT
+  set bpT : Tile .blockPtr [BLOCK_K, BLOCK_N] :=
+    ⟨fun _ : TileIndex [BLOCK_K, BLOCK_N] =>
+      { region := B, baseOffset := 0, parentShape := [K, N],
+        blockShape := [BLOCK_K, BLOCK_N], strides := [stride_bk, stride_bn],
+        offsets := [0, 0] }⟩ with hbpT
+  set cpT : Tile .blockPtr [BLOCK_M, BLOCK_N] :=
+    ⟨fun _ : TileIndex [BLOCK_M, BLOCK_N] =>
+      { region := C, baseOffset := 0, parentShape := [M, N],
+        blockShape := [BLOCK_M, BLOCK_N], strides := [stride_cm, stride_cn],
+        offsets := [0, 0] }⟩ with hcpT
+  rw [show execR Rm ((matmul_tma_f16_surface A B C M N K stride_am stride_ak
+        stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N
+        BLOCK_K).toAlgKernel) s
+      = stepStmtsR Rm ((matmul_tma_f16_surface A B C M N K stride_am stride_ak
+          stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N
+          BLOCK_K).toAlgKernel.body) s from rfl]
+  rw [show (matmul_tma_f16_surface A B C M N K stride_am stride_ak
+          stride_bk stride_bn stride_cm stride_cn BLOCK_M BLOCK_N
+          BLOCK_K).toAlgKernel.body
+      = [ Stmt.assign .blockPtr [BLOCK_M, BLOCK_K] "a_block_ptr"
+            (Op.makeBlockPtrDyn A (Op.constNat 0) [M, K] [BLOCK_M, BLOCK_K] [stride_am, stride_ak] [0, 0]),
+          Stmt.assign .blockPtr [BLOCK_K, BLOCK_N] "b_block_ptr"
+            (Op.makeBlockPtrDyn B (Op.constNat 0) [K, N] [BLOCK_K, BLOCK_N] [stride_bk, stride_bn] [0, 0]),
+          Stmt.assign .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr"
+            (Op.makeBlockPtrDyn C (Op.constNat 0) [M, N] [BLOCK_M, BLOCK_N] [stride_cm, stride_cn] [0, 0]),
+          Stmt.assign .real [BLOCK_M, BLOCK_K] "a"
+            (Op.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_K] "a_block_ptr") []) .none),
+          Stmt.assign .real [BLOCK_K, BLOCK_N] "b"
+            (Op.load .real (.blockPtr (Op.ref .blockPtr [BLOCK_K, BLOCK_N] "b_block_ptr") []) .none),
+          Stmt.assign FloatDType.fp16.toTileDType ([] ++ [BLOCK_M, BLOCK_N]) "c"
+            (Op.castFloat FloatDType.real FloatDType.fp16
+              (Op.dot (batch := []) (Op.ref .real [BLOCK_M, BLOCK_K] "a") (Op.ref .real [BLOCK_K, BLOCK_N] "b"))),
+          Stmt.store .fp16 [BLOCK_M, BLOCK_N]
+            (.blockPtr (Op.ref .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr") [])
+            (Op.ref .fp16 [BLOCK_M, BLOCK_N] "c") .none ] from rfl]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (makeBlockPtr_evalR Rm s A M K stride_am stride_ak BLOCK_M BLOCK_K))]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (makeBlockPtr_evalR Rm _ B K N stride_bk stride_bn BLOCK_K BLOCK_N))]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (makeBlockPtr_evalR Rm _ C M N stride_cm stride_cn BLOCK_M BLOCK_N))]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (load_blockPtr_evalR (BR := BLOCK_M) (BC := BLOCK_K) Rm _ A M K stride_am stride_ak
+          "a_block_ptr" (by simp)))]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some
+        (load_blockPtr_evalR (BR := BLOCK_K) (BC := BLOCK_N) Rm _ B K N stride_bk stride_bn
+          "b_block_ptr" (by simp)))]
+  simp only [BlockState.setReg_readMem]
+  rw [← haT, ← hbT]
+  set s5 := (((((s.setReg "a_block_ptr" .blockPtr [BLOCK_M, BLOCK_K] apT).setReg
+        "b_block_ptr" .blockPtr [BLOCK_K, BLOCK_N] bpT).setReg
+        "c_block_ptr" .blockPtr [BLOCK_M, BLOCK_N] cpT).setReg
+        "a" .real [BLOCK_M, BLOCK_K] aT).setReg "b" .real [BLOCK_K, BLOCK_N] bT) with hs5
+  have ha5 : s5.regs .real [BLOCK_M, BLOCK_K] "a" = some aT := by rw [hs5]; simp
+  have hb5 : s5.regs .real [BLOCK_K, BLOCK_N] "b" = some bT := by rw [hs5]; simp
+  have hcp5 : s5.regs .blockPtr [BLOCK_M, BLOCK_N] "c_block_ptr" = some cpT := by
+    rw [hs5]; simp [hcpT]
+  rw [stepStmtsR_cons_some (stepStmtR_assign_eq_some (castdot_evalR Rm s5 aT bT ha5 hb5))]
+  set cTile : Tile .fp16 [BLOCK_M, BLOCK_N] :=
+    ⟨fun idx => Rm.cast FloatDType.real FloatDType.fp16 ((Tile.dot [] aT bT).data idx)⟩
+    with hcTile
+  have hdotval : ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+      cTile.data idx = Rm.cast FloatDType.real FloatDType.fp16
+        (some (matmulSpec s A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+          idx.1.val idx.2.1.val)) := by
+    intro idx
+    obtain ⟨i, j, u⟩ := idx
+    simp only [hcTile]
+    rw [tile_dot_data BLOCK_M BLOCK_K BLOCK_N aT bT i j
+          (fun e => aElem s A stride_am stride_ak i.val e.val)
+          (fun e => bElem s B stride_bk stride_bn e.val j.val)
+          (fun e => by rw [haT]; rfl) (fun e => by rw [hbT]; rfl)]
+    rfl
+  obtain ⟨sfin, hstore, hread, hframe⟩ :=
+    store_blockPtr_fp16_readbackR (BR := BLOCK_M) (BC := BLOCK_N) Rm
+      (s5.setReg "c" FloatDType.fp16.toTileDType ([] ++ [BLOCK_M, BLOCK_N])
+        ⟨fun idx => Rm.cast FloatDType.real FloatDType.fp16 ((Tile.dot [] aT bT).data idx)⟩)
+      C M N stride_cm stride_cn "c_block_ptr" "c" cTile
+      (by rw [hcp5.symm]; simp) (by simp [hcTile])
+      (cOffset stride_cm stride_cn) (fun idx => by simp [cOffset]) hInj
+  refine ⟨sfin, ?_, ?_, ?_⟩
+  · rw [stepStmtsR_cons_some hstore, stepStmtsR_nil]
+  · intro idx
+    rw [hread idx, hdotval idx]
+  · intro r o hcond
+    rw [hframe r o hcond, hs5]
+    simp
+
+/-- The fp16 branch sits inside the flat-memory bridge's covered fragment. -/
+theorem matmul_tma_f16_flattenOk (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) :
+    ((matmul_tma_f16_surface A B C M N K stride_am stride_ak stride_bk stride_bn
+      stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [matmul_tma_f16_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, StmtList.FlattenOk,
+    Stmt.FlattenOk, Op.FlattenOk]
+  simp [Op.FlattenOk.eq_def]
+
+/-- Per-execution safety walk of the fp16 branch **under the rounding model**:
+the three block pointers carry no `boundary_check`, so every lane of both loads
+and of the store must be in bounds. -/
+theorem matmul_tma_f16_traceSafeR (Rm : RoundingModel) (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) (bounds : RegionBounds) (s : BlockState)
+    (hA : ∀ idx : TileIndex [BLOCK_M, BLOCK_K],
+      idx.1.val * stride_am + idx.2.1.val * stride_ak < bounds A)
+    (hB : ∀ idx : TileIndex [BLOCK_K, BLOCK_N],
+      idx.1.val * stride_bk + idx.2.1.val * stride_bn < bounds B)
+    (hC : ∀ idx : TileIndex [BLOCK_M, BLOCK_N],
+      cOffset stride_cm stride_cn idx < bounds C) :
+    Kernel.TraceSafeR Rm bounds
+      ((matmul_tma_f16_surface A B C M N K stride_am stride_ak stride_bk
+        stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K).toAlgKernel) s := by
+  simp [Kernel.TraceSafeR, matmul_tma_f16_surface, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtsR, stepStmtR, evalOpR,
+    evalOpR.eq_def, Option.bind, Option.map, Tile.bop, Tile.dot,
+    TileShape.indexToList, BlockPtr.inBounds]
+  and_intros
+  all_goals try exact fun a b => hA (a, b, PUnit.unit)
+  all_goals try exact fun a b => hB (a, b, PUnit.unit)
+  all_goals try exact fun a b => hC (a, b, PUnit.unit)
+  all_goals try simp [Op.SafeAtR.eq_def]
+
+/-- IO signature of the fp16 branch on the per-channel-shape surface — the same
+windows as `matmulTmaF32IO`, on the fp16 kernel. -/
+def matmulTmaF16IO (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat) : MaskedTileShapedKernelIO₂ where
+  kernel := matmul_tma_f16_surface A B C M N K stride_am stride_ak stride_bk
+    stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K
+  in1 := A
+  in2 := B
+  out := C
+  shape1 := [BLOCK_M, BLOCK_K]
+  shape2 := [BLOCK_K, BLOCK_N]
+  shapeOut := [BLOCK_M, BLOCK_N]
+  read1 := fun _p₀ _p₁ k => k.1.val * stride_am + k.2.1.val * stride_ak
+  read2 := fun _p₀ _p₁ k => k.1.val * stride_bk + k.2.1.val * stride_bn
+  write := fun _p₀ _p₁ o => cOffset stride_cm stride_cn o
+  mask1 := fun _p₀ _p₁ _ => True
+  mask2 := fun _p₀ _p₁ _ => True
+  writeMask := fun _p₀ _p₁ _ => True
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for `matmul_tma.py`'s `matmul_tma_load_store`,
+`OUTPUT_F16 = true` branch: for **every** rounding model `R`, every disjoint flat
+placement of the three buffers, and every launch state whose `A` and `B` tiles are
+pinned, the kernel run under `execR R` terminates, every cell of the output tile
+reads back at `.fp16` holding
+
+  `R.round .fp16 (Σ_{e < BLOCK_K} xs[i, e] · ys[e, j])`
+
+and every other memory cell is unchanged.
+
+Unlike every other `⊨[R]` face on a port in `bench/tritonbench_g`, this one is
+**not** a transport of an exact result: `.to(tl.float16)` is a genuine rounding
+site, so the `R.round .fp16` on the right is the quantization the kernel actually
+performs (the showcase `bench/examples/FloatDTypeCorrect.lean` is the existing
+precedent for a rounding-real `⊨[R]`, there via explicit `.round_to`). `f` remains the exact ℝ contraction — the face's content is precisely
+"the fp16 output is the real GEMM value, rounded once".
+
+The kernel rounds the value **twice** (the cast, then the fp16 typed store);
+`RoundingModel.round_idem` collapses that to the single round stated here.
+
+Dimension-general in `M`, `N`, `K`, all six strides and all three block sizes.
+Honest side-condition: output-address injectivity (`hInj`) — the same hypothesis
+the exact closed forms take, dischargeable for row-major `C` by
+`cOffset_injective_of_rowMajor`. -/
+specification matmul_tma_f16_io_correctnessR (Rm : RoundingModel)
+    (A B C : RegionName)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      BLOCK_M BLOCK_N BLOCK_K : Nat)
+    (hInj : Function.Injective
+      (cOffset (BLOCK_M := BLOCK_M) (BLOCK_N := BLOCK_N) stride_cm stride_cn)) :
+    matmulTmaF16IO A B C M N K stride_am stride_ak stride_bk stride_bn stride_cm
+        stride_cn BLOCK_M BLOCK_N BLOCK_K
+      ⊨[Rm, FloatDType.fp16] fun _p₀ _p₁ xs ys idx =>
+          matmulSpecOf BLOCK_M BLOCK_N BLOCK_K xs ys idx := by
+  refine MaskedTileShapedKernelIO₂.ImplementsR.intro _ ?_ ?_ ?_
+  · exact matmul_tma_f16_flattenOk A B C M N K stride_am stride_ak stride_bk
+      stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K
+  · intro bounds s h1 h2 h3
+    exact matmul_tma_f16_traceSafeR Rm A B C M N K stride_am stride_ak stride_bk
+      stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K bounds s
+      (fun idx => h1 idx trivial) (fun idx => h2 idx trivial)
+      (fun idx => h3 idx trivial)
+  · intro s₀ xs ys hx hy
+    obtain ⟨s1, hexec, hread, hframe⟩ :=
+      matmul_tma_f16_region_runR Rm A B C M N K stride_am stride_ak stride_bk
+        stride_bn stride_cm stride_cn BLOCK_M BLOCK_N BLOCK_K hInj s₀
+    refine ⟨s1, hexec, ?_, fun r o hcond => hframe r o (by
+      rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun idx => h idx trivial)⟩
+    intro idx _
+    simp only [matmulTmaF16IO]
+    -- the read-back: the stored cell is the fp16 store value of the fp16 cast of
+    -- the ℝ contraction; `round_idem` collapses cast-then-store to one round
+    rw [show matmulSpecOf BLOCK_M BLOCK_N BLOCK_K xs ys idx
+        = matmulSpec s₀ A B stride_am stride_ak stride_bk stride_bn BLOCK_K
+            idx.1.val idx.2.1.val from
+      (matmulSpec_eq_of A B stride_am stride_ak stride_bk stride_bn BLOCK_M
+        BLOCK_N BLOCK_K s₀ xs ys (fun k => hx k trivial) (fun k => hy k trivial)
+        idx).symm]
+    unfold BlockState.readMemAs
+    rw [hread idx]
+    simp [MemCell.readAs_of_same, FloatDType.ofReal, FloatDType.storeValue,
+      RoundingModel.storeValue, RoundingModel.cast, Rm.round_idem]
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.MatmulTma
