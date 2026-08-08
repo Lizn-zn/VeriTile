@@ -907,20 +907,35 @@ face below is not a transport: it states
 
 — the exact ℝ contraction, quantized once onto the fp16 grid.
 
-Two precedents, so this is not overclaimed:
+What this face is, and is **not**. It is *not* the first rounding-real `⊨[R]`
+in the corpus — eight ports already state an fp16 boundary quantization the same
+way, carrying `outDType := .fp16` on their (streaming) IO signature with the
+cast-plus-typed-store pair collapsed by `round_idem`: `matmul_kernel`,
+`matmul_leakyrelu`, `matmul_leakyrelu_fp8`, `matmul_triton_autotune`,
+`iv_dependent_matmul`, `rmsnorm_fused_llama`, `attention_kernel`,
+`attention_kernel_aligned`. The showcase
+`bench/examples/FloatDTypeCorrect.lean` does the same at `.fp32` via the
+explicit `.round_to(...)` spelling.
 
-* the showcase `bench/examples/FloatDTypeCorrect.lean` already carries a
-  rounding-real `⊨[R]`, at `.fp32` via the **explicit** quantization spelling
-  `.round_to(...)`;
-* ten ports (the attention family, `triton_conv2d_fwd`, `triton_attention`) do
-  have `⊨[R]` faces over fp16 kernels — but they carry the hypothesis
-  `hfp16 : R.round .fp16 = id`, i.e. they **assume the fp16 rounding away** and
-  declare it their modeling boundary.
+What this face *does* is close a real gap and extend the surface:
 
-What is new here is that this face *states* the fp16 quantization instead of
-assuming it away or erasing it: no `hfp16`, `outDType := .fp16`, and the
-rounded quantity is a **contraction** rather than an elementwise add. The same
-technique is what would let those ten ports drop `hfp16`.
+* `matmul_tma`'s fp16 branch had **no** IO face at all — only a per-write-map
+  closed form — so this is the branch's first flat-memory contract of any kind;
+* it is the first fp16 boundary on the **per-channel-shape** skin
+  (`MaskedTileShapedKernelIO₂`, a contraction with three different lane sets),
+  which is why that skin needed an `ImplementsR` at all. The eight above all
+  sit on streaming skins.
+
+A separate group of ports handles fp16 the *other* way: nine attention/conv
+ports (`attn_fwd_triton`, `attn_fwd_causal`, `attention_fwd_triton2`,
+`attention_forward_triton`, `triton_attention`, `triton_conv2d_fwd`,
+`flash_attn`, and the two `attention_kernel*` for their in-loop cast) carry
+`hfp16 : R.round .fp16 = id` and declare fp16 their modeling boundary. That is
+**not** removable by the technique used here: their `.to(tl.float16)` sits
+*inside* the accumulation loop, so the rounded value feeds the next iteration
+and the result cannot be written as `R.round .fp16 (exact spec)`. Dropping
+`hfp16` there needs a rounded-*recurrence* spec, a different mathematical
+object from the proven ℝ closed forms.
 
 The value is in fact rounded **twice** — once by the `.to(tl.float16)` cast
 (site 1) and again by the fp16 typed store (site 2) — and
@@ -1237,11 +1252,13 @@ reads back at `.fp16` holding
 
 and every other memory cell is unchanged.
 
-Unlike every other `⊨[R]` face on a port in `bench/tritonbench_g`, this one is
-**not** a transport of an exact result: `.to(tl.float16)` is a genuine rounding
-site, so the `R.round .fp16` on the right is the quantization the kernel actually
-performs (the showcase `bench/examples/FloatDTypeCorrect.lean` is the existing
-precedent for a rounding-real `⊨[R]`, there via explicit `.round_to`). `f` remains the exact ℝ contraction — the face's content is precisely
+Unlike the **cast-free** `⊨[R]` port faces (which transport an exact result
+verbatim because `execR R = exec`), this one is not a transport: `.to(tl.float16)`
+is a genuine rounding site, so the `R.round .fp16` on the right is the
+quantization the kernel actually performs. Eight other ports already state an
+fp16 boundary this way — see the section docstring for the list; this face's
+contribution is that `matmul_tma`'s fp16 branch previously had no IO face at
+all, and that it is the first fp16 boundary on the per-channel-shape skin. `f` remains the exact ℝ contraction — the face's content is precisely
 "the fp16 output is the real GEMM value, rounded once".
 
 The kernel rounds the value **twice** (the cast, then the fp16 typed store);
