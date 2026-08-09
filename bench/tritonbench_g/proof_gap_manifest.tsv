@@ -234,7 +234,7 @@ bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_2_compute_corr
 bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_dim_single_block_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_preprocess_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_genuine_output_summary	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	triton_conv2d_fwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
