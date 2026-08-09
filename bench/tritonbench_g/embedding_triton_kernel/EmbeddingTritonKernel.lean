@@ -2718,6 +2718,185 @@ theorem embedding_kernel_frame (weight input_ids out : RegionName)
   intro r o hcond
   exact hInv.2 r o hcond
 
+/-! ### ════════ The whole-kernel `⊨[R]` face ════════
+
+Everything the face needs is now proven over the real
+`range(0, BLOCK_N, BLOCK_NN)` loop: `FlattenOk`, `TraceSafeR`, `execR = exec`,
+termination, the cell frame, and — from the port's own stack — the values. This
+section adds the last two links: a memory-level→channel-level bridge for the
+spec, and the assembly. -/
+
+/-- **Memory→channel bridge.** `embeddingSpecFull` is stated over memory reads;
+the IO face's `f` sees the pinned channels `ids` / `xs`. On a write-active lane
+the two agree: the mask forces the token id to be the pinned one, and the gather
+address is then exactly the skin's `read` window. -/
+theorem embeddingSpecFull_eq_of (weight input_ids : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq n_ctx hiden_size BLOCK_DMODEL
+      BLOCK_N : Nat) (s : BlockState)
+    (ids : TileIndex [BLOCK_N] → Nat)
+    (xs : TileIndex [BLOCK_N, BLOCK_DMODEL] → ℝ)
+    (hid : ∀ i : TileIndex [BLOCK_N], s.pids 0 * BLOCK_N + i.1.val < n_ctx →
+      s.readMemValue .nat input_ids (s.pids 0 * BLOCK_N + i.1.val) = ids i)
+    (hx : ∀ j : TileIndex [BLOCK_N, BLOCK_DMODEL],
+      (vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+          ids (j.1, PUnit.unit) < vob_end_id) ∧ j.2.1.val < hiden_size →
+      s.readMem weight
+          ((ids (j.1, PUnit.unit) - vob_start_id) * stride_weight_seq
+            + j.2.1.val) = xs j)
+    (idx : TileIndex [BLOCK_N, BLOCK_DMODEL])
+    (hact : storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx) :
+    embeddingSpecFull s weight input_ids vob_start_id vob_end_id
+        stride_weight_seq BLOCK_N BLOCK_DMODEL idx
+      = (if vob_start_id ≤ ids (idx.1, PUnit.unit) ∧
+            ids (idx.1, PUnit.unit) < vob_end_id then xs idx else 0) := by
+  obtain ⟨hn, hd⟩ := hact
+  simp only [storeActiveFull, fullSeqIndex, dimIndex] at hn hd
+  have hraw : tokenRawFull s input_ids BLOCK_N idx.1 = ids (idx.1, PUnit.unit) := by
+    simpa [tokenRawFull, fullSeqIndex] using hid (idx.1, PUnit.unit) hn
+  by_cases hrange : vob_start_id ≤ ids (idx.1, PUnit.unit) ∧
+      ids (idx.1, PUnit.unit) < vob_end_id
+  · have hxv := hx idx ⟨hrange, hd⟩
+    simp only [embeddingSpecFull, weightOffsetFull, tokenIndexFull, dimIndex,
+      hraw, if_pos hrange, hxv]
+    simp
+  · simp only [embeddingSpecFull, hraw, if_neg hrange, if_neg hrange]
+    norm_num
+
+/-- IO signature of the **whole** `embedding_kernel` on the row-gather surface:
+the index tile is the program's full `[BLOCK_N]` slice of `input_ids`, the data
+and output tiles are `[BLOCK_N, BLOCK_DMODEL]`, and the gather address is built
+from the loaded token ids. Compare `bodyIO`, which is the same skin at one
+chunk. -/
+def wholeIO (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N : Nat) : GatherTileKernelIO where
+  kernel := embedding_kernel weight input_ids out vob_start_id vob_end_id
+    stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N 1
+  idxbuf := input_ids
+  inp := weight
+  out := out
+  shapeIdx := [BLOCK_N]
+  shape := [BLOCK_N, BLOCK_DMODEL]
+  readx := fun pid i => pid * BLOCK_N + i.1.val
+  read := fun _pid ids j =>
+    (ids (j.1, PUnit.unit) - vob_start_id) * stride_weight_seq + j.2.1.val
+  write := fun pid j => (pid * BLOCK_N + j.1.val) * stride_out_seq + j.2.1.val
+  maskx := fun pid i => pid * BLOCK_N + i.1.val < n_ctx
+  readMask := fun _pid ids j =>
+    (vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+      ids (j.1, PUnit.unit) < vob_end_id) ∧ j.2.1.val < hiden_size
+  writeMask := fun pid j => pid * BLOCK_N + j.1.val < n_ctx ∧ j.2.1.val < hiden_size
+
+/-! ### ════════ ★ MAIN THEOREM (whole kernel, rounding face) ★ ════════ -/
+
+/-- **The whole-kernel `⊨[R]` headline** for `embedding_kernel` — the launched
+kernel, `for start_nn in range(0, BLOCK_N, BLOCK_NN)` loop included, not a
+hand-cut body.
+
+For every rounding model `R`, every disjoint flat placement of
+`input_ids` / `weight` / `out`, every program id whose index and gather windows
+are in bounds, and every launch state whose index row holds `ids` and whose
+gathered weight rows hold `xs`: the translated pointer kernel run under
+`execR R` terminates, every write-active lane of the output tile reads back at
+`.real` holding the gathered row (`xs j` on an in-vocabulary lane, `0` outside —
+the kernel's `id_mask` branch), and every other memory cell is unchanged.
+
+Honest side conditions, all inherited from the port's whole-kernel value result
+rather than added here:
+
+* `hOne` is discharged by instantiating the signature at `BLOCK_NN = 1` — the
+  chunking `embedding_kernel_compute_correct` assumes;
+* `hOutInj` — no two lanes share an output cell;
+* `input_ids ≠ out` and `weight ≠ out` — the loop writes only `out`, and these
+  are what keep the token ids and weight rows stable across iterations.
+
+The kernel is cast-free, so the `R.round .real` the surface applies is the
+identity: this face's rounding content is that *the embedding gather introduces
+no rounding event of its own*, which is the truthful reading for a kernel that
+only moves weight rows. -/
+specification embedding_kernel_whole_io_correctnessR (R : RoundingModel)
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N : Nat)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hOutInj : ∀ pid : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
+        (pid * BLOCK_N + idx.1.val) * stride_out_seq + idx.2.1.val)) :
+    wholeIO weight input_ids out vob_start_id vob_end_id stride_weight_seq
+        stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      ⊨[R, FloatDType.real] fun _pid ids xs j =>
+          if vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+              ids (j.1, PUnit.unit) < vob_end_id then xs j else 0 := by
+  refine GatherTileKernelIO.ImplementsR.intro _ ?_ ?_ ?_
+  · exact embedding_kernel_flattenOk weight input_ids out vob_start_id
+      vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+      BLOCK_N 1
+  · intro bounds s ids hidpin hbx hbr hbw
+    simp only [wholeIO] at hidpin hbx hbr hbw
+    refine embedding_kernel_traceSafeR R weight input_ids out vob_start_id
+      vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+      BLOCK_N bounds s hInputOutNe hWeightOutNe
+      (fun row hrow => hbx (row, PUnit.unit) hrow) ?_ ?_
+    · -- the gather bound: rewrite the pinned token id into the skin's window
+      intro idx hn hact
+      have hraw : s.readMemValue .nat input_ids (s.pids 0 * BLOCK_N + idx.1.val)
+          = ids (idx.1, PUnit.unit) := hidpin (idx.1, PUnit.unit) hn
+      have := hbr idx (by rw [← hraw]; exact hact)
+      simpa [hraw] using this
+    · intro idx hn hd
+      exact hbw idx ⟨hn, hd⟩
+  · intro s₀ ids xs hidpin hxpin
+    simp only [wholeIO] at hidpin hxpin
+    obtain ⟨s1, hexecExact⟩ :=
+      embedding_kernel_terminates weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        hInputOutNe hWeightOutNe s₀
+    have hpost : embedding_kernel_alg_post weight input_ids out vob_start_id
+        vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+        BLOCK_DMODEL BLOCK_N 1 s₀ s1 := by
+      refine embeddingProjectedBody_alg_post s₀ s1 weight input_ids out
+        vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+        hiden_size BLOCK_DMODEL BLOCK_N 1 rfl
+        (by
+          have := hOutInj (s₀.pids 0)
+          simpa [outOffsetFull, fullSeqIndex, dimIndex] using this)
+        hInputOutNe hWeightOutNe ?_
+      rw [← embedding_kernel_toAlg_body]
+      exact hexecExact
+    refine ⟨s1, ?_, ?_, ?_⟩
+    · simp only [wholeIO]
+      rw [embedding_kernel_castFree R weight input_ids out vob_start_id
+        vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+        BLOCK_DMODEL BLOCK_N 1 s₀]
+      exact hexecExact
+    · intro j hj
+      simp only [wholeIO] at hj ⊢
+      have hactFull : storeActiveFull s₀ n_ctx hiden_size BLOCK_N BLOCK_DMODEL j := by
+        simpa [storeActiveFull, fullSeqIndex, dimIndex] using hj
+      have hval := hpost j hactFull
+      rw [BlockState.readMemAs_real]
+      have : s1.readMem out ((s₀.pids 0 * BLOCK_N + j.1.val) * stride_out_seq
+          + j.2.1.val) = embeddingSpecFull s₀ weight input_ids vob_start_id
+            vob_end_id stride_weight_seq BLOCK_N BLOCK_DMODEL j := by
+        simpa [outOffsetFull, fullSeqIndex, dimIndex] using hval
+      rw [this, embeddingSpecFull_eq_of weight input_ids vob_start_id vob_end_id
+        stride_weight_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N s₀ ids xs
+        (fun i hi => hidpin i hi) (fun k hk => hxpin k hk) j hactFull]
+      simp
+    · intro r o hcond
+      simp only [wholeIO] at hcond
+      refine embedding_kernel_frame weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        hInputOutNe hWeightOutNe s₀ s1 hexecExact r o ?_
+      rcases hcond with h | h
+      · exact Or.inl h
+      · refine Or.inr fun idx hactFull => ?_
+        have hj : s₀.pids 0 * BLOCK_N + idx.1.val < n_ctx ∧
+            idx.2.1.val < hiden_size := by
+          simpa [storeActiveFull, fullSeqIndex, dimIndex] using hactFull
+        simpa [outOffsetFull, fullSeqIndex, dimIndex] using h idx hj
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
