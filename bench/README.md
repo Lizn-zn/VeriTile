@@ -42,21 +42,25 @@ project.
 ## TritonBench-G v1 anchor
 
 We are aligning the verification benchmark with [TritonBench-G v1][tb] (184
-GitHub-scraped real Triton kernels, ACL 2025 Findings). A static primitive
-scan of all 184 kernels against the current DSL contract gives, after two
-trivial surface adapters (`tl.math.*`, `tl.extra.cuda.libdevice.*`):
+GitHub-scraped real Triton kernels, ACL 2025 Findings). **151 of the 184 are ported.** The original (2026-05-05) static primitive scan
+estimated only 141 as within the DSL contract; the levers it named
+(`tl.math.*` / `tl.extra` adapters, the concurrency boundary,
+`tl.num_programs`, the `atomic_add` proof shape) have since landed, so that
+estimate is superseded — treat it as history, not status.
 
-| Verdict | Count | Share |
-|---|---:|---:|
-| OK (DSL covers primitives) | 141 | 77% |
-| Soft (small DSL/proof extension) | 15 | 8% |
-| Hard (new semantic layer required) | 28 | 15% |
+The remaining **33 are scaffolded but not imported**: the per-kernel directory
+and README exist, the upstream `.py` does not. Re-measured against the DSL's
+actual surface (95 `tl.*` forms, extracted from `VeriTile/Triton/DSL/**`):
 
-Top remediation levers, ranked by file yield: `tl.math.*` adapter (24),
-`tl.extra` adapter (9), concurrency boundary (#12, unlocks 11), `tl.num_programs`
-(9), FP8 dtype channel (7), `atomic_add` proof shape (6), int4 packed unpack
-(4), RNG (#41, 4). See [`tritonbench_coverage.md`](./tritonbench_coverage.md)
-for the full per-file table, hard-gap reasons, and caveats.
+| Verdict | Count |
+|---|---:|
+| Portable now — every `tl.*` form already in the DSL | 17 |
+| Blocked on a missing primitive, or on an ℝ-model limit | 16 |
+
+Ranked unlock levers for the 15: fp8 dtype channel (7), RNG (4),
+`tl.interleave` (2), `tl.static_assert` (2, a macro no-op), `tl.broadcast_to`
+(1, an alias). See [`tritonbench_coverage.md`](./tritonbench_coverage.md) for
+the per-kernel table, the method, and what "portable" does and does not claim.
 
 The "OK" verdict is *expressibility*, not *proof feasibility*: many `OK`
 kernels (FA-1 backward, RWKV6, Mamba SSM, chunked GLA) still need fresh proof

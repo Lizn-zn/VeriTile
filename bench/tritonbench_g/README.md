@@ -8,8 +8,7 @@ This directory holds one subdirectory per kernel. Each subdirectory bundles **up
 
 ```
 bench/tritonbench_g/
-├── README.md                       (this file)
-├── tritonbench_coverage.md         (static coverage analysis, 184 kernels)
+├── README.md                       (this file)   # coverage table: ../tritonbench_coverage.md
 └── <kernel_name>/
     ├── README.md                   per-kernel notes (status, gotchas, TODO)
     ├── <kernel_name>.py            upstream Python source (pinned, see Provenance)
@@ -129,7 +128,7 @@ The initial imports landed without these headers (commit `eab9b81`); back-fillin
 ## Adding a kernel
 
 1. Pick a file from upstream `data/TritonBench_G_v1/`.
-2. Cross-check its verdict in [`tritonbench_coverage.md`](./tritonbench_coverage.md). Prefer `OK` first; `Soft` next; `Hard` only when the relevant capability extension has landed.
+2. Cross-check its verdict in [`../tritonbench_coverage.md`](../tritonbench_coverage.md). Prefer `portable now`; a `blocked` kernel only after the primitive it names has landed (with a consumer).
 3. Create `bench/tritonbench_g/<kernel_name>/`.
 4. Drop the upstream `.py` in there with the attribution header above.
 5. Add `<KernelName>.lean` with the DSL port. Use `namespace VeriTile.Bench.TritonBenchG.<KernelName>` and import `VeriTile.Triton.Core` + `VeriTile.Triton.DSL`.
@@ -139,7 +138,7 @@ The initial imports landed without these headers (commit `eab9b81`); back-fillin
 
 ## See also
 
-- [`tritonbench_coverage.md`](./tritonbench_coverage.md) — static coverage classification across all 184 kernels
+- [`../tritonbench_coverage.md`](../tritonbench_coverage.md) — measured coverage classification across all 184 kernels
 - [`../README.md`](../README.md) — overall benchmark policy
 - [`../check_ports.sh`](../check_ports.sh) — port build script
 - [`../../documents/KernelManifest.md`](../../documents/KernelManifest.md) — manifest schema (used at stage 3)
