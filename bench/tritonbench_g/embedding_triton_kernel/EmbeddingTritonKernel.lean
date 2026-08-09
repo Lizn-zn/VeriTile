@@ -2301,6 +2301,182 @@ theorem embedding_loop_traceSafeR (R : RoundingModel)
       (by simpa [hl0, Nat.add_comm] using hn) hd
     simpa [hl0, Nat.add_comm] using this
 
+/-- Statement-wise cast-freeness composes to the list stepper. Proving
+cast-freeness one statement at a time keeps every goal shallow — the
+`setReg` tower that stalls a whole-list `simp` over an abstract state never
+builds up. -/
+private theorem stepStmtsR_castFree_of_stmts (R : RoundingModel) (l : List Stmt)
+    (h : ∀ st ∈ l, ∀ t : BlockState, stepStmtR R st t = stepStmt st t) :
+    ∀ t : BlockState, stepStmtsR R l t = stepStmts l t := by
+  induction l with
+  | nil => intro t; rw [stepStmtsR_nil, stepStmts.nil]
+  | cons hd tl ih =>
+      intro t
+      rw [stepStmtsR, stepStmts, h hd List.mem_cons_self t]
+      cases hstep : stepStmt hd t with
+      | none => rfl
+      | some t' => exact ih (fun st hst => h st (List.mem_cons_of_mem hd hst)) t'
+
+/-- The loop body is cast-free at **every** state — the unconditional form
+`stepForRangeAuxR_castFree` needs (the pinned form
+`embeddingLoopBody_castFreeList` is not enough there). -/
+private theorem embeddingLoopBody_castFreeAll (R : RoundingModel)
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) :
+    ∀ t : BlockState,
+      stepStmtsR R
+          (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+            stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+            BLOCK_N BLOCK_NN) t
+        = stepStmts
+          (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+            stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+            BLOCK_N BLOCK_NN) t := by
+  refine stepStmtsR_castFree_of_stmts R _ ?_
+  intro st hst t
+  unfold embeddingLoopBody at hst
+  simp only [List.mem_cons, List.mem_singleton, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  all_goals
+    simp [stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp, evalOp.eq_def,
+      BlockState.writeMemTypedR, BlockState.writeMemAsR, Option.bind,
+      Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.uop,
+      TileShape.dropInsertedIndex, NumericDType.add, NumericDType.sub,
+      NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+      FloatDType.cast, Bool.and_eq_true]
+
+/-- The pre-loop is cast-free (three register assigns, no float cast). -/
+private theorem embeddingPreLoop_castFreeAll (R : RoundingModel)
+    (BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) :
+    ∀ t : BlockState,
+      stepStmtsR R (embeddingPreLoop BLOCK_DMODEL BLOCK_N BLOCK_NN) t
+        = stepStmts (embeddingPreLoop BLOCK_DMODEL BLOCK_N BLOCK_NN) t := by
+  refine stepStmtsR_castFree_of_stmts R _ ?_
+  intro st hst t
+  unfold embeddingPreLoop at hst
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl
+  all_goals
+    simp [stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp, evalOp.eq_def,
+      Option.bind, Option.map, Tile.bop, NumericDType.mul, NumericDType.add]
+
+/-- **The whole kernel is cast-free.** The pre-loop and the loop body are, and
+`stepForRangeAuxR_castFree` lifts the body's cast-freeness through the strided
+fold — so the entire `execR R` run is the exact run, and the port's proven value
+stack (`embedding_kernel_alg_post`) transports without being redone. -/
+theorem embedding_kernel_castFree (R : RoundingModel)
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) (s : BlockState) :
+    execR R ((embedding_kernel weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN).toAlgKernel) s
+      = exec ((embedding_kernel weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN).toAlgKernel) s := by
+  show stepStmtsR R _ s = stepStmts _ s
+  rw [embedding_kernel_toAlg_body]
+  unfold embeddingProjectedBody
+  refine stepStmtsR_castFree_of_stmts R _ ?_ s
+  intro st hst t
+  rcases List.mem_append.mp hst with hpre | hloop
+  · -- a pre-loop statement
+    have := embeddingPreLoop_castFreeAll R BLOCK_DMODEL BLOCK_N BLOCK_NN
+    unfold embeddingPreLoop at hpre
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hpre
+    rcases hpre with rfl | rfl | rfl
+    all_goals
+      simp [stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp, evalOp.eq_def,
+        Option.bind, Option.map, Tile.bop, NumericDType.mul, NumericDType.add]
+  · -- the single `forRange` statement
+    simp only [List.mem_singleton] at hloop
+    subst hloop
+    rw [stepStmtR_forRange]
+    simp only [stepStmt]
+    exact stepForRangeAuxR_castFree R _
+      (embeddingLoopBody_castFreeAll R weight input_ids out vob_start_id
+        vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+        BLOCK_DMODEL BLOCK_N BLOCK_NN) _ _ _ _ t
+
+/-- The whole kernel sits inside the flat-memory bridge's covered fragment: the
+`Stmt.FlattenOk` loop arm falls straight through to the body. -/
+theorem embedding_kernel_flattenOk (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) :
+    ((embedding_kernel weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [embedding_kernel_toAlg_body]
+  unfold embeddingProjectedBody embeddingPreLoop embeddingLoopBody
+  simp [StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk]
+  -- the `expandDim` nodes: `Op.FlattenOk`'s per-case equation does not fire under
+  -- `simp` on them, but `.eq_def` is fine on this op-level residual
+  and_intros <;> simp [Op.FlattenOk.eq_def]
+
+/-- **The whole kernel is trace-safe under the rounding model.** The pre-loop is
+three register assigns (safe at every state, `Stmt.TraceSafeListR.of_forall`);
+joining it to the loop with `Stmt.TraceSafeListR.append_intro` needs the safe
+context at the post-pre-loop state, which `embeddingPreLoop_step_regs` supplies.
+
+Bounds are the whole-tile ones an IO face gives, at `BLOCK_NN = 1`. -/
+theorem embedding_kernel_traceSafeR (R : RoundingModel)
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hidxAll : ∀ row : Fin BLOCK_N,
+      s.pids 0 * BLOCK_N + row.val < n_ctx →
+      s.pids 0 * BLOCK_N + row.val < bounds input_ids)
+    (hwAll : ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+      s.pids 0 * BLOCK_N + idx.1.val < n_ctx →
+      (vob_start_id ≤ s.readMemValue .nat input_ids
+            (s.pids 0 * BLOCK_N + idx.1.val) ∧
+          s.readMemValue .nat input_ids
+            (s.pids 0 * BLOCK_N + idx.1.val) < vob_end_id) ∧
+        idx.2.1.val < hiden_size →
+      (s.readMemValue .nat input_ids (s.pids 0 * BLOCK_N + idx.1.val)
+          - vob_start_id) * stride_weight_seq + idx.2.1.val < bounds weight)
+    (houtAll : ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+      s.pids 0 * BLOCK_N + idx.1.val < n_ctx →
+      idx.2.1.val < hiden_size →
+      (s.pids 0 * BLOCK_N + idx.1.val) * stride_out_seq + idx.2.1.val
+        < bounds out) :
+    Kernel.TraceSafeR R bounds
+      ((embedding_kernel weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        1).toAlgKernel) s := by
+  unfold Kernel.TraceSafeR
+  rw [embedding_kernel_toAlg_body]
+  unfold embeddingProjectedBody
+  refine Stmt.TraceSafeListR.append_intro _ s ?_ ?_
+  · -- the pre-loop: three register assigns, no memory access
+    refine Stmt.TraceSafeListR.of_forall _ s ?_
+    intro st hst s'
+    unfold embeddingPreLoop at hst
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+    rcases hst with rfl | rfl | rfl
+    all_goals
+      simp [Stmt.TraceSafeR, Op.SafeAtR, Op.SafeAtR.eq_def]
+  · -- the loop, from the post-pre-loop state
+    intro sPre hPre
+    have hPreExact :
+        stepStmts (embeddingPreLoop BLOCK_DMODEL BLOCK_N 1) s = some sPre := by
+      rw [← embeddingPreLoop_castFreeAll R BLOCK_DMODEL BLOCK_N 1 s]
+      exact hPre
+    obtain ⟨_hStart, hOffsNN, hOffsD, hInputRead, hWeightRead⟩ :=
+      embeddingPreLoop_step_regs s sPre input_ids weight BLOCK_DMODEL BLOCK_N 1
+        hPreExact
+    refine Stmt.TraceSafeListR.cons_intro ?_ (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR]
+    exact embedding_loop_traceSafeR R s sPre weight input_ids out vob_start_id
+      vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+      BLOCK_N bounds hInputOutNe hWeightOutNe
+      ⟨hOffsNN, hOffsD, hInputRead, hWeightRead⟩ hidxAll hwAll houtAll
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
