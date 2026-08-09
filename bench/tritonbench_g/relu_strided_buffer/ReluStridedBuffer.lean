@@ -24,10 +24,27 @@ obligation here. Program ids and the launch-grid size are universally
 quantified (`s.pids 0` / `s.numPids 0`), so each per-program statement covers
 every program of its grid.
 
+**Both constexpr branches have an IO-surface headline.** The grid-stride branch
+needs the grid width in its *signature*, not merely in its proof: its windows
+stride by `num_ctas`, and a skin pinning only `pids` provably cannot state such
+a contract. It is therefore stated on `StreamGridStrideEmitMasked2DKernelIO₁`,
+whose `⊨[R]` pins `s₀.numPids 0` alongside the pids — this port is that skin's
+first consumer.
+
 ## Proof architecture
 
 ```
-relu_strided_buffer_one_tile_io_correctness                   ← TOP THEOREM
+relu_strided_buffer_grid_stride_io_correctnessR   ← TOP THEOREM (⊨[R], the
+  ├─ relu_grid_stride_flattenOk                     grid-stride branch on the
+  ├─ relu_grid_stride_traceSafeR                    grid-width-aware skin)
+  │    └─ perTile_traceSafeR                    R-side per-tile safety walk
+  ├─ relu_grid_stride_execR_eq_exec             cast-free: execR R = exec
+  │    └─ rsForDyn_castFree → rsLoopBody_castFree → rsPerTile_stmt_castFree
+  ├─ relu_grid_stride_run_exact                 termination + cell frame
+  │    └─ gs_loop_cells                         per-cell loop invariant
+  └─ relu_grid_stride_exec_correct              per-(step, lane) values (below)
+
+relu_strided_buffer_one_tile_io_correctness       ⊨, the one-tile branch
   ├─ relu_one_tile_flattenOk                    inside the flat-memory bridge
   ├─ relu_one_tile_traceSafe                    block-pointer safety walk
   │    └─ perTile_traceSafe                     shared per-tile body
@@ -1258,6 +1275,658 @@ specification relu_strided_buffer_one_tile_io_correctness
   · intro s₀ xs hin
     exact relu_one_tile_region_run in0_ptr out0_ptr in0_stride0 out0_stride0 s0
       num_tasks tiles_per_cta tile_size0 hStride s₀ xs hin
+
+open scoped VeriTile.Triton.StreamGridStrideEmitMasked2DKernelIO₁
+
+/-! # ════════ `⊨[R]` IO face — the grid-stride branch ════════
+
+The section above states the `one_tile_per_cta = true` branch. This one states
+the `one_tile_per_cta = false` **grid-stride** branch, which needs a wider
+signature than any pid-only skin can provide: its windows stride by
+`num_ctas = tl.num_programs(0)`, and a skin that pins only `pids` provably
+cannot state such a contract (instantiate it at two launch states with equal
+inputs and `numPids 0 = 1` vs `2`: one cell must both hold the readback value
+and be untouched by the frame). See the genre note on
+`StreamGridStrideEmitMasked2DKernelIO₁` in `Memory/KernelSpec.lean`; this is
+that skin's first consumer.
+
+The streaming genre's only surface is `⊨[R]`. With the default
+`outDType := .real` every per-step store is exact under `execR R`, so the
+statement below **is** the exact grid-stride streaming contract — `R` is
+threaded through the whole kernel but never rounds anything, which is faithful
+here precisely because ReLU is a *selection* (`tl.where(x > 0, x, 0)` returns a
+loaded value or the literal `0`); no arithmetic manufactures a real that would
+have to be quantized. -/
+
+/-- The grid-stride surface sits inside the flat-memory bridge's covered
+fragment (`FlattenOk` recurses into the `forRangeDyn` body). -/
+theorem relu_grid_stride_flattenOk
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat) :
+    ((relu_forward_kernel_rank_1_grid_stride_surface in0_ptr out0_ptr
+      in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+      tile_size0).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  rw [gridStride_body_eq]
+  simp [numTiles0Stmt, perTileStmts, StmtList.FlattenOk, Stmt.FlattenOk,
+    Op.FlattenOk]
+
+/-! ### Cast-freeness: `execR R` collapses onto the exact stepper
+
+The kernel's only dtype casts are the source's `.to(...element_ty)` pair, which
+the DSL erases to `.real`, and every store is `.real`-typed
+(`writeMemTypedR R .real` is definitionally the exact write). So `execR R` and
+`exec` step identically — statement by statement, and through the grid-stride
+loop via `stepForRangeAuxR_castFree`. -/
+
+/-- An assign steps identically under `stepStmtR R` once its operand does. -/
+private theorem rsAssign_castFree {R : RoundingModel} {d : TileDType}
+    {sh : TileShape} {nm : RegName} (e : Op d sh) (u : BlockState)
+    (h : evalOpR R e u = evalOp e u) :
+    stepStmtR R (Stmt.assign d sh nm e) u = stepStmt (Stmt.assign d sh nm e) u := by
+  simp only [stepStmtR, stepStmt, h]
+
+/-- Statement lists whose members all step identically step identically. -/
+private theorem rsStepList_castFree {R : RoundingModel} :
+    ∀ (l : List Stmt),
+      (∀ st ∈ l, ∀ u : BlockState, stepStmtR R st u = stepStmt st u) →
+      ∀ u : BlockState, stepStmtsR R l u = stepStmts l u
+  | [], _, u => by simp only [stepStmtsR, stepStmts]
+  | st :: rest, h, u => by
+      cases hv : stepStmt st u with
+      | none => simp only [stepStmtsR, stepStmts, h st List.mem_cons_self u, hv]
+      | some u' =>
+          simp only [stepStmtsR, stepStmts, h st List.mem_cons_self u, hv]
+          exact rsStepList_castFree rest
+            (fun s' hs' => h s' (List.mem_cons_of_mem _ hs')) u'
+
+/-- The two per-tile `tl.make_block_ptr` operands evaluate identically. A
+dedicated lemma: unfolding `evalOpR`/`evalOp` inside a broad `simp` at symbolic
+dimensions blows up `whnf`. -/
+private theorem rsEvalR_blockPtr (R : RoundingModel) (Reg : RegionName)
+    (s0 tile_size0 stride : Nat) (u : BlockState) :
+    evalOpR R (Op.makeBlockPtrDynOffsets Reg (Op.constNat 0) [s0] [tile_size0]
+        [stride] [Op.ref .nat [] "offset0"]) u
+      = evalOp (Op.makeBlockPtrDynOffsets Reg (Op.constNat 0) [s0] [tile_size0]
+        [stride] [Op.ref .nat [] "offset0"]) u := by
+  simp only [evalOpR, evalOp, List.mapM_cons, List.mapM_nil]
+
+/-- The boundary-checked `.real` block-pointer load evaluates identically. -/
+private theorem rsEvalR_load (R : RoundingModel) (tile_size0 : Nat)
+    (u : BlockState) :
+    evalOpR R (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [tile_size0] "in0_bptr") [0])
+        MaskOpt.none) u
+      = evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [tile_size0] "in0_bptr") [0])
+        MaskOpt.none) u := by
+  simp only [evalOpR, evalOp, evalOpR_ref, evalOp_ref]
+
+/-- The inlined `relu_forward` `tl.where` evaluates identically (a selection of
+already-loaded values and the literal `0`; nothing to round). -/
+private theorem rsEvalR_where (R : RoundingModel) (tile_size0 : Nat)
+    (u : BlockState) :
+    evalOpR R ((Op.gt ComparableDType.real Broadcast.scalarR
+          (Op.ref .real [tile_size0] "in0") (Op.const 0)).where
+        (Op.ref .real [tile_size0] "in0")
+        ((Op.const 0).broadcast [tile_size0])) u
+      = evalOp ((Op.gt ComparableDType.real Broadcast.scalarR
+          (Op.ref .real [tile_size0] "in0") (Op.const 0)).where
+        (Op.ref .real [tile_size0] "in0")
+        ((Op.const 0).broadcast [tile_size0])) u := by
+  simp only [evalOpR, evalOp, evalOpR_ref, evalOp_ref]
+
+/-- Every statement of the shared per-tile body is cast-free, unconditionally
+in the state — which is what `stepForRangeAuxR_castFree` needs. -/
+private theorem rsPerTile_stmt_castFree (R : RoundingModel)
+    (in0_ptr out0_ptr : RegionName) (in0_stride0 out0_stride0 s0 tile_size0 : Nat) :
+    ∀ st ∈ perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0,
+      ∀ u : BlockState, stepStmtR R st u = stepStmt st u := by
+  intro st hst u
+  simp only [perTileStmts, List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl | rfl | rfl | rfl
+  · exact rsAssign_castFree _ u (by simp only [evalOpR, evalOp])
+  · exact rsAssign_castFree _ u (by simp only [evalOpR, evalOp])
+  · exact rsAssign_castFree _ u (rsEvalR_blockPtr R in0_ptr s0 tile_size0 in0_stride0 u)
+  · exact rsAssign_castFree _ u (rsEvalR_load R tile_size0 u)
+  · exact rsAssign_castFree _ u (rsEvalR_where R tile_size0 u)
+  · exact rsAssign_castFree _ u (rsEvalR_blockPtr R out0_ptr s0 tile_size0 out0_stride0 u)
+  · simp only [stepStmtR, stepStmt, evalOpR_ref, evalOp_ref,
+      BlockState.writeMemTypedR]
+
+/-- The grid-stride loop body (the `tile_id` recomputation plus the shared
+per-tile body) is cast-free. -/
+private theorem rsLoopBody_castFree (R : RoundingModel)
+    (in0_ptr out0_ptr : RegionName) (in0_stride0 out0_stride0 s0 tile_size0 : Nat)
+    (u : BlockState) :
+    stepStmtsR R
+        (Stmt.assign .nat [] "tile_id"
+            (Op.add NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "j")
+                (Op.ref .nat [] "num_ctas")))
+          :: perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0)
+        u
+      = stepStmts
+        (Stmt.assign .nat [] "tile_id"
+            (Op.add NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+              (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "j")
+                (Op.ref .nat [] "num_ctas")))
+          :: perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0)
+        u := by
+  refine rsStepList_castFree _ ?_ u
+  intro st hst v
+  rcases List.mem_cons.mp hst with rfl | hrest
+  · exact rsAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · exact rsPerTile_stmt_castFree R in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+      tile_size0 st hrest v
+
+/-- The grid-stride `forRangeDyn` steps identically under `stepStmtR R`. -/
+private theorem rsForDyn_castFree (R : RoundingModel)
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 tiles_per_cta tile_size0 : Nat)
+    (u : BlockState) :
+    stepStmtR R
+        (Stmt.forRangeDyn "j" (Op.constNat 0) (Op.constNat tiles_per_cta)
+          (Op.constNat 1)
+          (Stmt.assign .nat [] "tile_id"
+              (Op.add NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "j")
+                  (Op.ref .nat [] "num_ctas")))
+            :: perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+              tile_size0)) u
+      = stepStmt
+        (Stmt.forRangeDyn "j" (Op.constNat 0) (Op.constNat tiles_per_cta)
+          (Op.constNat 1)
+          (Stmt.assign .nat [] "tile_id"
+              (Op.add NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "j")
+                  (Op.ref .nat [] "num_ctas")))
+            :: perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+              tile_size0)) u := by
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  simp only [stepStmtR, evalOpR, evalOp, Option.bind]
+  exact stepForRangeAuxR_castFree R _
+    (rsLoopBody_castFree R in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0)
+    "j" _ _ _ u
+
+/-- **The whole grid-stride kernel is cast-free**: `execR R` is the exact
+`exec`. -/
+private theorem relu_grid_stride_execR_eq_exec (R : RoundingModel)
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
+    (u : BlockState) :
+    execR R ((relu_forward_kernel_rank_1_grid_stride_surface in0_ptr out0_ptr
+        in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+        tile_size0).toAlgKernel) u
+      = exec ((relu_forward_kernel_rank_1_grid_stride_surface in0_ptr out0_ptr
+        in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+        tile_size0).toAlgKernel) u := by
+  unfold execR exec
+  rw [gridStride_body_eq]
+  refine rsStepList_castFree _ ?_ u
+  intro st hst v
+  simp only [List.mem_cons, List.not_mem_nil, or_false] at hst
+  rcases hst with rfl | rfl | rfl | rfl
+  · exact rsAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · exact rsAssign_castFree _ v
+      (by simp only [numTiles0Stmt, evalOpR.eq_def, evalOp.eq_def])
+  · exact rsAssign_castFree _ v (by simp only [evalOpR.eq_def, evalOp.eq_def])
+  · exact rsForDyn_castFree R in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+      tiles_per_cta tile_size0 v
+
+/-! ### The `R`-side safety walk
+
+`TraceSafeR` is not `TraceSafe` (the address/mask obligations quantify over
+`evalOpR`-evaluated pointers), so the walk is redone rather than transported.
+Cast-freeness still pays: it identifies the intermediate states, so each step
+reuses the exact stack's eval lemmas. -/
+
+set_option maxHeartbeats 1000000 in
+/-- `R`-side per-execution safety walk for the shared per-tile body — the
+mirror of `perTile_traceSafe`. -/
+theorem perTile_traceSafeR (R : RoundingModel)
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 tile_size0 : Nat)
+    (bounds : RegionBounds) (T : Nat) (t : BlockState) (V : Tile .nat [])
+    (hT : t.regs .nat [] "tile_id" = some V)
+    (hV : V.data PUnit.unit = T)
+    (hin : ∀ i : Fin tile_size0, T * tile_size0 + i.val < s0 →
+      (T * tile_size0 + i.val) * in0_stride0 < bounds in0_ptr)
+    (hout : ∀ i : Fin tile_size0, T * tile_size0 + i.val < s0 →
+      (T * tile_size0 + i.val) * out0_stride0 < bounds out0_ptr) :
+    Stmt.TraceSafeListR R bounds
+      (perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0)
+      t := by
+  set offV : Tile .nat [] :=
+    Tile.bop (NumericDType.mul .nat) Broadcast.nil V (Tile.scalar tile_size0)
+    with hoffV
+  have hoffData : offV.data PUnit.unit = T * tile_size0 := by
+    rw [hoffV, Tile.bop_data]
+    show NumericDType.mul .nat (V.data PUnit.unit) tile_size0 = T * tile_size0
+    rw [hV]
+    rfl
+  simp only [perTileStmts]
+  -- `tile_id0 = tile_id`
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR]) (fun t1 ht1 => ?_)
+  rw [rsAssign_castFree _ t (by simp only [evalOpR, evalOp]),
+    stepStmt_assign_eq_some
+      (show evalOp (Op.ref .nat [] "tile_id") t = some V by simp [hT])] at ht1
+  obtain rfl := Option.some.inj ht1
+  -- `offset0 = tile_id0 * tile_size0`
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR, and_self]) (fun t2 ht2 => ?_)
+  rw [rsAssign_castFree _ _ (by simp only [evalOpR, evalOp]),
+    stepStmt_assign_eq_some
+      (show evalOp (Op.mul NumericDType.nat Broadcast.nil
+          (Op.ref .nat [] "tile_id0") (Op.constNat tile_size0))
+          (t.setReg "tile_id0" .nat [] V) = some offV by
+        simp [hoffV])] at ht2
+  obtain rfl := Option.some.inj ht2
+  -- `in0_bptr = tl.make_block_ptr(...)`
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR, List.mem_cons, List.not_mem_nil,
+      or_false, forall_eq, and_self]) (fun t3 ht3 => ?_)
+  rw [rsAssign_castFree _ _ (rsEvalR_blockPtr R in0_ptr s0 tile_size0 in0_stride0 _),
+    stepStmt_assign_eq_some
+      (makeBlockPtr_1d_eval in0_ptr s0 in0_stride0 tile_size0 "offset0"
+        ((t.setReg "tile_id0" .nat [] V).setReg "offset0" .nat [] offV) offV
+        (T * tile_size0) (by simp) hoffData)] at ht3
+  obtain rfl := Option.some.inj ht3
+  -- the boundary-checked block-pointer load
+  refine Stmt.TraceSafeListR.cons_intro ?_ (fun t4 ht4 => ?_)
+  · simp only [Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.ActiveR,
+      MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref, BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro hib
+    simp only [TileShape.indexToList, BlockPtr.address_1d, Nat.zero_add]
+    refine hin idx.1 ?_
+    simpa [TileShape.indexToList] using hib
+  · rw [rsAssign_castFree _ _ (rsEvalR_load R tile_size0 _)] at ht4
+    obtain ⟨v4, -, rfl⟩ := stepStmt_assign_inv' ht4
+    -- `out0 = tl.where(in0 > 0, in0, 0)`
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp only [Stmt.TraceSafeR, Op.SafeAtR, and_self]) (fun t5 ht5 => ?_)
+    rw [rsAssign_castFree _ _ (rsEvalR_where R tile_size0 _)] at ht5
+    obtain ⟨v5, -, rfl⟩ := stepStmt_assign_inv' ht5
+    -- `out0_bptr = tl.make_block_ptr(...)`
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp only [Stmt.TraceSafeR, Op.SafeAtR, List.mem_cons, List.not_mem_nil,
+        or_false, forall_eq, and_self]) (fun t6 ht6 => ?_)
+    rw [rsAssign_castFree _ _
+        (rsEvalR_blockPtr R out0_ptr s0 tile_size0 out0_stride0 _),
+      stepStmt_assign_eq_some
+        (makeBlockPtr_1d_eval out0_ptr s0 out0_stride0 tile_size0 "offset0" _ offV
+          (T * tile_size0) (by simp) hoffData)] at ht6
+    obtain rfl := Option.some.inj ht6
+    -- the boundary-checked block-pointer store
+    refine Stmt.TraceSafeListR.cons_intro ?_
+      (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+    simp only [Stmt.TraceSafeR, Op.SafeAtR, MemAccess.SafeAtR, MaskOpt.SafeAtR,
+      MaskOpt.ActiveR, MemAccess.ActiveAddressSafeR, memAccessActiveAddressSafeR]
+    refine ⟨trivial, trivial, trivial, ?_⟩
+    intro ptrs hptrs idx _
+    rw [evalOpR_ref, BlockState.setReg_same] at hptrs
+    obtain rfl := Option.some.inj hptrs
+    intro hib
+    simp only [TileShape.indexToList, BlockPtr.address_1d, Nat.zero_add]
+    refine hout idx.1 ?_
+    simpa [TileShape.indexToList] using hib
+
+set_option maxHeartbeats 1000000 in
+/-- `R`-side per-execution safety walk for the whole grid-stride kernel: the
+three prologue assigns impose nothing, and the grid-stride loop is driven by
+`Stmt.forRangeTraceSafeR_inv` on the invariant "`pid` and `num_ctas` still hold
+the launch values", whose body step is `perTile_traceSafeR` at the iteration's
+grid-stride tile. -/
+theorem relu_grid_stride_traceSafeR (R : RoundingModel)
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
+    (hStride : 0 < out0_stride0) (bounds : RegionBounds) (s : BlockState)
+    (hin : ∀ (j : Fin tiles_per_cta) (i : Fin tile_size0),
+      taskIndex (s.pids 0 + j.val * s.numPids 0) tile_size0 i < s0 →
+      taskIndex (s.pids 0 + j.val * s.numPids 0) tile_size0 i * in0_stride0
+        < bounds in0_ptr)
+    (hout : ∀ (j : Fin tiles_per_cta) (i : Fin tile_size0),
+      taskIndex (s.pids 0 + j.val * s.numPids 0) tile_size0 i < s0 →
+      taskIndex (s.pids 0 + j.val * s.numPids 0) tile_size0 i * out0_stride0
+        < bounds out0_ptr) :
+    ((relu_forward_kernel_rank_1_grid_stride_surface in0_ptr out0_ptr
+        in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+        tile_size0).toAlgKernel).TraceSafeR R bounds s := by
+  unfold Kernel.TraceSafeR
+  rw [gridStride_body_eq]
+  -- `pid = tl.program_id(0)`
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR]) (fun t1 ht1 => ?_)
+  rw [rsAssign_castFree _ s (by simp only [evalOpR, evalOp]),
+    stepStmt_assign_eq_some (evalOp_programId 0 s)] at ht1
+  obtain rfl := Option.some.inj ht1
+  -- `num_tiles0 = tl.cdiv(s0, tile_size0)`
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [numTiles0Stmt, Stmt.TraceSafeR, Op.SafeAtR, and_self])
+    (fun t2 ht2 => ?_)
+  rw [show stepStmtR R (numTiles0Stmt s0 tile_size0)
+        (s.setReg "pid" .nat [] (Tile.scalar (s.pids 0)))
+      = stepStmt (numTiles0Stmt s0 tile_size0)
+        (s.setReg "pid" .nat [] (Tile.scalar (s.pids 0))) from by
+      rw [numTiles0Stmt]
+      exact rsAssign_castFree _ _ (by simp only [evalOpR, evalOp]),
+    numTiles0_step s0 tile_size0 _] at ht2
+  obtain rfl := Option.some.inj ht2
+  -- `num_ctas = tl.num_programs(0)`
+  refine Stmt.TraceSafeListR.cons_intro
+    (by simp only [Stmt.TraceSafeR, Op.SafeAtR]) (fun t3 ht3 => ?_)
+  rw [rsAssign_castFree _ _ (by simp only [evalOpR, evalOp]),
+    stepStmt_assign_eq_some (evalOp_numPrograms 0 _)] at ht3
+  obtain rfl := Option.some.inj ht3
+  -- the grid-stride loop
+  refine Stmt.TraceSafeListR.cons_intro ?_
+    (fun _ _ => Stmt.TraceSafeListR.nil_intro)
+  simp only [Stmt.TraceSafeR]
+  refine ⟨by simp only [Op.SafeAtR], by simp only [Op.SafeAtR],
+    by simp only [Op.SafeAtR], ?_⟩
+  rw [show evalOpR R (Op.constNat 0) _ = some (Tile.scalar 0) from by
+      simp [evalOpR],
+    show evalOpR R (Op.constNat tiles_per_cta) _
+        = some (Tile.scalar tiles_per_cta) from by simp [evalOpR],
+    show evalOpR R (Op.constNat 1) _ = some (Tile.scalar 1) from by simp [evalOpR]]
+  refine Stmt.forRangeTraceSafeR_inv R bounds "j" tiles_per_cta 1 _
+    (fun _ st => st.regs .nat [] "pid" = some (Tile.scalar (s.pids 0)) ∧
+      st.regs .nat [] "num_ctas" = some (Tile.scalar (s.numPids 0)))
+    ?_ 0 _ ⟨by simp, by simp⟩
+  intro c sc hc hP
+  obtain ⟨hpidC, hctasC⟩ := hP
+  set scj := sc.setReg "j" .nat [] (Tile.scalar c) with hscj
+  have hpidJ : scj.regs .nat [] "pid" = some (Tile.scalar (s.pids 0)) := by
+    rw [hscj, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hpidC
+  have hctasJ : scj.regs .nat [] "num_ctas"
+      = some (Tile.scalar (s.numPids 0)) := by
+    rw [hscj, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hctasC
+  set addV : Tile .nat [] := Tile.bop (NumericDType.add .nat) Broadcast.nil
+    (Tile.scalar (s.pids 0)) (Tile.bop (NumericDType.mul .nat) Broadcast.nil
+      (Tile.scalar c) (Tile.scalar (s.numPids 0))) with haddV
+  have hAssign : stepStmt (Stmt.assign .nat [] "tile_id"
+      (Op.add NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+        (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "j")
+          (Op.ref .nat [] "num_ctas")))) scj
+      = some (scj.setReg "tile_id" .nat [] addV) :=
+    stepStmt_assign_eq_some (by
+      simp only [evalOp_add, evalOp_mul, evalOp_ref, hpidJ, hctasJ,
+        show scj.regs .nat [] "j" = some (Tile.scalar c) by simp [hscj],
+        Option.bind_some, haddV]
+      rfl)
+  have haddData : addV.data PUnit.unit = s.pids 0 + c * s.numPids 0 := by
+    rw [haddV]; rfl
+  refine ⟨?_, ?_⟩
+  · -- body safety
+    refine Stmt.TraceSafeListR.cons_intro
+      (by simp only [Stmt.TraceSafeR, Op.SafeAtR, and_self]) (fun tb htb => ?_)
+    rw [rsAssign_castFree _ _ (by simp only [evalOpR, evalOp]), hAssign] at htb
+    obtain rfl := Option.some.inj htb
+    exact perTile_traceSafeR R in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+      tile_size0 bounds (s.pids 0 + c * s.numPids 0) _ addV
+      (BlockState.setReg_same _ _ _ _ _) haddData
+      (fun i hi => hin ⟨c, hc⟩ i hi) (fun i hi => hout ⟨c, hc⟩ i hi)
+  · -- body run, invariant preserved
+    obtain ⟨tb', hstepBody, -, -, -, hregs, -⟩ :=
+      perTile_steps in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0
+        hStride (s.pids 0 + c * s.numPids 0)
+        (scj.setReg "tile_id" .nat [] addV) addV (by simp) haddData
+    refine ⟨tb', ?_, ?_, ?_⟩
+    · rw [rsLoopBody_castFree R in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+        tile_size0, stepStmts.cons_some hAssign]
+      exact hstepBody
+    · rw [hregs _ _ _ (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide), BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+      exact hpidJ
+    · rw [hregs _ _ _ (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide), BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+      exact hctasJ
+
+/-! ### Termination and the **cell-level** frame of the grid-stride loop
+
+`gs_loop_readback` already proves the per-lane values (and the `readMem`-level
+`out0` frame). The `⊨[R]` triple additionally needs a per-**cell** frame over
+every region, which `perTile_steps`' last conjunct supplies per iteration; the
+loop lemma below threads it and, on the way, gives termination. -/
+
+set_option maxHeartbeats 1000000 in
+private theorem gs_loop_cells
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 tile_size0 : Nat)
+    (hStride : 0 < out0_stride0) (P C : Nat) (tiles_per_cta : Nat) :
+    ∀ (n c : Nat), c + n = tiles_per_cta →
+    ∀ (t : BlockState),
+      t.regs .nat [] "pid" = some (Tile.scalar P) →
+      t.regs .nat [] "num_ctas" = some (Tile.scalar C) →
+      ∃ t', stepForRangeAux "j" c tiles_per_cta 1
+          (Stmt.assign .nat [] "tile_id"
+              (Op.add NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "j")
+                  (Op.ref .nat [] "num_ctas")))
+            :: perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0)
+          t = some t'
+        ∧ (∀ (r : RegionName) (o : Nat),
+            (r ≠ out0_ptr ∨ ∀ (j : Nat) (i : Fin tile_size0), c ≤ j →
+              j < tiles_per_cta → taskIndex (P + j * C) tile_size0 i < s0 →
+              o ≠ taskIndex (P + j * C) tile_size0 i * out0_stride0) →
+            t'.mem r o = t.mem r o) := by
+  intro n
+  induction n with
+  | zero =>
+      intro c hc t hpid hctas
+      exact ⟨t, stepForRangeAux.step_ge one_ne_zero (by omega), fun r o _ => rfl⟩
+  | succ n ih =>
+      intro c hc t hpid hctas
+      have hlt : c < tiles_per_cta := by omega
+      set tJ := t.setReg "j" .nat [] (Tile.scalar c) with htJ
+      set addV : Tile .nat [] := Tile.bop (NumericDType.add .nat) Broadcast.nil
+        (Tile.scalar P) (Tile.bop (NumericDType.mul .nat) Broadcast.nil
+          (Tile.scalar c) (Tile.scalar C)) with haddV
+      have hpidJ : tJ.regs .nat [] "pid" = some (Tile.scalar P) := by
+        rw [htJ, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]; exact hpid
+      have hctasJ : tJ.regs .nat [] "num_ctas" = some (Tile.scalar C) := by
+        rw [htJ, BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+        exact hctas
+      have haddData : addV.data PUnit.unit = P + c * C := by rw [haddV]; rfl
+      have hAssign : stepStmt (Stmt.assign .nat [] "tile_id"
+          (Op.add NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+            (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "j")
+              (Op.ref .nat [] "num_ctas")))) tJ
+          = some (tJ.setReg "tile_id" .nat [] addV) :=
+        stepStmt_assign_eq_some (by
+          simp only [evalOp_add, evalOp_mul, evalOp_ref, hpidJ, hctasJ,
+            show tJ.regs .nat [] "j" = some (Tile.scalar c) by simp [htJ],
+            Option.bind_some, haddV]
+          rfl)
+      obtain ⟨tb, hstepBody, -, -, -, hregs, hcell⟩ :=
+        perTile_steps in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0
+          hStride (P + c * C) (tJ.setReg "tile_id" .nat [] addV) addV
+          (by simp) haddData
+      have hbody : stepStmts
+          (Stmt.assign .nat [] "tile_id"
+              (Op.add NumericDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+                (Op.mul NumericDType.nat Broadcast.nil (Op.ref .nat [] "j")
+                  (Op.ref .nat [] "num_ctas")))
+            :: perTileStmts in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+              tile_size0) tJ = some tb := by
+        rw [stepStmts.cons_some hAssign]; exact hstepBody
+      have hpidB : tb.regs .nat [] "pid" = some (Tile.scalar P) := by
+        rw [hregs _ _ _ (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+        exact hpidJ
+      have hctasB : tb.regs .nat [] "num_ctas" = some (Tile.scalar C) := by
+        rw [hregs _ _ _ (by decide) (by decide) (by decide) (by decide)
+          (by decide) (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+        exact hctasJ
+      obtain ⟨t', hrest, hcellRest⟩ := ih (c + 1) (by omega) tb hpidB hctasB
+      refine ⟨t', ?_, ?_⟩
+      · rw [stepForRangeAux.step_lt one_ne_zero hlt, hbody, Option.bind_some]
+        exact hrest
+      · intro r o hcond
+        have hcRest : r ≠ out0_ptr ∨ ∀ (j : Nat) (i : Fin tile_size0), c + 1 ≤ j →
+            j < tiles_per_cta → taskIndex (P + j * C) tile_size0 i < s0 →
+            o ≠ taskIndex (P + j * C) tile_size0 i * out0_stride0 := by
+          rcases hcond with h | h
+          · exact Or.inl h
+          · exact Or.inr fun j i hcj hj hi => h j i (by omega) hj hi
+        have hcHere : r ≠ out0_ptr ∨ ∀ i : Fin tile_size0,
+            taskIndex (P + c * C) tile_size0 i < s0 →
+            o ≠ taskIndex (P + c * C) tile_size0 i * out0_stride0 := by
+          rcases hcond with h | h
+          · exact Or.inl h
+          · exact Or.inr fun i hi => h c i (Nat.le_refl c) hlt hi
+        rw [hcellRest r o hcRest, hcell r o hcHere, htJ]
+        simp
+
+set_option maxHeartbeats 1000000 in
+/-- Termination and the cell-level frame of the whole grid-stride kernel under
+the exact stepper, from an arbitrary launch state. -/
+private theorem relu_grid_stride_run_exact
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
+    (hStride : 0 < out0_stride0) (s₀ : BlockState) :
+    ∃ s1, exec ((relu_forward_kernel_rank_1_grid_stride_surface in0_ptr out0_ptr
+        in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+        tile_size0).toAlgKernel) s₀ = some s1
+      ∧ (∀ (r : RegionName) (o : Nat),
+          (r ≠ out0_ptr ∨ ∀ (j : Nat) (i : Fin tile_size0), j < tiles_per_cta →
+            taskIndex (s₀.pids 0 + j * s₀.numPids 0) tile_size0 i < s0 →
+            o ≠ taskIndex (s₀.pids 0 + j * s₀.numPids 0) tile_size0 i
+                  * out0_stride0) →
+          s1.mem r o = s₀.mem r o) := by
+  set sp3 := ((s₀.setReg "pid" .nat [] (Tile.scalar (s₀.pids 0))).setReg
+      "num_tiles0" .nat [] (numTiles0Val s0 tile_size0)).setReg
+      "num_ctas" .nat [] (Tile.scalar (s₀.numPids 0)) with hsp3
+  obtain ⟨s1, hloop, hcells⟩ :=
+    gs_loop_cells in0_ptr out0_ptr in0_stride0 out0_stride0 s0 tile_size0
+      hStride (s₀.pids 0) (s₀.numPids 0) tiles_per_cta tiles_per_cta 0 (by omega)
+      sp3 (by simp [hsp3]) (by simp [hsp3])
+  refine ⟨s1, ?_, ?_⟩
+  · rw [show exec ((relu_forward_kernel_rank_1_grid_stride_surface in0_ptr
+          out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+          tile_size0).toAlgKernel) s₀
+        = stepStmts ((relu_forward_kernel_rank_1_grid_stride_surface in0_ptr
+          out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+          tile_size0).toAlgKernel).body s₀ from rfl,
+      gridStride_body_eq]
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s₀))]
+    rw [stepStmts.cons_some (numTiles0_step s0 tile_size0 _)]
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_numPrograms 0 _))]
+    rw [stepStmts_singleton, stepForRangeAux.forRangeDyn_unfold]
+    simp only [evalOp_constNat, Option.bind_some]
+    exact hloop
+  · intro r o hcond
+    rw [hcells r o ?_, hsp3]
+    · simp
+    · rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun j i _ hj hi => h j i hj hi
+
+/-- IO signature of the `one_tile_per_cta = false` **grid-stride** branch on the
+grid-width-aware streaming surface: step `j` of program `(pid₀, _)` in a launch
+grid of width `nCtas` covers the flat tile `pid₀ + j·nCtas`, whose lane `i` reads
+`in0_ptr` at `t·in0_stride0` and writes `out0_ptr` at `t·out0_stride0` for the
+task index `t`, active exactly on the `boundary_check=(0,)` guard `t < s0`.
+
+`pre` is the grid-stride idiom's own launch legality `pid₀ < nCtas` — a program's
+id is below its grid's width. `BlockState` carries no invariant tying `pids` to
+`numPids`, and the kernel's loop genuinely needs `0 < nCtas` (at `nCtas = 0`
+every step would revisit tile `pid₀`), so it is assumed here rather than
+pretended free. `outDType` stays at the default `.real`: both source casts are
+`.to(...element_ty)`, which the DSL erases. -/
+def reluGridStrideIO (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat) :
+    StreamGridStrideEmitMasked2DKernelIO₁ where
+  kernel := relu_forward_kernel_rank_1_grid_stride_surface in0_ptr out0_ptr
+    in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0
+  inp1 := in0_ptr
+  out := out0_ptr
+  T := tiles_per_cta
+  B1 := tile_size0
+  C := tile_size0
+  pre := fun pid₀ _ nCtas => pid₀ < nCtas
+  read1 := fun p₀ _ nCtas t j =>
+    taskIndex (p₀ + t.val * nCtas) tile_size0 j * in0_stride0
+  write := fun p₀ _ nCtas t j =>
+    taskIndex (p₀ + t.val * nCtas) tile_size0 j * out0_stride0
+  mask1 := fun p₀ _ nCtas t j => taskIndex (p₀ + t.val * nCtas) tile_size0 j < s0
+  writeMask := fun p₀ _ nCtas t j =>
+    taskIndex (p₀ + t.val * nCtas) tile_size0 j < s0
+
+/-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
+
+/-- **The headline on the grid-width-aware IO surface** for
+`relu_strided_buffer.py`'s `relu_forward_kernel_rank_1`,
+`one_tile_per_cta = false` (grid-stride) branch: for every disjoint flat
+placement of the two buffers, every program id and **launch grid width**, and
+every launch state whose per-step input windows hold `xs`, the translated
+pointer kernel terminates and every write-active lane of every grid-stride step
+holds `relu (xs t i) = max 0 (xs t i)`, with every other memory **cell**
+unchanged.
+
+Dimension-general in `s0`, both strides, `tile_size0` and `tiles_per_cta`, and
+**universally quantified over the launch grid width** — the point of the skin:
+the windows stride by `nCtas = tl.num_programs(0)`, pinned inside the relation
+to `s₀.numPids 0`.
+
+Honest side-conditions: `0 < out0_stride0` (store-footprint injectivity — a
+torch stride of a non-degenerate rank-1 buffer is ≥ 1); `in0_ptr ≠ out0_ptr`
+(later grid-stride steps load after earlier steps stored, and the two buffers
+carry *different* strides, so an aliased pair genuinely breaks the contract —
+the IO surface's placement disjointness does not supply this, since the core
+allows a skin to name one region twice for in-place kernels); and the skin's
+`pre` `pid₀ < nCtas` (launch legality, which also supplies the `0 < nCtas` the
+loop arithmetic needs).
+
+`R` is threaded through the whole kernel but rounds nothing — with
+`outDType := .real` every per-step store is exact under `execR R`, so this is
+the exact grid-stride streaming contract. That is faithful rather than vacuous
+because ReLU is a *selection* (`tl.where`), so no arithmetic manufactures a real
+that would need quantizing. -/
+specification relu_strided_buffer_grid_stride_io_correctnessR (R : RoundingModel)
+    (in0_ptr out0_ptr : RegionName)
+    (in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta tile_size0 : Nat)
+    (hStride : 0 < out0_stride0) (hDisj : in0_ptr ≠ out0_ptr) :
+    reluGridStrideIO in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks
+        tiles_per_cta tile_size0
+      ⊨[R] fun _pid₀ _pid₁ _nCtas xs t i => TiledActivation.relu (xs t i) := by
+  refine StreamGridStrideEmitMasked2DKernelIO₁.ImplementsR.intro _ ?_ ?_ ?_
+  · exact relu_grid_stride_flattenOk in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+      num_tasks tiles_per_cta tile_size0
+  · intro bounds s xs _ _ hbr1 hbw
+    exact relu_grid_stride_traceSafeR R in0_ptr out0_ptr in0_stride0 out0_stride0
+      s0 num_tasks tiles_per_cta tile_size0 hStride bounds s hbr1 hbw
+  · intro s₀ xs hpre _ hx
+    simp only [reluGridStrideIO] at hpre hx ⊢
+    have hGrid : 0 < s₀.numPids 0 := Nat.lt_of_le_of_lt (Nat.zero_le _) hpre
+    obtain ⟨s1, hexec, hcells⟩ :=
+      relu_grid_stride_run_exact in0_ptr out0_ptr in0_stride0 out0_stride0 s0
+        num_tasks tiles_per_cta tile_size0 hStride s₀
+    refine ⟨s1, ?_, ?_, ?_⟩
+    · rw [relu_grid_stride_execR_eq_exec R in0_ptr out0_ptr in0_stride0
+        out0_stride0 s0 num_tasks tiles_per_cta tile_size0 s₀]
+      exact hexec
+    · intro t i hact
+      have hval := relu_grid_stride_exec_correct in0_ptr out0_ptr in0_stride0
+        out0_stride0 s0 num_tasks tiles_per_cta tile_size0 s₀ hStride hDisj
+        hGrid s1 hexec t.val i t.isLt hact
+      rw [BlockState.readMemAs_real]
+      refine congrArg some ?_
+      rw [hval]
+      simp only [reluSpec, FloatDType.ofReal, RoundingModel.round_real_apply]
+      rw [hx t i hact]
+    · intro r o hcond
+      refine hcells r o ?_
+      rcases hcond with h | h
+      · exact Or.inl h
+      · exact Or.inr fun j i hj hi => h ⟨j, hj⟩ i hi
 
 end IOFace
 
