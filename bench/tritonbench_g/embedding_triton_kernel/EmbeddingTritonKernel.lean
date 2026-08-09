@@ -2052,6 +2052,255 @@ specification embedding_body_io_correctnessR (R : RoundingModel)
       rw [BlockState.readMemAs_real, hval j hj]
       simp
 
+/-! ### Toward the whole-kernel face: the loop body's safety walk
+
+The value half of the whole-kernel contract is already proven for the entire
+`range(0, BLOCK_N, BLOCK_NN)` loop (`embedding_kernel_alg_post`). What an IO face
+additionally needs is the **safety** walk, and `Stmt.TraceSafeR` is a different
+recursive predicate from the value post-condition, so it needs its own induction.
+
+This section supplies the per-iteration obligation: from a state whose `offs_nn` /
+`offs_d` registers are the pre-loop ones and whose `input_ids` / `weight` reads
+still agree with the launch state, the loop body is `TraceSafeListR`. Those four
+facts are exactly the non-value conjuncts of the port's existing
+`embeddingLoopContextInvariant`, so the eventual `Stmt.forRangeTraceSafeR_inv`
+walk can run on the weaker context below and reuse the value invariant untouched.
+
+Addresses appear here in the shape the evaluator produces —
+`start_nn + (pid·BLOCK_N + lane)` — rather than the `seqLaneIndex` normal form;
+`outOffset2D_eval_add` / `storeActive2D_eval_iff` convert between them. -/
+
+/-- The non-value part of the loop context: the two pre-loop index registers, and
+agreement of the read-only buffers with the launch state. The loop writes only
+`out`, so this is preserved across iterations. -/
+def embeddingSafeContext (s0 : BlockState) (weight input_ids : RegionName)
+    (BLOCK_DMODEL BLOCK_N BLOCK_NN : Nat) (st : BlockState) : Prop :=
+  st.regs .nat [BLOCK_NN] "offs_nn" =
+      some { data := fun lane : TileIndex [BLOCK_NN] =>
+        s0.pids 0 * BLOCK_N + lane.1.val } ∧
+    st.regs .nat [BLOCK_DMODEL] "offs_d" =
+      some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val } ∧
+    (∀ offset,
+      st.readMemValue .nat (Region.cast input_ids) offset =
+        s0.readMemValue .nat (Region.cast input_ids) offset) ∧
+    (∀ offset, st.readMem weight offset = s0.readMem weight offset)
+
+/-- The non-value context is exactly the tail of the port's full loop context. -/
+theorem embeddingSafeContext_of_loopContext
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN off : Nat)
+    (hCtx : embeddingLoopContextInvariant s0 weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_N BLOCK_DMODEL BLOCK_NN off st) :
+    embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N BLOCK_NN st :=
+  ⟨hCtx.2.1, hCtx.2.2.1, hCtx.2.2.2.1, hCtx.2.2.2.2⟩
+
+/-- **The per-iteration safety obligation.** From a safe context, one loop body is
+trace-safe under the rounding model, given the three window bounds at this
+iteration's lanes (index reads, the token-dependent gather, and the store).
+
+The gather bound is only required on in-context lanes: an out-of-context lane
+loads the `other = vob_end_id` sentinel, which fails `id_mask` outright, so that
+lane is never read-active — the same sentinel argument the one-body face makes. -/
+theorem embeddingLoopBody_traceSafeR (R : RoundingModel)
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (bounds : RegionBounds)
+    (hCtx : embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N
+      BLOCK_NN st)
+    (hidx : ∀ lane : Fin BLOCK_NN,
+      start_nn + (s0.pids 0 * BLOCK_N + lane.val) < n_ctx →
+      start_nn + (s0.pids 0 * BLOCK_N + lane.val) < bounds input_ids)
+    (hw : ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      start_nn + (s0.pids 0 * BLOCK_N + idx.1.val) < n_ctx →
+      (vob_start_id ≤ s0.readMemValue .nat input_ids
+            (start_nn + (s0.pids 0 * BLOCK_N + idx.1.val)) ∧
+          s0.readMemValue .nat input_ids
+            (start_nn + (s0.pids 0 * BLOCK_N + idx.1.val)) < vob_end_id) ∧
+        idx.2.1.val < hiden_size →
+      (s0.readMemValue .nat input_ids
+            (start_nn + (s0.pids 0 * BLOCK_N + idx.1.val)) - vob_start_id)
+          * stride_weight_seq + idx.2.1.val < bounds weight)
+    (hout : ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      start_nn + (s0.pids 0 * BLOCK_N + idx.1.val) < n_ctx →
+      idx.2.1.val < hiden_size →
+      (start_nn + (s0.pids 0 * BLOCK_N + idx.1.val)) * stride_out_seq
+        + idx.2.1.val < bounds out) :
+    Stmt.TraceSafeListR R bounds
+      (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN)
+      (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) := by
+  obtain ⟨hOffsNN, hOffsD, hInputRead, hWeightRead⟩ := hCtx
+  -- the pins arrive wrapped in `Region.cast`; the body's loads mention the bare
+  -- region name, so strip the wrapper before it reaches the simp set
+  have hIR : ∀ offset,
+      st.readMemValue .nat input_ids offset
+        = s0.readMemValue .nat input_ids offset := hInputRead
+  unfold embeddingLoopBody
+  simp [Stmt.TraceSafeListR, Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR,
+    MaskOpt.ActiveR, MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtsR, stepStmtR, evalOpR,
+    evalOpR.eq_def, hOffsNN, hOffsD, hIR, hWeightRead, Option.bind,
+    Option.map, Tile.bop, Tile.cop, Tile.expandDim, Tile.uop,
+    TileShape.dropInsertedIndex, NumericDType.add, NumericDType.sub,
+    NumericDType.mul, ComparableDType.lt, ComparableDType.ge, FloatDType.cast,
+    Bool.and_eq_true]
+  and_intros
+  all_goals try exact fun a h => hidx a h
+  all_goals try simp [Op.SafeAtR.eq_def]
+  all_goals try exact fun a b h1 h2 => hout (a, b, PUnit.unit) h1 h2
+  all_goals
+    intro a b h1 h2 h3
+    by_cases hn : start_nn + (s0.pids 0 * BLOCK_N + a.val) < n_ctx
+    · simp only [if_pos hn] at h1 h2 ⊢
+      exact hw (a, b, PUnit.unit) hn ⟨⟨h1, h2⟩, h3⟩
+    · simp only [if_neg hn] at h2
+      exact absurd h2 (lt_irrefl _)
+
+/-- The loop body list is cast-free: the two steppers agree statement for
+statement (no float cast anywhere in the body). -/
+private theorem embeddingLoopBody_castFreeList (R : RoundingModel)
+    (s0 : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat) (st : BlockState)
+    (hOffsNN :
+      st.regs .nat [BLOCK_NN] "offs_nn" =
+        some { data := fun lane : TileIndex [BLOCK_NN] =>
+          s0.pids 0 * BLOCK_N + lane.1.val })
+    (hOffsD :
+      st.regs .nat [BLOCK_DMODEL] "offs_d" =
+        some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val }) :
+    stepStmtsR R
+        (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+          stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+          BLOCK_NN) (st.setReg "start_nn" .nat [] (Tile.scalar start_nn))
+      = stepStmts
+        (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+          stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+          BLOCK_NN) (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) := by
+  unfold embeddingLoopBody
+  simp [stepStmtsR, stepStmts, stepStmtR, stepStmt, evalOpR, evalOpR.eq_def,
+    evalOp, evalOp.eq_def, BlockState.writeMemTypedR, BlockState.writeMemAsR,
+    hOffsNN, hOffsD, Option.bind, Option.map, Tile.bop, Tile.cop,
+    Tile.expandDim, Tile.uop, TileShape.dropInsertedIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+    FloatDType.cast, Bool.and_eq_true]
+
+/-- One body step under the rounding model exists and re-establishes the safe
+context. The step is the exact one (`embeddingLoopBody_castFreeList`), so the
+port's existing preservation lemma is reused unchanged. -/
+theorem embeddingSafeContext_stepR (R : RoundingModel)
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hCtx : embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N
+      BLOCK_NN st) :
+    ∃ st',
+      stepStmtsR R
+          (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+            stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+            BLOCK_N BLOCK_NN)
+          (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st'
+        ∧ embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N BLOCK_NN
+            st' := by
+  obtain ⟨hOffsNN, hOffsD, hInputRead, hWeightRead⟩ := hCtx
+  rw [embeddingLoopBody_castFreeList R s0 weight input_ids out vob_start_id
+    vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+    BLOCK_N BLOCK_NN start_nn st hOffsNN hOffsD]
+  -- the body is straight-line: with the two index registers pinned it always steps
+  have hex : ∃ st',
+      stepStmts
+          (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+            stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+            BLOCK_N BLOCK_NN)
+          (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st' := by
+    unfold embeddingLoopBody
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hOffsNN, hOffsD,
+      Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+      TileShape.dropInsertedIndex, NumericDType.add, NumericDType.sub,
+      NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+      Bool.and_eq_true]
+  obtain ⟨st', hstep⟩ := hex
+  refine ⟨st', hstep, ?_⟩
+  exact embeddingLoopBody_step_preserves_context s0 st st' weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+    BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn hOffsNN hOffsD hInputRead
+    hWeightRead hInputOutNe hWeightOutNe hstep
+
+/-- **The whole loop is trace-safe under the rounding model.** The
+`Stmt.forRangeTraceSafeR_inv` walk over the safe context: every in-range
+iteration has a trace-safe body (`embeddingLoopBody_traceSafeR`) and steps to a
+state that re-establishes the context (`embeddingSafeContext_stepR`).
+
+The three window bounds are taken at **whole-tile** granularity — over
+`TileIndex [BLOCK_N, BLOCK_DMODEL]` — which is what an IO face supplies; with
+`hOne : BLOCK_NN = 1` iteration `c` is exactly full-tile row `c`, so the
+per-iteration bounds are instantiations of the whole-tile ones. -/
+theorem embedding_loop_traceSafeR (R : RoundingModel)
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N : Nat)
+    (bounds : RegionBounds)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hCtx : embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N 1 st)
+    (hidxAll : ∀ row : Fin BLOCK_N,
+      s0.pids 0 * BLOCK_N + row.val < n_ctx →
+      s0.pids 0 * BLOCK_N + row.val < bounds input_ids)
+    (hwAll : ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+      s0.pids 0 * BLOCK_N + idx.1.val < n_ctx →
+      (vob_start_id ≤ s0.readMemValue .nat input_ids
+            (s0.pids 0 * BLOCK_N + idx.1.val) ∧
+          s0.readMemValue .nat input_ids
+            (s0.pids 0 * BLOCK_N + idx.1.val) < vob_end_id) ∧
+        idx.2.1.val < hiden_size →
+      (s0.readMemValue .nat input_ids (s0.pids 0 * BLOCK_N + idx.1.val)
+          - vob_start_id) * stride_weight_seq + idx.2.1.val < bounds weight)
+    (houtAll : ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+      s0.pids 0 * BLOCK_N + idx.1.val < n_ctx →
+      idx.2.1.val < hiden_size →
+      (s0.pids 0 * BLOCK_N + idx.1.val) * stride_out_seq + idx.2.1.val
+        < bounds out) :
+    Stmt.forRangeTraceSafeR R bounds "start_nn" 0 BLOCK_N 1
+      (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N 1)
+      st := by
+  refine Stmt.forRangeTraceSafeR_inv R bounds "start_nn" BLOCK_N 1
+    (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N 1)
+    (fun _c stc =>
+      embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N 1 stc)
+    ?_ 0 st hCtx
+  intro c stc hc hCtxc
+  refine ⟨?_, embeddingSafeContext_stepR R s0 stc weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+    BLOCK_DMODEL BLOCK_N 1 c hInputOutNe hWeightOutNe hCtxc⟩
+  -- `BLOCK_NN = 1`, so the single lane is `0` and `c + (pid·BLOCK_N + 0)` is
+  -- full-tile row `c`
+  refine embeddingLoopBody_traceSafeR R s0 stc weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+    BLOCK_DMODEL BLOCK_N 1 c bounds hCtxc ?_ ?_ ?_
+  · intro lane hlt
+    have hl0 : lane.val = 0 := by omega
+    have := hidxAll ⟨c, hc⟩ (by simpa [hl0, Nat.add_comm] using hlt)
+    simpa [hl0, Nat.add_comm] using this
+  · intro idx hn hact
+    have hl0 : idx.1.val = 0 := by omega
+    have := hwAll (⟨c, hc⟩, idx.2.1, PUnit.unit)
+      (by simpa [hl0, Nat.add_comm] using hn)
+      (by simpa [hl0, Nat.add_comm] using hact)
+    simpa [hl0, Nat.add_comm] using this
+  · intro idx hn hd
+    have hl0 : idx.1.val = 0 := by omega
+    have := houtAll (⟨c, hc⟩, idx.2.1, PUnit.unit)
+      (by simpa [hl0, Nat.add_comm] using hn) hd
+    simpa [hl0, Nat.add_comm] using this
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
