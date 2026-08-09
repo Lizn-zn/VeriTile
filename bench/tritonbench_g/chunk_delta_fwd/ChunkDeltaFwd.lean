@@ -32,18 +32,27 @@ emitted value):
 
 over `ℝ`, with the kernel's exact block-pointer layouts. The closed form is
 given for the single-inner-chunk regime `BC = BT` (`ceil(BT/BC) = 1`), which is
-exactly the checked Python shape (`BT = BC = 32`).
+the launcher's regime whenever `BT ≤ 64` (it sets `BC = min(BT, 64)`).
 
-## Scope — genuine end-to-end, but shape-pinned
+## Scope — genuine end-to-end and dimension-general
 
 The headline `chunk_delta_fwd_exec_genuine` verifies the per-program
 `@triton.jit` body **end-to-end from `exec`**: it runs the whole surface
 (prologue + outer `NT` loop + epilogue) and reads the genuine closed form back
-out of the output buffers, with **no producer hypotheses**. The price is that it
-is pinned to the checked Python shape (all dimensions and strides are concrete
-literals) and to `s.pids 0 = 0` (the `i_k = 0` regime the host's `NK == 1`
-assertion creates). Per `bench/MAIN_THEOREM_CONVENTIONS.md` §6 that trade —
-genuine-but-scoped over general-but-assumed — is the intended one.
+out of the output buffers, with **no producer hypotheses**. Every dimension and
+stride is a free variable; what used to be concrete literals is now five stated
+*regime* hypotheses, each satisfied by the launcher:
+
+* `s.pids 0 = 0` — the `i_k = 0` regime the host's `NK == 1` assertion creates;
+* `BC = BT`, `0 < BT` — one inner chunk (`ceil(BT/BC) = 1`);
+* `BK ≤ K` — no key-axis boundary lane inside the block (with `NK == 1` giving
+  `K ≤ BK`, in practice `BK = K`);
+* `NT * BT ≤ T` — no partial trailing time chunk (`BT ∣ T` under
+  `NT = cdiv(T, BT)`);
+* `0 < s_vo_d`, `(BK - 1) * s_h_t + BV ≤ K * V`, `BV * s_vo_d ≤ s_vo_t` — the
+  *block-fit* conditions that make distinct time chunks write disjoint memory;
+  the contiguous launcher layouts (`h.stride(2) = V`, `v_new.stride(3) = 1`)
+  satisfy them with equality.
 
 The host launch (`chunk_delta_rule_fwd_kernel_h[(NK, NV, B*H)]`, the 3-D grid,
 the autotuned warp counts, the host-computed `BK/BV/BC/NT` and the `NK == 1`
@@ -53,7 +62,7 @@ quantified, so the statement covers every program with `i_k = 0`.
 ## Proof architecture
 
 ```
-chunk_delta_fwd_exec_genuine                       ← TOP THEOREM (exec-level, shape-pinned)
+chunk_delta_fwd_exec_genuine                       ← TOP THEOREM (exec-level, general)
   ├─ cdfPrologue_run          seed / block-ptr prologue
   ├─ cdfOuterLoop_run         the NT-chunk carry fold, derived — not assumed
   │    ├─ cdfCarry_active     concrete carry cell = genuine `stateValue`
@@ -64,11 +73,12 @@ chunk_delta_fwd_exec_genuine                       ← TOP THEOREM (exec-level, 
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune`
-(`num_warps`) is not modeled. The headline fixes the checked Python shape
-(`B,H,T,K,V = 2,4,128,64,64`, `BT = BC = 32`, `BK = BV = 64`, `NT = 4`) and
-covers both flag settings symbolically, so the benchmark's case 1 (no
-initial/final state) and case 2 (with) are both instances. The dynamic `.to(...)`
-casts erase to the identity at the algorithm layer.
+(`num_warps`) is not modeled. The headline covers both flag settings
+symbolically, so the benchmark's case 1 (no initial/final state) and case 2
+(with) are both instances — as is its shape `B,H,T,K,V = 2,4,128,64,64`,
+`BT = BC = 32`, `BK = BV = 64`, `NT = 4`, which satisfies every regime
+hypothesis above. The dynamic `.to(...)` casts erase to the identity at the
+algorithm layer.
 
 Region distinctness is a **real** precondition here and is stated as twelve
 explicit `≠` hypotheses: the fold performs many stores interleaved with loads, so
@@ -83,12 +93,11 @@ hypothesis `hBH`/`hBVN`/`hBHF`. The old prose claimed those hypotheses were
 "discharged end-to-end from the kernel `exec` … by `chunk_delta_fwd_exec_genuine`";
 they were not, and could not be — `exec_genuine` concludes about `sF.readMem h`
 (final state, real region) while `hBH` constrains `s.readMem BH` (initial state,
-fiction region), and it is additionally shape-pinned and needs `pids 0 = 0`.
-There was no Lean term linking them.
+fiction region), and it additionally needs `pids 0 = 0`. There was no Lean term
+linking them.
 
-Still not covered: the multi-inner-chunk regime `BC < BT` (the benchmark has
-`BC = BT = 32`, hence `ceil(BT/BC) = 1`), and any shape other than the checked
-one.
+Still not covered: the multi-inner-chunk regime `BC < BT`, and the partial
+trailing time chunk `T < NT * BT`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkDeltaFwd
@@ -100,8 +109,8 @@ set_option linter.unusedSimpArgs false
 set_option linter.unusedVariables false
 
 /-! **★ Main theorem:** `chunk_delta_fwd_exec_genuine` — exec-level and genuine
-end-to-end (no producer hypotheses), scoped to the checked Python shape and to
-`s.pids 0 = 0`. -/
+end-to-end (no producer hypotheses), dimension-general, scoped to the
+single-inner-chunk regime and to `s.pids 0 = 0`. -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -401,8 +410,8 @@ instance activeDecidable (s : BlockState) (K V BK BV : Nat)
 
 Element accessors use the kernel's exact block-pointer layouts at `i_k = 0`
 (the `NK = 1` regime). The recurrence is given for the single-inner-chunk regime
-`BC = BT` (`ceil(BT/BC) = 1`, the checked Python shape), so each time chunk `i_t`
-covers rows `i_t·BT … i_t·BT + BT − 1` with a single inner chunk `i_c = 0`. -/
+`BC = BT` (`ceil(BT/BC) = 1`), so each time chunk `i_t` covers rows
+`i_t·BT … i_t·BT + BT − 1` with a single inner chunk `i_c = 0`. -/
 
 /-- `k[e, c]` element (block ptr `(K,T)` strides `(s_qk_d, s_qk_t)`, offsets
 `(0, i_t·BT)`): `k` at `i_bh·s_qk_h + e·s_qk_d + (i_t·BT + c)·s_qk_t`. -/
@@ -512,9 +521,9 @@ instance vNewActiveDecidable (s : BlockState) (i_t i_c T V BT BC BV : Nat)
 
 noncomputable def vNewSpec (s : BlockState)
     (k v d initial_state : RegionName)
-    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d K V BT BV BK BC : Nat)
     (USE_INITIAL_STATE : Bool)
-    (i_t : Nat) (idx : TileIndex [BT, BV]) : ℝ :=
+    (i_t : Nat) (idx : TileIndex [BC, BV]) : ℝ :=
   vNewValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
     K V BT BV BK USE_INITIAL_STATE i_t idx.1.val idx.2.1.val
 
@@ -526,22 +535,25 @@ def finalStateOffset (s : BlockState) (K V BK BV : Nat)
     (idx : TileIndex [BK, BV]) : Nat :=
   s.pids 2 * K * V + kIndex s BK idx.1 * V + vIndex s BV idx.2.1
 
-noncomputable def cdfBkTile (s : BlockState) (k : RegionName) (i_t : Nat) :
-    Tile .real [64, 32] :=
-  ⟨fun idx => if (idx.1.val < 64 ∧ i_t * 32 + idx.2.1.val < 128) then
-      some (kElem s k 8192 128 1 32 i_t idx.1.val idx.2.1.val) else some 0⟩
+noncomputable def cdfBkTile (s : BlockState) (k : RegionName)
+    (s_qk_h s_qk_t s_qk_d T K BT BC BK : Nat) (i_t : Nat) :
+    Tile .real [BK, BC] :=
+  ⟨fun idx => if (idx.1.val < K ∧ i_t * BT + idx.2.1.val < T) then
+      some (kElem s k s_qk_h s_qk_t s_qk_d BT i_t idx.1.val idx.2.1.val) else some 0⟩
 
-/-- The loaded `b_d` tile `[32,64]` of chunk `i_t`. Cell `(c,e)` reads `dElem`. -/
-noncomputable def cdfBdTile (s : BlockState) (d : RegionName) (i_t : Nat) :
-    Tile .real [32, 64] :=
-  ⟨fun idx => if (i_t * 32 + idx.1.val < 128 ∧ idx.2.1.val < 64) then
-      some (dElem s d 8192 128 1 32 i_t idx.1.val idx.2.1.val) else some 0⟩
+/-- The loaded `b_d` tile `[BC,BK]` of chunk `i_t`. Cell `(c,e)` reads `dElem`. -/
+noncomputable def cdfBdTile (s : BlockState) (d : RegionName)
+    (s_qk_h s_qk_t s_qk_d T K BT BC BK : Nat) (i_t : Nat) :
+    Tile .real [BC, BK] :=
+  ⟨fun idx => if (i_t * BT + idx.1.val < T ∧ idx.2.1.val < K) then
+      some (dElem s d s_qk_h s_qk_t s_qk_d BT i_t idx.1.val idx.2.1.val) else some 0⟩
 
-/-- The loaded `b_v` tile `[32,64]` of chunk `i_t`. Cell `(c,p)` reads `vElem`. -/
-noncomputable def cdfBvTile (s : BlockState) (v : RegionName) (i_t : Nat) :
-    Tile .real [32, 64] :=
-  ⟨fun idx => if (i_t * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) then
-      some (vElem s v 8192 64 1 32 64 i_t idx.1.val idx.2.1.val) else some 0⟩
+/-- The loaded `b_v` tile `[BC,BV]` of chunk `i_t`. Cell `(c,p)` reads `vElem`. -/
+noncomputable def cdfBvTile (s : BlockState) (v : RegionName)
+    (s_vo_h s_vo_t s_vo_d T V BT BC BV : Nat) (i_t : Nat) :
+    Tile .real [BC, BV] :=
+  ⟨fun idx => if (i_t * BT + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) then
+      some (vElem s v s_vo_h s_vo_t s_vo_d BT BV i_t idx.1.val idx.2.1.val) else some 0⟩
 
 /-- Cell-level `dot(ref a, ref b)` eval recipe (returns the closed-form cell tile). -/
 theorem cdfDot_op_eval {M Kd N : Nat} (s' : BlockState) (aName bName : RegName)
@@ -641,73 +653,88 @@ theorem cdfSubDot_op_eval {M Kd N : Nat} (s' : BlockState)
 /-- Corrected `b_v` cell with an abstract chunk-start state `fbh` for `b_h`:
 `vElem − Σ_e dElem·fbh(e,p)` on the active region (`0` off it). -/
 noncomputable def cdfBvNewCell (s : BlockState) (v d : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BV BK : Nat)
     (fbh : Nat → Nat → ℝ) (i_t : Nat) (c p : Nat) : ℝ :=
-  (if (i_t * 32 + c < 128 ∧ s.pids 1 * 64 + p < 64) then
-      vElem s v 8192 64 1 32 64 i_t c p else 0)
-    - Finset.univ.sum (fun e : Fin 64 =>
-        (if (i_t * 32 + c < 128 ∧ e.val < 64) then
-            dElem s d 8192 128 1 32 i_t c e.val else 0) * fbh e.val p)
+  (if (i_t * BT + c < T ∧ s.pids 1 * BV + p < V) then
+      vElem s v s_vo_h s_vo_t s_vo_d BT BV i_t c p else 0)
+    - Finset.univ.sum (fun e : Fin BK =>
+        (if (i_t * BT + c < T ∧ e.val < K) then
+            dElem s d s_qk_h s_qk_t s_qk_d BT i_t c e.val else 0) * fbh e.val p)
 
 /-- `b_k` load equals `cdfBkTile` (memory matched to `s`). -/
-theorem cdfLoad_bk_eq (s sin : BlockState) (k : RegionName) (i_t : Nat)
+theorem cdfLoad_bk_eq (s sin : BlockState) (k : RegionName)
+    (s_qk_h s_qk_t s_qk_d T K BT BC BK : Nat) (i_t : Nat)
     (hmem : ∀ off, sin.readMem k off = s.readMem k off)
-    (hpk : sin.regs .blockPtr [64, 32] "p_k" = some
-      ⟨fun _ => BlockPtr.mk k (s.pids 2 * 8192) [64, 128] [64, 32] [1, 128]
-        [0 * 64, i_t * 32 + 0 * 32]⟩) :
-    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 32] "p_k") [0, 1]) .none) sin
-      = some (cdfBkTile s k i_t) := by
-  rw [load_bp_2d_ref k sin "p_k" (s.pids 2 * 8192) 64 128 64 32 1 128 (0 * 64) (i_t * 32 + 0 * 32) hpk]
+    (hpk : sin.regs .blockPtr [BK, BC] "p_k" = some
+      ⟨fun _ => BlockPtr.mk k (s.pids 2 * s_qk_h) [K, T] [BK, BC] [s_qk_d, s_qk_t]
+        [0 * BK, i_t * BT + 0 * BC]⟩) :
+    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [BK, BC] "p_k") [0, 1]) .none) sin
+      = some (cdfBkTile s k s_qk_h s_qk_t s_qk_d T K BT BC BK i_t) := by
+  rw [load_bp_2d_ref k sin "p_k" (s.pids 2 * s_qk_h) K T BK BC s_qk_d s_qk_t
+    (0 * BK) (i_t * BT + 0 * BC) hpk]
   refine congrArg some ?_
   ext idx; obtain ⟨e, c, u⟩ := idx
-  simp only [cdfBkTile, kElem, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one, Nat.zero_mul]
+  simp only [cdfBkTile, kElem, hmem, Nat.add_zero, Nat.zero_add, Nat.zero_mul]
 
 /-- `b_d` load equals `cdfBdTile`. -/
-theorem cdfLoad_bd_eq (s sin : BlockState) (d : RegionName) (i_t : Nat)
+theorem cdfLoad_bd_eq (s sin : BlockState) (d : RegionName)
+    (s_qk_h s_qk_t s_qk_d T K BT BC BK : Nat) (i_t : Nat)
     (hmem : ∀ off, sin.readMem d off = s.readMem d off)
-    (hpd : sin.regs .blockPtr [32, 64] "p_d" = some
-      ⟨fun _ => BlockPtr.mk d (s.pids 2 * 8192) [128, 64] [32, 64] [128, 1]
-        [i_t * 32 + 0 * 32, 0 * 64]⟩) :
-    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [32, 64] "p_d") [0, 1]) .none) sin
-      = some (cdfBdTile s d i_t) := by
-  rw [load_bp_2d_ref d sin "p_d" (s.pids 2 * 8192) 128 64 32 64 128 1 (i_t * 32 + 0 * 32) (0 * 64) hpd]
+    (hpd : sin.regs .blockPtr [BC, BK] "p_d" = some
+      ⟨fun _ => BlockPtr.mk d (s.pids 2 * s_qk_h) [T, K] [BC, BK] [s_qk_t, s_qk_d]
+        [i_t * BT + 0 * BC, 0 * BK]⟩) :
+    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [BC, BK] "p_d") [0, 1]) .none) sin
+      = some (cdfBdTile s d s_qk_h s_qk_t s_qk_d T K BT BC BK i_t) := by
+  rw [load_bp_2d_ref d sin "p_d" (s.pids 2 * s_qk_h) T K BC BK s_qk_t s_qk_d
+    (i_t * BT + 0 * BC) (0 * BK) hpd]
   refine congrArg some ?_
   ext idx; obtain ⟨c, e, u⟩ := idx
-  simp only [cdfBdTile, dElem, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one, Nat.zero_mul]
+  simp only [cdfBdTile, dElem, hmem, Nat.add_zero, Nat.zero_add, Nat.zero_mul]
 
 /-- `b_v` load equals `cdfBvTile`. -/
-theorem cdfLoad_bv_eq (s sin : BlockState) (v : RegionName) (i_t : Nat)
+theorem cdfLoad_bv_eq (s sin : BlockState) (v : RegionName)
+    (s_vo_h s_vo_t s_vo_d T V BT BC BV : Nat) (i_t : Nat)
     (hmem : ∀ off, sin.readMem v off = s.readMem v off)
-    (hpv : sin.regs .blockPtr [32, 64] "p_v" = some
-      ⟨fun _ => BlockPtr.mk v (s.pids 2 * 8192) [128, 64] [32, 64] [64, 1]
-        [i_t * 32 + 0 * 32, s.pids 1 * 64]⟩) :
-    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [32, 64] "p_v") [0, 1]) .none) sin
-      = some (cdfBvTile s v i_t) := by
-  rw [load_bp_2d_ref v sin "p_v" (s.pids 2 * 8192) 128 64 32 64 64 1 (i_t * 32 + 0 * 32) (s.pids 1 * 64) hpv]
+    (hpv : sin.regs .blockPtr [BC, BV] "p_v" = some
+      ⟨fun _ => BlockPtr.mk v (s.pids 2 * s_vo_h) [T, V] [BC, BV] [s_vo_t, s_vo_d]
+        [i_t * BT + 0 * BC, s.pids 1 * BV]⟩) :
+    evalOp (Op.load .real (.blockPtr (Op.ref .blockPtr [BC, BV] "p_v") [0, 1]) .none) sin
+      = some (cdfBvTile s v s_vo_h s_vo_t s_vo_d T V BT BC BV i_t) := by
+  rw [load_bp_2d_ref v sin "p_v" (s.pids 2 * s_vo_h) T V BC BV s_vo_t s_vo_d
+    (i_t * BT + 0 * BC) (s.pids 1 * BV) hpv]
   refine congrArg some ?_
   ext idx; obtain ⟨c, p, u⟩ := idx
-  simp only [cdfBvTile, vElem, hmem, Nat.add_zero, Nat.zero_add, Nat.mul_one, Nat.zero_mul]
+  simp only [cdfBvTile, vElem, hmem, Nat.add_zero, Nat.zero_add, Nat.zero_mul]
 
-/-- The corrected `b_v` tile `[32,64]`: data `(c,p) ↦ cdfBvNewCell`. -/
+/-- The corrected `b_v` tile `[BC,BV]`: data `(c,p) ↦ cdfBvNewCell`. -/
 noncomputable def cdfBvNewTile (s : BlockState) (v d : RegionName)
-    (fbh : Nat → Nat → ℝ) (i_t : Nat) : Tile .real [32, 64] :=
-  ⟨fun idx => some (cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)⟩
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
+    (fbh : Nat → Nat → ℝ) (i_t : Nat) : Tile .real [BC, BV] :=
+  ⟨fun idx => some (cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+    T K V BT BV BK fbh i_t idx.1.val idx.2.1.val)⟩
 
 /-- Eval of `b_v - dot(b_d, b_h)` = `cdfBvNewTile`. -/
-theorem cdfCorrect_bv_eq (s sin : BlockState) (v d : RegionName) (i_t : Nat)
-    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [64, 64])
+theorem cdfCorrect_bv_eq (s sin : BlockState) (v d : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat) (i_t : Nat)
+    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [BK, BV])
     (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
-    (hbv : sin.regs .real [32, 64] "b_v" = some (cdfBvTile s v i_t))
-    (hbd : sin.regs .real [32, 64] "b_d" = some (cdfBdTile s d i_t))
-    (hbh : sin.regs .real [64, 64] "b_h" = some bhT) :
+    (hbv : sin.regs .real [BC, BV] "b_v"
+        = some (cdfBvTile s v s_vo_h s_vo_t s_vo_d T V BT BC BV i_t))
+    (hbd : sin.regs .real [BC, BK] "b_d"
+        = some (cdfBdTile s d s_qk_h s_qk_t s_qk_d T K BT BC BK i_t))
+    (hbh : sin.regs .real [BK, BV] "b_h" = some bhT) :
     evalOp (Op.sub .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [32, 64] "b_v")
-        (Op.dot (batch := []) (Op.ref .real [32, 64] "b_d") (Op.ref .real [64, 64] "b_h"))) sin
-      = some (cdfBvNewTile s v d fbh i_t) := by
-  rw [cdfSubDot_op_eval sin "b_v" "b_d" "b_h" (cdfBvTile s v i_t) (cdfBdTile s d i_t) bhT
-    (fun c p => if (i_t * 32 + c.val < 128 ∧ s.pids 1 * 64 + p.val < 64) then
-        vElem s v 8192 64 1 32 64 i_t c.val p.val else 0)
-    (fun c e => if (i_t * 32 + c.val < 128 ∧ e.val < 64) then
-        dElem s d 8192 128 1 32 i_t c.val e.val else 0)
+        (Op.ref .real [BC, BV] "b_v")
+        (Op.dot (batch := []) (Op.ref .real [BC, BK] "b_d") (Op.ref .real [BK, BV] "b_h"))) sin
+      = some (cdfBvNewTile s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV fbh i_t) := by
+  rw [cdfSubDot_op_eval sin "b_v" "b_d" "b_h"
+    (cdfBvTile s v s_vo_h s_vo_t s_vo_d T V BT BC BV i_t)
+    (cdfBdTile s d s_qk_h s_qk_t s_qk_d T K BT BC BK i_t) bhT
+    (fun c p => if (i_t * BT + c.val < T ∧ s.pids 1 * BV + p.val < V) then
+        vElem s v s_vo_h s_vo_t s_vo_d BT BV i_t c.val p.val else 0)
+    (fun c e => if (i_t * BT + c.val < T ∧ e.val < K) then
+        dElem s d s_qk_h s_qk_t s_qk_d BT i_t c.val e.val else 0)
     (fun e p => fbh e.val p.val)
     hbv hbd hbh
     (fun c p => by simp only [cdfBvTile]; split <;> rfl)
@@ -717,102 +744,141 @@ theorem cdfCorrect_bv_eq (s sin : BlockState) (v d : RegionName) (i_t : Nat)
   ext idx; obtain ⟨c, p, u⟩ := idx
   simp only [cdfBvNewTile, cdfBvNewCell]
 
-/-- The accumulated `b_h_cumsum` tile `[64,64]`: data `(e,p) ↦ Σ_c kElem·vNewCell`. -/
+/-- The accumulated `b_h_cumsum` cell `(e,p)`: `Σ_c kElem·vNewCell` over the inner
+chunk's `BC` rows. Stated as a plain `Nat`-indexed function (no `Fin` wrapping), so
+the carry recursion can consume it directly. -/
+noncomputable def cdfCumsumCell (s : BlockState) (k v d : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
+    (fbh : Nat → Nat → ℝ) (i_t : Nat) (e p : Nat) : ℝ :=
+  Finset.univ.sum fun c : Fin BC =>
+    (if (e < K ∧ i_t * BT + c.val < T) then
+        kElem s k s_qk_h s_qk_t s_qk_d BT i_t e c.val else 0)
+      * cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BV BK fbh i_t c.val p
+
+/-- The accumulated `b_h_cumsum` tile `[BK,BV]`. -/
 noncomputable def cdfCumsumTile (s : BlockState) (k v d : RegionName)
-    (fbh : Nat → Nat → ℝ) (i_t : Nat) : Tile .real [64, 64] :=
-  ⟨fun idx : TileIndex [64, 64] =>
-    some (Finset.univ.sum fun c : Fin 32 =>
-      (if (idx.1.val < 64 ∧ i_t * 32 + c.val < 128) then
-          kElem s k 8192 128 1 32 i_t idx.1.val c.val else 0)
-        * cdfBvNewCell s v d fbh i_t c.val idx.2.1.val)⟩
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
+    (fbh : Nat → Nat → ℝ) (i_t : Nat) : Tile .real [BK, BV] :=
+  ⟨fun idx : TileIndex [BK, BV] =>
+    some (cdfCumsumCell s k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+      T K V BT BC BK BV fbh i_t idx.1.val idx.2.1.val)⟩
 
 /-- Eval of `b_h_cumsum + dot(b_k, b_v)` (from a zero `b_h_cumsum`) = `cdfCumsumTile`. -/
-theorem cdfAccum_cumsum_eq (s sin : BlockState) (k v d : RegionName) (i_t : Nat)
+theorem cdfAccum_cumsum_eq (s sin : BlockState) (k v d : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat) (i_t : Nat)
     (fbh : Nat → Nat → ℝ)
-    (hcs : sin.regs .real [64, 64] "b_h_cumsum"
-        = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64]))
-    (hbk : sin.regs .real [64, 32] "b_k" = some (cdfBkTile s k i_t))
-    (hbv : sin.regs .real [32, 64] "b_v" = some (cdfBvNewTile s v d fbh i_t)) :
+    (hcs : sin.regs .real [BK, BV] "b_h_cumsum"
+        = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [BK, BV]))
+    (hbk : sin.regs .real [BK, BC] "b_k"
+        = some (cdfBkTile s k s_qk_h s_qk_t s_qk_d T K BT BC BK i_t))
+    (hbv : sin.regs .real [BC, BV] "b_v"
+        = some (cdfBvNewTile s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV fbh i_t)) :
     evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [64, 64] "b_h_cumsum")
-        (Op.dot (batch := []) (Op.ref .real [64, 32] "b_k") (Op.ref .real [32, 64] "b_v"))) sin
-      = some (cdfCumsumTile s k v d fbh i_t) := by
+        (Op.ref .real [BK, BV] "b_h_cumsum")
+        (Op.dot (batch := []) (Op.ref .real [BK, BC] "b_k") (Op.ref .real [BC, BV] "b_v"))) sin
+      = some (cdfCumsumTile s k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV fbh i_t) := by
   rw [cdfAccDot_op_eval sin "b_h_cumsum" "b_k" "b_v"
-    (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64]) (cdfBkTile s k i_t) (cdfBvNewTile s v d fbh i_t)
+    (⟨fun _ => some (0:ℝ)⟩ : Tile .real [BK, BV])
+    (cdfBkTile s k s_qk_h s_qk_t s_qk_d T K BT BC BK i_t)
+    (cdfBvNewTile s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV fbh i_t)
     (fun _ _ => (0:ℝ))
-    (fun e c => if (e.val < 64 ∧ i_t * 32 + c.val < 128) then
-        kElem s k 8192 128 1 32 i_t e.val c.val else 0)
-    (fun c p => cdfBvNewCell s v d fbh i_t c.val p.val)
+    (fun e c => if (e.val < K ∧ i_t * BT + c.val < T) then
+        kElem s k s_qk_h s_qk_t s_qk_d BT i_t e.val c.val else 0)
+    (fun c p => cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BV BK fbh i_t c.val p.val)
     hcs hbk hbv
     (fun e p => rfl)
     (fun e c => by simp only [cdfBkTile]; split <;> rfl)
     (fun c p => by simp only [cdfBvNewTile])]
   refine congrArg some ?_
   ext idx; obtain ⟨e, p, u⟩ := idx
-  simp only [cdfCumsumTile, zero_add]
+  simp only [cdfCumsumTile, cdfCumsumCell, zero_add]
 
 /-- The block-ptr `v_new` store offset at lane `(c,p)` (inner chunk `i_c=0`). -/
-def cdfVNewAddr (s : BlockState) (i_t : Nat) (idx : TileIndex [32, 64]) : Nat :=
-  s.pids 2 * 8192 + (i_t * 32 + 0 * 32 + idx.1.val) * 64 + (s.pids 1 * 64 + idx.2.1.val) * 1
+def cdfVNewAddr (s : BlockState) (s_vo_h s_vo_t s_vo_d BT BC BV : Nat)
+    (i_t : Nat) (idx : TileIndex [BC, BV]) : Nat :=
+  s.pids 2 * s_vo_h + (i_t * BT + 0 * BC + idx.1.val) * s_vo_t
+    + (s.pids 1 * BV + idx.2.1.val) * s_vo_d
 
 /-- The explicit post-store state of the `v_new` block-ptr store: the masked
 writeMem foldl of the corrected value (built from the reference state `s`) over
 the input state `sin`, at chunk `i_t`. -/
 noncomputable def cdfVNewStoreState (s sin : BlockState) (v d v_new : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
     (i_t : Nat) (fbh : Nat → Nat → ℝ) : BlockState :=
-  (TileShape.allIndices [32, 64]).foldl
-    (fun acc i => if (i_t * 32 + 0 * 32 + i.1.val < 128 ∧ s.pids 1 * 64 + i.2.1.val < 64)
-        then acc.writeMem v_new (cdfVNewAddr s i_t i)
-          (cdfBvNewCell s v d fbh i_t i.1.val i.2.1.val) else acc) sin
+  (TileShape.allIndices [BC, BV]).foldl
+    (fun acc i => if (i_t * BT + 0 * BC + i.1.val < T ∧ s.pids 1 * BV + i.2.1.val < V)
+        then acc.writeMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t i)
+          (cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BV BK fbh i_t i.1.val i.2.1.val) else acc) sin
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **`v_new` block-ptr store step (eq).** Stepping the masked block-ptr store of
 `b_v` (= `cdfBvNewTile`) through `p_v_new` yields `cdfVNewStoreState`. -/
-theorem cdfStore_vnew_step_eq (s sin : BlockState) (v d v_new : RegionName) (i_t : Nat)
+theorem cdfStore_vnew_step_eq (s sin : BlockState) (v d v_new : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat) (i_t : Nat)
     (fbh : Nat → Nat → ℝ)
-    (hbv : sin.regs .real [32, 64] "b_v" = some (cdfBvNewTile s v d fbh i_t))
-    (hpvn : sin.regs .blockPtr [32, 64] "p_v_new" = some
-      ⟨fun _ => BlockPtr.mk v_new (s.pids 2 * 8192) [128, 64] [32, 64] [64, 1]
-        [i_t * 32 + 0 * 32, s.pids 1 * 64]⟩) :
-    stepStmt (Stmt.store .real [32, 64]
-        (.blockPtr (Op.ref .blockPtr [32, 64] "p_v_new") [0, 1])
-        (Op.ref .real [32, 64] "b_v") .none) sin
-      = some (cdfVNewStoreState s sin v d v_new i_t fbh) := by
+    (hbv : sin.regs .real [BC, BV] "b_v"
+        = some (cdfBvNewTile s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV fbh i_t))
+    (hpvn : sin.regs .blockPtr [BC, BV] "p_v_new" = some
+      ⟨fun _ => BlockPtr.mk v_new (s.pids 2 * s_vo_h) [T, V] [BC, BV] [s_vo_t, s_vo_d]
+        [i_t * BT + 0 * BC, s.pids 1 * BV]⟩) :
+    stepStmt (Stmt.store .real [BC, BV]
+        (.blockPtr (Op.ref .blockPtr [BC, BV] "p_v_new") [0, 1])
+        (Op.ref .real [BC, BV] "b_v") .none) sin
+      = some (cdfVNewStoreState s sin v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV i_t fbh) := by
   unfold stepStmt cdfVNewStoreState
   simp only [evalOp_ref, hbv, hpvn, Option.bind, Option.map]
-  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [32, 64])) ?_)
+  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [BC, BV])) ?_)
   funext acc i
   obtain ⟨c, p, u⟩ := i
   simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
     Bool.true_and, cdfVNewAddr]
-  by_cases hb : i_t * 32 + 0 * 32 + c.val < 128 ∧ s.pids 1 * 64 + p.val < 64
+  by_cases hb : i_t * BT + 0 * BC + c.val < T ∧ s.pids 1 * BV + p.val < V
   · simp only [hb, decide_true, if_true, BlockState.writeMemTyped_real]; rfl
   · simp only [hb, decide_false, Bool.false_eq_true, if_false]
 
 set_option maxHeartbeats 4000000 in
 /-- **`v_new` store readback properties.** `cdfVNewStoreState` writes
 `cdfBvNewCell` at every active lane and leaves all other addresses unchanged. -/
-theorem cdfStore_vnew_step_props (s sin : BlockState) (v d v_new : RegionName) (i_t : Nat)
+theorem cdfStore_vnew_step_props (s sin : BlockState) (v d v_new : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat) (i_t : Nat)
     (fbh : Nat → Nat → ℝ)
-    (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx)) :
-    (cdfVNewStoreState s sin v d v_new i_t fbh).pids = sin.pids
-      ∧ (cdfVNewStoreState s sin v d v_new i_t fbh).regs = sin.regs
-      ∧ (∀ idx : TileIndex [32, 64],
-          (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
-          (cdfVNewStoreState s sin v d v_new i_t fbh).readMem v_new (cdfVNewAddr s i_t idx)
-            = cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BC, BV] => cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx)) :
+    (cdfVNewStoreState s sin v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BC BK BV i_t fbh).pids = sin.pids
+      ∧ (cdfVNewStoreState s sin v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV i_t fbh).regs = sin.regs
+      ∧ (∀ idx : TileIndex [BC, BV],
+          (i_t * BT + 0 * BC + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) →
+          (cdfVNewStoreState s sin v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              T K V BT BC BK BV i_t fbh).readMem v_new
+              (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx)
+            = cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                T K V BT BV BK fbh i_t idx.1.val idx.2.1.val)
       ∧ (∀ rg off, rg ≠ v_new →
-          (cdfVNewStoreState s sin v d v_new i_t fbh).readMem rg off = sin.readMem rg off)
-      ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
-          (cdfVNewStoreState s sin v d v_new i_t fbh).readMem v_new off = sin.readMem v_new off) := by
+          (cdfVNewStoreState s sin v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV i_t fbh).readMem rg off = sin.readMem rg off)
+      ∧ (∀ off, (∀ idx : TileIndex [BC, BV],
+            off ≠ cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx) →
+          (cdfVNewStoreState s sin v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV i_t fbh).readMem v_new off = sin.readMem v_new off) := by
   classical
   unfold cdfVNewStoreState
-  set offFn : TileIndex [32, 64] → Nat := fun idx => cdfVNewAddr s i_t idx with hoffFn
-  set Pmask : TileIndex [32, 64] → Prop :=
-    fun idx => i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64 with hPmask
-  set valFn : TileIndex [32, 64] → ℝ :=
-    fun idx => cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val with hvalFn
+  set offFn : TileIndex [BC, BV] → Nat :=
+    fun idx => cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx with hoffFn
+  set Pmask : TileIndex [BC, BV] → Prop :=
+    fun idx => i_t * BT + 0 * BC + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V with hPmask
+  set valFn : TileIndex [BC, BV] → ℝ :=
+    fun idx => cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+      T K V BT BV BK fbh i_t idx.1.val idx.2.1.val with hvalFn
   have hinj : Function.Injective offFn := hInj
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · rw [BlockState.foldl_writeMem_prop_masked_pids]
@@ -837,9 +903,11 @@ from an entry state `sin` carrying `i_k=0`, `i_t`, `i_c=0`, an abstract `b_h` ti
 block, and preserves `b_h`/pids/the loop registers and the `k`/`v`/`d` regions. -/
 theorem chunkDeltaInnerBody_step
     (k v d v_new : RegionName) (s sin : BlockState) (i_t : Nat) (fbh : Nat → Nat → ℝ)
-    (bhT : Tile .real [64, 64]) (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
+    (bhT : Tile .real [BK, BV]) (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
     (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d)
-    (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BC, BV] => cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx))
     (hmemK : ∀ off, sin.readMem k off = s.readMem k off)
     (hmemV : ∀ off, sin.readMem v off = s.readMem v off)
     (hmemD : ∀ off, sin.readMem d off = s.readMem d off)
@@ -849,76 +917,88 @@ theorem chunkDeltaInnerBody_step
     (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
     (hit : sin.regs .nat [] "i_t" = some (Tile.scalar i_t))
     (hic : sin.regs .nat [] "i_c" = some (Tile.scalar 0))
-    (hbh : sin.regs .real [64, 64] "b_h" = some bhT)
-    (hcs : sin.regs .real [64, 64] "b_h_cumsum"
-        = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64])) :
-    ∃ s', stepStmts (chunkDeltaInnerBody k v d v_new 8192 128 1 8192 64 1 128 64 64 32 32 64 64) sin
+    (hbh : sin.regs .real [BK, BV] "b_h" = some bhT)
+    (hcs : sin.regs .real [BK, BV] "b_h_cumsum"
+        = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [BK, BV])) :
+    ∃ s', stepStmts (chunkDeltaInnerBody k v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BC BK BV) sin
         = some s'
       ∧ s'.pids = sin.pids
       ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
       ∧ s'.regs .nat [] "i_v" = sin.regs .nat [] "i_v"
       ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
       ∧ s'.regs .nat [] "i_t" = some (Tile.scalar i_t)
-      ∧ s'.regs .real [64, 64] "b_h" = some bhT
-      ∧ s'.regs .real [64, 64] "b_h_cumsum" = some (cdfCumsumTile s k v d fbh i_t)
+      ∧ s'.regs .real [BK, BV] "b_h" = some bhT
+      ∧ s'.regs .real [BK, BV] "b_h_cumsum"
+          = some (cdfCumsumTile s k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              T K V BT BC BK BV fbh i_t)
       ∧ (∀ off, s'.readMem k off = s.readMem k off)
       ∧ (∀ off, s'.readMem v off = s.readMem v off)
       ∧ (∀ off, s'.readMem d off = s.readMem d off)
       ∧ (∀ rg off, rg ≠ v_new → s'.readMem rg off = sin.readMem rg off)
-      ∧ (∀ idx : TileIndex [32, 64],
-          (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
-          s'.readMem v_new (cdfVNewAddr s i_t idx)
-            = cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)
-      ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
+      ∧ (∀ idx : TileIndex [BC, BV],
+          (i_t * BT + 0 * BC + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) →
+          s'.readMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx)
+            = cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                T K V BT BV BK fbh i_t idx.1.val idx.2.1.val)
+      ∧ (∀ off, (∀ idx : TileIndex [BC, BV],
+            off ≠ cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx) →
           s'.readMem v_new off = sin.readMem v_new off) := by
   unfold chunkDeltaInnerBody
   -- p_k
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (makeBlockPtr_2d_eval k sin _ _ _ [64, 128] [64, 32] [1, 128]
-      (s.pids 2 * 8192) (0 * 64) (i_t * 32 + 0 * 32)
-      (mulConst_eval sin "i_bh" (s.pids 2) 8192 hibh)
-      (mulConst_eval sin "i_k" 0 64 hik)
-      (addMulMul_eval sin "i_t" "i_c" i_t 32 0 32 hit hic)))]
+    (makeBlockPtr_2d_eval k sin _ _ _ [K, T] [BK, BC] [s_qk_d, s_qk_t]
+      (s.pids 2 * s_qk_h) (0 * BK) (i_t * BT + 0 * BC)
+      (mulConst_eval sin "i_bh" (s.pids 2) s_qk_h hibh)
+      (mulConst_eval sin "i_k" 0 BK hik)
+      (addMulMul_eval sin "i_t" "i_c" i_t BT 0 BC hit hic)))]
   -- p_d
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (makeBlockPtr_2d_eval d _ _ _ _ [128, 64] [32, 64] [128, 1]
-      (s.pids 2 * 8192) (i_t * 32 + 0 * 32) (0 * 64)
-      (mulConst_eval _ "i_bh" (s.pids 2) 8192 (by simp [hibh]))
-      (addMulMul_eval _ "i_t" "i_c" i_t 32 0 32 (by simp [hit]) (by simp [hic]))
-      (mulConst_eval _ "i_k" 0 64 (by simp [hik]))))]
+    (makeBlockPtr_2d_eval d _ _ _ _ [T, K] [BC, BK] [s_qk_t, s_qk_d]
+      (s.pids 2 * s_qk_h) (i_t * BT + 0 * BC) (0 * BK)
+      (mulConst_eval _ "i_bh" (s.pids 2) s_qk_h (by simp [hibh]))
+      (addMulMul_eval _ "i_t" "i_c" i_t BT 0 BC (by simp [hit]) (by simp [hic]))
+      (mulConst_eval _ "i_k" 0 BK (by simp [hik]))))]
   -- p_v
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (makeBlockPtr_2d_eval v _ _ _ _ [128, 64] [32, 64] [64, 1]
-      (s.pids 2 * 8192) (i_t * 32 + 0 * 32) (s.pids 1 * 64)
-      (mulConst_eval _ "i_bh" (s.pids 2) 8192 (by simp [hibh]))
-      (addMulMul_eval _ "i_t" "i_c" i_t 32 0 32 (by simp [hit]) (by simp [hic]))
-      (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [hiv]))))]
+    (makeBlockPtr_2d_eval v _ _ _ _ [T, V] [BC, BV] [s_vo_t, s_vo_d]
+      (s.pids 2 * s_vo_h) (i_t * BT + 0 * BC) (s.pids 1 * BV)
+      (mulConst_eval _ "i_bh" (s.pids 2) s_vo_h (by simp [hibh]))
+      (addMulMul_eval _ "i_t" "i_c" i_t BT 0 BC (by simp [hit]) (by simp [hic]))
+      (mulConst_eval _ "i_v" (s.pids 1) BV (by simp [hiv]))))]
   -- p_v_new
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (makeBlockPtr_2d_eval v_new _ _ _ _ [128, 64] [32, 64] [64, 1]
-      (s.pids 2 * 8192) (i_t * 32 + 0 * 32) (s.pids 1 * 64)
-      (mulConst_eval _ "i_bh" (s.pids 2) 8192 (by simp [hibh]))
-      (addMulMul_eval _ "i_t" "i_c" i_t 32 0 32 (by simp [hit]) (by simp [hic]))
-      (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [hiv]))))]
+    (makeBlockPtr_2d_eval v_new _ _ _ _ [T, V] [BC, BV] [s_vo_t, s_vo_d]
+      (s.pids 2 * s_vo_h) (i_t * BT + 0 * BC) (s.pids 1 * BV)
+      (mulConst_eval _ "i_bh" (s.pids 2) s_vo_h (by simp [hibh]))
+      (addMulMul_eval _ "i_t" "i_c" i_t BT 0 BC (by simp [hit]) (by simp [hic]))
+      (mulConst_eval _ "i_v" (s.pids 1) BV (by simp [hiv]))))]
   -- b_k load
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfLoad_bk_eq s _ k i_t (by intro off; simp [hmemK]) (by simp)))]
+    (cdfLoad_bk_eq s _ k s_qk_h s_qk_t s_qk_d T K BT BC BK i_t
+      (by intro off; simp [hmemK]) (by simp)))]
   -- b_d load
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfLoad_bd_eq s _ d i_t (by intro off; simp [hmemD]) (by simp)))]
+    (cdfLoad_bd_eq s _ d s_qk_h s_qk_t s_qk_d T K BT BC BK i_t
+      (by intro off; simp [hmemD]) (by simp)))]
   -- b_v load
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfLoad_bv_eq s _ v i_t (by intro off; simp [hmemV]) (by simp)))]
+    (cdfLoad_bv_eq s _ v s_vo_h s_vo_t s_vo_d T V BT BC BV i_t
+      (by intro off; simp [hmemV]) (by simp)))]
   -- b_v correction
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfCorrect_bv_eq s _ v d i_t fbh bhT (fun e p => by simp [hbhf])
+    (cdfCorrect_bv_eq s _ v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+      T K V BT BC BK BV i_t fbh bhT (fun e p => by simp [hbhf])
       (by simp) (by simp) (by simp [hbh])))]
   -- v_new store
-  rw [stepStmts.cons_some (cdfStore_vnew_step_eq s _ v d v_new i_t fbh (by simp) (by simp))]
+  rw [stepStmts.cons_some (cdfStore_vnew_step_eq s _ v d v_new
+    s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV i_t fbh (by simp) (by simp))]
   obtain ⟨hpids9, hregs9, hvnew9, hother9, hoff9⟩ :=
-    cdfStore_vnew_step_props s _ v d v_new i_t fbh hInj
+    cdfStore_vnew_step_props s _ v d v_new
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV i_t fbh hInj
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfAccum_cumsum_eq s _ k v d i_t fbh ?hcs9 ?hbk9 ?hbv9))]
+    (cdfAccum_cumsum_eq s _ k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+      T K V BT BC BK BV i_t fbh ?hcs9 ?hbk9 ?hbv9))]
   case hbk9 => rw [hregs9]; simp [BlockState.setReg_ne_name]
   case hbv9 => rw [hregs9]; simp [BlockState.setReg_same]
   case hcs9 => rw [hregs9]; simp [BlockState.setReg_ne_name, hcs]
@@ -965,35 +1045,36 @@ theorem chunkDeltaInnerBody_step
 /-- The explicit post-store state of the `h[i_t]` block-ptr store of a `[64,64]`
 tile `bhT` (cell fn `fbh`) over input state `sin`, value built from `s`. -/
 noncomputable def cdfHStoreState (s sin : BlockState) (h : RegionName)
-    (i_t : Nat) (fbh : Nat → Nat → ℝ) : BlockState :=
-  (TileShape.allIndices [64, 64]).foldl
-    (fun acc i => if (s.pids 0 * 64 + i.1.val < 64 ∧ s.pids 1 * 64 + i.2.1.val < 64)
-        then acc.writeMem h (hOffset s i_t 16384 64 64 64 64 64 i)
+    (s_h_h s_h_t K V BK BV : Nat) (i_t : Nat) (fbh : Nat → Nat → ℝ) : BlockState :=
+  (TileShape.allIndices [BK, BV]).foldl
+    (fun acc i => if (s.pids 0 * BK + i.1.val < K ∧ s.pids 1 * BV + i.2.1.val < V)
+        then acc.writeMem h (hOffset s i_t s_h_h s_h_t K V BK BV i)
           (fbh i.1.val i.2.1.val) else acc) sin
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
 /-- **`h[i_t]` block-ptr store step (eq).** Stepping the masked block-ptr store of
 the carry tile `bhT` (cell fn `fbh`) through `p_h` yields `cdfHStoreState`. -/
-theorem cdfStore_h_step_eq (s sin : BlockState) (h : RegionName) (i_t : Nat)
-    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [64, 64])
+theorem cdfStore_h_step_eq (s sin : BlockState) (h : RegionName)
+    (s_h_h s_h_t K V BK BV : Nat) (i_t : Nat)
+    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [BK, BV])
     (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
-    (hbh : sin.regs .real [64, 64] "b_h" = some bhT)
-    (hph : sin.regs .blockPtr [64, 64] "p_h" = some
-      ⟨fun _ => BlockPtr.mk h (s.pids 2 * 16384 + i_t * 64 * 64) [64, 64] [64, 64] [64, 1]
-        [s.pids 0 * 64, s.pids 1 * 64]⟩) :
-    stepStmt (Stmt.store .real [64, 64]
-        (.blockPtr (Op.ref .blockPtr [64, 64] "p_h") [0, 1])
-        (Op.ref .real [64, 64] "b_h") .none) sin
-      = some (cdfHStoreState s sin h i_t fbh) := by
+    (hbh : sin.regs .real [BK, BV] "b_h" = some bhT)
+    (hph : sin.regs .blockPtr [BK, BV] "p_h" = some
+      ⟨fun _ => BlockPtr.mk h (s.pids 2 * s_h_h + i_t * K * V) [K, V] [BK, BV] [s_h_t, 1]
+        [s.pids 0 * BK, s.pids 1 * BV]⟩) :
+    stepStmt (Stmt.store .real [BK, BV]
+        (.blockPtr (Op.ref .blockPtr [BK, BV] "p_h") [0, 1])
+        (Op.ref .real [BK, BV] "b_h") .none) sin
+      = some (cdfHStoreState s sin h s_h_h s_h_t K V BK BV i_t fbh) := by
   unfold stepStmt cdfHStoreState
   simp only [evalOp_ref, hbh, hph, Option.bind, Option.map]
-  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [64, 64])) ?_)
+  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [BK, BV])) ?_)
   funext acc i
   obtain ⟨e, p, u⟩ := i
   simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
     Bool.true_and, hOffset, kIndex, vIndex]
-  by_cases hb : s.pids 0 * 64 + e.val < 64 ∧ s.pids 1 * 64 + p.val < 64
+  by_cases hb : s.pids 0 * BK + e.val < K ∧ s.pids 1 * BV + p.val < V
   · simp only [hb, decide_true, if_true, BlockState.writeMemTyped_real, hbhf, Nat.mul_one]
     rfl
   · simp only [hb, decide_false, Bool.false_eq_true, if_false, if_neg hb]
@@ -1001,25 +1082,31 @@ theorem cdfStore_h_step_eq (s sin : BlockState) (h : RegionName) (i_t : Nat)
 set_option maxHeartbeats 4000000 in
 /-- **`h[i_t]` store readback properties.** `cdfHStoreState` writes `fbh` at every
 active lane and leaves all other addresses unchanged. -/
-theorem cdfStore_h_step_props (s sin : BlockState) (h : RegionName) (i_t : Nat)
+theorem cdfStore_h_step_props (s sin : BlockState) (h : RegionName)
+    (s_h_h s_h_t K V BK BV : Nat) (i_t : Nat)
     (fbh : Nat → Nat → ℝ)
     (hInj : Function.Injective
-      (fun idx : TileIndex [64, 64] => hOffset s i_t 16384 64 64 64 64 64 idx)) :
-    (cdfHStoreState s sin h i_t fbh).pids = sin.pids
-      ∧ (cdfHStoreState s sin h i_t fbh).regs = sin.regs
-      ∧ (∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-          (cdfHStoreState s sin h i_t fbh).readMem h (hOffset s i_t 16384 64 64 64 64 64 idx)
+      (fun idx : TileIndex [BK, BV] => hOffset s i_t s_h_h s_h_t K V BK BV idx)) :
+    (cdfHStoreState s sin h s_h_h s_h_t K V BK BV i_t fbh).pids = sin.pids
+      ∧ (cdfHStoreState s sin h s_h_h s_h_t K V BK BV i_t fbh).regs = sin.regs
+      ∧ (∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+          (cdfHStoreState s sin h s_h_h s_h_t K V BK BV i_t fbh).readMem h
+              (hOffset s i_t s_h_h s_h_t K V BK BV idx)
             = fbh idx.1.val idx.2.1.val)
       ∧ (∀ rg off, rg ≠ h →
-          (cdfHStoreState s sin h i_t fbh).readMem rg off = sin.readMem rg off)
-      ∧ (∀ off, (∀ idx : TileIndex [64, 64], off ≠ hOffset s i_t 16384 64 64 64 64 64 idx) →
-          (cdfHStoreState s sin h i_t fbh).readMem h off = sin.readMem h off) := by
+          (cdfHStoreState s sin h s_h_h s_h_t K V BK BV i_t fbh).readMem rg off
+            = sin.readMem rg off)
+      ∧ (∀ off, (∀ idx : TileIndex [BK, BV],
+            off ≠ hOffset s i_t s_h_h s_h_t K V BK BV idx) →
+          (cdfHStoreState s sin h s_h_h s_h_t K V BK BV i_t fbh).readMem h off
+            = sin.readMem h off) := by
   classical
   unfold cdfHStoreState
-  set offFn : TileIndex [64, 64] → Nat := fun idx => hOffset s i_t 16384 64 64 64 64 64 idx with hoffFn
-  set Pmask : TileIndex [64, 64] → Prop :=
-    fun idx => s.pids 0 * 64 + idx.1.val < 64 ∧ s.pids 1 * 64 + idx.2.1.val < 64 with hPmask
-  set valFn : TileIndex [64, 64] → ℝ := fun idx => fbh idx.1.val idx.2.1.val with hvalFn
+  set offFn : TileIndex [BK, BV] → Nat :=
+    fun idx => hOffset s i_t s_h_h s_h_t K V BK BV idx with hoffFn
+  set Pmask : TileIndex [BK, BV] → Prop :=
+    fun idx => s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V with hPmask
+  set valFn : TileIndex [BK, BV] → ℝ := fun idx => fbh idx.1.val idx.2.1.val with hvalFn
   have hinj : Function.Injective offFn := hInj
   refine ⟨?_, ?_, ?_, ?_, ?_⟩
   · rw [BlockState.foldl_writeMem_prop_masked_pids]
@@ -1038,108 +1125,122 @@ theorem cdfStore_h_step_props (s sin : BlockState) (h : RegionName) (i_t : Nat)
 
 /-! ## Cross-chunk exec carry-fold (genuine producer derivation)
 
-We step the lowered (algorithm-layer, float-erased) surface body of the checked
-Python shape directly, eliminating the producer hypotheses `hBH`/`hBVN`/`hBHF`.
+We step the lowered (algorithm-layer, float-erased) surface body directly,
+eliminating the producer hypotheses `hBH`/`hBVN`/`hBHF`.
 
-* `cdfStopOp` — the inner `tl.cdiv(32, 32)` loop bound (evaluates to `1`).
+* `cdfStopOp BT BC` — the inner `tl.cdiv(BT, BC)` loop bound (evaluates to `1`
+  in the `BC = BT` regime).
 * `cdfInnerBody` — the inner `forRangeDyn "i_c"` body (= `chunkDeltaInnerBody`).
-* `cdfOuterBody` — the outer `forRange "i_t" 0 4 1` body: `p_h` make + `h` store
+* `cdfOuterBody` — the outer `forRange "i_t" 0 NT 1` body: `p_h` make + `h` store
   + `b_h_cumsum = 0` + the inner dynamic loop + the `b_h += b_h_cumsum` advance.
 * `cdfPrologue USE` — the prologue (`i_k`/`i_v`/`i_bh`, `b_h = 0`, the
   `USE_INITIAL_STATE` `ifThen` seed).
 * `cdfEpilogue STORE` — the `STORE_FINAL_STATE` `ifThen` flush.
 
 `chunk_delta_fwd_body_split` proves (by `rfl`) the full algorithm body equals
-`cdfPrologue ++ [forRange "i_t" 0 4 1 cdfOuterBody] ++ cdfEpilogue`. -/
+`cdfPrologue ++ [forRange "i_t" 0 NT 1 cdfOuterBody] ++ cdfEpilogue`. -/
 
-/-- The inner `forRangeDyn "i_c"` stop op `tl.cdiv(32, 32)` (= `(32+32-1)/32 = 1`). -/
-def cdfStopOp : Op .nat [] :=
+/-- The inner `forRangeDyn "i_c"` stop op `tl.cdiv(BT, BC)` (= `(BT+BC-1)/BC`). -/
+def cdfStopOp (BT BC : Nat) : Op .nat [] :=
   Op.div .nat Broadcast.nil
     (Op.sub .nat Broadcast.nil
-      (Op.add .nat Broadcast.nil (Op.constNat 32) (Op.constNat 32)) (Op.constNat 1))
-    (Op.constNat 32)
+      (Op.add .nat Broadcast.nil (Op.constNat BT) (Op.constNat BC)) (Op.constNat 1))
+    (Op.constNat BC)
 
-theorem cdfStopOp_eval (s : BlockState) : evalOp cdfStopOp s = some (Tile.scalar 1) := by
+/-- In the single-inner-chunk regime `BC = BT` (with `0 < BT`) the stop op is `1`.
+This is the launcher's regime: it sets `BC = min(BT, 64)` (for `BK ≤ 64`), so
+`BC = BT` whenever `BT ≤ 64` — the checked configuration has `BT = 32`. -/
+theorem cdfStopOp_eval (BT BC : Nat) (hBC : BC = BT) (hBT : 0 < BT) (s : BlockState) :
+    evalOp (cdfStopOp BT BC) s = some (Tile.scalar 1) := by
+  have hdiv : (BT + BC - 1) / BC = 1 := by
+    subst hBC; refine Nat.div_eq_of_lt_le ?_ ?_ <;> omega
   simp only [cdfStopOp, evalOp_div, evalOp_sub, evalOp_add, evalOp_constNat,
     Option.bind_some, Option.bind_eq_bind]
   refine congrArg some ?_
   apply Tile.ext
   intro z
   simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
-    NumericDType.div, NumericDType.sub, NumericDType.add]
+    NumericDType.div, NumericDType.sub, NumericDType.add, hdiv]
 
-/-- The outer `forRange "i_t" 0 4 1` body (float-erased, algorithm layer). -/
-def cdfOuterBody (k v d v_new h : RegionName) : List Stmt :=
-  [ Stmt.assign .blockPtr [64, 64] "p_h"
+/-- The outer `forRange "i_t" 0 NT 1` body (float-erased, algorithm layer). -/
+def cdfOuterBody (k v d v_new h : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      T K V BT BC BK BV : Nat) : List Stmt :=
+  [ Stmt.assign .blockPtr [BK, BV] "p_h"
       (Op.makeBlockPtrDynOffsets h
         (Op.add .nat Broadcast.nil
-          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 16384))
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_h_h))
           (Op.mul .nat Broadcast.nil
-            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat 64))
-            (Op.constNat 64)))
-        [64, 64] [64, 64] [64, 1]
-        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 64),
-          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat 64)]),
-    Stmt.store .real [64, 64]
-      (.blockPtr (Op.ref .blockPtr [64, 64] "p_h") [0, 1])
-      (Op.ref .real [64, 64] "b_h") .none,
-    Stmt.assign .real [64, 64] "b_h_cumsum"
-      (Op.full [64, 64] (Op.const 0)),
-    Stmt.forRangeDyn "i_c" (Op.constNat 0) cdfStopOp (Op.constNat 1)
-      (chunkDeltaInnerBody k v d v_new 8192 128 1 8192 64 1 128 64 64 32 32 64 64),
-    Stmt.assign .real [64, 64] "b_h"
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat K))
+            (Op.constNat V)))
+        [K, V] [BK, BV] [s_h_t, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV)]),
+    Stmt.store .real [BK, BV]
+      (.blockPtr (Op.ref .blockPtr [BK, BV] "p_h") [0, 1])
+      (Op.ref .real [BK, BV] "b_h") .none,
+    Stmt.assign .real [BK, BV] "b_h_cumsum"
+      (Op.full [BK, BV] (Op.const 0)),
+    Stmt.forRangeDyn "i_c" (Op.constNat 0) (cdfStopOp BT BC) (Op.constNat 1)
+      (chunkDeltaInnerBody k v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BC BK BV),
+    Stmt.assign .real [BK, BV] "b_h"
       (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [64, 64] "b_h")
-        (Op.ref .real [64, 64] "b_h_cumsum")) ]
+        (Op.ref .real [BK, BV] "b_h")
+        (Op.ref .real [BK, BV] "b_h_cumsum")) ]
 
 /-- The prologue (algorithm layer): program ids, `b_h = 0`, and the
 `USE_INITIAL_STATE` `ifThen` seed (`p_h0` make + `b_h` load). -/
-def cdfPrologue (initial_state : RegionName) (USE_INITIAL_STATE : Bool) : List Stmt :=
+def cdfPrologue (initial_state : RegionName) (K V BK BV : Nat)
+    (USE_INITIAL_STATE : Bool) : List Stmt :=
   [ Stmt.assign .nat [] "i_k" (Op.programId 0),
     Stmt.assign .nat [] "i_v" (Op.programId 1),
     Stmt.assign .nat [] "i_bh" (Op.programId 2),
-    Stmt.assign .real [64, 64] "b_h" (Op.full [64, 64] (Op.const 0)),
+    Stmt.assign .real [BK, BV] "b_h" (Op.full [BK, BV] (Op.const 0)),
     Stmt.ifThen (Op.constBool USE_INITIAL_STATE)
-      [ Stmt.assign .blockPtr [64, 64] "p_h0"
+      [ Stmt.assign .blockPtr [BK, BV] "p_h0"
           (Op.makeBlockPtrDynOffsets initial_state
             (Op.mul .nat Broadcast.nil
-              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
-              (Op.constNat 64))
-            [64, 64] [64, 64] [64, 1]
-            [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 64),
-              Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat 64)]),
-        Stmt.assign .real [64, 64] "b_h"
-          (Op.load .real (.blockPtr (Op.ref .blockPtr [64, 64] "p_h0") [0, 1]) .none) ] ]
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat K))
+              (Op.constNat V))
+            [K, V] [BK, BV] [V, 1]
+            [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK),
+              Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV)]),
+        Stmt.assign .real [BK, BV] "b_h"
+          (Op.load .real (.blockPtr (Op.ref .blockPtr [BK, BV] "p_h0") [0, 1]) .none) ] ]
 
 /-- The epilogue (algorithm layer): the `STORE_FINAL_STATE` `ifThen` flush
 (`p_ht` make + `final_state` store). -/
-def cdfEpilogue (final_state : RegionName) (STORE_FINAL_STATE : Bool) : List Stmt :=
+def cdfEpilogue (final_state : RegionName) (K V BK BV : Nat)
+    (STORE_FINAL_STATE : Bool) : List Stmt :=
   [ Stmt.ifThen (Op.constBool STORE_FINAL_STATE)
-      [ Stmt.assign .blockPtr [64, 64] "p_ht"
+      [ Stmt.assign .blockPtr [BK, BV] "p_ht"
           (Op.makeBlockPtrDynOffsets final_state
             (Op.mul .nat Broadcast.nil
-              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat 64))
-              (Op.constNat 64))
-            [64, 64] [64, 64] [64, 1]
-            [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat 64),
-              Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat 64)]),
-        Stmt.store .real [64, 64]
-          (.blockPtr (Op.ref .blockPtr [64, 64] "p_ht") [0, 1])
-          (Op.ref .real [64, 64] "b_h") .none ] ]
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat K))
+              (Op.constNat V))
+            [K, V] [BK, BV] [V, 1]
+            [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK),
+              Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV)]),
+        Stmt.store .real [BK, BV]
+          (.blockPtr (Op.ref .blockPtr [BK, BV] "p_ht") [0, 1])
+          (Op.ref .real [BK, BV] "b_h") .none ] ]
 
 set_option maxRecDepth 8000 in
-/-- **Body split (by `rfl`).** The Python-shape surface lowers (float-erased) to
-the prologue, the single outer `forRange "i_t" 0 4 1` carrying `cdfOuterBody`, and
-the epilogue. -/
+/-- **Body split (by `rfl`).** The surface lowers (float-erased) to the prologue,
+the single outer `forRange "i_t" 0 NT 1` carrying `cdfOuterBody`, and the epilogue. -/
 theorem chunk_delta_fwd_body_split
     (k v d v_new h initial_state final_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) :
     (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-      8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t H T K V BT BC BK BV NT
       USE_INITIAL_STATE STORE_FINAL_STATE).toAlgKernel.body
-      = cdfPrologue initial_state USE_INITIAL_STATE
-        ++ [Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)]
-        ++ cdfEpilogue final_state STORE_FINAL_STATE := by
+      = cdfPrologue initial_state K V BK BV USE_INITIAL_STATE
+        ++ [Stmt.forRange "i_t" 0 NT 1 (cdfOuterBody k v d v_new h
+              s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT BC BK BV)]
+        ++ cdfEpilogue final_state K V BK BV STORE_FINAL_STATE := by
   cases USE_INITIAL_STATE <;> cases STORE_FINAL_STATE <;> rfl
 
 set_option maxHeartbeats 4000000 in
@@ -1151,9 +1252,12 @@ corrected `v_new[i_t]` block, and preserves `b_h`/pids/the loop registers and th
 `k`/`v`/`d` regions — the inner-loop face of one outer chunk. -/
 theorem cdfInnerLoop_run
     (k v d v_new : RegionName) (s sin : BlockState) (i_t : Nat) (fbh : Nat → Nat → ℝ)
-    (bhT : Tile .real [64, 64]) (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
+    (hBC : BC = BT) (hBT : 0 < BT)
+    (bhT : Tile .real [BK, BV]) (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
     (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d)
-    (hInj : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BC, BV] => cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx))
     (hmemK : ∀ off, sin.readMem k off = s.readMem k off)
     (hmemV : ∀ off, sin.readMem v off = s.readMem v off)
     (hmemD : ∀ off, sin.readMem d off = s.readMem d off)
@@ -1162,33 +1266,38 @@ theorem cdfInnerLoop_run
     (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
     (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
     (hit : sin.regs .nat [] "i_t" = some (Tile.scalar i_t))
-    (hbh : sin.regs .real [64, 64] "b_h" = some bhT)
-    (hcs : sin.regs .real [64, 64] "b_h_cumsum"
-        = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64])) :
-    ∃ s', stepStmt (Stmt.forRangeDyn "i_c" (Op.constNat 0) cdfStopOp (Op.constNat 1)
-        (chunkDeltaInnerBody k v d v_new 8192 128 1 8192 64 1 128 64 64 32 32 64 64)) sin
+    (hbh : sin.regs .real [BK, BV] "b_h" = some bhT)
+    (hcs : sin.regs .real [BK, BV] "b_h_cumsum"
+        = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [BK, BV])) :
+    ∃ s', stepStmt (Stmt.forRangeDyn "i_c" (Op.constNat 0) (cdfStopOp BT BC) (Op.constNat 1)
+        (chunkDeltaInnerBody k v d v_new s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV)) sin
         = some s'
       ∧ s'.pids = sin.pids
       ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
       ∧ s'.regs .nat [] "i_v" = sin.regs .nat [] "i_v"
       ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
       ∧ s'.regs .nat [] "i_t" = some (Tile.scalar i_t)
-      ∧ s'.regs .real [64, 64] "b_h" = some bhT
-      ∧ s'.regs .real [64, 64] "b_h_cumsum" = some (cdfCumsumTile s k v d fbh i_t)
+      ∧ s'.regs .real [BK, BV] "b_h" = some bhT
+      ∧ s'.regs .real [BK, BV] "b_h_cumsum"
+          = some (cdfCumsumTile s k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              T K V BT BC BK BV fbh i_t)
       ∧ (∀ off, s'.readMem k off = s.readMem k off)
       ∧ (∀ off, s'.readMem v off = s.readMem v off)
       ∧ (∀ off, s'.readMem d off = s.readMem d off)
       ∧ (∀ rg off, rg ≠ v_new → s'.readMem rg off = sin.readMem rg off)
-      ∧ (∀ idx : TileIndex [32, 64],
-          (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
-          s'.readMem v_new (cdfVNewAddr s i_t idx)
-            = cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)
-      ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
+      ∧ (∀ idx : TileIndex [BC, BV],
+          (i_t * BT + 0 * BC + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) →
+          s'.readMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx)
+            = cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                T K V BT BV BK fbh i_t idx.1.val idx.2.1.val)
+      ∧ (∀ off, (∀ idx : TileIndex [BC, BV],
+            off ≠ cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx) →
           s'.readMem v_new off = sin.readMem v_new off) := by
   -- carry invariant: at counter 0, the entry state; at counter 1, the post-conditions.
   obtain ⟨final, s', hstep, hfinal, hP⟩ :=
     forRangeDyn_inv (idx := "i_c") (start := 0) (stop := 1) (step := 1)
-      (startOp := Op.constNat 0) (stopOp := cdfStopOp) (stepOp := Op.constNat 1)
+      (startOp := Op.constNat 0) (stopOp := cdfStopOp BT BC) (stepOp := Op.constNat 1)
       (s_init := sin)
       (P := fun n st =>
         (n = 0 →
@@ -1200,8 +1309,9 @@ theorem cdfInnerLoop_run
           ∧ st.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
           ∧ st.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
           ∧ st.regs .nat [] "i_t" = some (Tile.scalar i_t)
-          ∧ st.regs .real [64, 64] "b_h" = some bhT
-          ∧ st.regs .real [64, 64] "b_h_cumsum" = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [64, 64])
+          ∧ st.regs .real [BK, BV] "b_h" = some bhT
+          ∧ st.regs .real [BK, BV] "b_h_cumsum"
+              = some (⟨fun _ => some (0:ℝ)⟩ : Tile .real [BK, BV])
           ∧ (∀ off, st.readMem v_new off = sin.readMem v_new off)
           ∧ (∀ rg off, st.readMem rg off = sin.readMem rg off)) ∧
         (n ≥ 1 →
@@ -1210,19 +1320,23 @@ theorem cdfInnerLoop_run
           ∧ st.regs .nat [] "i_v" = sin.regs .nat [] "i_v"
           ∧ st.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
           ∧ st.regs .nat [] "i_t" = some (Tile.scalar i_t)
-          ∧ st.regs .real [64, 64] "b_h" = some bhT
-          ∧ st.regs .real [64, 64] "b_h_cumsum" = some (cdfCumsumTile s k v d fbh i_t)
+          ∧ st.regs .real [BK, BV] "b_h" = some bhT
+          ∧ st.regs .real [BK, BV] "b_h_cumsum"
+              = some (cdfCumsumTile s k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                  T K V BT BC BK BV fbh i_t)
           ∧ (∀ off, st.readMem k off = s.readMem k off)
           ∧ (∀ off, st.readMem v off = s.readMem v off)
           ∧ (∀ off, st.readMem d off = s.readMem d off)
           ∧ (∀ rg off, rg ≠ v_new → st.readMem rg off = sin.readMem rg off)
-          ∧ (∀ idx : TileIndex [32, 64],
-              (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
-              st.readMem v_new (cdfVNewAddr s i_t idx)
-                = cdfBvNewCell s v d fbh i_t idx.1.val idx.2.1.val)
-          ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
+          ∧ (∀ idx : TileIndex [BC, BV],
+              (i_t * BT + 0 * BC + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) →
+              st.readMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx)
+                = cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                    T K V BT BV BK fbh i_t idx.1.val idx.2.1.val)
+          ∧ (∀ off, (∀ idx : TileIndex [BC, BV],
+                off ≠ cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx) →
               st.readMem v_new off = sin.readMem v_new off)))
-      (by simp [evalOp]) (cdfStopOp_eval sin) (by simp [evalOp]) (by norm_num)
+      (by simp [evalOp]) (cdfStopOp_eval BT BC hBC hBT sin) (by simp [evalOp]) (by norm_num)
       ⟨fun _ => ⟨hmemK, hmemV, hmemD, hpids, hik, hiv, hibh, hit, hbh, hcs,
           fun _ => rfl, fun _ _ => rfl⟩,
         fun h => absurd h (by norm_num)⟩
@@ -1236,7 +1350,9 @@ theorem cdfInnerLoop_run
         set sc := st.setReg "i_c" .nat [] (Tile.scalar 0) with hsc
         obtain ⟨s'', hbody, hp'', hik'', hiv'', hibh'', hit'', hbh'', hcs'',
           hk'', hv'', hd'', hgen'', hvn'', hoth''⟩ :=
-          chunkDeltaInnerBody_step k v d v_new s sc i_t fbh bhT hbhf hVk hVv hVd hInj
+          chunkDeltaInnerBody_step k v d v_new s sc i_t fbh
+            s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV
+            bhT hbhf hVk hVv hVd hInj
             (by rw [hsc]; intro off; simp [BlockState.setReg_readMem, hmemKSt])
             (by rw [hsc]; intro off; simp [BlockState.setReg_readMem, hmemVSt])
             (by rw [hsc]; intro off; simp [BlockState.setReg_readMem, hmemDSt])
@@ -1271,43 +1387,54 @@ theorem cdfInnerLoop_run
     hpost hfinal
   exact ⟨s', hstep, hp, hik', hiv', hibh', hit', hbh', hcs', hk', hv', hd', hgen', hvn', hoth'⟩
 
-/-- Abbreviation for the Python-shape genuine state value (`i_k = 0` regime). -/
-noncomputable def cdfState (s : BlockState) (k v d initial_state : RegionName)
-    (USE_INITIAL_STATE : Bool) (i_t e p : Nat) : ℝ :=
-  stateValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-    USE_INITIAL_STATE i_t e p
-
 set_option maxHeartbeats 4000000 in
-/-- **State-advance linchpin (general `fbh`).** The `cdfCumsumTile` cell at active
+/-- **State-advance linchpin (general `fbh`).** The `cdfCumsumCell` at active
 lane `(e,p)` built from any `fbh` that agrees with the chunk-start state on column
-`p` (all `e'`) equals the closed-form advance increment. -/
+`p` (all `e'`) equals the closed-form advance increment.
+
+The three scope hypotheses are what make the concrete masked fold and the unmasked
+closed form agree: `hBC` (a single inner chunk), `hBK : BK ≤ K` (no key-axis
+boundary lane inside the block — the host's `NK == 1` assertion gives the reverse
+inclusion, so in practice `BK = K`), and `hTNT : NT * BT ≤ T` (no partial trailing
+time chunk, i.e. `BT ∣ T` under the launcher's `NT = cdiv(T, BT)`). -/
 theorem cdfAdvance_active_of
     (s : BlockState) (k v d initial_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT : Nat)
+    (hBC : BC = BT) (hBK : BK ≤ K) (hTNT : NT * BT ≤ T)
     (fbh : Nat → Nat → ℝ)
-    (i_t : Nat) (hit : i_t < 4) (e p : Nat) (he : e < 64) (hp : s.pids 1 * 64 + p < 64)
-    (hcol : ∀ e' : Nat, e' < 64 →
-      fbh e' p = cdfState s k v d initial_state USE_INITIAL_STATE i_t e' p) :
-    (cdfCumsumTile s k v d fbh i_t).data (⟨e, by omega⟩, ⟨p, by omega⟩, PUnit.unit)
-      = some (cdfState s k v d initial_state USE_INITIAL_STATE (i_t + 1) e p
-          - cdfState s k v d initial_state USE_INITIAL_STATE i_t e p) := by
-  simp only [cdfCumsumTile, cdfState, stateValue]
-  refine congrArg some ?_
+    (i_t : Nat) (hit : i_t < NT) (e p : Nat) (he : e < K) (hp : s.pids 1 * BV + p < V)
+    (hcol : ∀ e' : Nat, e' < K →
+      fbh e' p = stateValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        K V BT BV BK USE_INITIAL_STATE i_t e' p) :
+    cdfCumsumCell s k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BC BK BV fbh i_t e p
+      = stateValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            K V BT BV BK USE_INITIAL_STATE (i_t + 1) e p
+        - stateValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            K V BT BV BK USE_INITIAL_STATE i_t e p := by
+  subst hBC
+  simp only [cdfCumsumCell, stateValue]
   rw [add_sub_cancel_left]
   refine Finset.sum_congr rfl (fun c _ => ?_)
-  have hc : i_t * 32 + c.val < 128 := by have := c.isLt; omega
+  have hc : i_t * BC + c.val < T := by
+    have hstep : (i_t + 1) * BC ≤ NT * BC := Nat.mul_le_mul_right BC hit
+    have hsucc : (i_t + 1) * BC = i_t * BC + BC := by rw [Nat.succ_mul]
+    have := c.isLt
+    omega
   rw [if_pos ⟨he, hc⟩]
   simp only [cdfBvNewCell]
   rw [if_pos ⟨hc, hp⟩]
   have hdsum :
-      (Finset.univ.sum (fun e' : Fin 64 =>
-        (if (i_t * 32 + c.val < 128 ∧ e'.val < 64) then
-            dElem s d 8192 128 1 32 i_t c.val e'.val else 0) * fbh e'.val p))
-      = Finset.univ.sum (fun e' : Fin 64 =>
-          dElem s d 8192 128 1 32 i_t c.val e'.val
-            * stateValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                USE_INITIAL_STATE i_t e'.val p) := by
+      (Finset.univ.sum (fun e' : Fin BK =>
+        (if (i_t * BC + c.val < T ∧ e'.val < K) then
+            dElem s d s_qk_h s_qk_t s_qk_d BC i_t c.val e'.val else 0) * fbh e'.val p))
+      = Finset.univ.sum (fun e' : Fin BK =>
+          dElem s d s_qk_h s_qk_t s_qk_d BC i_t c.val e'.val
+            * stateValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                K V BC BV BK USE_INITIAL_STATE i_t e'.val p) := by
     refine Finset.sum_congr rfl (fun e' _ => ?_)
-    rw [if_pos ⟨hc, e'.isLt⟩, hcol e'.val e'.isLt]; rfl
+    have he' : e'.val < K := Nat.lt_of_lt_of_le e'.isLt hBK
+    rw [if_pos ⟨hc, he'⟩, hcol e'.val he']
   rw [hdsum]
 
 /-! ### Outer-loop carry tile
@@ -1324,94 +1451,100 @@ recurrence match holds only on active lanes (where the stores read). -/
 block-ptr load (`initElem` on the active region when `USE_INITIAL_STATE`, else `0`).
 The boundary check matches the kernel's `tl.make_block_ptr` load mask exactly. -/
 noncomputable def cdfSeedCell (s : BlockState) (initial_state : RegionName)
-    (USE_INITIAL_STATE : Bool) (e p : Nat) : ℝ :=
-  if (s.pids 0 * 64 + e < 64 ∧ s.pids 1 * 64 + p < 64) then
-    (if USE_INITIAL_STATE then initElem s initial_state 64 64 64 e p else 0)
+    (K V BK BV : Nat) (USE_INITIAL_STATE : Bool) (e p : Nat) : ℝ :=
+  if (s.pids 0 * BK + e < K ∧ s.pids 1 * BV + p < V) then
+    (if USE_INITIAL_STATE then initElem s initial_state K V BV e p else 0)
   else 0
 
 /-- The concrete carry cell `(e,p)` after `c` chunks: the actual fold value
-`b_h` holds (seed + Σ of `cdfCumsumTile` increments). Total over all lanes. -/
+`b_h` holds (seed + Σ of `cdfCumsumCell` increments). Total over all lanes. -/
 noncomputable def cdfCarryCell (s : BlockState) (k v d initial_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
     (USE_INITIAL_STATE : Bool) : Nat → Nat → Nat → ℝ
-  | 0, e, p => cdfSeedCell s initial_state USE_INITIAL_STATE e p
+  | 0, e, p => cdfSeedCell s initial_state K V BK BV USE_INITIAL_STATE e p
   | c + 1, e, p =>
-      cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e p
-        + WithBot.unbotD 0
-            ((cdfCumsumTile s k v d
-                (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e' p') c).data
-              (⟨e % 64, Nat.mod_lt _ (by norm_num)⟩, ⟨p % 64, Nat.mod_lt _ (by norm_num)⟩, PUnit.unit))
+      cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV USE_INITIAL_STATE c e p
+        + cdfCumsumCell s k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV
+            (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+              s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE c e' p') c e p
 
-/-- The concrete `[64,64]` carry tile after `c` chunks (data `(e,p) ↦ cdfCarryCell`). -/
+/-- The concrete `[BK,BV]` carry tile after `c` chunks (data `(e,p) ↦ cdfCarryCell`). -/
 noncomputable def cdfCarryTile (s : BlockState) (k v d initial_state : RegionName)
-    (USE_INITIAL_STATE : Bool) (c : Nat) : Tile .real [64, 64] :=
-  ⟨fun idx => some (cdfCarryCell s k v d initial_state USE_INITIAL_STATE c idx.1.val idx.2.1.val)⟩
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
+    (USE_INITIAL_STATE : Bool) (c : Nat) : Tile .real [BK, BV] :=
+  ⟨fun idx => some (cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+    s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE c idx.1.val idx.2.1.val)⟩
 
 theorem cdfCarryTile_data (s : BlockState) (k v d initial_state : RegionName)
-    (USE_INITIAL_STATE : Bool) (c : Nat) (e p : Fin 64) :
-    (cdfCarryTile s k v d initial_state USE_INITIAL_STATE c).data (e, p, PUnit.unit)
-      = some (cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e.val p.val) := rfl
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
+    (USE_INITIAL_STATE : Bool) (c : Nat) (e : Fin BK) (p : Fin BV) :
+    (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BC BK BV USE_INITIAL_STATE c).data (e, p, PUnit.unit)
+      = some (cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV USE_INITIAL_STATE c e.val p.val) := rfl
 
 set_option maxHeartbeats 4000000 in
 /-- **Advance eval.** `b_h + b_h_cumsum`, with `b_h = cdfCarryTile c` and
 `b_h_cumsum = cdfCumsumTile` (built from the `cdfCarryCell c` fn), evaluates to
 `cdfCarryTile (c+1)`. -/
 theorem cdfAdvance_eval (s sin : BlockState) (k v d initial_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
     (USE_INITIAL_STATE : Bool) (c : Nat)
-    (hbh : sin.regs .real [64, 64] "b_h"
-        = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE c))
-    (hcs : sin.regs .real [64, 64] "b_h_cumsum"
-        = some (cdfCumsumTile s k v d
-            (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e' p') c)) :
+    (hbh : sin.regs .real [BK, BV] "b_h"
+        = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV USE_INITIAL_STATE c))
+    (hcs : sin.regs .real [BK, BV] "b_h_cumsum"
+        = some (cdfCumsumTile s k v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV
+            (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+              s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE c e' p') c)) :
     evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.ref .real [64, 64] "b_h")
-        (Op.ref .real [64, 64] "b_h_cumsum")) sin
-      = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE (c + 1)) := by
+        (Op.ref .real [BK, BV] "b_h")
+        (Op.ref .real [BK, BV] "b_h_cumsum")) sin
+      = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV USE_INITIAL_STATE (c + 1)) := by
   rw [evalOp_add]
   simp only [evalOp_ref, hbh, hcs, Option.bind_eq_bind, Option.bind_some]
   refine congrArg some ?_
   ext idx; obtain ⟨e, p, u⟩ := idx
   simp only [Tile.bop, Broadcast.consSame, Broadcast.leftIndex, Broadcast.rightIndex,
     cdfCarryTile, NumericDType.add, WithBot.realAdd, Option.map₂, Option.bind, Option.map,
-    cdfCarryCell, cdfCumsumTile, WithBot.unbotD_some]
-  rw [Nat.mod_eq_of_lt e.isLt, Nat.mod_eq_of_lt p.isLt]
+    cdfCarryCell, cdfCumsumTile]
 
-/-- **Carry-active match.** On the active region (`s.pids 0 * 64 + e < 64`,
-`s.pids 1 * 64 + p < 64`) and for `c ≤ 4`, the concrete carry cell `cdfCarryCell c`
+/-- **Carry-active match.** On the active region (`s.pids 0 * BK + e < K`,
+`s.pids 1 * BV + p < V`) and for `c ≤ NT`, the concrete carry cell `cdfCarryCell c`
 agrees with the genuine `stateValue c`. Proven by induction on `c` via
 `cdfAdvance_active_of`. -/
 theorem cdfCarry_active
     (s : BlockState) (k v d initial_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT : Nat)
+    (hBC : BC = BT) (hBK : BK ≤ K) (hTNT : NT * BT ≤ T)
     (hpids0 : s.pids 0 = 0)
-    (c : Nat) (hc : c ≤ 4) (e p : Nat) (he : e < 64) (hp : s.pids 1 * 64 + p < 64) :
-    cdfCarryCell s k v d initial_state USE_INITIAL_STATE c e p
-      = cdfState s k v d initial_state USE_INITIAL_STATE c e p := by
+    (c : Nat) (hc : c ≤ NT) (e p : Nat) (he : e < K) (hp : s.pids 1 * BV + p < V) :
+    cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BC BK BV USE_INITIAL_STATE c e p
+      = stateValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          K V BT BV BK USE_INITIAL_STATE c e p := by
   induction c generalizing e with
   | zero =>
-      simp only [cdfCarryCell, cdfSeedCell, cdfState, stateValue, initElem,
-        if_pos (show s.pids 0 * 64 + e < 64 ∧ s.pids 1 * 64 + p < 64 from
-          ⟨by rw [hpids0]; omega, hp⟩)]
+      simp only [cdfCarryCell, cdfSeedCell, stateValue, initElem,
+        if_pos (show s.pids 0 * BK + e < K ∧ s.pids 1 * BV + p < V from
+          ⟨by rw [hpids0, Nat.zero_mul, Nat.zero_add]; exact he, hp⟩)]
   | succ n ih =>
-      have hn4 : n < 4 := by omega
-      have hnle : n ≤ 4 := by omega
+      have hnlt : n < NT := by omega
+      have hnle : n ≤ NT := by omega
       simp only [cdfCarryCell]
       have hcell := cdfAdvance_active_of s k v d initial_state USE_INITIAL_STATE
-        (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE n e' p')
-        n hn4 e p he hp
+        s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT hBC hBK hTNT
+        (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE n e' p')
+        n hnlt e p he hp
         (fun e' he'' => ih hnle e' he'')
-      rw [show (⟨e % 64, Nat.mod_lt _ (by norm_num)⟩ : Fin 64) = (⟨e, by omega⟩ : Fin 64) from
-            by simp [Nat.mod_eq_of_lt he],
-          show (⟨p % 64, Nat.mod_lt _ (by norm_num)⟩ : Fin 64) = (⟨p, by omega⟩ : Fin 64) from
-            by simp [Nat.mod_eq_of_lt (by omega : p < 64)]]
-      rw [hcell, WithBot.unbotD_some]
-      rw [ih (by omega) e he]
-      -- cdfState n + (cdfState (n+1) - cdfState n) = cdfState (n+1)
+      rw [hcell, ih hnle e he]
       ring
 
 /-! ### Outer-loop body step and carry invariant -/
-
-/-- The `h[i_t]` block-ptr store offset at lane `(e,p)` (Python shape). -/
-abbrev cdfHAddr (s : BlockState) (i_t : Nat) (idx : TileIndex [64, 64]) : Nat :=
-  hOffset s i_t 16384 64 64 64 64 64 idx
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
@@ -1422,11 +1555,16 @@ into `h[c]` at every active lane, writes the corrected `v_new[c]` block, and
 preserves pids / `i_k`/`i_bh` / the `k`/`v`/`d` regions. -/
 theorem cdfOuterBody_step
     (k v d v_new h initial_state : RegionName) (USE_INITIAL_STATE : Bool)
-    (s sin : BlockState) (i_t : Nat) (hit : i_t < 4) (hpids0 : s.pids 0 = 0)
+    (s sin : BlockState)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT BC BK BV : Nat)
+    (hBC : BC = BT) (hBT : 0 < BT)
+    (i_t : Nat) (hpids0 : s.pids 0 = 0)
     (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
     (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
-    (hInjV : Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t idx))
-    (hInjH : Function.Injective (fun idx : TileIndex [64, 64] => cdfHAddr s i_t idx))
+    (hInjV : Function.Injective
+      (fun idx : TileIndex [BC, BV] => cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx))
+    (hInjH : Function.Injective
+      (fun idx : TileIndex [BK, BV] => hOffset s i_t s_h_h s_h_t K V BK BV idx))
     (hmemK : ∀ off, sin.readMem k off = s.readMem k off)
     (hmemV : ∀ off, sin.readMem v off = s.readMem v off)
     (hmemD : ∀ off, sin.readMem d off = s.readMem d off)
@@ -1435,67 +1573,76 @@ theorem cdfOuterBody_step
     (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
     (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
     (hit2 : sin.regs .nat [] "i_t" = some (Tile.scalar i_t))
-    (hbh : sin.regs .real [64, 64] "b_h"
-        = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE i_t)) :
-    ∃ s', stepStmts (cdfOuterBody k v d v_new h) sin = some s'
+    (hbh : sin.regs .real [BK, BV] "b_h"
+        = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV USE_INITIAL_STATE i_t)) :
+    ∃ s', stepStmts (cdfOuterBody k v d v_new h s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        s_h_h s_h_t T K V BT BC BK BV) sin = some s'
       ∧ s'.pids = sin.pids
       ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
       ∧ s'.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
       ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
-      ∧ s'.regs .real [64, 64] "b_h"
-          = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE (i_t + 1))
+      ∧ s'.regs .real [BK, BV] "b_h"
+          = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              T K V BT BC BK BV USE_INITIAL_STATE (i_t + 1))
       ∧ (∀ off, s'.readMem k off = s.readMem k off)
       ∧ (∀ off, s'.readMem v off = s.readMem v off)
       ∧ (∀ off, s'.readMem d off = s.readMem d off)
       -- h[i_t] active lanes hold the chunk-start carry cell
-      ∧ (∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-          s'.readMem h (cdfHAddr s i_t idx)
-            = cdfCarryCell s k v d initial_state USE_INITIAL_STATE i_t idx.1.val idx.2.1.val)
+      ∧ (∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+          s'.readMem h (hOffset s i_t s_h_h s_h_t K V BK BV idx)
+            = cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                T K V BT BC BK BV USE_INITIAL_STATE i_t idx.1.val idx.2.1.val)
       -- h off chunk-i_t block is unchanged
-      ∧ (∀ off, (∀ idx : TileIndex [64, 64], off ≠ cdfHAddr s i_t idx) →
+      ∧ (∀ off, (∀ idx : TileIndex [BK, BV],
+            off ≠ hOffset s i_t s_h_h s_h_t K V BK BV idx) →
           s'.readMem h off = sin.readMem h off)
       -- v_new[i_t] active lanes hold the corrected value
-      ∧ (∀ idx : TileIndex [32, 64],
-          (i_t * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
-          s'.readMem v_new (cdfVNewAddr s i_t idx)
-            = cdfBvNewCell s v d
-                (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE i_t e' p')
+      ∧ (∀ idx : TileIndex [BC, BV],
+          (i_t * BT + 0 * BC + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) →
+          s'.readMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx)
+            = cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BV BK
+                (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+                  s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE i_t e' p')
                 i_t idx.1.val idx.2.1.val)
-      ∧ (∀ off, (∀ idx : TileIndex [32, 64], off ≠ cdfVNewAddr s i_t idx) →
+      ∧ (∀ off, (∀ idx : TileIndex [BC, BV],
+            off ≠ cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t idx) →
           s'.readMem v_new off = sin.readMem v_new off) := by
-  set fbh := fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE i_t e' p' with hfbh
+  set fbh := fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+    s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE i_t e' p' with hfbh
   unfold cdfOuterBody
   -- p_h make
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (makeBlockPtr_2d_eval h sin _ _ _ [64, 64] [64, 64] [64, 1]
-      (s.pids 2 * 16384 + i_t * 64 * 64) (0 * 64) (s.pids 1 * 64)
-      (addMulMulMul_eval sin "i_bh" "i_t" (s.pids 2) 16384 i_t 64 64 hibh hit2)
-      (mulConst_eval sin "i_k" 0 64 hik)
-      (mulConst_eval sin "i_v" (s.pids 1) 64 hiv)))]
-  -- h store (offsets [0, pids1*64] = [pids0*64, pids1*64] since pids0 = 0)
-  rw [stepStmts.cons_some (cdfStore_h_step_eq s _ h i_t fbh
-      (cdfCarryTile s k v d initial_state USE_INITIAL_STATE i_t)
+    (makeBlockPtr_2d_eval h sin _ _ _ [K, V] [BK, BV] [s_h_t, 1]
+      (s.pids 2 * s_h_h + i_t * K * V) (0 * BK) (s.pids 1 * BV)
+      (addMulMulMul_eval sin "i_bh" "i_t" (s.pids 2) s_h_h i_t K V hibh hit2)
+      (mulConst_eval sin "i_k" 0 BK hik)
+      (mulConst_eval sin "i_v" (s.pids 1) BV hiv)))]
+  -- h store (offsets [0, pids1*BV] = [pids0*BK, pids1*BV] since pids0 = 0)
+  rw [stepStmts.cons_some (cdfStore_h_step_eq s _ h s_h_h s_h_t K V BK BV i_t fbh
+      (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BC BK BV USE_INITIAL_STATE i_t)
       (fun e p => by rw [cdfCarryTile_data])
       (by simp [BlockState.setReg_same, hbh])
       (by simp [BlockState.setReg_same, hpids0]))]
   obtain ⟨hpidsH, hregsH, hvnewH, hotherH, hoffH⟩ :=
     cdfStore_h_step_props s
-      (sin.setReg "p_h" .blockPtr [64, 64]
-        (⟨fun _ => BlockPtr.mk h (s.pids 2 * 16384 + i_t * 64 * 64) [64, 64] [64, 64] [64, 1]
-          [0 * 64, s.pids 1 * 64]⟩ : Tile .blockPtr [64, 64]))
-      h i_t fbh hInjH
+      (sin.setReg "p_h" .blockPtr [BK, BV]
+        (⟨fun _ => BlockPtr.mk h (s.pids 2 * s_h_h + i_t * K * V) [K, V] [BK, BV] [s_h_t, 1]
+          [0 * BK, s.pids 1 * BV]⟩ : Tile .blockPtr [BK, BV]))
+      h s_h_h s_h_t K V BK BV i_t fbh hInjH
   -- b_h_cumsum = 0
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.full [64, 64] (Op.const 0)) _
-        = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) from by
+    (show evalOp (Op.full [BK, BV] (Op.const 0)) _
+        = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BK, BV]) from by
       simp [evalOp_full, evalOp_const]))]
   -- name the p_h-setReg state by generalizing the block-ptr tile it stores
-  generalize hsP : sin.setReg "p_h" .blockPtr [64, 64]
-      (⟨fun _ => BlockPtr.mk h (s.pids 2 * 16384 + i_t * 64 * 64) [64, 64] [64, 64] [64, 1]
-        [0 * 64, s.pids 1 * 64]⟩ : Tile .blockPtr [64, 64]) = sP at hpidsH hregsH hvnewH hotherH hoffH ⊢
-  set sH := cdfHStoreState s sP h i_t fbh with hsH
-  set sIn := sH.setReg "b_h_cumsum" .real [64, 64]
-      (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) with hsIn
+  generalize hsP : sin.setReg "p_h" .blockPtr [BK, BV]
+      (⟨fun _ => BlockPtr.mk h (s.pids 2 * s_h_h + i_t * K * V) [K, V] [BK, BV] [s_h_t, 1]
+        [0 * BK, s.pids 1 * BV]⟩ : Tile .blockPtr [BK, BV]) = sP at hpidsH hregsH hvnewH hotherH hoffH ⊢
+  set sH := cdfHStoreState s sP h s_h_h s_h_t K V BK BV i_t fbh with hsH
+  set sIn := sH.setReg "b_h_cumsum" .real [BK, BV]
+      (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BK, BV]) with hsIn
   -- relate sP's registers/pids/memory to sin
   have hsP_pids : sP.pids = sin.pids := by rw [← hsP]; simp [BlockState.setReg_pids]
   have hsP_regs : ∀ {dt sh} (nm : RegName), nm ≠ "p_h" →
@@ -1520,7 +1667,9 @@ theorem cdfOuterBody_step
   obtain ⟨sInner, hInnerStep, hpidsI, hikI, hivI, hibhI, hitI, hbhI, hcsI,
     hkI, hvI, hdI, hgenI, hvnewI, hothI⟩ :=
     cdfInnerLoop_run k v d v_new s sIn
-      i_t fbh (cdfCarryTile s k v d initial_state USE_INITIAL_STATE i_t)
+      i_t fbh s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV hBC hBT
+      (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BC BK BV USE_INITIAL_STATE i_t)
       (fun e p => by rw [cdfCarryTile_data])
       hVk hVv hVd hInjV
       (hmemIn k hHk.symm hmemK) (hmemIn v hHv2.symm hmemV) (hmemIn d hHd.symm hmemD)
@@ -1534,7 +1683,8 @@ theorem cdfOuterBody_step
   rw [stepStmts.cons_some hInnerStep]
   -- advance
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cdfAdvance_eval s sInner k v d initial_state USE_INITIAL_STATE i_t hbhI hcsI))]
+    (cdfAdvance_eval s sInner k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+      T K V BT BC BK BV USE_INITIAL_STATE i_t hbhI hcsI))]
   rw [stepStmts.nil]
   refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
   · -- pids
@@ -1556,7 +1706,7 @@ theorem cdfOuterBody_step
     intro off; rw [BlockState.setReg_readMem]; exact hdI off
   · -- h active readback
     intro idx hidx
-    rw [BlockState.setReg_readMem, hgenI h (cdfHAddr s i_t idx) hHv,
+    rw [BlockState.setReg_readMem, hgenI h (hOffset s i_t s_h_h s_h_t K V BK BV idx) hHv,
       hsIn, BlockState.setReg_readMem, hvnewH idx hidx]
   · -- h off-block unchanged
     intro off hoff
@@ -1570,109 +1720,171 @@ theorem cdfOuterBody_step
 
 /-! ### Cross-chunk block disjointness
 
-Distinct time chunks `j ≠ c` write disjoint `[64,64]` blocks of `h` (block size
-`64*64 = 4096`) and disjoint `[32,64]` blocks of `v_new` (block size `32*64 =
-2048`, stride `64`), so chunk `c`'s store leaves chunk `j`'s readback intact. -/
+Distinct time chunks `j ≠ c` write disjoint `[BK,BV]` blocks of `h` (block size
+`K*V`) and disjoint `[BC,BV]` row bands of `v_new` (row stride `s_vo_t`), so chunk
+`c`'s store leaves chunk `j`'s readback intact. Each direction needs one *block-fit*
+hypothesis — that a whole tile fits inside its stride — which the launcher's
+contiguous layouts supply (`h.stride(2) = V`, `v_new.stride(3) = 1`). -/
 
+/-- If two `Q`-blocks with in-block offsets `A, B < Q` collide, the block indices
+are equal. The engine behind both disjointness lemmas. -/
+private theorem block_index_inj {Q j c A B : Nat} (hA : A < Q) (hB : B < Q)
+    (heq : j * Q + A = c * Q + B) : j = c := by
+  have hQ : 0 < Q := Nat.lt_of_le_of_lt (Nat.zero_le A) hA
+  have hj : (j * Q + A) / Q = j := by
+    rw [Nat.mul_comm, Nat.mul_add_div hQ, Nat.div_eq_of_lt hA, Nat.add_zero]
+  have hc : (c * Q + B) / Q = c := by
+    rw [Nat.mul_comm, Nat.mul_add_div hQ, Nat.div_eq_of_lt hB, Nat.add_zero]
+  rw [← hj, heq, hc]
+
+/-- `hHBlock` says a whole `[BK,BV]` tile fits inside one `K*V` chunk block of `h`
+(equality under the launcher's `BK = K`, `BV = V`, `s_h_t = V`). -/
 theorem cdfHAddr_chunk_disjoint (s : BlockState) (hpids0 : s.pids 0 = 0)
-    (j c : Nat) (hjc : j ≠ c) (idxj idxc : TileIndex [64, 64]) :
-    cdfHAddr s j idxj ≠ cdfHAddr s c idxc := by
+    (s_h_h s_h_t K V BK BV : Nat) (hHBlock : (BK - 1) * s_h_t + BV ≤ K * V)
+    (j c : Nat) (hjc : j ≠ c) (idxj idxc : TileIndex [BK, BV]) :
+    hOffset s j s_h_h s_h_t K V BK BV idxj ≠ hOffset s c s_h_h s_h_t K V BK BV idxc := by
   obtain ⟨⟨ej, hej⟩, ⟨pj, hpj⟩, _⟩ := idxj
   obtain ⟨⟨ec, hec⟩, ⟨pc, hpc⟩, _⟩ := idxc
-  simp only [cdfHAddr, hOffset, kIndex, vIndex, hpids0]
+  simp only [hOffset, kIndex, vIndex, hpids0, Nat.zero_mul, Nat.zero_add]
   intro heq
-  -- pids2*16384 + j*4096 + (0*64+ej)*64 + (pids1*64+pj) = ... c ...
-  -- in-block offset ej*64+pj < 4096; blocks at j*4096 vs c*4096 are disjoint
   apply hjc
-  nlinarith [hej, hpj, hec, hpc]
+  have hbound : ∀ e p : Nat, e < BK → p < BV → e * s_h_t + p < K * V := by
+    intro e p he hp
+    have h1 : e * s_h_t ≤ (BK - 1) * s_h_t := Nat.mul_le_mul_right s_h_t (by omega)
+    omega
+  refine block_index_inj (Q := K * V) (A := ej * s_h_t + pj) (B := ec * s_h_t + pc)
+    (hbound ej pj hej hpj) (hbound ec pc hec hpc) ?_
+  -- cancel the shared `pids 2 * s_h_h` base and the shared `pids 1 * BV` column base
+  have h1 : ej * s_h_t ≤ (BK - 1) * s_h_t := Nat.mul_le_mul_right s_h_t (by omega)
+  have h2 : ec * s_h_t ≤ (BK - 1) * s_h_t := Nat.mul_le_mul_right s_h_t (by omega)
+  have hjm : j * (K * V) = j * K * V := by rw [Nat.mul_assoc]
+  have hcm : c * (K * V) = c * K * V := by rw [Nat.mul_assoc]
+  omega
 
+/-- `hVBlock` says a whole `BV` lane block fits inside one `v_new` row stride
+(`BV ≤ V = s_vo_t` under the launcher's contiguous `s_vo_d = 1`). -/
 theorem cdfVNewAddr_chunk_disjoint (s : BlockState)
-    (j c : Nat) (hjc : j ≠ c) (idxj idxc : TileIndex [32, 64]) :
-    cdfVNewAddr s j idxj ≠ cdfVNewAddr s c idxc := by
+    (s_vo_h s_vo_t s_vo_d BT BC BV : Nat) (hBCle : BC ≤ BT) (hBT : 0 < BT)
+    (hVod : 0 < s_vo_d) (hVBlock : BV * s_vo_d ≤ s_vo_t)
+    (j c : Nat) (hjc : j ≠ c) (idxj idxc : TileIndex [BC, BV]) :
+    cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV j idxj
+      ≠ cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV c idxc := by
   obtain ⟨⟨cj, hcj⟩, ⟨pj, hpj⟩, _⟩ := idxj
   obtain ⟨⟨cc, hcc⟩, ⟨pc, hpc⟩, _⟩ := idxc
-  simp only [cdfVNewAddr]
+  simp only [cdfVNewAddr, Nat.zero_mul, Nat.add_zero]
   intro heq
   apply hjc
-  -- (j*32+cj)*64 + (pids1*64+pj) = (c*32+cc)*64 + (pids1*64+pc); cj,cc<32, pj,pc<64
-  nlinarith [hcj, hpj, hcc, hpc]
+  have hlane : ∀ p : Nat, p < BV → p * s_vo_d < s_vo_t := by
+    intro p hp
+    have := mul_lt_mul_of_pos_right hp hVod
+    omega
+  -- first: the row indices `j*BT + cj` and `c*BT + cc` agree
+  have hrow : j * BT + cj = c * BT + cc := by
+    refine block_index_inj (Q := s_vo_t) (A := pj * s_vo_d) (B := pc * s_vo_d)
+      (hlane pj hpj) (hlane pc hpc) ?_
+    have e1 : (j * BT + 0 * BC + cj) * s_vo_t = (j * BT + cj) * s_vo_t := by
+      rw [Nat.zero_mul, Nat.add_zero]
+    have e2 : (c * BT + 0 * BC + cc) * s_vo_t = (c * BT + cc) * s_vo_t := by
+      rw [Nat.zero_mul, Nat.add_zero]
+    have e3 : (s.pids 1 * BV + pj) * s_vo_d = s.pids 1 * BV * s_vo_d + pj * s_vo_d :=
+      Nat.add_mul _ _ _
+    have e4 : (s.pids 1 * BV + pc) * s_vo_d = s.pids 1 * BV * s_vo_d + pc * s_vo_d :=
+      Nat.add_mul _ _ _
+    omega
+  exact block_index_inj (Q := BT) (A := cj) (B := cc)
+    (Nat.lt_of_lt_of_le hcj hBCle) (Nat.lt_of_lt_of_le hcc hBCle) hrow
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
-/-- **Outer-loop carry.** Driving the static `forRange "i_t" 0 4 1 cdfOuterBody`
+/-- **Outer-loop carry.** Driving the static `forRange "i_t" 0 NT 1 cdfOuterBody`
 from the post-prologue state `s0` (b_h = seed = `cdfCarryTile 0`) folds the state
-across all 4 chunks: every chunk `j < 4` has its chunk-start carry cell stored into
-`h[j]` and its corrected value into `v_new[j]` (at active lanes), with `b_h`
-holding `cdfCarryTile 4` at the end, and the `k`/`v`/`d` regions preserved. -/
+across all `NT` chunks: every chunk `j < NT` has its chunk-start carry cell stored
+into `h[j]` and its corrected value into `v_new[j]` (at active lanes), with `b_h`
+holding `cdfCarryTile NT` at the end, and the `k`/`v`/`d` regions preserved. -/
 theorem cdfOuterLoop_run
     (k v d v_new h initial_state : RegionName) (USE_INITIAL_STATE : Bool)
-    (s s0 : BlockState) (hpids0 : s.pids 0 = 0)
+    (s s0 : BlockState)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT BC BK BV NT : Nat)
+    (hBC : BC = BT) (hBT : 0 < BT) (hVod : 0 < s_vo_d)
+    (hHBlock : (BK - 1) * s_h_t + BV ≤ K * V) (hVBlock : BV * s_vo_d ≤ s_vo_t)
+    (hpids0 : s.pids 0 = 0)
     (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
     (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
-    (hInjV : ∀ i_t : Fin 4,
-      Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t.val idx))
-    (hInjH : ∀ i_t : Fin 4,
-      Function.Injective (fun idx : TileIndex [64, 64] => cdfHAddr s i_t.val idx))
+    (hInjV : ∀ i_t : Fin NT, Function.Injective
+      (fun idx : TileIndex [BC, BV] =>
+        cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t.val idx))
+    (hInjH : ∀ i_t : Fin NT, Function.Injective
+      (fun idx : TileIndex [BK, BV] => hOffset s i_t.val s_h_h s_h_t K V BK BV idx))
     (hmem : ∀ rg off, s0.readMem rg off = s.readMem rg off)
     (hpids : s0.pids = s.pids)
     (hik : s0.regs .nat [] "i_k" = some (Tile.scalar 0))
     (hiv : s0.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
     (hibh : s0.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
-    (hbh : s0.regs .real [64, 64] "b_h"
-        = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 0)) :
-    ∃ s', stepStmt (Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)) s0 = some s'
+    (hbh : s0.regs .real [BK, BV] "b_h"
+        = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV USE_INITIAL_STATE 0)) :
+    ∃ s', stepStmt (Stmt.forRange "i_t" 0 NT 1 (cdfOuterBody k v d v_new h
+        s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT BC BK BV)) s0 = some s'
       ∧ s'.pids = s.pids
       ∧ s'.regs .nat [] "i_k" = some (Tile.scalar 0)
       ∧ s'.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
       ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
-      ∧ s'.regs .real [64, 64] "b_h"
-          = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 4)
+      ∧ s'.regs .real [BK, BV] "b_h"
+          = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              T K V BT BC BK BV USE_INITIAL_STATE NT)
       ∧ (∀ off, s'.readMem k off = s.readMem k off)
       ∧ (∀ off, s'.readMem v off = s.readMem v off)
       ∧ (∀ off, s'.readMem d off = s.readMem d off)
-      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-          s'.readMem h (cdfHAddr s j.val idx)
-            = cdfCarryCell s k v d initial_state USE_INITIAL_STATE j.val idx.1.val idx.2.1.val)
-      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [32, 64],
-          (j.val * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
-          s'.readMem v_new (cdfVNewAddr s j.val idx)
-            = cdfBvNewCell s v d
-                (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE j.val e' p')
+      ∧ (∀ j : Fin NT, ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+          s'.readMem h (hOffset s j.val s_h_h s_h_t K V BK BV idx)
+            = cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                T K V BT BC BK BV USE_INITIAL_STATE j.val idx.1.val idx.2.1.val)
+      ∧ (∀ j : Fin NT, ∀ idx : TileIndex [BC, BV],
+          (j.val * BT + 0 * BC + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) →
+          s'.readMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV j.val idx)
+            = cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BV BK
+                (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+                  s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE j.val e' p')
                 j.val idx.1.val idx.2.1.val) := by
   obtain ⟨final, s', hstep, hfinal, hP⟩ :=
-    forRange_inv (idx := "i_t") (start := 0) (stop := 4) (step := 1)
+    forRange_inv (idx := "i_t") (start := 0) (stop := NT) (step := 1)
       (s_init := s0)
       (P := fun c st =>
-        c ≤ 4
+        c ≤ NT
         ∧ st.pids = s.pids
         ∧ st.regs .nat [] "i_k" = some (Tile.scalar 0)
         ∧ st.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
         ∧ st.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
-        ∧ st.regs .real [64, 64] "b_h"
-            = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE c)
+        ∧ st.regs .real [BK, BV] "b_h"
+            = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                T K V BT BC BK BV USE_INITIAL_STATE c)
         ∧ (∀ off, st.readMem k off = s.readMem k off)
         ∧ (∀ off, st.readMem v off = s.readMem v off)
         ∧ (∀ off, st.readMem d off = s.readMem d off)
-        ∧ (∀ j, j < c → ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-            st.readMem h (cdfHAddr s j idx)
-              = cdfCarryCell s k v d initial_state USE_INITIAL_STATE j idx.1.val idx.2.1.val)
-        ∧ (∀ j, j < c → ∀ idx : TileIndex [32, 64],
-            (j * 32 + 0 * 32 + idx.1.val < 128 ∧ s.pids 1 * 64 + idx.2.1.val < 64) →
-            st.readMem v_new (cdfVNewAddr s j idx)
-              = cdfBvNewCell s v d
-                  (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE j e' p')
+        ∧ (∀ j, j < c → ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+            st.readMem h (hOffset s j s_h_h s_h_t K V BK BV idx)
+              = cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                  T K V BT BC BK BV USE_INITIAL_STATE j idx.1.val idx.2.1.val)
+        ∧ (∀ j, j < c → ∀ idx : TileIndex [BC, BV],
+            (j * BT + 0 * BC + idx.1.val < T ∧ s.pids 1 * BV + idx.2.1.val < V) →
+            st.readMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV j idx)
+              = cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BV BK
+                  (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+                    s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE j e' p')
                   j idx.1.val idx.2.1.val))
       (by norm_num)
-      ⟨by norm_num, hpids, hik, hiv, hibh, hbh, hmem k, hmem v, hmem d,
+      ⟨Nat.zero_le NT, hpids, hik, hiv, hibh, hbh, hmem k, hmem v, hmem d,
         fun j hj => absurd hj (Nat.not_lt_zero j), fun j hj => absurd hj (Nat.not_lt_zero j)⟩
       (fun c st hlt hPc => by
         obtain ⟨hcle, hpidsC, hikC, hivC, hibhC, hbhC, hkC, hvC, hdC, hhC, hvnC⟩ := hPc
-        have hc4 : c < 4 := hlt
+        have hc4 : c < NT := hlt
         -- step the outer body for chunk c
         set sc := st.setReg "i_t" .nat [] (Tile.scalar c) with hsc
         obtain ⟨s', hbody, hpidsB, hikB, hivB, hibhB, hbhB,
           hkB, hvB, hdB, hhActB, hhOffB, hvnActB, hvnOffB⟩ :=
-          cdfOuterBody_step k v d v_new h initial_state USE_INITIAL_STATE s sc c hc4 hpids0
+          cdfOuterBody_step k v d v_new h initial_state USE_INITIAL_STATE s sc
+            s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT BC BK BV
+            hBC hBT c hpids0
             hVk hVv hVd hHv hHk hHv2 hHd (hInjV ⟨c, hc4⟩) (hInjH ⟨c, hc4⟩)
             (by intro off; rw [hsc, BlockState.setReg_readMem]; exact hkC off)
             (by intro off; rw [hsc, BlockState.setReg_readMem]; exact hvC off)
@@ -1697,21 +1909,23 @@ theorem cdfOuterLoop_run
           intro j hj idx hact
           rcases Nat.lt_succ_iff_lt_or_eq.mp hj with hjlt | hjeq
           · -- j < c: preserved (chunk c's store off chunk j's block)
-            rw [hhOffB (cdfHAddr s j idx) (fun idxc =>
-              cdfHAddr_chunk_disjoint s hpids0 j c (by omega) idx idxc)]
+            rw [hhOffB (hOffset s j s_h_h s_h_t K V BK BV idx) (fun idxc =>
+              cdfHAddr_chunk_disjoint s hpids0 s_h_h s_h_t K V BK BV hHBlock
+                j c (by omega) idx idxc)]
             rw [hsc, BlockState.setReg_readMem]
             exact hhC j hjlt idx hact
           · subst hjeq; exact hhActB idx hact
         · -- v_new readback for chunks < c+1
           intro j hj idx hact
           rcases Nat.lt_succ_iff_lt_or_eq.mp hj with hjlt | hjeq
-          · rw [hvnOffB (cdfVNewAddr s j idx) (fun idxc =>
-              cdfVNewAddr_chunk_disjoint s j c (by omega) idx idxc)]
+          · rw [hvnOffB (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV j idx) (fun idxc =>
+              cdfVNewAddr_chunk_disjoint s s_vo_h s_vo_t s_vo_d BT BC BV (by omega) hBT
+                hVod hVBlock j c (by omega) idx idxc)]
             rw [hsc, BlockState.setReg_readMem]
             exact hvnC j hjlt idx hact
           · subst hjeq; exact hvnActB idx hact)
   obtain ⟨hcleF, hpidsF, hikF, hivF, hibhF, hbhF, hkF, hvF, hdF, hhF, hvnF⟩ := hP
-  have hfinalEq : final = 4 := le_antisymm hcleF hfinal
+  have hfinalEq : final = NT := le_antisymm hcleF hfinal
   subst hfinalEq
   exact ⟨s', hstep, hpidsF, hikF, hivF, hibhF, hbhF, hkF, hvF, hdF,
     fun j idx hact => hhF j.val j.isLt idx hact,
@@ -1729,11 +1943,13 @@ theorem cdf_ifThen_true_run (body : List Stmt) (X : BlockState) :
     stepStmt (Stmt.ifThen (Op.constBool Bool.true) body) X = stepStmts body X := by
   simp [stepStmt, evalOp]
 
-/-- The all-zero `[64,64]` tile equals `cdfCarryTile 0` when `USE_INITIAL_STATE`
+/-- The all-zero `[BK,BV]` tile equals `cdfCarryTile 0` when `USE_INITIAL_STATE`
 is `false` (the seed is `0` on every lane). -/
-theorem cdfCarryTile_zero_false (s : BlockState) (k v d initial_state : RegionName) :
-    (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64])
-      = cdfCarryTile s k v d initial_state Bool.false 0 := by
+theorem cdfCarryTile_zero_false (s : BlockState) (k v d initial_state : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat) :
+    (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BK, BV])
+      = cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BC BK BV Bool.false 0 := by
   refine congrArg _ ?_
   funext idx; obtain ⟨e, p, u⟩ := idx
   simp only [cdfCarryTile, cdfCarryCell, cdfSeedCell, Bool.false_eq_true, if_false, ite_self]
@@ -1746,15 +1962,17 @@ reaches a state `s0` whose program-id registers are set, `b_h` holds the seed
 (masked `initial_state` load) and `false` (zero seed) branches are covered. -/
 theorem cdfPrologue_run
     (k v d v_new h initial_state final_state : RegionName) (USE_INITIAL_STATE : Bool)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV : Nat)
     (s : BlockState) (hpids0 : s.pids 0 = 0) :
-    ∃ s0, stepStmts (cdfPrologue initial_state USE_INITIAL_STATE) s = some s0
+    ∃ s0, stepStmts (cdfPrologue initial_state K V BK BV USE_INITIAL_STATE) s = some s0
       ∧ s0.pids = s.pids
       ∧ (∀ rg off, s0.readMem rg off = s.readMem rg off)
       ∧ s0.regs .nat [] "i_k" = some (Tile.scalar 0)
       ∧ s0.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
       ∧ s0.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
-      ∧ s0.regs .real [64, 64] "b_h"
-          = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 0) := by
+      ∧ s0.regs .real [BK, BV] "b_h"
+          = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              T K V BT BC BK BV USE_INITIAL_STATE 0) := by
   unfold cdfPrologue
   -- i_k = program_id 0 = pids 0 = 0
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
@@ -1764,8 +1982,8 @@ theorem cdfPrologue_run
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (show evalOp (Op.programId 2) _ = some (Tile.scalar (s.pids 2)) from by simp))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (show evalOp (Op.full [64, 64] (Op.const 0)) _
-        = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [64, 64]) from by
+    (show evalOp (Op.full [BK, BV] (Op.const 0)) _
+        = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BK, BV]) from by
       simp [evalOp_full, evalOp_const]))]
   cases USE_INITIAL_STATE
   · -- false: ifThen false = no-op
@@ -1777,22 +1995,23 @@ theorem cdfPrologue_run
     · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
     · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
     · simp [BlockState.setReg_ne_name, BlockState.setReg_same]
-    · rw [BlockState.setReg_same, cdfCarryTile_zero_false s k v d initial_state]
+    · rw [BlockState.setReg_same, cdfCarryTile_zero_false s k v d initial_state
+        s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV]
   · -- true: ifThen true: run the seed body (p_h0 make + masked load)
     rw [stepStmts.cons_some (st := Stmt.ifThen (Op.constBool Bool.true) _)
       (by
         rw [cdf_ifThen_true_run]
         -- p_h0 make
         rw [stepStmts.cons_some (stepStmt_assign_eq_some
-          (makeBlockPtr_2d_eval initial_state _ _ _ _ [64, 64] [64, 64] [64, 1]
-            (s.pids 2 * 64 * 64) (0 * 64) (s.pids 1 * 64)
-            (mulMulConst_eval _ "i_bh" (s.pids 2) 64 64 (by simp [BlockState.setReg_ne_name]))
-            (mulConst_eval _ "i_k" 0 64 (by simp [BlockState.setReg_ne_name]))
-            (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [BlockState.setReg_ne_name]))))]
+          (makeBlockPtr_2d_eval initial_state _ _ _ _ [K, V] [BK, BV] [V, 1]
+            (s.pids 2 * K * V) (0 * BK) (s.pids 1 * BV)
+            (mulMulConst_eval _ "i_bh" (s.pids 2) K V (by simp [BlockState.setReg_ne_name]))
+            (mulConst_eval _ "i_k" 0 BK (by simp [BlockState.setReg_ne_name]))
+            (mulConst_eval _ "i_v" (s.pids 1) BV (by simp [BlockState.setReg_ne_name]))))]
         -- b_h masked load
         rw [stepStmts.cons_some (stepStmt_assign_eq_some
-          (load_bp_2d_ref initial_state _ "p_h0" (s.pids 2 * 64 * 64) 64 64 64 64 64 1
-            (0 * 64) (s.pids 1 * 64) (by simp)))]
+          (load_bp_2d_ref initial_state _ "p_h0" (s.pids 2 * K * V) K V BK BV V 1
+            (0 * BK) (s.pids 1 * BV) (by simp)))]
         rw [stepStmts.nil])]
     rw [stepStmts.nil]
     refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_⟩
@@ -1808,17 +2027,17 @@ theorem cdfPrologue_run
       funext idx; obtain ⟨e, p, u⟩ := idx
       simp only [cdfCarryTile, cdfCarryCell, cdfSeedCell, initElem, hpids0,
         Nat.zero_mul, Nat.zero_add, Nat.mul_one, BlockState.setReg_readMem]
-      by_cases hb : e.val < 64 ∧ s.pids 1 * 64 + p.val < 64
+      by_cases hb : e.val < K ∧ s.pids 1 * BV + p.val < V
       · rw [if_pos hb, if_pos hb]; simp
       · rw [if_neg hb, if_neg hb]
 
 /-- The explicit post-store state of the `final_state` block-ptr store of the
 carry tile `bhT` (cell fn `fbh`) over input state `sin`, value built from `s`. -/
 noncomputable def cdfFinalStoreState (s sin : BlockState) (final_state : RegionName)
-    (fbh : Nat → Nat → ℝ) : BlockState :=
-  (TileShape.allIndices [64, 64]).foldl
-    (fun acc i => if (s.pids 0 * 64 + i.1.val < 64 ∧ s.pids 1 * 64 + i.2.1.val < 64)
-        then acc.writeMem final_state (finalStateOffset s 64 64 64 64 i)
+    (K V BK BV : Nat) (fbh : Nat → Nat → ℝ) : BlockState :=
+  (TileShape.allIndices [BK, BV]).foldl
+    (fun acc i => if (s.pids 0 * BK + i.1.val < K ∧ s.pids 1 * BV + i.2.1.val < V)
+        then acc.writeMem final_state (finalStateOffset s K V BK BV i)
           (fbh i.1.val i.2.1.val) else acc) sin
 
 set_option maxHeartbeats 4000000 in
@@ -1827,24 +2046,25 @@ set_option maxRecDepth 8000 in
 store of the carry tile `bhT` (cell fn `fbh`) through `p_ht` yields
 `cdfFinalStoreState`. -/
 theorem cdfStoreFinal_step_eq (s sin : BlockState) (final_state : RegionName)
-    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [64, 64])
+    (K V BK BV : Nat)
+    (fbh : Nat → Nat → ℝ) (bhT : Tile .real [BK, BV])
     (hbhf : ∀ e p, bhT.data (e, p, PUnit.unit) = some (fbh e.val p.val))
-    (hbh : sin.regs .real [64, 64] "b_h" = some bhT)
-    (hph : sin.regs .blockPtr [64, 64] "p_ht" = some
-      ⟨fun _ => BlockPtr.mk final_state (s.pids 2 * 64 * 64) [64, 64] [64, 64] [64, 1]
-        [s.pids 0 * 64, s.pids 1 * 64]⟩) :
-    stepStmt (Stmt.store .real [64, 64]
-        (.blockPtr (Op.ref .blockPtr [64, 64] "p_ht") [0, 1])
-        (Op.ref .real [64, 64] "b_h") .none) sin
-      = some (cdfFinalStoreState s sin final_state fbh) := by
+    (hbh : sin.regs .real [BK, BV] "b_h" = some bhT)
+    (hph : sin.regs .blockPtr [BK, BV] "p_ht" = some
+      ⟨fun _ => BlockPtr.mk final_state (s.pids 2 * K * V) [K, V] [BK, BV] [V, 1]
+        [s.pids 0 * BK, s.pids 1 * BV]⟩) :
+    stepStmt (Stmt.store .real [BK, BV]
+        (.blockPtr (Op.ref .blockPtr [BK, BV] "p_ht") [0, 1])
+        (Op.ref .real [BK, BV] "b_h") .none) sin
+      = some (cdfFinalStoreState s sin final_state K V BK BV fbh) := by
   unfold stepStmt cdfFinalStoreState
   simp only [evalOp_ref, hbh, hph, Option.bind, Option.map]
-  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [64, 64])) ?_)
+  refine congrArg some (congrArg (fun f => List.foldl f sin (TileShape.allIndices [BK, BV])) ?_)
   funext acc i
   obtain ⟨e, p, u⟩ := i
   simp only [TileShape.indexToList, BlockPtr.address_2d_offsets, BlockPtr.inBounds_2d_offsets,
     Bool.true_and, finalStateOffset, kIndex, vIndex]
-  by_cases hb : s.pids 0 * 64 + e.val < 64 ∧ s.pids 1 * 64 + p.val < 64
+  by_cases hb : s.pids 0 * BK + e.val < K ∧ s.pids 1 * BV + p.val < V
   · simp only [hb, decide_true, if_true, BlockState.writeMemTyped_real, hbhf, Nat.mul_one]
     rfl
   · simp only [hb, decide_false, Bool.false_eq_true, if_false, if_neg hb]
@@ -1852,21 +2072,23 @@ theorem cdfStoreFinal_step_eq (s sin : BlockState) (final_state : RegionName)
 set_option maxHeartbeats 4000000 in
 /-- **`final_state` store readback (active lanes).** -/
 theorem cdfStoreFinal_step_active (s sin : BlockState) (final_state : RegionName)
+    (K V BK BV : Nat)
     (fbh : Nat → Nat → ℝ)
-    (hInj : Function.Injective (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx)) :
-    ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-      (cdfFinalStoreState s sin final_state fbh).readMem final_state
-          (finalStateOffset s 64 64 64 64 idx)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx)) :
+    ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+      (cdfFinalStoreState s sin final_state K V BK BV fbh).readMem final_state
+          (finalStateOffset s K V BK BV idx)
         = fbh idx.1.val idx.2.1.val := by
   classical
   intro idx hidx
   unfold cdfFinalStoreState
   have h := BlockState.scatter_readback_prop_masked_nd (region := final_state) sin
-    (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx)
+    (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx)
     (fun idx => fbh idx.1.val idx.2.1.val)
-    (fun idx => s.pids 0 * 64 + idx.1.val < 64 ∧ s.pids 1 * 64 + idx.2.1.val < 64)
+    (fun idx => s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V)
     hInj idx
-  rw [h, if_pos (show s.pids 0 * 64 + idx.1.val < 64 ∧ s.pids 1 * 64 + idx.2.1.val < 64 from
+  rw [h, if_pos (show s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V from
     by obtain ⟨ka, va⟩ := hidx; exact ⟨by simpa [kIndex] using ka, by simpa [vIndex] using va⟩)]
 
 set_option maxHeartbeats 4000000 in
@@ -1878,22 +2100,27 @@ at every active lane (`STORE_FINAL_STATE = true`). The `k`/`v`/`d`/`h`/`v_new`
 regions and pids are preserved in both cases. -/
 theorem cdfEpilogue_run
     (k v d v_new h initial_state final_state : RegionName) (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
-    (s sF : BlockState) (hpids0 : s.pids 0 = 0)
+    (s sF : BlockState)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT : Nat)
+    (hpids0 : s.pids 0 = 0)
     (hFh : final_state ≠ h) (hFv : final_state ≠ v_new) (hFk : final_state ≠ k)
     (hFv2 : final_state ≠ v) (hFd : final_state ≠ d)
-    (hInjF : Function.Injective (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx))
+    (hInjF : Function.Injective
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx))
     (hpids : sF.pids = s.pids)
     (hik : sF.regs .nat [] "i_k" = some (Tile.scalar 0))
     (hiv : sF.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
     (hibh : sF.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
-    (hbh : sF.regs .real [64, 64] "b_h"
-        = some (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 4)) :
-    ∃ s', stepStmts (cdfEpilogue final_state STORE_FINAL_STATE) sF = some s'
+    (hbh : sF.regs .real [BK, BV] "b_h"
+        = some (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV USE_INITIAL_STATE NT)) :
+    ∃ s', stepStmts (cdfEpilogue final_state K V BK BV STORE_FINAL_STATE) sF = some s'
       ∧ (∀ rg off, rg ≠ final_state → s'.readMem rg off = sF.readMem rg off)
       ∧ (STORE_FINAL_STATE = Bool.true →
-          ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-            s'.readMem final_state (finalStateOffset s 64 64 64 64 idx)
-              = cdfCarryCell s k v d initial_state USE_INITIAL_STATE 4 idx.1.val idx.2.1.val) := by
+          ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+            s'.readMem final_state (finalStateOffset s K V BK BV idx)
+              = cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                  T K V BT BC BK BV USE_INITIAL_STATE NT idx.1.val idx.2.1.val) := by
   unfold cdfEpilogue
   cases STORE_FINAL_STATE
   · -- false: no-op
@@ -1904,31 +2131,34 @@ theorem cdfEpilogue_run
       (by
         rw [cdf_ifThen_true_run]
         rw [stepStmts.cons_some (stepStmt_assign_eq_some
-          (makeBlockPtr_2d_eval final_state _ _ _ _ [64, 64] [64, 64] [64, 1]
-            (s.pids 2 * 64 * 64) (0 * 64) (s.pids 1 * 64)
-            (mulMulConst_eval _ "i_bh" (s.pids 2) 64 64 (by simp [BlockState.setReg_ne_name, hibh]))
-            (mulConst_eval _ "i_k" 0 64 (by simp [BlockState.setReg_ne_name, hik]))
-            (mulConst_eval _ "i_v" (s.pids 1) 64 (by simp [BlockState.setReg_ne_name, hiv]))))]
-        rw [stepStmts.cons_some (cdfStoreFinal_step_eq s _ final_state
-          (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE 4 e' p')
-          (cdfCarryTile s k v d initial_state USE_INITIAL_STATE 4)
+          (makeBlockPtr_2d_eval final_state _ _ _ _ [K, V] [BK, BV] [V, 1]
+            (s.pids 2 * K * V) (0 * BK) (s.pids 1 * BV)
+            (mulMulConst_eval _ "i_bh" (s.pids 2) K V (by simp [BlockState.setReg_ne_name, hibh]))
+            (mulConst_eval _ "i_k" 0 BK (by simp [BlockState.setReg_ne_name, hik]))
+            (mulConst_eval _ "i_v" (s.pids 1) BV (by simp [BlockState.setReg_ne_name, hiv]))))]
+        rw [stepStmts.cons_some (cdfStoreFinal_step_eq s _ final_state K V BK BV
+          (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+            s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE NT e' p')
+          (cdfCarryTile s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BC BK BV USE_INITIAL_STATE NT)
           (fun e p => by rw [cdfCarryTile_data])
           (by simp [BlockState.setReg_ne_name, BlockState.setReg_same, hbh])
           (by simp [BlockState.setReg_same, hpids0]))]
         rw [stepStmts.nil])]
     rw [stepStmts.nil]
     -- name the post-store state
-    generalize hsFin : sF.setReg "p_ht" .blockPtr [64, 64]
-      (⟨fun _ => BlockPtr.mk final_state (s.pids 2 * 64 * 64) [64, 64] [64, 64] [64, 1]
-        [0 * 64, s.pids 1 * 64]⟩ : Tile .blockPtr [64, 64]) = sPt
+    generalize hsFin : sF.setReg "p_ht" .blockPtr [BK, BV]
+      (⟨fun _ => BlockPtr.mk final_state (s.pids 2 * K * V) [K, V] [BK, BV] [V, 1]
+        [0 * BK, s.pids 1 * BV]⟩ : Tile .blockPtr [BK, BV]) = sPt
     refine ⟨_, rfl, ?_, ?_⟩
     · intro rg off hrg
       unfold cdfFinalStoreState
       rw [BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
         final_state _ _ _ _ _ rg off hrg, ← hsFin, BlockState.setReg_readMem]
     · intro _ idx hidx
-      exact cdfStoreFinal_step_active s sPt final_state
-        (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE 4 e' p')
+      exact cdfStoreFinal_step_active s sPt final_state K V BK BV
+        (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE NT e' p')
         hInjF idx hidx
 
 /-! ### Bridges: concrete carry cells = genuine closed forms (active lanes) -/
@@ -1937,103 +2167,129 @@ theorem cdfEpilogue_run
 from the carry equals the genuine `vNewValue` (the `i_c = 0`, `BC = BT` regime). -/
 theorem cdfBvNew_eq_vNewValue
     (s : BlockState) (k v d initial_state : RegionName) (USE_INITIAL_STATE : Bool)
-    (hpids0 : s.pids 0 = 0) (i_t : Nat) (hit : i_t < 4)
-    (c p : Nat) (hc : i_t * 32 + c < 128) (hp : s.pids 1 * 64 + p < 64) :
-    cdfBvNewCell s v d
-        (fun e' p' => cdfCarryCell s k v d initial_state USE_INITIAL_STATE i_t e' p') i_t c p
-      = vNewValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-          USE_INITIAL_STATE i_t c p := by
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT : Nat)
+    (hBC : BC = BT) (hBK : BK ≤ K) (hTNT : NT * BT ≤ T)
+    (hpids0 : s.pids 0 = 0) (i_t : Nat) (hit : i_t < NT)
+    (c p : Nat) (hc : i_t * BT + c < T) (hp : s.pids 1 * BV + p < V) :
+    cdfBvNewCell s v d s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BV BK
+        (fun e' p' => cdfCarryCell s k v d initial_state s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d T K V BT BC BK BV USE_INITIAL_STATE i_t e' p') i_t c p
+      = vNewValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          K V BT BV BK USE_INITIAL_STATE i_t c p := by
   simp only [cdfBvNewCell, vNewValue]
-  rw [if_pos (⟨hc, hp⟩ : i_t * 32 + c < 128 ∧ s.pids 1 * 64 + p < 64)]
-  refine congrArg (vElem s v 8192 64 1 32 64 i_t c p - ·) ?_
+  rw [if_pos (⟨hc, hp⟩ : i_t * BT + c < T ∧ s.pids 1 * BV + p < V)]
+  refine congrArg (vElem s v s_vo_h s_vo_t s_vo_d BT BV i_t c p - ·) ?_
   refine Finset.sum_congr rfl (fun e' _ => ?_)
-  rw [if_pos ⟨hc, e'.isLt⟩,
-    cdfCarry_active s k v d initial_state USE_INITIAL_STATE hpids0 i_t (by omega) e'.val p
-      e'.isLt hp]
-  rfl
+  have he' : e'.val < K := Nat.lt_of_lt_of_le e'.isLt hBK
+  rw [if_pos ⟨hc, he'⟩,
+    cdfCarry_active s k v d initial_state USE_INITIAL_STATE
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT hBC hBK hTNT
+      hpids0 i_t (by omega) e'.val p he' hp]
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 
 set_option maxHeartbeats 4000000 in
 set_option maxRecDepth 8000 in
-/-- **SCOPE — genuine and end-to-end over the launched surface, but pinned to the
-checked Python shape and to `i_k = 0`.** Read the two scope conditions first:
-
-* every dimension and stride is a **concrete literal**
-  (`s_qk_h = 8192, T = 128, K = V = 64, BT = BC = 32, BK = BV = 64, NT = 4`, …),
-  matching the benchmark's `B,H,T,K,V = 2,4,128,64,64`, `BT = 32`;
-* `hpids0 : s.pids 0 = 0` pins the key-axis program id, which the host guarantees
-  via its `NK == 1` assertion but which is *not* proven here.
-
-Per `bench/MAIN_THEOREM_CONVENTIONS.md` §6 this is the blessed trade: genuine and
-scoped beats dimension-general and assumed. What it buys, and what the previous
-headline did not have: **no producer hypotheses at all.** Executing the entire
-`chunk_delta_rule_fwd_h_surface` (prologue + outer `forRange` over `NT = 4` +
-epilogue) writes the genuine delta-rule closed form into the output buffers —
-`h[j]` holds the chunk-start state `hValue j`, `v_new[j]` the corrected
-`vNewSpec j`, and, when `STORE_FINAL_STATE`, `final_state` holds `finalValue 4` —
-at every active lane, with the whole cross-chunk carry fold *derived from the
-kernel `exec`* rather than assumed. The closed forms `hValue` / `vNewSpec` /
+/-- **Genuine and end-to-end over the launched surface, dimension-general in every
+stride and block size.** Executing the entire `chunk_delta_rule_fwd_h_surface`
+(prologue + outer `forRange` over `NT` + epilogue) writes the genuine delta-rule
+closed form into the output buffers — `h[j]` holds the chunk-start state
+`hValue j`, `v_new[j]` the corrected `vNewSpec j`, and, when `STORE_FINAL_STATE`,
+`final_state` holds `finalValue NT` — at every active lane, with the whole
+cross-chunk carry fold *derived from the kernel `exec`* rather than assumed, and
+with **no producer hypotheses at all.** The closed forms `hValue` / `vNewSpec` /
 `finalValue` are over the input memory `k`/`v`/`d`/`initial_state`; none is an
 exec read-back.
 
-Honest hypotheses: the two scope pins above, twelve **region-distinctness**
-(`≠`) hypotheses — the outputs `v_new`, `h`, `final_state` must not alias each
-other or the inputs, which the store-order-sensitive multi-store fold genuinely
-needs — and three output-offset injectivity hypotheses. The `USE_INITIAL_STATE`
-and `STORE_FINAL_STATE` flags flow through symbolically.
+Every dimension and stride (`s_qk_h … s_h_t`, `T`, `K`, `V`, `BT`, `BC`, `BK`,
+`BV`, `NT`) is a free variable. Five **regime** hypotheses replace what used to be
+concrete literals; each is satisfied by the launcher and each is stated rather
+than baked in:
+
+* `hpids0 : s.pids 0 = 0` — the key-axis program id, guaranteed by the host's
+  `assert NK == 1` but not proven here;
+* `hBC : BC = BT` with `hBT : 0 < BT` — the single-inner-chunk regime
+  (`ceil(BT/BC) = 1`); the launcher sets `BC = min(BT, 64)` for `BK ≤ 64`, so this
+  holds whenever `BT ≤ 64`;
+* `hBK : BK ≤ K` — no key-axis boundary lane inside the block; with the `NK == 1`
+  assertion giving `K ≤ BK`, in practice `BK = K`;
+* `hTNT : NT * BT ≤ T` — no partial trailing time chunk (`BT ∣ T` under the
+  launcher's `NT = cdiv(T, BT)`);
+* `hVod : 0 < s_vo_d`, `hHBlock : (BK - 1) * s_h_t + BV ≤ K * V` and
+  `hVBlock : BV * s_vo_d ≤ s_vo_t` — the *block-fit* conditions that make distinct
+  time chunks write disjoint memory; the launcher's contiguous layouts
+  (`h.stride(2) = V`, `v_new.stride(3) = 1`) satisfy them with equality.
+
+Also honest: twelve **region-distinctness** (`≠`) hypotheses — the outputs
+`v_new`, `h`, `final_state` must not alias each other or the inputs, which the
+store-order-sensitive multi-store fold genuinely needs — and three output-offset
+injectivity hypotheses. The `USE_INITIAL_STATE` and `STORE_FINAL_STATE` flags flow
+through symbolically.
 
 Not covered: the host launch (the 3-D grid, autotuned warp counts, host-computed
 `BK/BV/BC/NT`, and the `NK == 1` assertion), and the multi-inner-chunk regime
-`BC < BT` (here `BC = BT = 32`, so `ceil(BT/BC) = 1`). -/
+`BC < BT`. -/
 specification chunk_delta_fwd_exec_genuine
     (k v d v_new h initial_state final_state : RegionName)
-    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool) (s : BlockState) (hpids0 : s.pids 0 = 0)
+    (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+      H T K V BT BC BK BV NT : Nat)
+    (s : BlockState) (hpids0 : s.pids 0 = 0)
+    (hBC : BC = BT) (hBT : 0 < BT) (hBK : BK ≤ K) (hTNT : NT * BT ≤ T)
+    (hVod : 0 < s_vo_d)
+    (hHBlock : (BK - 1) * s_h_t + BV ≤ K * V) (hVBlock : BV * s_vo_d ≤ s_vo_t)
     (hVk : v_new ≠ k) (hVv : v_new ≠ v) (hVd : v_new ≠ d) (hHv : h ≠ v_new)
     (hHk : h ≠ k) (hHv2 : h ≠ v) (hHd : h ≠ d)
     (hFh : final_state ≠ h) (hFv : final_state ≠ v_new) (hFk : final_state ≠ k)
     (hFv2 : final_state ≠ v) (hFd : final_state ≠ d)
-    (hInjV : ∀ i_t : Fin 4,
-      Function.Injective (fun idx : TileIndex [32, 64] => cdfVNewAddr s i_t.val idx))
-    (hInjH : ∀ i_t : Fin 4,
-      Function.Injective (fun idx : TileIndex [64, 64] => cdfHAddr s i_t.val idx))
+    (hInjV : ∀ i_t : Fin NT, Function.Injective
+      (fun idx : TileIndex [BC, BV] =>
+        cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV i_t.val idx))
+    (hInjH : ∀ i_t : Fin NT, Function.Injective
+      (fun idx : TileIndex [BK, BV] => hOffset s i_t.val s_h_h s_h_t K V BK BV idx))
     (hInjF : Function.Injective
-      (fun idx : TileIndex [64, 64] => finalStateOffset s 64 64 64 64 idx)) :
+      (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx)) :
     ∃ sF, exec (chunk_delta_rule_fwd_h_surface k v d v_new h initial_state final_state
-        8192 128 1 8192 64 1 16384 64 4 128 64 64 32 32 64 64 4
+        s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t H T K V BT BC BK BV NT
         USE_INITIAL_STATE STORE_FINAL_STATE).toAlgKernel s = some sF
-      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-          sF.readMem h (cdfHAddr s j.val idx)
-            = hValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                USE_INITIAL_STATE j.val idx)
-      ∧ (∀ j : Fin 4, ∀ idx : TileIndex [32, 64],
-          vNewActive s j.val 0 128 64 32 32 64 idx →
-          sF.readMem v_new (cdfVNewAddr s j.val idx)
-            = vNewSpec s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                USE_INITIAL_STATE j.val idx)
+      ∧ (∀ j : Fin NT, ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+          sF.readMem h (hOffset s j.val s_h_h s_h_t K V BK BV idx)
+            = hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                K V BT BV BK USE_INITIAL_STATE j.val idx)
+      ∧ (∀ j : Fin NT, ∀ idx : TileIndex [BC, BV],
+          vNewActive s j.val 0 T V BT BC BV idx →
+          sF.readMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV j.val idx)
+            = vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                K V BT BV BK BC USE_INITIAL_STATE j.val idx)
       ∧ (STORE_FINAL_STATE = Bool.true →
-          ∀ idx : TileIndex [64, 64], active s 64 64 64 64 idx →
-            sF.readMem final_state (finalStateOffset s 64 64 64 64 idx)
-              = finalValue s k v d initial_state 8192 128 1 8192 64 1 64 64 32 64 64
-                  USE_INITIAL_STATE 4 idx) := by
+          ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
+            sF.readMem final_state (finalStateOffset s K V BK BV idx)
+              = finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                  K V BT BV BK USE_INITIAL_STATE NT idx) := by
   rw [exec, chunk_delta_fwd_body_split]
   -- prologue
   obtain ⟨s0, hpre, hpidsP, hmemP, hikP, hivP, hibhP, hbhP⟩ :=
-    cdfPrologue_run k v d v_new h initial_state final_state USE_INITIAL_STATE s hpids0
+    cdfPrologue_run k v d v_new h initial_state final_state USE_INITIAL_STATE
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV s hpids0
   -- outer loop
   obtain ⟨sL, hloop, hpidsL, hikL, hivL, hibhL, hbhL, hkL, hvL, hdL, hhL, hvnL⟩ :=
-    cdfOuterLoop_run k v d v_new h initial_state USE_INITIAL_STATE s s0 hpids0
+    cdfOuterLoop_run k v d v_new h initial_state USE_INITIAL_STATE s s0
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT BC BK BV NT
+      hBC hBT hVod hHBlock hVBlock hpids0
       hVk hVv hVd hHv hHk hHv2 hHd hInjV hInjH hmemP hpidsP hikP hivP hibhP hbhP
   -- epilogue
   obtain ⟨sE, hepi, hmemE, hfinE⟩ :=
     cdfEpilogue_run k v d v_new h initial_state final_state USE_INITIAL_STATE STORE_FINAL_STATE
-      s sL hpids0 hFh hFv hFk hFv2 hFd hInjF hpidsL hikL hivL hibhL hbhL
+      s sL s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT
+      hpids0 hFh hFv hFk hFv2 hFd hInjF hpidsL hikL hivL hibhL hbhL
   -- assemble the full body: (prologue) ++ (forRange :: epilogue)
   rw [List.append_assoc, stepStmts.append_some hpre]
-  rw [show [Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)]
-        ++ cdfEpilogue final_state STORE_FINAL_STATE
-      = Stmt.forRange "i_t" 0 4 1 (cdfOuterBody k v d v_new h)
-        :: cdfEpilogue final_state STORE_FINAL_STATE from rfl,
+  rw [show [Stmt.forRange "i_t" 0 NT 1 (cdfOuterBody k v d v_new h
+          s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT BC BK BV)]
+        ++ cdfEpilogue final_state K V BK BV STORE_FINAL_STATE
+      = Stmt.forRange "i_t" 0 NT 1 (cdfOuterBody k v d v_new h
+          s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT BC BK BV)
+        :: cdfEpilogue final_state K V BK BV STORE_FINAL_STATE from rfl,
     stepStmts.cons_some hloop, hepi]
   refine ⟨sE, rfl, ?_, ?_, ?_⟩
   · -- h readback: h reads of sE = sL (epilogue only writes final_state ≠ h) = cdfCarryCell = hValue
@@ -2042,26 +2298,28 @@ specification chunk_delta_fwd_exec_genuine
     -- cdfCarryCell j = stateValue j = hValue j
     obtain ⟨e, p, u⟩ := idx
     simp only [hValue, kIndex, hpids0, Nat.zero_mul, Nat.zero_add]
-    rw [cdfCarry_active s k v d initial_state USE_INITIAL_STATE hpids0 j.val (by omega)
-      e.val p.val e.isLt (by
+    rw [cdfCarry_active s k v d initial_state USE_INITIAL_STATE
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT hBC hBK hTNT
+      hpids0 j.val (by omega) e.val p.val (Nat.lt_of_lt_of_le e.isLt hBK) (by
         obtain ⟨_, hv⟩ := hact; simpa [vIndex] using hv)]
-    rfl
   · -- v_new readback
     intro j idx hact
     obtain ⟨hcT, hvV⟩ := hact
     rw [hmemE v_new _ hFv.symm, hvnL j idx (by exact ⟨by simpa using hcT, by simpa [vIndex] using hvV⟩)]
     obtain ⟨c, p, u⟩ := idx
     simp only [vNewSpec, vNewActive, cIndex, vIndex] at *
-    rw [cdfBvNew_eq_vNewValue s k v d initial_state USE_INITIAL_STATE hpids0 j.val (by omega)
-      c.val p.val (by simpa using hcT) (by simpa using hvV)]
+    rw [cdfBvNew_eq_vNewValue s k v d initial_state USE_INITIAL_STATE
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT hBC hBK hTNT
+      hpids0 j.val (by omega) c.val p.val (by simpa using hcT) (by simpa using hvV)]
   · -- final_state readback (STORE_FINAL_STATE = true)
     intro hStore idx hact
     rw [hfinE hStore idx hact]
     obtain ⟨e, p, u⟩ := idx
     simp only [finalValue, kIndex, hpids0, Nat.zero_mul, Nat.zero_add]
-    rw [cdfCarry_active s k v d initial_state USE_INITIAL_STATE hpids0 4 (by omega)
-      e.val p.val e.isLt (by obtain ⟨_, hv⟩ := hact; simpa [vIndex] using hv)]
-    rfl
+    rw [cdfCarry_active s k v d initial_state USE_INITIAL_STATE
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d T K V BT BC BK BV NT hBC hBK hTNT
+      hpids0 NT (le_refl NT) e.val p.val (Nat.lt_of_lt_of_le e.isLt hBK)
+      (by obtain ⟨_, hv⟩ := hact; simpa [vIndex] using hv)]
 
 end Correct_without_Rounding
 
