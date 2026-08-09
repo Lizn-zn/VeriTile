@@ -2477,6 +2477,90 @@ theorem embedding_kernel_traceSafeR (R : RoundingModel)
       BLOCK_N bounds hInputOutNe hWeightOutNe
       ⟨hOffsNN, hOffsD, hInputRead, hWeightRead⟩ hidxAll hwAll houtAll
 
+/-- Exact-side sibling of `embeddingSafeContext_stepR`: one body step exists and
+re-establishes the safe context. Split out because `forRange_inv` — which is what
+turns per-iteration progress into termination of the whole loop — is stated on the
+exact stepper. -/
+theorem embeddingSafeContext_step
+    (s0 st : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (hCtx : embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N
+      BLOCK_NN st) :
+    ∃ st',
+      stepStmts
+          (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+            stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+            BLOCK_N BLOCK_NN)
+          (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st'
+        ∧ embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N BLOCK_NN
+            st' := by
+  obtain ⟨hOffsNN, hOffsD, hInputRead, hWeightRead⟩ := hCtx
+  have hex : ∃ st',
+      stepStmts
+          (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+            stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+            BLOCK_N BLOCK_NN)
+          (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st' := by
+    unfold embeddingLoopBody
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hOffsNN, hOffsD,
+      Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+      TileShape.dropInsertedIndex, NumericDType.add, NumericDType.sub,
+      NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+      Bool.and_eq_true]
+  obtain ⟨st', hstep⟩ := hex
+  refine ⟨st', hstep, ?_⟩
+  exact embeddingLoopBody_step_preserves_context s0 st st' weight input_ids out
+    vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+    BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn hOffsNN hOffsD hInputRead
+    hWeightRead hInputOutNe hWeightOutNe hstep
+
+/-- **The whole kernel terminates.** `embedding_kernel_alg_post` is a
+post-condition *given* a successful run; this is the missing existence half. The
+pre-loop steps outright, and `forRange_inv` turns per-iteration progress
+(`embeddingSafeContext_step`) into a successful step of the whole `forRange`.
+
+Stated at `BLOCK_NN = 1`, the chunking the port's whole-kernel value result also
+assumes. Honest side conditions: the two alias facts, which are what keep the
+token ids and weight rows stable across iterations. -/
+theorem embedding_kernel_terminates (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N : Nat)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (s : BlockState) :
+    ∃ s1, exec ((embedding_kernel weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      1).toAlgKernel) s = some s1 := by
+  show ∃ s1, stepStmts _ s = some s1
+  rw [embedding_kernel_toAlg_body]
+  unfold embeddingProjectedBody
+  -- the pre-loop always steps
+  have hpre : ∃ sPre, stepStmts (embeddingPreLoop BLOCK_DMODEL BLOCK_N 1) s
+      = some sPre := by
+    unfold embeddingPreLoop
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, NumericDType.mul, NumericDType.add]
+  obtain ⟨sPre, hPre⟩ := hpre
+  obtain ⟨_hStart, hOffsNN, hOffsD, hInputRead, hWeightRead⟩ :=
+    embeddingPreLoop_step_regs s sPre input_ids weight BLOCK_DMODEL BLOCK_N 1 hPre
+  obtain ⟨_final, sFinal, hFor, _hfinal, _hCtx⟩ :=
+    forRange_inv (idx := "start_nn") (start := 0) (stop := BLOCK_N) (step := 1)
+      (body := embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N 1)
+      (P := fun _c stc =>
+        embeddingSafeContext s weight input_ids BLOCK_DMODEL BLOCK_N 1 stc)
+      (s_init := sPre) (by simp)
+      ⟨hOffsNN, hOffsD, hInputRead, hWeightRead⟩
+      (fun c stc _hlt hCtxc =>
+        embeddingSafeContext_step s stc weight input_ids out vob_start_id
+          vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+          BLOCK_DMODEL BLOCK_N 1 c hInputOutNe hWeightOutNe hCtxc)
+  exact ⟨sFinal, stepStmts.append_some_iff.mpr
+    ⟨sPre, hPre, by simp [stepStmts, hFor]⟩⟩
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
