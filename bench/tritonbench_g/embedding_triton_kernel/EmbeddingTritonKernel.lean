@@ -2561,6 +2561,163 @@ theorem embedding_kernel_terminates (weight input_ids out : RegionName)
   exact ⟨sFinal, stepStmts.append_some_iff.mpr
     ⟨sPre, hPre, by simp [stepStmts, hFor]⟩⟩
 
+/-- **Body-level cell frame.** One loop body step leaves every memory cell it does
+not write unchanged — at the granularity an IO face needs (`mem r o` for an
+arbitrary region `r`, so `r ≠ out` is covered), not merely `readMem out` at a
+prefix address. The port's `embeddingLoopBody_step_preserve_old` is the latter and
+does not imply this; the library's `scatter_prop_masked_preserves_other_*` family
+is also `readMem`-level, hence the private cell-level `foldl_writeMem_frame`. -/
+theorem embeddingLoopBody_step_cellFrame
+    (s0 st st' : BlockState) (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hOffsNN :
+      st.regs .nat [BLOCK_NN] "offs_nn" =
+        some { data := fun lane : TileIndex [BLOCK_NN] =>
+          s0.pids 0 * BLOCK_N + lane.1.val })
+    (hOffsD :
+      st.regs .nat [BLOCK_DMODEL] "offs_d" =
+        some { data := fun lane : TileIndex [BLOCK_DMODEL] => lane.1.val })
+    (hStep :
+      stepStmts
+        (embeddingLoopBody weight input_ids out
+          vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN)
+        (st.setReg "start_nn" .nat [] (Tile.scalar start_nn)) = some st') :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ out ∨ ∀ lane : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+        (start_nn + (s0.pids 0 * BLOCK_N + lane.1.val) < n_ctx ∧
+          lane.2.1.val < hiden_size) →
+        o ≠ (start_nn + (s0.pids 0 * BLOCK_N + lane.1.val)) * stride_out_seq
+              + lane.2.1.val) →
+      st'.mem r o = st.mem r o := by
+  intro r o hcond
+  unfold embeddingLoopBody at hStep
+  simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, hOffsNN, hOffsD, Tile.bop,
+    Tile.cop, Tile.expandDim, TileShape.dropInsertedIndex, NumericDType.add,
+    NumericDType.sub, NumericDType.mul, ComparableDType.lt, ComparableDType.ge,
+    Bool.and_eq_true, Option.bind] at hStep
+  subst st'
+  rw [foldl_writeMem_frame (region := out)
+    (fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+      (start_nn + (s0.pids 0 * BLOCK_N + lane.1.val)) * stride_out_seq
+        + lane.2.1.val)
+    _ (fun lane : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+      start_nn + (s0.pids 0 * BLOCK_N + lane.1.val) < n_ctx ∧
+        lane.2.1.val < hiden_size) r o
+    (TileShape.allIndices [BLOCK_NN, BLOCK_DMODEL]) ?_]
+  · simp [BlockState.setReg]
+  · rcases hcond with h | h
+    · exact Or.inl h
+    · exact Or.inr fun lane _ hlane => Ne.symm (h lane hlane)
+
+/-- The run invariant: the safe context, plus "every cell outside the **whole
+tile's** active write windows still agrees with the launch state". The second
+conjunct is preserved because iteration `c` writes only full-tile row `c`, which
+is itself inside the whole tile's windows. -/
+def embeddingRunInvariant (s0 : BlockState) (weight input_ids out : RegionName)
+    (stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N : Nat)
+    (st : BlockState) : Prop :=
+  embeddingSafeContext s0 weight input_ids BLOCK_DMODEL BLOCK_N 1 st ∧
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ out ∨ ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+        storeActiveFull s0 n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx →
+        o ≠ outOffsetFull s0 stride_out_seq BLOCK_N idx) →
+      st.mem r o = s0.mem r o
+
+/-- **The whole-kernel cell frame.** Everything outside the active write windows
+is untouched by the entire run. The loop half rides `forRange_inv` on
+`embeddingRunInvariant`; the pre-loop half is register-only, so it moves no cell.
+
+Stated at `BLOCK_NN = 1`: iteration `c` then owns exactly full-tile row `c`, which
+is what lets the per-iteration frame (`embeddingLoopBody_step_cellFrame`) discharge
+the whole-tile condition. -/
+theorem embedding_kernel_frame (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N : Nat)
+    (hInputOutNe : input_ids ≠ out)
+    (hWeightOutNe : weight ≠ out)
+    (s s1 : BlockState)
+    (hExec : exec ((embedding_kernel weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      1).toAlgKernel) s = some s1) :
+    ∀ (r : RegionName) (o : Nat),
+      (r ≠ out ∨ ∀ idx : TileIndex [BLOCK_N, BLOCK_DMODEL],
+        storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL idx →
+        o ≠ outOffsetFull s stride_out_seq BLOCK_N idx) →
+      s1.mem r o = s.mem r o := by
+  replace hExec : stepStmts (embeddingProjectedBody weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_DMODEL BLOCK_N 1) s = some s1 := by
+    rw [← embedding_kernel_toAlg_body]; exact hExec
+  unfold embeddingProjectedBody at hExec
+  obtain ⟨sPre, hPre, hLoopList⟩ := stepStmts.append_some_iff.mp hExec
+  obtain ⟨_hStart, hOffsNN, hOffsD, hInputRead, hWeightRead⟩ :=
+    embeddingPreLoop_step_regs s sPre input_ids weight BLOCK_DMODEL BLOCK_N 1 hPre
+  -- the pre-loop is register-only, so it moves no cell
+  have hPreMem : ∀ (r : RegionName) (o : Nat), sPre.mem r o = s.mem r o := by
+    unfold embeddingPreLoop at hPre
+    simp [stepStmts, stepStmt, evalOp, evalOp.eq_def, Option.bind, Option.map,
+      Tile.bop, NumericDType.mul, NumericDType.add] at hPre
+    subst hPre
+    intro r o
+    simp [BlockState.setReg]
+  have hInit : embeddingRunInvariant s weight input_ids out stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N sPre :=
+    ⟨⟨hOffsNN, hOffsD, hInputRead, hWeightRead⟩, fun r o _ => hPreMem r o⟩
+  have hstepObl : ∀ c stc, c < BLOCK_N →
+      embeddingRunInvariant s weight input_ids out stride_out_seq n_ctx
+        hiden_size BLOCK_DMODEL BLOCK_N stc →
+      ∃ stc',
+        stepStmts (embeddingLoopBody weight input_ids out vob_start_id
+            vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+            BLOCK_DMODEL BLOCK_N 1)
+          (stc.setReg "start_nn" .nat [] (Tile.scalar c)) = some stc'
+          ∧ embeddingRunInvariant s weight input_ids out stride_out_seq n_ctx
+              hiden_size BLOCK_DMODEL BLOCK_N stc' := by
+    intro c stc hlt hInvc
+    obtain ⟨hCtxc, hFramec⟩ := hInvc
+    obtain ⟨stc', hstep, hCtxc'⟩ :=
+      embeddingSafeContext_step s stc weight input_ids out vob_start_id
+        vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+        BLOCK_DMODEL BLOCK_N 1 c hInputOutNe hWeightOutNe hCtxc
+    refine ⟨stc', hstep, hCtxc', fun r o hcond => ?_⟩
+    obtain ⟨hOffsNNc, hOffsDc, _, _⟩ := hCtxc
+    rw [embeddingLoopBody_step_cellFrame s stc stc' weight input_ids out
+      vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size
+      BLOCK_DMODEL BLOCK_N 1 c hOffsNNc hOffsDc hstep r o ?_]
+    · exact hFramec r o hcond
+    · rcases hcond with h | h
+      · exact Or.inl h
+      · refine Or.inr fun lane hlane => ?_
+        have hl0 : lane.1.val = 0 := by omega
+        have hact : storeActiveFull s n_ctx hiden_size BLOCK_N BLOCK_DMODEL
+            (⟨c, hlt⟩, lane.2.1, PUnit.unit) := by
+          simpa [storeActiveFull, fullSeqIndex, dimIndex, hl0, Nat.add_comm]
+            using hlane
+        have hne := h (⟨c, hlt⟩, lane.2.1, PUnit.unit) hact
+        simpa [outOffsetFull, fullSeqIndex, dimIndex, hl0, Nat.add_comm]
+          using hne
+  obtain ⟨_final, sFinal, hFor, _hfinal, hInv⟩ :=
+    forRange_inv (idx := "start_nn") (start := 0) (stop := BLOCK_N) (step := 1)
+      (body := embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N 1)
+      (P := fun _c stc =>
+        embeddingRunInvariant s weight input_ids out stride_out_seq n_ctx
+          hiden_size BLOCK_DMODEL BLOCK_N stc)
+      (s_init := sPre) (by simp) hInit hstepObl
+  have hEq : sFinal = s1 := by
+    have hone : stepStmts [Stmt.forRange "start_nn" 0 BLOCK_N 1
+        (embeddingLoopBody weight input_ids out vob_start_id vob_end_id
+          stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+          BLOCK_N 1)] sPre = some sFinal := by
+      simp [stepStmts, hFor]
+    rw [hone] at hLoopList
+    exact Option.some.inj hLoopList
+  subst hEq
+  intro r o hcond
+  exact hInv.2 r o hcond
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
