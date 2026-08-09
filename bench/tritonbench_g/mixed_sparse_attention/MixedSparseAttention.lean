@@ -4474,9 +4474,25 @@ specification mixed_sparse_attention_output_closed_form_summary_general
 
 /-! ## ════════ `⊨` IO face for the epilogue ════════
 
-The launched kernel is a twenty-loop block-sparse/column-sparse attention, and its
-own `⊨` face is out of reach (block pointers, an `fp16` read-back, and a
-denominator-positivity side condition). Its **epilogue** is not:
+The launched kernel is a twenty-loop block-sparse/column-sparse attention. Its own
+whole-kernel `⊨` face is **not** blocked by the proof: the whole-kernel value
+result *with* termination is already here
+(`mixed_sparse_attention_output_closed_form_summary_general`:
+`∃ sF, exec … = some sF ∧ …`, and dimension-general in every stride). What is
+missing is a **skin**, i.e. a signature able to carry this kernel's channels —
+three float inputs (`Q` / `K` / `V`) plus five `.nat` metadata channels
+(`Seqlens` / `Blocks` / `BlockOffsets` / `ColCounts` / `Cols`) and one output.
+No skin in `KernelSpec` has that shape.
+
+(An earlier version of this note listed the `fp16` read-back as one of the
+blockers. It is not one: `matmul_tma`'s fp16 branch now carries a genuine
+`⊨[R, .fp16]` face, so a narrow-float boundary is expressible — the whole-kernel
+face here would simply be stated at `.fp16` rather than `.real`. Block pointers
+are likewise already carried by the block-ptr io faces. The honest remaining
+costs are the channel count and the `hpos` denominator-positivity side condition,
+which the value result already assumes.)
+
+Its **epilogue** needs none of that:
 
 ```python
     acc /= l_i[:, None]
