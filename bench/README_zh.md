@@ -28,23 +28,25 @@ LLM-assist 评估不再是项目的 benchmark 维度。
 
 我们正在把 verification benchmark 与 [TritonBench-G v1][tb] 对齐
 (184 个 GitHub-scraped 真实 Triton kernel,ACL 2025 Findings)。
-针对 184 个 kernel 的当前 DSL 契约,在两个 trivial 的 surface adapter
-(`tl.math.*`、`tl.extra.cuda.libdevice.*`)落地后做静态 primitive scan,
-结果是:
+**184 个里已移植 151 个。** 最初(2026-05-05)的静态 primitive scan 只估出
+141 个在 DSL 契约内;它点名的那些杠杆(`tl.math.*` / `tl.extra` adapter、
+concurrency 边界、`tl.num_programs`、`atomic_add` proof shape)此后都已落地,
+所以那组估计已被取代 —— 它是历史,不是现状。
 
-| 判定 | 数量 | 占比 |
-|---|---:|---:|
-| OK(DSL 覆盖 primitive)| 141 | 77% |
-| Soft(DSL/proof 小扩展)| 15 | 8% |
-| Hard(需要新 semantic 层)| 28 | 15% |
+剩下的 **33 个是"占位目录建了、上游 `.py` 从未导入"**。按 DSL 的**实际** surface
+(95 个 `tl.*` 形式,从 `VeriTile/Triton/DSL/**` 提取)重新实测:
 
-按文件产出排序的最佳补救杠杆:`tl.math.*` adapter(24)、
-`tl.extra` adapter(9)、concurrency 边界(#12,解锁 11)、
-`tl.num_programs`(9)、FP8 dtype channel(7)、`atomic_add` proof shape(6)、
-int4 packed unpack(4)、RNG(#41,4)。完整 per-file 表、hard-gap 原因
-与 caveat 见 [`tritonbench_coverage.md`](./tritonbench_coverage.md)。
+| 判定 | 数量 |
+|---|---:|
+| 现在就能移植 —— 用到的 `tl.*` 全在 DSL 里 | 17 |
+| 被缺失 primitive 或 ℝ 模型限制阻塞 | 16 |
 
-"OK" 判定是 *可表达性*,不是 *proof 可行性*:许多 `OK` kernel
+那 15 个的解锁杠杆按产出排序:fp8 dtype channel(7)、RNG(4)、
+`tl.interleave`(2)、`tl.static_assert`(2,宏层 no-op)、`tl.broadcast_to`
+(1,别名)。逐 kernel 表、测法,以及"可移植"到底声称了什么和没声称什么,
+见 [`tritonbench_coverage.md`](./tritonbench_coverage.md)。
+
+判定是 *可表达性*,不是 *proof 可行性*:许多可表达的 kernel
 (FA-1 backward、RWKV6、Mamba SSM、chunked GLA)即便 primitive 今天能
 lower,仍需要全新的 proof 工程。
 
