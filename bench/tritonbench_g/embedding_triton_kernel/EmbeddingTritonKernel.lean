@@ -1912,6 +1912,146 @@ specification embedding_body_io_correctness
         ids xs (fun i hi => hidpin i hi) (fun j hj => hxpin j hj)
     exact ⟨s1, hexec, fun j hj => hval j hj, fun r n hc => hframe r n hc⟩
 
+/-! ### The rounding face
+
+The body is a masked **gather** with no arithmetic on the loaded weight row and
+no `.to(...)` on the store — the data tile stays `.real` end to end, and the only
+arithmetic anywhere is ℕ index arithmetic (`token_ids - vob_start_id`), which is
+not a float rounding site. So the slice is **cast-free** and the exact run
+transports to `execR R` for *every* rounding model.
+
+Note the index channel needs nothing extra: it is `.nat`, and `ChanTy.nat` reads
+are exact under `execR` as well. -/
+
+/-- The slice is cast-free: `execR R` is the exact stepper. -/
+private theorem embeddingBody_castFree (R : RoundingModel)
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat) (s : BlockState) :
+    execR R ((embedding_body_slice weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN start_nn).toAlgKernel) s
+      = exec ((embedding_body_slice weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN start_nn).toAlgKernel) s := by
+  simp [execR, exec, embedding_body_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, stepStmtsR, stepStmts,
+    stepStmtR, stepStmt, evalOpR, evalOpR.eq_def, evalOp, evalOp.eq_def,
+    BlockState.writeMemTypedR, BlockState.writeMemAsR, Option.bind, Option.map,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.uop, TileShape.dropInsertedIndex,
+    NumericDType.add, NumericDType.sub, NumericDType.mul, ComparableDType.lt,
+    ComparableDType.ge, FloatDType.cast, Bool.and_eq_true]
+
+/-- Per-execution safety walk **under the rounding model** — the `hts`
+obligation of `GatherTileKernelIO.ImplementsR.intro`. -/
+theorem embeddingBody_traceSafeR (R : RoundingModel)
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (bounds : RegionBounds) (s : BlockState)
+    (hidx : ∀ i : Fin BLOCK_NN, s.pids 0 * BLOCK_N + start_nn + i.val < n_ctx →
+      s.pids 0 * BLOCK_N + start_nn + i.val < bounds input_ids)
+    (hw : ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      s.pids 0 * BLOCK_N + start_nn + idx.1.val < n_ctx →
+      (vob_start_id ≤ tokenRaw2D s input_ids BLOCK_N start_nn idx.1 ∧
+          tokenRaw2D s input_ids BLOCK_N start_nn idx.1 < vob_end_id) ∧
+        idx.2.1.val < hiden_size →
+      weightOffset2D s input_ids vob_start_id stride_weight_seq BLOCK_N start_nn
+        idx < bounds weight)
+    (hout : ∀ idx : TileIndex [BLOCK_NN, BLOCK_DMODEL],
+      storeActive2D s n_ctx hiden_size BLOCK_N start_nn BLOCK_NN BLOCK_DMODEL
+        idx → outOffset2D s stride_out_seq BLOCK_N start_nn idx < bounds out) :
+    Kernel.TraceSafeR R bounds
+      ((embedding_body_slice weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN start_nn).toAlgKernel) s := by
+  simp only [storeActive2D, outOffset2D, seqLaneIndex, dimIndex, tokenRaw2D,
+    weightOffset2D, tokenIndex2D] at hw hout
+  simp [Kernel.TraceSafeR, embedding_body_slice, ComputeKernel.toAlgKernel,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, Stmt.TraceSafeListR,
+    Stmt.TraceSafeR, Op.SafeAtR, MaskOpt.SafeAtR, MaskOpt.ActiveR,
+    MemAccess.SafeAtR, MemAccess.ActiveAddressSafeR,
+    memAccessActiveAddressSafeR, stepStmtsR, stepStmtR, evalOpR,
+    evalOpR.eq_def, Option.bind, Option.map, Tile.bop, Tile.cop, Tile.expandDim,
+    Tile.uop, TileShape.dropInsertedIndex, NumericDType.add, NumericDType.sub,
+    NumericDType.mul, ComparableDType.lt, ComparableDType.ge, FloatDType.cast,
+    Bool.and_eq_true]
+  and_intros
+  all_goals try exact fun a h => hidx a h
+  all_goals try simp [Op.SafeAtR.eq_def]
+  all_goals try exact fun a b h1 h2 => hout (a, b, PUnit.unit) ⟨h1, h2⟩
+  -- the gather's window: on an out-of-context lane the `other = vob_end_id`
+  -- sentinel fails `id_mask` outright, so only in-context lanes need a bound
+  all_goals
+    intro a b h1 h2 h3
+    by_cases hn : s.pids 0 * BLOCK_N + start_nn + a.val < n_ctx
+    · simp only [if_pos hn] at h1 h2 ⊢
+      exact hw (a, b, PUnit.unit) hn ⟨⟨h1, h2⟩, h3⟩
+    · simp only [if_neg hn] at h2
+      exact absurd h2 (lt_irrefl _)
+
+/-! ### ════════ ★ MAIN THEOREM (rounding face) ★ ════════ -/
+
+/-- **The `⊨[R]` headline** for one body of `embedding_kernel`'s
+`range(0, BLOCK_N, BLOCK_NN)` loop: for **every** rounding model `R`, the same
+gather Hoare triple as `embedding_body_io_correctness`, but run under `execR R`
+and read back as `.real`-typed cells holding `R.round .real (f …)`.
+
+The body carries no float cast and no arithmetic on the gathered row, so the
+slice is cast-free and the exact run transports verbatim. The content of the
+rounding face here is exactly that: *this body introduces no rounding event of
+its own*, at any `R` — an embedding gather moves weight rows bit-for-bit. -/
+specification embedding_body_io_correctnessR (R : RoundingModel)
+    (weight input_ids out : RegionName)
+    (vob_start_id vob_end_id stride_weight_seq stride_out_seq n_ctx
+      hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn : Nat)
+    (hOutInj : ∀ pid : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
+        (pid * BLOCK_N + start_nn + idx.1.val) * stride_out_seq
+          + idx.2.1.val)) :
+    bodyIO weight input_ids out vob_start_id vob_end_id stride_weight_seq
+        stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N BLOCK_NN start_nn
+      ⊨[R, FloatDType.real] fun _pid ids xs j =>
+          if vob_start_id ≤ ids (j.1, PUnit.unit) ∧
+              ids (j.1, PUnit.unit) < vob_end_id then xs j else 0 := by
+  refine GatherTileKernelIO.ImplementsR.intro _ ?_ ?_ ?_
+  · exact embeddingBody_flattenOk weight input_ids out vob_start_id vob_end_id
+      stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+      BLOCK_NN start_nn
+  · intro bounds s ids hidpin hbx hbr hbw
+    simp only [bodyIO] at hidpin hbx hbr hbw
+    refine embeddingBody_traceSafeR R weight input_ids out vob_start_id
+      vob_end_id stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL
+      BLOCK_N BLOCK_NN start_nn bounds s (fun i hi => hbx (i, PUnit.unit) hi)
+      ?_ ?_
+    · intro idx hn hactive
+      have hraw : tokenRaw2D s input_ids BLOCK_N start_nn idx.1
+          = ids (idx.1, PUnit.unit) := hidpin (idx.1, PUnit.unit) hn
+      have := hbr idx (by rw [← hraw]; exact hactive)
+      simpa [weightOffset2D, tokenIndex2D, dimIndex, hraw] using this
+    · intro idx hactive
+      exact hbw idx hactive
+  · intro s₀ ids xs hidpin hxpin
+    simp only [bodyIO] at hidpin hxpin
+    obtain ⟨s1, hexec, hval, hframe⟩ :=
+      embeddingBody_region_run weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN start_nn s₀
+        (by
+          have := hOutInj (s₀.pids 0)
+          simpa [outOffset2D, seqLaneIndex, dimIndex] using this)
+        ids xs (fun i hi => hidpin i hi) (fun j hj => hxpin j hj)
+    refine ⟨s1, ?_, ?_, fun r n hc => hframe r n hc⟩
+    · simp only [bodyIO]
+      rw [embeddingBody_castFree R weight input_ids out vob_start_id vob_end_id
+        stride_weight_seq stride_out_seq n_ctx hiden_size BLOCK_DMODEL BLOCK_N
+        BLOCK_NN start_nn s₀]
+      exact hexec
+    · intro j hj
+      simp only [bodyIO]
+      rw [BlockState.readMemAs_real, hval j hj]
+      simp
+
 end IOFace
 
 end VeriTile.Bench.TritonBenchG.EmbeddingTritonKernel
