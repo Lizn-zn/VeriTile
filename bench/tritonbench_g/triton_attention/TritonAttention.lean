@@ -24,7 +24,7 @@ program of each grid.
 ## Proof architecture
 
 ```
-triton_attention_bwd_grads_genuine_output_summary_general           ← ★ MAIN (bwd grads, multi-block dimension-general)
+triton_attention_bwd_grads_genuine_output_summary                   ← ★ MAIN (bwd grads, multi-block; strides + Z/H PINNED)
   └─ genuine input-memory closed forms: bwdKernelDQSpecG (priorDQ + Σ_J fp16(ds)·k);
        DV[J,e] = Σ_I fp16(p)·do, DK[J,e] = Σ_I fp16(ds)·q (genuine fp16 column sums)
   bwd score P/DS step: triton_attention_bwd_score_{p,ds}_formula_slice_compute_correct  ← closed-form P/DS
@@ -55,7 +55,9 @@ modeling depth differs by kernel:
   `mPartial`). See `ta_exec` and the `triton_attention_forward_surface_*` theorems.
 * **Backward grads** (`DQ`, `DK`, `DV`) are verified against explicit closed
   forms defined over the **input** memory (never re-reading `exec`): the ★ MAIN
-  dimension-general `triton_attention_bwd_grads_genuine_output_summary_general`
+  `triton_attention_bwd_grads_genuine_output_summary` — general in the block
+  dims (`BLOCK_M`, `BLOCK_DMODEL`, `num_block`, `D0`, `sm_scale`) but **pinned in
+  the strides and in `Z`/`H`** (see its docstring) —
   checks the stores against `DQ = priorDQ + Σ_J fp16(ds)·k` (`bwdKernelDQSpecG`),
   `DV[J,e] = Σ_I fp16(p)·do`, and `DK[J,e] = Σ_I fp16(ds)·q` (the genuine fp16
   column sums over all query rows).
@@ -65,10 +67,17 @@ modeling depth differs by kernel:
   carriers — these inner arithmetic steps are checked, the surrounding loop
   composition is trusted.
 
-Side conditions: the dimension-general summaries quantify over symbolic
-`(B,H,T,D)`, block sizes, strides and `sm_scale`, taking tile-offset
-injectivity as hypotheses of the main theorem; the
-backward-grads summary additionally requires the score tiles distinct
+Side conditions: the **forward** and **backward-preprocess** summaries quantify
+over symbolic `(B,H,T,D)`, block sizes, strides and `sm_scale`, taking
+tile-offset injectivity as hypotheses of the main theorem. The
+**backward-grads** summary is general in the block dims and `sm_scale` but
+still **pins `stride_qz = 32768`, `stride_qh = 8192`, `Z = 2`, `H = 4`** — the
+benchmark's `(B,H,T,D) = (2,4,…,…)` shape — because the whole `bwd*G` spec layer
+routes its base offset through `bwdKBase`, which hard-codes
+`off_z·32768 + off_h·8192`. Generalizing it means threading `H`/`stride_qz`/
+`stride_qh` through the 66 declarations that transitively name `bwdKBase`
+(~3.1k lines, including one 882-line step lemma); that is **open work**, not a
+modeling limit. It additionally requires the score tiles distinct
 (`PTile ≠ DSTile`).
 -/
 
@@ -78,7 +87,7 @@ open VeriTile.Triton
 
 set_option linter.unusedSimpArgs false
 
-/-! **★ Main theorems:** `triton_attention_forward_output_summary_general` (forward, dimension-general), `triton_attention_bwd_preprocess_genuine_output_summary_general`, `triton_attention_bwd_grads_genuine_output_summary_general` (backward gradients, multi-block general) -/
+/-! **★ Main theorems:** `triton_attention_forward_output_summary_general` (forward, dimension-general), `triton_attention_bwd_preprocess_genuine_output_summary_general`, `triton_attention_bwd_grads_genuine_output_summary` (backward gradients, multi-block; strides + Z/H pinned) -/
 
 /-! # ══════════ CORRECT — genuine / dimension-general (review this) ══════════ -/
 
@@ -10021,9 +10030,10 @@ private def bwdOuterInvariantG
 
 set_option maxHeartbeats 16000000 in
 set_option maxRecDepth 8000 in
-/-- **General multi-block backward exec.** Running the full general `_bwd_kernel`
-(contiguous strides `[BD,1]`, `stride_qz = 32768`, `stride_qh = 8192`, `H = 4`,
-`N_CTX = BM·nb`) from a clean honest state reaches a final state whose `DV`/`DK`
+/-- **Multi-block backward exec** (general in the block dims; `stride_qz`,
+`stride_qh` and `H` pinned). Running `_bwd_kernel` at contiguous strides
+`[BD,1]` with `stride_qz = 32768`, `stride_qh = 8192`, `H = 4`,
+`N_CTX = BM·nb`, from a clean honest state reaches a final state whose `DV`/`DK`
 memory (fp16 `MemCell` level) holds the genuine general column sums at every key
 row, and whose `DQ` memory (real) holds `bwdKernelDQSpecG`. Driven by the outer
 `forRange_inv` over KV blocks `start_n ∈ [0, nb)` with `bwdOuterInvariantG`. -/
@@ -10360,10 +10370,19 @@ specification triton_attention_forward_output_summary_general
 
 /-! ### ════════ ★ MAIN THEOREM ★ ════════ -/
 set_option maxHeartbeats 1600000 in
-/-- **★ MAIN (backward gradients, multi-block general).** Public symbolic-dimension
-backward-gradient summary for `triton_attention.py`'s `_bwd_kernel` over a full
-`N_CTX = BLOCK_M · num_block` sequence (the multi-block KV/Q streaming loop).
-For symbolic `num_block`/`N_CTX`/`BLOCK_M`/`BLOCK_DMODEL` with contiguous strides:
+/-- **★ MAIN (backward gradients, multi-block) — SCOPE: block dims general,
+strides and `Z`/`H` pinned.** Read the scope first: `num_block`, `N_CTX`,
+`BLOCK_M`, `BLOCK_DMODEL`, `D0` and `sm_scale` are symbolic, but the kernel is
+applied at the **concrete** `stride_qz = 32768`, `stride_qh = 8192`, `Z = 2`,
+`H = 4` — the benchmark's shape. The pin is not a modeling limit: the `bwd*G`
+spec layer routes every address through `bwdKBase`, which hard-codes
+`off_z·32768 + off_h·8192`, so generalizing means threading three parameters
+through the 66 declarations that transitively name it. That is open work; per
+`bench/MAIN_THEOREM_CONVENTIONS.md` §6 this theorem is therefore *not* named
+`_general`.
+
+What it does prove, over a full `N_CTX = BLOCK_M · num_block` sequence (the
+multi-block KV/Q streaming loop), genuinely and end-to-end from `exec`:
 
 * `DQ` (stored `.real`) reads back as a **real** equal to the genuine general
   `bwdKernelDQSpecG` (`priorDQ + Σ_J fp16(ds)·k`, summed over **all** key rows);
@@ -10372,12 +10391,13 @@ For symbolic `num_block`/`N_CTX`/`BLOCK_M`/`BLOCK_DMODEL` with contiguous stride
   column sums `DV[J,e] = Σ_I fp16(p[I,J])·do[I,e]`,
   `DK[J,e] = Σ_I fp16(ds[I,J])·q[I,e]` over all query rows `I ∈ Fin (BLOCK_M·num_block)`.
 
-Honest side conditions: positive block dims and `num_block`, `BD ∣ bwdKBase`, the
-streaming boundary `bwdKBase/BD + num_block·BLOCK_M ≤ D0`, the index/stride
-arithmetic `hbase`, input/output region disjointness, and the honest pids grid. All
+Honest side conditions: the stride/`Z`/`H` pin above, positive block dims and
+`num_block`, `BD ∣ bwdKBase`, the streaming boundary
+`bwdKBase/BD + num_block·BLOCK_M ≤ D0`, the index/stride arithmetic `hbase`,
+input/output region disjointness, and the honest pids grid. All
 specs are defined purely over the **input** `Q`/`K`/`V`/`DO`/`M`/`Delta`/`DQ`
 memory — never over the kernel's own `exec` readback. -/
-specification triton_attention_bwd_grads_genuine_output_summary_general
+specification triton_attention_bwd_grads_genuine_output_summary
     (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) (sc : ℝ)
     (BM BD D0 nb : Nat)
     (hBM : 0 < BM) (hBD : 0 < BD) (hnb : 0 < nb) (hbdvd : BD ∣ bwdKBase s)

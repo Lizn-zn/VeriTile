@@ -473,7 +473,7 @@ def fwdCausalSetG (s : BlockState) (SEQ BLOCK_M : Nat) (i : Fin BLOCK_M) :
 ```
 </details>
 
-## Public theorem: `triton_attention_bwd_grads_genuine_output_summary_general`
+## Public theorem: `triton_attention_bwd_grads_genuine_output_summary`
 
 <details><summary>docstring</summary>
 
@@ -500,7 +500,7 @@ memory — never over the kernel's own `exec` readback. -/
 
 **Statement:**
 ```lean
-specification triton_attention_bwd_grads_genuine_output_summary_general
+specification triton_attention_bwd_grads_genuine_output_summary
     (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) (sc : ℝ)
     (BM BD D0 nb : Nat)
     (hBM : 0 < BM) (hBD : 0 < BD) (hnb : 0 < nb) (hbdvd : BD ∣ bwdKBase s)
