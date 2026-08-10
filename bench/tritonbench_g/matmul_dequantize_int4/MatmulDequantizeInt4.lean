@@ -1621,6 +1621,380 @@ theorem mdqLoopBody_run (s0 : BlockState) (a scales : RegionName)
         rw [hf, groupRow_of_noGroups]]
       simpa using hzerosT
 
+/-- The loop combinator writes the induction variable before each iteration, and
+`mdqInv` constrains no register named `"k"`, so the invariant survives that write. -/
+theorem mdqInv_setReg_k (s0 : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M N K groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK GM i j : Nat) (s : BlockState)
+    (h : mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+      stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+      stride_zeros_n BM BN BK GM i s) :
+    mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+      stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+      stride_zeros_n BM BN BK GM i (s.setReg "k" .nat [] (Tile.scalar j)) := by
+  obtain ⟨hle, hmem, hpids, hbits, hipb, hpm, hpn, hmask, hshift, hzshift,
+    hspt, hzpt, hapt, hbpt, hacc, hpreload⟩ := h
+  exact ⟨hle, hmem, hpids, by simpa using hbits, by simpa using hipb,
+    by simpa using hpm, by simpa using hpn, by simpa using hmask,
+    by simpa using hshift, by simpa using hzshift, by simpa using hspt,
+    by simpa using hzpt, by simpa using hapt, by simpa using hbpt,
+    by simpa using hacc, fun hf => by simpa using hpreload hf⟩
+
+/-! ### Collapsing the K loop
+
+`forRangeDyn_inv` concludes only `stop ≤ final`, so the readout needs the other
+inequality; that is what the invariant's own `i ≤ numPidK K BK` conjunct is for —
+together they pin `final = numPidK K BK` and hand the accumulator to
+`mdqAccTile_full`. -/
+
+theorem mdqLoop_collapse (s0 : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M N K groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK GM : Nat) (s : BlockState)
+    (hnpk : s.regs .nat [] "num_pid_k" = some (Tile.scalar (numPidK K BK)))
+    (h0 : mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+      stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+      stride_zeros_n BM BN BK GM 0 s) :
+    ∃ sF, stepStmt (Stmt.forRangeDyn "k" (Op.constNat 0)
+          (Op.ref .nat [] "num_pid_k") (Op.constNat 1)
+          (mdqLoopBody groupsize stride_ak stride_bk stride_scales_g
+            stride_zeros_g NO_GROUPS BM BN BK)) s = some sF
+      ∧ mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+          stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+          stride_zeros_n BM BN BK GM (numPidK K BK) sF := by
+  obtain ⟨final, sF, hrun, hfinal, hP⟩ :=
+    forRangeDyn_inv (idx := "k") (start := 0) (stop := numPidK K BK) (step := 1)
+      (P := fun i t => mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am
+        stride_ak stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+        stride_zeros_n BM BN BK GM i t)
+      (evalOp_constNat _ _) (by rw [evalOp_ref]; exact hnpk) (evalOp_constNat _ _)
+      one_ne_zero h0
+      (fun i t hi hinv => by
+        obtain ⟨s', hs', hinv'⟩ :=
+          mdqLoopBody_run s0 a scales b zeros NO_GROUPS M N K groupsize stride_am
+            stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+            stride_zeros_g stride_zeros_n BM BN BK GM i _ (by omega) (by simp)
+            (mdqInv_setReg_k s0 a scales b zeros NO_GROUPS M N K groupsize stride_am
+              stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+              stride_zeros_g stride_zeros_n BM BN BK GM i i t hinv)
+        exact ⟨s', hs', hinv'⟩)
+  -- `hP.1` is the invariant's `final ≤ numPidK`; `hfinal` is the reverse.
+  have hEq : final = numPidK K BK := le_antisymm hP.1 hfinal
+  subst hEq
+  exact ⟨sF, hrun, hP⟩
+
+/-! ## The prologue's building blocks
+
+Every prologue statement is one of two kinds: a `nat` **scalar** step (the pid
+swizzle and the three `tl.cdiv`s), or a shaped **index tile** (the offset vectors,
+the four pointer tiles, the mask and the two shifters). The scalar family all has
+the same shape — `Tile.bop f Broadcast.nil (Tile.scalar u) (Tile.scalar v)` is
+`Tile.scalar (f u v)` by `rfl` — so those recipes are listed together, followed by
+one `evalOp` lemma per index tile that lands directly on the named tile. -/
+
+/-- `Op.div` on any numeric channel (this is what `tl.cdiv` expands to; `//` is
+`Op.floorDiv`). -/
+private theorem mdq_divTile_eval {dtype : TileDType} (h : NumericDType dtype)
+    {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op dtype a) (y : Op dtype b) (t : BlockState)
+    (vx : Tile dtype a) (vy : Tile dtype b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.div h bc x y) t = some (Tile.bop h.div bc vx vy) := by
+  rw [evalOp_div, hx, hy]
+  rfl
+
+/-- `%` on the `nat` channel. -/
+private theorem mdq_mod_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .nat a) (y : Op .nat b) (t : BlockState)
+    (vx : Tile .nat a) (vy : Tile .nat b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.mod IntegralDType.nat bc x y) t
+      = some (Tile.bop (IntegralDType.mod IntegralDType.nat) bc vx vy) := by
+  simp only [evalOp, hx, hy]
+  rfl
+
+/-- `<`. -/
+private theorem mdq_ltTile_eval {dtype : TileDType} (h : ComparableDType dtype)
+    {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op dtype a) (y : Op dtype b) (t : BlockState)
+    (vx : Tile dtype a) (vy : Tile dtype b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.lt h bc x y) t = some (Tile.cop h.lt bc vx vy) := by
+  rw [evalOp_lt, hx, hy]
+  rfl
+
+/-- `tl.where` — how `min(a, b)` is lowered, there being no `Op.min`. -/
+private theorem mdq_where_eval {dtype : TileDType} {sh : TileShape}
+    (c : Op .bool sh) (x y : Op dtype sh) (t : BlockState)
+    (vc : Tile .bool sh) (vx vy : Tile dtype sh)
+    (hc : evalOp c t = some vc) (hx : evalOp x t = some vx)
+    (hy : evalOp y t = some vy) :
+    evalOp (Op.where c x y) t = some (Tile.select vc vx vy) := by
+  rw [evalOp_where, hc, hx, hy]
+  rfl
+
+/-- `tl.zeros` / `tl.full`. -/
+private theorem mdq_full_eval {dtype : TileDType} (sh : TileShape) (e : Op dtype [])
+    (t : BlockState) (v : Tile dtype []) (hv : evalOp e t = some v) :
+    evalOp (Op.full sh e) t
+      = some (⟨fun _ => v.data PUnit.unit⟩ : Tile dtype sh) := by
+  rw [evalOp_full, hv]
+  rfl
+
+/-- A pointer tile built from a bare region base, as every `R + offs` in the
+prologue is. -/
+private theorem mdq_ptrAddBase_eval {d : TileDType} {b out : TileShape}
+    (bc : Broadcast [] b out) (rg : Region d) (t : BlockState)
+    (off : Op .nat b) (ov : Tile .nat b) (ho : evalOp off t = some ov) :
+    evalOp (Op.ptrAdd bc (Op.ptrBase rg) off) t
+      = some (Tile.ptrAdd bc (Tile.scalar ((Region.cast rg : RegionName), 0)) ov) := by
+  simp only [evalOp, ho]
+  rfl
+
+/-! ### `nat` scalars -/
+
+private theorem mdq_addScalarNat_eval (x y : Op .nat []) (t : BlockState) (u v : Nat)
+    (hx : evalOp x t = some (Tile.scalar u))
+    (hy : evalOp y t = some (Tile.scalar v)) :
+    evalOp (Op.add .nat Broadcast.nil x y) t = some (Tile.scalar (u + v)) := by
+  rw [mdq_addTile_eval NumericDType.nat Broadcast.nil x y t _ _ hx hy]
+  rfl
+
+private theorem mdq_subScalarNat_eval (x y : Op .nat []) (t : BlockState) (u v : Nat)
+    (hx : evalOp x t = some (Tile.scalar u))
+    (hy : evalOp y t = some (Tile.scalar v)) :
+    evalOp (Op.sub .nat Broadcast.nil x y) t = some (Tile.scalar (u - v)) := by
+  rw [mdq_subTile_eval NumericDType.nat Broadcast.nil x y t _ _ hx hy]
+  rfl
+
+private theorem mdq_divScalarNat_eval (x y : Op .nat []) (t : BlockState) (u v : Nat)
+    (hx : evalOp x t = some (Tile.scalar u))
+    (hy : evalOp y t = some (Tile.scalar v)) :
+    evalOp (Op.div .nat Broadcast.nil x y) t = some (Tile.scalar (u / v)) := by
+  rw [mdq_divTile_eval NumericDType.nat Broadcast.nil x y t _ _ hx hy]
+  rfl
+
+private theorem mdq_modScalarNat_eval (x y : Op .nat []) (t : BlockState) (u v : Nat)
+    (hx : evalOp x t = some (Tile.scalar u))
+    (hy : evalOp y t = some (Tile.scalar v)) :
+    evalOp (Op.mod IntegralDType.nat Broadcast.nil x y) t
+      = some (Tile.scalar (u % v)) := by
+  rw [mdq_mod_eval Broadcast.nil x y t _ _ hx hy]
+  rfl
+
+private theorem mdq_ltScalarNat_eval (x y : Op .nat []) (t : BlockState) (u v : Nat)
+    (hx : evalOp x t = some (Tile.scalar u))
+    (hy : evalOp y t = some (Tile.scalar v)) :
+    evalOp (Op.lt ComparableDType.nat Broadcast.nil x y) t
+      = some (Tile.scalar (decide (u < v))) := by
+  rw [mdq_ltTile_eval ComparableDType.nat Broadcast.nil x y t _ _ hx hy]
+  rfl
+
+private theorem mdq_whereScalarNat_eval (c : Op .bool []) (x y : Op .nat [])
+    (t : BlockState) (cv : Bool) (u v : Nat)
+    (hc : evalOp c t = some (Tile.scalar cv))
+    (hx : evalOp x t = some (Tile.scalar u))
+    (hy : evalOp y t = some (Tile.scalar v)) :
+    evalOp (Op.where c x y) t = some (Tile.scalar (if cv then u else v)) := by
+  rw [mdq_where_eval c x y t _ _ _ hc hx hy]
+  rfl
+
+/-- `min` is spelled as a `tl.where` by the DSL; this is the arithmetic identity
+that turns the lowered form back into `groupSizeM`'s `min`. -/
+private theorem mdq_min_as_where (u v : Nat) : (if u < v then u else v) = min u v := by
+  rcases Nat.lt_or_ge u v with h | h
+  · rw [if_pos h]; omega
+  · rw [if_neg (by omega)]; omega
+
+/-! ### Index tiles -/
+
+/-- `pid_* * BLOCK + tl.arange(0, BLOCK)`, and `tl.arange` on its own at `base = 0`. -/
+def mdqOffsTile (base BD : Nat) : Tile .nat [BD] := ⟨fun idx => base + idx.1.val⟩
+
+private theorem mdq_arange_eq_offs (BD : Nat) :
+    (Tile.vec (fun i => (i.val : Nat)) : Tile .nat [BD]) = mdqOffsTile 0 BD := by
+  apply Tile.ext
+  intro idx
+  simp [mdqOffsTile, Tile.vec]
+
+private theorem mdq_offs_eval (nm : RegName) (t : BlockState) (BD base c : Nat)
+    (hr : t.regs .nat [] nm = some (Tile.scalar base)) :
+    evalOp (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] nm) (Op.constNat c))
+        (Op.arange BD)) t
+      = some (mdqOffsTile (base * c) BD) := by
+  rw [mdq_addTile_eval NumericDType.nat Broadcast.scalarL _ _ t
+    (Tile.scalar (base * c)) (Tile.vec (fun i => (i.val : Nat)))
+    (mdq_mulScalarNat_eval _ _ t base c (by rw [evalOp_ref]; exact hr)
+      (evalOp_constNat _ _))
+    (evalOp_arange _ _)]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqOffsTile, Tile.vec, Broadcast.rightIndex, NumericDType.add]
+
+/-- `a_ptrs = a_ptr + offs_am[:, None] * stride_am + offs_k[None, :] * stride_ak`. -/
+private theorem mdq_aPtrsInit_eval (a : RegionName) (t : BlockState)
+    (stride_am stride_ak BM BK pm : Nat)
+    (ham : t.regs .nat [BM] "offs_am" = some (mdqOffsTile (pm * BM) BM))
+    (hok : t.regs .nat [BK] "offs_k" = some (mdqOffsTile 0 BK)) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase a)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am"))
+            (Op.constNat stride_am))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BK] "offs_k"))
+            (Op.constNat stride_ak)))) t
+      = some (mdqAPtrs a stride_am stride_ak BM BK pm 0) := by
+  rw [mdq_ptrAddBase_eval _ _ t _ _
+    (mdq_addTile_eval NumericDType.nat _ _ _ t _ _
+      (mdq_mulTile_eval NumericDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar stride_am)
+        (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact ham))
+        (evalOp_constNat _ _))
+      (mdq_mulTile_eval NumericDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar stride_ak)
+        (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact hok))
+        (evalOp_constNat _ _)))]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqAPtrs, mdqAAddr, mdqOffsTile, Tile.ptrAdd_data, Tile.bop_data,
+    Tile.expandDim_data, TileShape.dropInsertedIndex, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+/-- `a_mask = offs_am[:, None] < M`. -/
+private theorem mdq_aMaskInit_eval (t : BlockState) (M BM pm : Nat)
+    (ham : t.regs .nat [BM] "offs_am" = some (mdqOffsTile (pm * BM) BM)) :
+    evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am")) (Op.constNat M)) t
+      = some (mdqAMask M BM pm) := by
+  rw [mdq_ltTile_eval ComparableDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar M)
+    (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact ham))
+    (evalOp_constNat _ _)]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqAMask, mdqOffsTile, Tile.cop_data, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, Broadcast.leftIndex, ComparableDType.lt]
+
+/-- `b_ptrs = b_ptr + (offs_k[:, None] // 8) * stride_bk + offs_bn[None, :] * stride_bn`. -/
+private theorem mdq_bPtrsInit_eval (b : Region .nat) (t : BlockState)
+    (stride_bk stride_bn BN BK pn : Nat)
+    (hok : t.regs .nat [BK] "offs_k" = some (mdqOffsTile 0 BK))
+    (hbn : t.regs .nat [BN] "offs_bn" = some (mdqOffsTile (pn * BN) BN))
+    (hipb : t.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8)) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase b)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.floorDiv IntegralDType.nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BK] "offs_k"))
+              (Op.ref .nat [] "infearure_per_bits"))
+            (Op.constNat stride_bk))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_bn"))
+            (Op.constNat stride_bn)))) t
+      = some (mdqBPtrs b stride_bk stride_bn BN BK pn 0) := by
+  rw [mdq_ptrAddBase_eval _ _ t _ _
+    (mdq_addTile_eval NumericDType.nat _ _ _ t _ _
+      (mdq_mulTile_eval NumericDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar stride_bk)
+        (mdq_floorDiv_eval Broadcast.scalarR _ _ t _ (Tile.scalar 8)
+          (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact hok))
+          (by rw [evalOp_ref]; exact hipb))
+        (evalOp_constNat _ _))
+      (mdq_mulTile_eval NumericDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar stride_bn)
+        (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact hbn))
+        (evalOp_constNat _ _)))]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqBPtrs, mdqBAddr, mdqOffsTile, Tile.ptrAdd_data, Tile.bop_data,
+    Tile.expandDim_data, TileShape.dropInsertedIndex, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+/-- `scales_ptrs = scales_ptr + offs_bn * stride_scales_n`. -/
+private theorem mdq_scalesPtrsInit_eval (scales : RegionName) (t : BlockState)
+    (stride_scales_n BN pn : Nat)
+    (hbn : t.regs .nat [BN] "offs_bn" = some (mdqOffsTile (pn * BN) BN)) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase scales)
+        (Op.mul .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_bn")
+          (Op.constNat stride_scales_n))) t
+      = some (mdqScalesPtrs scales stride_scales_n BN pn) := by
+  rw [mdq_ptrAddBase_eval _ _ t _ _
+    (mdq_mulTile_eval NumericDType.nat Broadcast.scalarR _ _ t _
+      (Tile.scalar stride_scales_n) (by rw [evalOp_ref]; exact hbn)
+      (evalOp_constNat _ _))]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqScalesPtrs, mdqScalesAddr, mdqOffsTile, Tile.ptrAdd_data, Tile.bop_data,
+    Broadcast.leftIndex, NumericDType.mul]
+
+/-- `zeros_ptrs = zeros_ptr + (offs_bn // 8) * stride_zeros_n`. -/
+private theorem mdq_zerosPtrsInit_eval (zeros : Region .nat) (t : BlockState)
+    (stride_zeros_n BN pn : Nat)
+    (hbn : t.regs .nat [BN] "offs_bn" = some (mdqOffsTile (pn * BN) BN))
+    (hipb : t.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8)) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase zeros)
+        (Op.mul .nat Broadcast.scalarR
+          (Op.floorDiv IntegralDType.nat Broadcast.scalarR (Op.ref .nat [BN] "offs_bn")
+            (Op.ref .nat [] "infearure_per_bits"))
+          (Op.constNat stride_zeros_n))) t
+      = some (mdqZerosPtrs zeros stride_zeros_n BN pn) := by
+  rw [mdq_ptrAddBase_eval _ _ t _ _
+    (mdq_mulTile_eval NumericDType.nat Broadcast.scalarR _ _ t _
+      (Tile.scalar stride_zeros_n)
+      (mdq_floorDiv_eval Broadcast.scalarR _ _ t _ (Tile.scalar 8)
+        (by rw [evalOp_ref]; exact hbn) (by rw [evalOp_ref]; exact hipb))
+      (evalOp_constNat _ _))]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqZerosPtrs, mdqZerosAddr, mdqOffsTile, Tile.ptrAdd_data, Tile.bop_data,
+    Broadcast.leftIndex, NumericDType.mul]
+
+/-- `shifter = (offs_k % infearure_per_bits) * bits`. -/
+private theorem mdq_shifterInit_eval (t : BlockState) (BK : Nat)
+    (hok : t.regs .nat [BK] "offs_k" = some (mdqOffsTile 0 BK))
+    (hipb : t.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8))
+    (hbits : t.regs .nat [] "bits" = some (Tile.scalar 4)) :
+    evalOp (Op.mul .nat Broadcast.scalarR
+        (Op.mod IntegralDType.nat Broadcast.scalarR (Op.ref .nat [BK] "offs_k")
+          (Op.ref .nat [] "infearure_per_bits"))
+        (Op.ref .nat [] "bits")) t
+      = some (mdqShifter BK) := by
+  rw [mdq_mulTile_eval NumericDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar 4)
+    (mdq_mod_eval Broadcast.scalarR _ _ t _ (Tile.scalar 8)
+      (by rw [evalOp_ref]; exact hok) (by rw [evalOp_ref]; exact hipb))
+    (by rw [evalOp_ref]; exact hbits)]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqShifter, mdqOffsTile, Tile.bop_data, Broadcast.leftIndex,
+    NumericDType.mul]
+
+/-- `zeros_shifter = (offs_bn % infearure_per_bits) * bits`. -/
+private theorem mdq_zerosShifterInit_eval (t : BlockState) (BN pn : Nat)
+    (hbn : t.regs .nat [BN] "offs_bn" = some (mdqOffsTile (pn * BN) BN))
+    (hipb : t.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8))
+    (hbits : t.regs .nat [] "bits" = some (Tile.scalar 4)) :
+    evalOp (Op.mul .nat Broadcast.scalarR
+        (Op.mod IntegralDType.nat Broadcast.scalarR (Op.ref .nat [BN] "offs_bn")
+          (Op.ref .nat [] "infearure_per_bits"))
+        (Op.ref .nat [] "bits")) t
+      = some (mdqZerosShifter BN pn) := by
+  rw [mdq_mulTile_eval NumericDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar 4)
+    (mdq_mod_eval Broadcast.scalarR _ _ t _ (Tile.scalar 8)
+      (by rw [evalOp_ref]; exact hbn) (by rw [evalOp_ref]; exact hipb))
+    (by rw [evalOp_ref]; exact hbits)]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqZerosShifter, mdqOffsTile, Tile.bop_data, Broadcast.leftIndex,
+    NumericDType.mul]
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
