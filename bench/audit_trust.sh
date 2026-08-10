@@ -7,7 +7,7 @@
 # population — the standalone, single-file bench elaborations that are NOT
 # importable:
 #
-#   * bench/tritonbench_g/*/*.lean   (the 151 TritonBench-G ports)
+#   * bench/tritonbench_g/*/*.lean   (the 152 TritonBench-G ports)
 #   * bench/examples/*.lean          (the kernel showcases)
 #   * bench/tests/*.lean             (infra smoke tests / regression gates)
 #

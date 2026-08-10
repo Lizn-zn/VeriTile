@@ -37,7 +37,7 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   `ComputeCorrect.Realizes_without_Rounding`) at the trivial model. See the
   fused-vs-unfused SwiGLU showcase
   [`bench/examples/FusedSwiglu.lean`](./bench/examples/FusedSwiglu.lean).
-- **Examples**: 151 ported TritonBench-G kernels with proofs (source of truth:
+- **Examples**: 152 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   see [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
   forward, online softmax, Welford, LayerNorm, log-sum-exp.
@@ -160,7 +160,7 @@ VeriTile/
     Launch/                Grid-launch composition / write footprints
     Concurrency/           Grid-wide atomic-add correctness (above Launch)
   Examples/                Worked correctness/refinement proofs
-bench/tritonbench_g/       TritonBench-G v1 ports (151 pairs; see completion_audit.md)
+bench/tritonbench_g/       TritonBench-G v1 ports (152 pairs; see completion_audit.md)
 bench/examples/            Showcase proofs (SwiGLU rounding invariance, ...)
 documents/                 Design notes, subset spec, surface guide
 scripts/                   CI gate, kernel manifest, LLM proof wrapper

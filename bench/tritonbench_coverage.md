@@ -6,9 +6,9 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **151** |
-| Not yet imported | 33 |
-| — of those, expressible with today's DSL surface | 17 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **152** |
+| Not yet imported | 32 |
+| — of those, expressible with today's DSL surface | 16 |
 | — of those, blocked on a missing primitive or an ℝ-model limit | 16 |
 
 ## What "expressible" means here, and what it does not
@@ -28,7 +28,7 @@ correctness depends on inter-program interleaving (spin locks, cooperative
 reductions) elaborate fine — the host launch is the trusted boundary — but their
 *specification* has to be chosen with that boundary in mind.
 
-## Not yet imported: portable now (17)
+## Not yet imported: portable now (16)
 
 Every `tl.*` form these use is already in the DSL surface. Each row is one
 port-sized unit of work: import the `.py` **together with** its `.lean` port,
@@ -38,7 +38,6 @@ guard that stops a kernel being imported and then forgotten.
 | Kernel | `.py` lines | `@triton.jit` kernels |
 |---|---:|---:|
 | `bmm_optimized` | 233 | 1 |
-| `chunk_bwd_dqkg` | 179 | 1 |
 | `chunk_gla_fwd` | 369 | 5 |
 | `chunk_linear_attn` | 309 | 4 |
 | `chunk_retention` | 452 | 4 |
