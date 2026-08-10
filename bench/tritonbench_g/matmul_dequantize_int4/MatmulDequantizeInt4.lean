@@ -1281,6 +1281,147 @@ private theorem mdq_groupBranch_run (s0 : BlockState) (scales : RegionName)
     · rw [mdqZerosTile_eq]
       simp
 
+/-! ### The dequantized weight tile and the accumulator step
+
+The last three compute statements of the body. `b` is rewritten twice — once to
+extract the nibble on the `nat` channel, once to scale and shift it onto the `real`
+channel — and only then does `tl.dot` fire, so the dequantization is entirely
+inside the K step and `bDequant` is the right unit to name. -/
+
+/-- `b` after both dequant statements at K step `k`: the unpacked nibble scaled by
+`scales`, minus the already-scaled `zeros`, both read at that step's group row. -/
+noncomputable def mdqBDequantTile (s : BlockState) (scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (groupsize stride_bk stride_bn stride_scales_g stride_scales_n
+      stride_zeros_g stride_zeros_n BN BK pn k : Nat) : Tile .real [BK, BN] :=
+  ⟨fun idx => some (bDequant s scales b zeros NO_GROUPS groupsize stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n BN BK pn
+      k idx.1.val idx.2.1.val)⟩
+
+/-- The dequantized tile **is** the compiled `b * scales[None, :] - zeros[None, :]`,
+with the group row supplied by `groupRow`. Both `[BN]` operands are rank-broadcast
+along the K axis, which is why one group row serves the whole tile. -/
+theorem mdqBDequantTile_eq (s : BlockState) (scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (groupsize stride_bk stride_bn stride_scales_g stride_scales_n
+      stride_zeros_g stride_zeros_n BN BK pn k : Nat) :
+    mdqBDequantTile s scales b zeros NO_GROUPS groupsize stride_bk stride_bn
+        stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n BN BK pn k
+      = Tile.bop NumericDType.real.sub
+          (Broadcast.consR (Broadcast.consSame Broadcast.nil))
+          (Tile.bop NumericDType.real.mul
+            (Broadcast.consR (Broadcast.consSame Broadcast.nil))
+            (Tile.natToReal (mdqBNibbleTile s b stride_bk stride_bn BN BK pn k))
+            (Tile.expandDim ⟨0, by simp⟩
+              (mdqScalesTile s scales stride_scales_g stride_scales_n BN pn
+                (groupRow NO_GROUPS groupsize BK k))))
+          (Tile.expandDim ⟨0, by simp⟩
+            (mdqZerosTile s scales zeros stride_scales_g stride_scales_n
+              stride_zeros_g stride_zeros_n BN pn
+              (groupRow NO_GROUPS groupsize BK k))) := by
+  apply Tile.ext
+  intro idx
+  simp only [mdqBDequantTile, bDequant, mdqBNibbleTile, mdqScalesTile, mdqZerosTile,
+    Tile.bop_data, Tile.natToReal, Tile.expandDim_data, TileShape.dropInsertedIndex,
+    Broadcast.leftIndex, Broadcast.rightIndex, NumericDType.sub, NumericDType.mul,
+    WithBot.realSub, WithBot.realMul]
+  rfl
+
+/-- A `WithBot ℝ` sum of pointwise products of `some`s is the `some` of the `ℝ`
+sum — the collapse `Tile.dot` needs, since every operand lane here is a loaded
+(non-`⊥`) value. -/
+private theorem mdq_coe_sum_mul {n : Nat} (f g : Fin n → ℝ) :
+    (@Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ fun e =>
+        Option.map₂ (fun x y : ℝ => x * y) (some (f e)) (some (g e)))
+      = some (∑ e : Fin n, f e * g e) := by
+  rw [show (@Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ fun e =>
+        Option.map₂ (fun x y : ℝ => x * y) (some (f e)) (some (g e)))
+      = (@Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ fun e =>
+          (some (f e * g e) : WithBot ℝ)) from Finset.sum_congr rfl fun e _ => by simp]
+  show (Finset.univ.sum fun e => ((f e * g e : ℝ) : WithBot ℝ)) = _
+  rw [← WithBot.coe_sum]
+  rfl
+
+/-- **The accumulator statement.** `accumulator += tl.dot(a, b)` extends the partial
+sum by exactly one `accStep`. -/
+theorem mdqAccTile_dot_succ (s : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK pm pn i : Nat) :
+    Tile.bop NumericDType.real.add
+        (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (mdqAccTile s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+          stride_bk stride_bn stride_scales_g stride_scales_n
+          stride_zeros_g stride_zeros_n BM BN BK pm pn i)
+        (Tile.dot [] (mdqATile s a M stride_am stride_ak BM BK pm i)
+          (mdqBDequantTile s scales b zeros NO_GROUPS groupsize stride_bk stride_bn
+            stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n BN BK pn i))
+      = mdqAccTile s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+          stride_bk stride_bn stride_scales_g stride_scales_n
+          stride_zeros_g stride_zeros_n BM BN BK pm pn (i + 1) := by
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, c, u⟩ := idx
+  rw [mdqAccTile_succ]
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, mdqAccTile,
+    NumericDType.add, WithBot.realAdd]
+  -- `erw`: `Tile.dot`'s operand shapes are `[] ++ [M, K]`, so `Tile.dot_nil_data`
+  -- does not fire under `rw` / `simp only`.
+  erw [Tile.dot_nil_data]
+  simp only [mdqATile_data, mdqBDequantTile]
+  rw [mdq_coe_sum_mul]
+  simp [accStep]
+
+/-! ### The remaining eval recipes -/
+
+/-- `-` on two tiles, both operand values known. -/
+private theorem mdq_subTile_eval {dtype : TileDType} (h : NumericDType dtype)
+    {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op dtype a) (y : Op dtype b) (t : BlockState)
+    (vx : Tile dtype a) (vy : Tile dtype b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.sub h bc x y) t = some (Tile.bop h.sub bc vx vy) := by
+  rw [evalOp_sub, hx, hy]
+  rfl
+
+/-- `+` on two tiles, both operand values known. -/
+private theorem mdq_addTile_eval {dtype : TileDType} (h : NumericDType dtype)
+    {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op dtype a) (y : Op dtype b) (t : BlockState)
+    (vx : Tile dtype a) (vy : Tile dtype b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.add h bc x y) t = some (Tile.bop h.add bc vx vy) := by
+  rw [evalOp_add, hx, hy]
+  rfl
+
+/-- `*` on two `nat` **scalars** — the shape both pointer advances use. -/
+private theorem mdq_mulScalarNat_eval (x y : Op .nat []) (t : BlockState) (u v : Nat)
+    (hx : evalOp x t = some (Tile.scalar u))
+    (hy : evalOp y t = some (Tile.scalar v)) :
+    evalOp (Op.mul .nat Broadcast.nil x y) t = some (Tile.scalar (u * v)) := by
+  rw [evalOp_mul, hx, hy]
+  rfl
+
+/-- `[:, None]` / `[None, :]`.  The axis binder is spelled `ax`: the DSL claims
+`axis` as a keyword-argument token, so it cannot be used as an identifier here. -/
+private theorem mdq_expandDim_eval {dtype : TileDType} {sh : TileShape}
+    (ax : Fin (sh.length + 1)) (x : Op dtype sh) (t : BlockState)
+    (v : Tile dtype sh) (hv : evalOp x t = some v) :
+    evalOp (Op.expandDim ax x) t = some (Tile.expandDim ax v) := by
+  rw [evalOp_expandDim, hv]
+  rfl
+
+/-- `tl.dot` at rank 2. `erw`, not `rw`: the operand shapes are `[] ++ [M, K]`,
+which does not unfold at reducible transparency, so `evalOp_dot` silently fails to
+fire under `rw` / `simp only`. -/
+private theorem mdq_dot_eval {M K N : Nat} (x : Op .real [M, K]) (y : Op .real [K, N])
+    (t : BlockState) (vx : Tile .real [M, K]) (vy : Tile .real [K, N])
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.dot (batch := []) x y) t = some (Tile.dot [] vx vy) := by
+  erw [evalOp_dot, hx, hy]
+  rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
