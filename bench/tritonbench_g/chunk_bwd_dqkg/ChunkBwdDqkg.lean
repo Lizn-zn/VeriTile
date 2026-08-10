@@ -1588,6 +1588,147 @@ private theorem cbd_dgFinal_eval (s t : BlockState) (g q k v h do_ dh : RegionNa
   · simp [hlt]
 
 
+/-! ## The three stores
+
+`dq` and `dk` share one block-pointer layout, so one injectivity hypothesis
+covers both; the `dg` layout is `base + (i_t*BT + r)`, injective outright. -/
+
+/-- The `dq` / `dk` block-ptr store offset at lane `(r, e)`. -/
+def cbdQkAddr (s : BlockState) (s_k_h s_k_t BT BK : Nat) (idx : TileIndex [BT, BK]) : Nat :=
+  s.pids 2 * s_k_h + (s.pids 1 * BT + idx.1.val) * s_k_t + (s.pids 0 * BK + idx.2.1.val) * 1
+
+/-- The `dg` block-ptr store offset at lane `r`. -/
+def cbdDgAddr (s : BlockState) (T BT : Nat) (idx : TileIndex [BT]) : Nat :=
+  (s.pids 0 * s.numPids 2 + s.pids 2) * T + (s.pids 1 * BT + idx.1.val) * 1
+
+/-- Post-store state of a boundary-checked 2-D block-pointer store. -/
+noncomputable def cbdStore2State (R : RegionName) (d0 d1 st0 st1 B0 B1 o0 o1 base : Nat)
+    (f : TileIndex [B0, B1] → ℝ) (t : BlockState) : BlockState :=
+  (TileShape.allIndices [B0, B1]).foldl
+    (fun acc i => if (o0 + i.1.val < d0 ∧ o1 + i.2.1.val < d1) then
+        acc.writeMem R (base + (o0 + i.1.val) * st0 + (o1 + i.2.1.val) * st1) (f i)
+      else acc) t
+
+/-- Post-store state of a boundary-checked 1-D block-pointer store. -/
+noncomputable def cbdStore1State (R : RegionName) (len stride B0 off base : Nat)
+    (f : TileIndex [B0] → ℝ) (t : BlockState) : BlockState :=
+  (TileShape.allIndices [B0]).foldl
+    (fun acc i => if off + i.1.val < len then
+        acc.writeMem R (base + (off + i.1.val) * stride) (f i) else acc) t
+
+private theorem cbd_store_2d_eq (R : RegionName) (d0 d1 st0 st1 B0 B1 o0 o1 base : Nat)
+    (bpName vName : RegName) (t : BlockState) (vt : Tile .real [B0, B1])
+    (f : TileIndex [B0, B1] → ℝ)
+    (hfv : ∀ i, vt.data i = some (f i))
+    (hbp : t.regs .blockPtr [B0, B1] bpName = some (⟨fun _ : TileIndex [B0, B1] =>
+        { region := R, baseOffset := base, parentShape := [d0, d1],
+          blockShape := [B0, B1], strides := [st0, st1], offsets := [o0, o1] }⟩ :
+        Tile .blockPtr [B0, B1]))
+    (hv : t.regs .real [B0, B1] vName = some vt) :
+    stepStmt (Stmt.store .real [B0, B1]
+        (.blockPtr (Op.ref .blockPtr [B0, B1] bpName) [0, 1])
+        (Op.ref .real [B0, B1] vName) .none) t
+      = some (cbdStore2State R d0 d1 st0 st1 B0 B1 o0 o1 base f t) := by
+  unfold stepStmt cbdStore2State
+  simp only [evalOp_ref, hv, hbp]
+  refine congrArg some
+    (congrArg (fun F => List.foldl F t (TileShape.allIndices [B0, B1])) ?_)
+  funext acc i
+  obtain ⟨i0, i1, u⟩ := i
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets,
+    BlockPtr.inBounds_2d_offsets, Bool.true_and]
+  by_cases hb : o0 + i0.val < d0 ∧ o1 + i1.val < d1
+  · simp only [hb, BlockState.writeMemTyped_real, hfv]
+    rfl
+  · simp only [hb, decide_false, Bool.false_eq_true, if_false]
+
+private theorem cbd_store_1d_eq (R : RegionName) (len stride B0 off base : Nat)
+    (bpName vName : RegName) (t : BlockState) (vt : Tile .real [B0])
+    (f : TileIndex [B0] → ℝ)
+    (hfv : ∀ i, vt.data i = some (f i))
+    (hbp : t.regs .blockPtr [B0] bpName = some (⟨fun _ : TileIndex [B0] =>
+        { region := R, baseOffset := base, parentShape := [len],
+          blockShape := [B0], strides := [stride], offsets := [off] }⟩ :
+        Tile .blockPtr [B0]))
+    (hv : t.regs .real [B0] vName = some vt) :
+    stepStmt (Stmt.store .real [B0]
+        (.blockPtr (Op.ref .blockPtr [B0] bpName) [0])
+        (Op.ref .real [B0] vName) .none) t
+      = some (cbdStore1State R len stride B0 off base f t) := by
+  unfold stepStmt cbdStore1State
+  simp only [evalOp_ref, hv, hbp]
+  refine congrArg some
+    (congrArg (fun F => List.foldl F t (TileShape.allIndices [B0])) ?_)
+  funext acc i
+  obtain ⟨i0, u⟩ := i
+  simp only [TileShape.indexToList, BlockPtr.address_1d, BlockPtr.inBounds_1d,
+    Bool.true_and]
+  by_cases hb : off + i0.val < len
+  · simp only [hb, BlockState.writeMemTyped_real, hfv]
+    rfl
+  · simp only [hb, decide_false, Bool.false_eq_true, if_false]
+
+private theorem cbd_store_2d_props (R : RegionName)
+    (d0 d1 st0 st1 B0 B1 o0 o1 base : Nat) (t : BlockState) (f : TileIndex [B0, B1] → ℝ)
+    (hInj : Function.Injective (fun i : TileIndex [B0, B1] =>
+        base + (o0 + i.1.val) * st0 + (o1 + i.2.1.val) * st1)) :
+    (cbdStore2State R d0 d1 st0 st1 B0 B1 o0 o1 base f t).pids = t.pids
+      ∧ (cbdStore2State R d0 d1 st0 st1 B0 B1 o0 o1 base f t).regs = t.regs
+      ∧ (∀ i : TileIndex [B0, B1], (o0 + i.1.val < d0 ∧ o1 + i.2.1.val < d1) →
+          (cbdStore2State R d0 d1 st0 st1 B0 B1 o0 o1 base f t).readMem R
+              (base + (o0 + i.1.val) * st0 + (o1 + i.2.1.val) * st1) = f i)
+      ∧ (∀ rg off, rg ≠ R →
+          (cbdStore2State R d0 d1 st0 st1 B0 B1 o0 o1 base f t).readMem rg off
+            = t.readMem rg off) := by
+  classical
+  unfold cbdStore2State
+  refine ⟨BlockState.foldl_writeMem_prop_masked_pids _ _ _ _ _ _, ?_, ?_, ?_⟩
+  · funext dtype shape name; rw [BlockState.foldl_writeMem_prop_masked_regs]
+  · intro i hi
+    have h := BlockState.scatter_readback_prop_masked_nd (region := R) t
+      (fun j : TileIndex [B0, B1] =>
+        base + (o0 + j.1.val) * st0 + (o1 + j.2.1.val) * st1) f
+      (fun j : TileIndex [B0, B1] => o0 + j.1.val < d0 ∧ o1 + j.2.1.val < d1) hInj i
+    rw [h, if_pos hi]
+  · intro rg off hrg
+    exact BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+      R _ f _ _ t rg off hrg
+
+private theorem cbd_store_1d_props (R : RegionName) (len stride B0 off base : Nat)
+    (t : BlockState) (f : TileIndex [B0] → ℝ) (hstride : 0 < stride) :
+    (cbdStore1State R len stride B0 off base f t).pids = t.pids
+      ∧ (cbdStore1State R len stride B0 off base f t).regs = t.regs
+      ∧ (∀ i : TileIndex [B0], off + i.1.val < len →
+          (cbdStore1State R len stride B0 off base f t).readMem R
+              (base + (off + i.1.val) * stride) = f i)
+      ∧ (∀ rg o, rg ≠ R →
+          (cbdStore1State R len stride B0 off base f t).readMem rg o = t.readMem rg o) := by
+  classical
+  have hInj : Function.Injective
+      (fun i : TileIndex [B0] => base + (off + i.1.val) * stride) := by
+    intro a b hab
+    obtain ⟨a0, ua⟩ := a
+    obtain ⟨b0, ub⟩ := b
+    simp only at hab
+    have : a0.val = b0.val := by
+      have := Nat.eq_of_mul_eq_mul_right hstride
+        (show (off + a0.val) * stride = (off + b0.val) * stride by omega)
+      omega
+    simp only [Prod.mk.injEq]
+    exact ⟨Fin.ext this, trivial⟩
+  unfold cbdStore1State
+  refine ⟨BlockState.foldl_writeMem_prop_masked_pids _ _ _ _ _ _, ?_, ?_, ?_⟩
+  · funext dtype shape name; rw [BlockState.foldl_writeMem_prop_masked_regs]
+  · intro i hi
+    have h := BlockState.scatter_readback_prop_masked_nd (region := R) t
+      (fun j : TileIndex [B0] => base + (off + j.1.val) * stride) f
+      (fun j : TileIndex [B0] => off + j.1.val < len) hInj i
+    rw [h, if_pos hi]
+  · intro rg o hrg
+    exact BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+      R _ f _ _ t rg o hrg
+
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkBwdDqkg
