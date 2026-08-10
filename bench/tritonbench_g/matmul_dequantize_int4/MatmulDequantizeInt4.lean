@@ -1038,6 +1038,61 @@ private theorem mdq_zerosLoad_eq (s0 : BlockState) (zeros : Region .nat)
   simp only [zerosWord, mdqZerosPtrs_offset, BlockState.readMemValue,
     BlockState.readMemTyped, hmem]
 
+/-- `//` on `nat` scalars — there is no `evalOp_floorDiv` in the library. -/
+private theorem mdq_floorDiv_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .nat a) (y : Op .nat b) (t : BlockState)
+    (vx : Tile .nat a) (vy : Tile .nat b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.floorDiv IntegralDType.nat bc x y) t
+      = some (Tile.bop (IntegralDType.floorDiv IntegralDType.nat) bc vx vy) := by
+  simp only [evalOp, hx, hy]
+  rfl
+
+/-- `name * c` on a `nat` scalar register. -/
+private theorem mdq_mulRef_eval (t : BlockState) (nm : RegName) (val c : Nat)
+    (hr : t.regs .nat [] nm = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] nm) (Op.constNat c)) t
+      = some (Tile.scalar (val * c)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hr, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- `Op.natToReal`. -/
+private theorem mdq_natToReal_eval {sh : TileShape} (x : Op .nat sh)
+    (t : BlockState) (vx : Tile .nat sh) (hx : evalOp x t = some vx) :
+    evalOp (Op.natToReal x) t = some (Tile.natToReal vx) := by
+  simp only [evalOp, hx]
+  rfl
+
+/-- The `g_id` value the branch computes at K step `i`, which is exactly
+`groupRow` on the non-`NO_GROUPS` side. -/
+theorem groupRow_of_groups (groupsize BK i : Nat) :
+    groupRow Bool.false groupsize BK i = i / (groupsize / BK) := by
+  simp [groupRow]
+
+/-- **The branch's last two statements.** Extract the zero-point nibble, then
+scale it — i.e. `mdqZerosTile` is exactly that composition over the loaded word. -/
+private theorem mdqZerosTile_eq (s0 : BlockState) (scales : RegionName)
+    (zeros : Region .nat)
+    (stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n BN pn g : Nat) :
+    mdqZerosTile s0 scales zeros stride_scales_g stride_scales_n
+        stride_zeros_g stride_zeros_n BN pn g
+      = Tile.bop NumericDType.real.mul (Broadcast.consSame Broadcast.nil)
+          (Tile.natToReal
+            (Tile.bop (· &&& ·) Broadcast.scalarR
+              (Tile.bop (· >>> ·) (Broadcast.consSame Broadcast.nil)
+                (⟨fun idx => zerosWord s0 zeros stride_zeros_g stride_zeros_n BN pn g
+                    idx.1.val⟩ : Tile .nat [BN])
+                (mdqZerosShifter BN pn))
+              (Tile.scalar 15)))
+          (mdqScalesTile s0 scales stride_scales_g stride_scales_n BN pn g) := by
+  apply Tile.ext
+  intro idx
+  simp only [mdqZerosTile, zeroScaled, zerosNibble, mdqScalesTile, mdqZerosShifter,
+    Tile.bop_data, Tile.natToReal, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.mul, WithBot.realMul]
+  rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
