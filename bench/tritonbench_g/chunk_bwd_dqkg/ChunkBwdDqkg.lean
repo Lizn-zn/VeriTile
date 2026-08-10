@@ -642,6 +642,25 @@ private theorem cbd_min_eval (t : BlockState) (a b : Op .nat []) (va vb : Nat)
   · simp [hlt, Nat.not_lt.mp hlt]
 
 
+/-- `a + b` on `nat` scalars. -/
+private theorem cbd_add_eval (t : BlockState) (a b : Op .nat []) (va vb : Nat)
+    (ha : evalOp a t = some (Tile.scalar va))
+    (hb : evalOp b t = some (Tile.scalar vb)) :
+    evalOp (Op.add .nat Broadcast.nil a b) t = some (Tile.scalar (va + vb)) := by
+  rw [evalOp_add]
+  simp only [ha, hb, Option.bind_some, Option.bind_eq_bind]
+  rfl
+
+/-- `a - b` on `nat` scalars (truncated, as `Nat` subtraction). -/
+private theorem cbd_sub_eval (t : BlockState) (a b : Op .nat []) (va vb : Nat)
+    (ha : evalOp a t = some (Tile.scalar va))
+    (hb : evalOp b t = some (Tile.scalar vb)) :
+    evalOp (Op.sub .nat Broadcast.nil a b) t = some (Tile.scalar (va - vb)) := by
+  rw [evalOp_sub]
+  simp only [ha, hb, Option.bind_some, Option.bind_eq_bind]
+  rfl
+
+
 /-! ## Prologue execution
 
 The loaded tiles are named exactly as the eval recipes emit them (so the step
@@ -674,6 +693,117 @@ theorem cbdBgTile_data (s : BlockState) (g : RegionName) (T BT : Nat)
 theorem cbdBgLastTile_data (s : BlockState) (g : RegionName) (T BT : Nat) :
     (cbdBgLastTile s g T BT).data PUnit.unit = some (gLastElem s g T BT) := by
   rfl
+
+/-- `tl.zeros(shape)` — the DSL emits `Op.full shape (Op.const 0)`. -/
+private theorem cbd_full_zero_eval (sh : TileShape) (t : BlockState) :
+    evalOp (Op.full sh (Op.const 0)) t = some (cbdZero sh) := by
+  simp only [evalOp_full, evalOp_const]
+  rfl
+
+/-- The `b_g` load, phrased against the *launch* state's memory: the prologue's
+earlier assignments do not touch memory, so the tile only depends on `s`. -/
+private theorem cbd_load_bg_eq (s t : BlockState) (g : RegionName) (T BT : Nat)
+    (hmem : ∀ off, t.readMem g off = s.readMem g off)
+    (hbp : t.regs .blockPtr [BT] "p_g" = some (⟨fun _ : TileIndex [BT] =>
+        { region := g, baseOffset := s.pids 2 * T, parentShape := [T],
+          blockShape := [BT], strides := [1], offsets := [s.pids 1 * BT] }⟩ :
+        Tile .blockPtr [BT])) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT] "p_g") [0]) MaskOpt.none) t
+      = some (cbdBgTile s g T BT) := by
+  rw [cbd_load_1d g T 1 BT (s.pids 2 * T) (s.pids 1 * BT) "p_g" t hbp]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp only [cbdBgTile]
+  split <;> simp [hmem]
+
+/-- The `b_g_last` load: a raw region access at `i_bh * T + last_idx`. -/
+private theorem cbd_load_glast_eq (s t : BlockState) (g : RegionName) (T BT : Nat)
+    (hmem : ∀ off, t.readMem g off = s.readMem g off)
+    (hibh : t.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hlast : t.regs .nat [] "last_idx"
+        = some (Tile.scalar (min (s.pids 1 * BT + BT) T - 1))) :
+    evalOp (Op.load .real
+        (MemAccess.region g
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat T))
+            (Op.ref .nat [] "last_idx"))) MaskOpt.none) t
+      = some (cbdBgLastTile s g T BT) := by
+  rw [evalOp_load_region_none,
+    cbd_add_eval t _ _ (s.pids 2 * T) (min (s.pids 1 * BT + BT) T - 1)
+      (cbd_mulRef_eval t "i_bh" (s.pids 2) T hibh)
+      (by rw [evalOp_ref]; exact hlast)]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro _
+  simp only [cbdBgLastTile, Region.cast_id, Tile.scalar,
+    BlockState.readMemValue_real, hmem]
+
+/-! ### The prologue's exit state
+
+Fourteen statements: the four ids, `o_i`, the `g` block pointer and its load,
+`last_idx` / `b_g_last`, and the five zero accumulators. Memory is untouched, so
+every register value is phrased against the launch state `s`. -/
+
+set_option maxHeartbeats 1000000 in
+/-- **Prologue run.** From a launch state `s`, `cbdPreLoop` reaches a state
+carrying the ids, the `arange`, the two `g` tiles and the five zeroed
+accumulators, with memory and the grid coordinates unchanged. -/
+theorem cbdPreLoop_run (g : RegionName) (T BT BK : Nat) (s : BlockState) :
+    ∃ s0, stepStmts (cbdPreLoop g T BT BK) s = some s0
+      ∧ s0.pids = s.pids
+      ∧ s0.numPids = s.numPids
+      ∧ (∀ rg off, s0.readMem rg off = s.readMem rg off)
+      ∧ s0.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0))
+      ∧ s0.regs .nat [] "i_t" = some (Tile.scalar (s.pids 1))
+      ∧ s0.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ s0.regs .nat [] "n_bh" = some (Tile.scalar (s.numPids 2))
+      ∧ s0.regs .nat [BT] "o_i" = some (Tile.vec (fun i : Fin BT => i.val))
+      ∧ s0.regs .real [BT] "b_g" = some (cbdBgTile s g T BT)
+      ∧ s0.regs .real [] "b_g_last" = some (cbdBgLastTile s g T BT)
+      ∧ s0.regs .real [BT, BK] "b_dq" = some (cbdZero [BT, BK])
+      ∧ s0.regs .real [BT, BK] "b_dk" = some (cbdZero [BT, BK])
+      ∧ s0.regs .real [BT, BT] "b_ds" = some (cbdZero [BT, BT])
+      ∧ s0.regs .real [] "b_dg_last" = some (cbdZero [])
+      ∧ s0.regs .real [BT] "b_dg" = some (cbdZero [BT]) := by
+  unfold cbdPreLoop
+  -- the four grid coordinates
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 2 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_numPrograms 2 _))]
+  -- o_i = arange(BT)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_arange BT _))]
+  -- p_g
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_1d g T 1 BT _ _ _ (s.pids 2 * T) (s.pids 1 * BT)
+      (cbd_mulRef_eval _ "i_bh" (s.pids 2) T (by simp))
+      (cbd_mulRef_eval _ "i_t" (s.pids 1) BT (by simp))))]
+  -- b_g
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_load_bg_eq s _ g T BT (by intro off; simp) (by simp)))]
+  -- last_idx = min(i_t*BT + BT, T) - 1
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_sub_eval _ _ _ (min (s.pids 1 * BT + BT) T) 1
+      (cbd_min_eval _ _ _ (s.pids 1 * BT + BT) T
+        (cbd_add_eval _ _ _ (s.pids 1 * BT) BT
+          (cbd_mulRef_eval _ "i_t" (s.pids 1) BT (by simp))
+          (evalOp_constNat BT _))
+        (evalOp_constNat T _))
+      (evalOp_constNat 1 _)))]
+  -- b_g_last
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_load_glast_eq s _ g T BT (by intro off; simp) (by simp) (by simp)))]
+  -- the five zeroed accumulators
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [BT, BK] _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [BT, BK] _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [BT, BT] _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [] _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [BT] _))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, by simp, by simp, by intro rg off; simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    ?_, ?_, ?_, ?_, ?_⟩ <;> simp
 
 /-! ## The single value-block regime
 
