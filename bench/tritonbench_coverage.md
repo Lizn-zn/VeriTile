@@ -8,8 +8,8 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | Anchor corpus | 184 |
 | **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **152** |
 | Not yet imported | 32 |
-| — of those, expressible with today's DSL surface | 7 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 25 |
+| — of those, expressible with today's DSL surface | 10 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 22 |
 
 ## What "expressible" means here, and what it does not
 
@@ -39,9 +39,10 @@ first pass of this table was wrong for six kernels because of it:
   AST, so an integer-accumulator `tl.dot` is not expressible at all.
 * **Whether the surface elaborates at all.** A kernel can use only supported
   forms and still fail to elaborate, because dtype *inference* is a separate
-  matter from dtype *support*. This is what blocks the three `matmul_dequant*`
-  kernels, and no scan of any kind would have predicted it — see the note under
-  the blocked table.
+  matter from dtype *support*. This is what blocked the three `matmul_dequant*`
+  kernels until the `PtrElems` threading fix, and no scan of any kind would have
+  predicted it. The lesson is not a scan improvement: **elaborate the surface**
+  before believing a portability verdict.
 
 The counts and both tables below are the corrected measurement.
 
@@ -50,7 +51,7 @@ correctness depends on inter-program interleaving (spin locks, cooperative
 reductions) elaborate fine — the host launch is the trusted boundary — but their
 *specification* has to be chosen with that boundary in mind.
 
-## Not yet imported: portable now (7)
+## Not yet imported: portable now (10)
 
 Every form these use — including the non-`tl.` ones — is already in the DSL
 surface. Each row is one port-sized unit of work: import the `.py` **together
@@ -65,16 +66,22 @@ forgotten.
 | `chunk_linear_attn` | 309 | 4 |
 | `chunk_retention` | 452 | 4 |
 | `chunk_retention_ops` | 364 | 4 |
+| `matmul_dequant_int4` | 303 | 2 |
+| `matmul_dequantize` | 358 | 3 |
+| `matmul_dequantize_int4` | 269 | 1 |
 | `parallel_attention` | 481 | 4 |
 | `parallel_retention_attention` | 399 | 4 |
 
-Everything in the three `matmul_dequant*` kernels **except one statement** is
-within the surface — the 4-bit unpack (`>>` / `& 0xF` on non-negative nibbles),
-the `Region .nat` packed container, the `nat → ℝ` crossing at `* scales`, the
-rank-broadcast load mask, in-loop pointer advance, even the dead `c` binding.
-See the note under the blocked table for what the one statement is.
+The three `matmul_dequant*` rows were briefly listed as blocked. They are not: the
+4-bit unpack (`>>` / `& 0xF` on non-negative nibbles), the `Region .nat` packed
+container, the `nat → ℝ` crossing at `* scales`, the rank-broadcast load mask,
+in-loop pointer advance and the dead `c` binding are all within the surface, and
+the one thing that did block them was a `PtrElems` inference bug, now fixed (see
+`bench/tests/PtrElemDType.lean`). `matmul_dequantize_int4`'s full surface has been
+elaborated end-to-end; the other two share its `matmul4_kernel`, so the same
+blocker is gone, but their *additional* jit kernels have not been elaborated yet.
 
-## Not yet imported: blocked on a missing primitive (25)
+## Not yet imported: blocked on a missing primitive (22)
 
 | Kernel | `.py` lines | missing `tl.*` |
 |---|---:|---|
@@ -100,40 +107,40 @@ See the note under the blocked table for what the one statement is.
 | `layer_norm_triton` | 231 | `while tl.atomic_cas(Lock, 0, 1) == 1` **inside** `_layer_norm_bwd_dx_fused` — `Stmt` has `forLoop`/`forRange`/`forRangeDyn` but no `while` |
 | `spinning_lock_reduction` | 99 | two `while`s, one a `tl.atomic_cas` spin whose exit depends on another program |
 | `streamk_matmul` | 295 | two `while`s plus three atomics |
-| `matmul_dequant_int4` | 303 | dtype inference fails inside the in-loop `if not NO_GROUPS` branch (see below) |
-| `matmul_dequantize` | 358 | same, in `matmul4_kernel` |
-| `matmul_dequantize_int4` | 269 | same |
 
-### The `matmul_dequant*` blocker is a DSL-inference failure, not a missing form
+### Resolved: the `matmul_dequant*` blocker was a `PtrElems` inference bug
 
-Worth stating precisely, because it is the one entry here whose cause is **not
-yet known**, and because a wrong guess was published in the first version of this
-section.
+Kept as a record, because it cost a wrong published diagnosis before the right
+one, and because the failure mode is invisible to both gates.
 
-What is established: on `matmul_dequantize_int4`, the surface elaborates through
-the whole kernel until the statement
+`DSL/Inference.collectPtrElems` is a whole-body pre-pass recording
+`pointer name → element dtype` with prepend; `lookupPtrElem` takes the first
+match. On its own that resolves a pointer name to whichever binding comes **last
+in the body** — everywhere in the body, *including before that binding*. The
+expansion driver passed the map through unchanged while threading `Env` properly,
+so:
 
-```
-zeros = (zeros >> zeros_shifter) & 0xF
-```
+* `matmul4_kernel` binds `ptr` to `scales_ptrs` (`.real`) and then to
+  `zeros_ptrs` (`.nat`), so **both** loads came back `.nat`, `scales` became
+  `.nat`, and the following arithmetic failed to typecheck;
+* worse, a load could be silently given the **wrong** element dtype rather than
+  be rejected — a load before the second binding inherited the second binding's
+  dtype and was accepted. Neither gate catches that: proofs are discharged against
+  the *elaborated* `Stmt` list, and `audit_tritonbench_g.sh` compares surface text.
 
-is added *inside the in-loop* `if not NO_GROUPS` branch. The same statement in
-the pre-loop `if NO_GROUPS` branch is fine. The error is
-`` `>>`: dtype mismatch ``, reported at the `triton {` opener, so it does not
-localize; the trigger was found by prefix bisection on the real file.
+Fixed by threading the map per statement (`Inference.ptrElemsAfterStmt`) exactly
+as `Env` already was. Checked: the corpus was **not** exposed — of 46 ports with a
+non-real region, 39 rebind a pointer name that is then loaded, and all 39 rebind it
+to the *same* root region, so the flat and threaded lookups agree everywhere and
+`check_ports.sh` stays at 152 ok. `bench/tests/PtrElemDType.lean` pins both
+directions and fails without the fix.
 
-What is **not** established: the mechanism. Several small kernels that appear to
-have the same shape elaborate fine — straight-line `nat → real → nat` rebinding
-of one name works, and so does rebinding inside an `if` inside a `for` — while
-small variations on them flip the outcome. Reduction to a minimal repro has not
-converged, so no mechanism is claimed here. In particular the earlier claim that
-"the inference environment fixes a name's dtype at its first binding" is **false**
-and was withdrawn: the register environment is an assoc list with prepend and
-find-first, and rebinding demonstrably works.
-
-Consequence for planning: the three kernels are blocked *today*, but on a bug of
-unknown size rather than on a design limit. Diagnosing it is the prerequisite for
-costing the lever — not the other way round.
+An earlier version of this section blamed "the inference environment fixes a name's
+dtype at its first binding". That was false — the register environment prepends and
+finds first, so value rebinding always worked — and it came from a malformed
+minimal repro. The lesson recorded: a reduction has to be well-formed before it can
+confirm anything, and a probe that *should* fail and doesn't is worth more than one
+that fails.
 
 ### Unlock levers, ranked by kernel yield
 
@@ -147,10 +154,9 @@ costing the lever — not the other way round.
 | IEEE special values (inf / NaN) + `libdevice.isfinited`/`finitef` | 1 | `isfinite_kernel` |
 | `while` statement in `Stmt` (+ a termination story) | 3 | `layer_norm_triton`, `spinning_lock_reduction`, `streamk_matmul` |
 | integer-channel `tl.dot` (int8×int8 → int32 accumulate) | 2 | `int8_dequant_matmul`, `int8_matmul_quantization` |
-| a DSL dtype-inference fix, not yet diagnosed | 3 | `matmul_dequant_int4`, `matmul_dequantize`, `matmul_dequantize_int4` |
 | signed fixed-width integer arithmetic | 1 | `int4_matmul` |
 
-The column sums to 26, not 25: `uniform_sampling` needs both RNG and
+The column sums to 23, not 22: `uniform_sampling` needs both RNG and
 `tl.static_assert`, so it appears under two levers. Every other kernel appears
 once.
 

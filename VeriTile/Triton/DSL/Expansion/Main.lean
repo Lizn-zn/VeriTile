@@ -2771,8 +2771,12 @@ partial def expandStmts (env : Env) (pinned intPinned : List String)
       | none => do
           let (algTerm, computeTerm, nextEnv, stmtHasCompute) ←
             expandStmt env pinned intPinned regionDTypes ptrElems st
+          -- Thread the pointer element-dtype map the same way `env` is threaded:
+          -- prepend this statement's bindings so the *rest* of the block resolves
+          -- a pointer name to its most recent binding, not the body's last one.
+          let nextPtrElems := Inference.ptrElemsAfterStmt regionDTypes ptrElems st
           let (algRest, computeRest, restEnv, restHasCompute) ←
-            expandStmts nextEnv pinned intPinned regionDTypes ptrElems rest
+            expandStmts nextEnv pinned intPinned regionDTypes nextPtrElems rest
           pure (#[algTerm] ++ algRest, #[computeTerm] ++ computeRest,
             restEnv, stmtHasCompute || restHasCompute)
 
