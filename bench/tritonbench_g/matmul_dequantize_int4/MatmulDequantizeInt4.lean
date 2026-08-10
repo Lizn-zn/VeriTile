@@ -134,6 +134,152 @@ theorem matmul_dequantize_int4_surface_toAlgorithm_supported
   simp [matmul_dequantize_int4_surface, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?]
 
+/-! ## The group-swizzled block coordinates
+
+`pid` is decomposed exactly as the source decomposes it, so the spec below is
+stated in the same coordinates the kernel computes rather than in a re-derived
+form. -/
+
+/-- `num_pid_m = tl.cdiv(M, BLOCK_SIZE_M)`. -/
+def numPidM (M BM : Nat) : Nat := (M + BM - 1) / BM
+
+/-- `num_pid_n = tl.cdiv(N, BLOCK_SIZE_N)`. -/
+def numPidN (N BN : Nat) : Nat := (N + BN - 1) / BN
+
+/-- `num_pid_k = tl.cdiv(K, BLOCK_SIZE_K)` — the K-loop trip count. -/
+def numPidK (K BK : Nat) : Nat := (K + BK - 1) / BK
+
+/-- `num_pid_in_group = GROUP_SIZE_M * num_pid_n`. -/
+def numPidInGroup (N BN GM : Nat) : Nat := GM * numPidN N BN
+
+/-- `group_id = pid // num_pid_in_group`. -/
+def groupId (s : BlockState) (N BN GM : Nat) : Nat :=
+  s.pids 0 / numPidInGroup N BN GM
+
+/-- `first_pid_m = group_id * GROUP_SIZE_M`. -/
+def firstPidM (s : BlockState) (N BN GM : Nat) : Nat := groupId s N BN GM * GM
+
+/-- `group_size_m = min(num_pid_m - first_pid_m, GROUP_SIZE_M)`. -/
+def groupSizeM (s : BlockState) (M N BM BN GM : Nat) : Nat :=
+  min (numPidM M BM - firstPidM s N BN GM) GM
+
+/-- `pid_m = first_pid_m + (pid % group_size_m)`. -/
+def pidM (s : BlockState) (M N BM BN GM : Nat) : Nat :=
+  firstPidM s N BN GM + s.pids 0 % groupSizeM s M N BM BN GM
+
+/-- `pid_n = (pid % num_pid_in_group) // group_size_m`. -/
+def pidN (s : BlockState) (M N BM BN GM : Nat) : Nat :=
+  s.pids 0 % numPidInGroup N BN GM / groupSizeM s M N BM BN GM
+
+
+/-! ## Masked element accessors
+
+Each is the kernel's own address arithmetic, guarded by the mask the matching load
+carries. All read the **launch** state's memory. -/
+
+/-- `a[r, k*BK + e]` at K step `k`. Masked on the row axis only — that is the
+kernel's `a_mask = offs_am[:, None] < M` with `other=0.0`. There is deliberately
+no K-axis mask: the source documents `K % BLOCK_SIZE_K == 0` as a precondition,
+and transcribing a mask it does not have would be unfaithful. -/
+noncomputable def aElem (s : BlockState) (a : RegionName)
+    (M stride_am stride_ak BM BK pm : Nat) (r k e : Nat) : ℝ :=
+  if pm * BM + r < M then
+    s.readMem a ((pm * BM + r) * stride_am + (e + k * BK) * stride_ak)
+  else 0
+
+/-- The packed 32-bit word holding the weight nibble for `(k, e, c)`. Unmasked,
+matching the source's bare `tl.load(b_ptrs)`. Eight weights share a word along K,
+hence the `e / 8`. -/
+def bWord (s : BlockState) (b : Region .nat)
+    (stride_bk stride_bn BN BK pn : Nat) (k e c : Nat) : Nat :=
+  s.readMemValue .nat b
+    ((e / 8 + k * (BK / 8)) * stride_bk + (pn * BN + c) * stride_bn)
+
+/-- The unpacked 4-bit weight: `(word >> (e % 8) * 4) & 0xF`. -/
+def bNibble (s : BlockState) (b : Region .nat)
+    (stride_bk stride_bn BN BK pn : Nat) (k e c : Nat) : Nat :=
+  bWord s b stride_bk stride_bn BN BK pn k e c >>> (e % 8 * 4) &&& 15
+
+/-- The group row read at K step `k`. Under `NO_GROUPS` the scales and zeros are
+loaded once before the loop **from the base pointers**, i.e. at row `0`; otherwise
+each step reloads at `k // (groupsize // BLOCK_SIZE_K)`. -/
+def groupRow (NO_GROUPS : Bool) (groupsize BK k : Nat) : Nat :=
+  if NO_GROUPS then 0 else k / (groupsize / BK)
+
+/-- `scales[g, pn*BN + c]`. -/
+noncomputable def scalesElem (s : BlockState) (scales : RegionName)
+    (stride_scales_g stride_scales_n BN pn : Nat) (g c : Nat) : ℝ :=
+  s.readMem scales ((pn * BN + c) * stride_scales_n + g * stride_scales_g)
+
+/-- The packed word holding the zero-point nibble for column `pn*BN + c`. Eight
+zero-points share a word along N, hence the `/ 8`. -/
+def zerosWord (s : BlockState) (zeros : Region .nat)
+    (stride_zeros_g stride_zeros_n BN pn : Nat) (g c : Nat) : Nat :=
+  s.readMemValue .nat zeros
+    ((pn * BN + c) / 8 * stride_zeros_n + g * stride_zeros_g)
+
+/-- The unpacked 4-bit zero-point. -/
+def zerosNibble (s : BlockState) (zeros : Region .nat)
+    (stride_zeros_g stride_zeros_n BN pn : Nat) (g c : Nat) : Nat :=
+  zerosWord s zeros stride_zeros_g stride_zeros_n BN pn g c
+    >>> ((pn * BN + c) % 8 * 4) &&& 15
+
+/-- `zeros` after the kernel's `zeros = zeros * scales`: the **scaled**
+zero-point. Both branches apply this before the loop body uses it. -/
+noncomputable def zeroScaled (s : BlockState) (scales : RegionName)
+    (zeros : Region .nat)
+    (stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n BN pn : Nat)
+    (g c : Nat) : ℝ :=
+  (zerosNibble s zeros stride_zeros_g stride_zeros_n BN pn g c : ℝ)
+    * scalesElem s scales stride_scales_g stride_scales_n BN pn g c
+
+/-- `b` after unpack, scale and zero-point shift at K step `k`:
+`b * scales - zeros`, where `zeros` is already scaled. -/
+noncomputable def bDequant (s : BlockState) (scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (groupsize stride_bk stride_bn stride_scales_g stride_scales_n
+      stride_zeros_g stride_zeros_n BN BK pn : Nat) (k e c : Nat) : ℝ :=
+  (bNibble s b stride_bk stride_bn BN BK pn k e c : ℝ)
+      * scalesElem s scales stride_scales_g stride_scales_n BN pn
+          (groupRow NO_GROUPS groupsize BK k) c
+    - zeroScaled s scales zeros stride_scales_g stride_scales_n
+        stride_zeros_g stride_zeros_n BN pn (groupRow NO_GROUPS groupsize BK k) c
+
+
+/-! ## The accumulator
+
+`tl.dot(a, b)` over the block's K extent, summed across the `num_pid_k` steps. -/
+
+/-- One K step's contribution to output cell `(r, c)`. -/
+noncomputable def accStep (s : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK pm pn : Nat) (k r c : Nat) : ℝ :=
+  ∑ e : Fin BK,
+    aElem s a M stride_am stride_ak BM BK pm r k e.val
+      * bDequant s scales b zeros NO_GROUPS groupsize stride_bk stride_bn
+          stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+          BN BK pn k e.val c
+
+/-- **The stored value.** `accumulator` after all `num_pid_k` K steps. (The source
+also computes `c = accumulator.to(...)` but stores `accumulator`, so this is what
+lands in memory.) -/
+noncomputable def accSpec (s : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M K groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK pm pn : Nat) (r c : Nat) : ℝ :=
+  ∑ k : Fin (numPidK K BK),
+    accStep s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+      stride_bk stride_bn stride_scales_g stride_scales_n
+      stride_zeros_g stride_zeros_n BM BN BK pm pn k.val r c
+
+/-- The `C` store address for output cell `(r, c)`. -/
+def cAddr (stride_cm stride_cn BM BN pm pn : Nat)
+    (idx : TileIndex [BM, BN]) : Nat :=
+  stride_cm * (pm * BM + idx.1.val) + stride_cn * (pn * BN + idx.2.1.val)
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
