@@ -547,6 +547,72 @@ theorem mdq_body_eq (a_ptr c_ptr scales_ptr : RegionName)
         ++ mdqPostLoop c_ptr M N stride_cm stride_cn BM BN := by
   rfl
 
+/-! ## Pointer tiles
+
+A `.ptr` tile carries one `(region, offset)` pair per lane, and a `.ptr` load is
+unconditionally in bounds — the mask is the only gate. `a_ptrs` and `b_ptrs` are
+advanced once per K step, so each is a function of the step `k`, and the two
+`mdq*Ptrs_succ` lemmas are what lets the invariant carry across an iteration. -/
+
+/-- `a_ptrs` lane `(r, e)` at K step `k`, in the accumulated form the kernel
+actually reaches: the initial offset plus `k` advances of `BK * stride_ak`. -/
+def mdqAAddr (stride_am stride_ak BM BK pm k : Nat) (idx : TileIndex [BM, BK]) : Nat :=
+  (pm * BM + idx.1.val) * stride_am + idx.2.1.val * stride_ak + k * (BK * stride_ak)
+
+/-- `b_ptrs` lane `(e, c)` at K step `k`. Eight weights share a word along K, so a
+step advances by `(BK / 8) * stride_bk`. -/
+def mdqBAddr (stride_bk stride_bn BN BK pn k : Nat) (idx : TileIndex [BK, BN]) : Nat :=
+  idx.1.val / 8 * stride_bk + (pn * BN + idx.2.1.val) * stride_bn
+    + k * (BK / 8 * stride_bk)
+
+noncomputable def mdqAPtrs (a : RegionName) (stride_am stride_ak BM BK pm k : Nat) :
+    Tile .ptr [BM, BK] :=
+  ⟨fun idx => (a, mdqAAddr stride_am stride_ak BM BK pm k idx)⟩
+
+noncomputable def mdqBPtrs (b : Region .nat)
+    (stride_bk stride_bn BN BK pn k : Nat) : Tile .ptr [BK, BN] :=
+  ⟨fun idx => (Region.cast b, mdqBAddr stride_bk stride_bn BN BK pn k idx)⟩
+
+/-- One `a_ptrs += BLOCK_SIZE_K * stride_ak` advance. -/
+theorem mdqAPtrs_succ (a : RegionName) (stride_am stride_ak BM BK pm k : Nat) :
+    Tile.ptrAdd Broadcast.scalarR (mdqAPtrs a stride_am stride_ak BM BK pm k)
+        (Tile.scalar (BK * stride_ak))
+      = mdqAPtrs a stride_am stride_ak BM BK pm (k + 1) := by
+  apply Tile.ext
+  intro idx
+  simp only [Tile.ptrAdd_data, mdqAPtrs, mdqAAddr, Tile.scalar,
+    Broadcast.leftIndex, Prod.mk.injEq]
+  refine ⟨trivial, ?_⟩
+  ring
+
+/-- One `b_ptrs += (BLOCK_SIZE_K // 8) * stride_bk` advance. -/
+theorem mdqBPtrs_succ (b : Region .nat) (stride_bk stride_bn BN BK pn k : Nat) :
+    Tile.ptrAdd Broadcast.scalarR (mdqBPtrs b stride_bk stride_bn BN BK pn k)
+        (Tile.scalar (BK / 8 * stride_bk))
+      = mdqBPtrs b stride_bk stride_bn BN BK pn (k + 1) := by
+  apply Tile.ext
+  intro idx
+  simp only [Tile.ptrAdd_data, mdqBPtrs, mdqBAddr, Tile.scalar,
+    Broadcast.leftIndex, Prod.mk.injEq]
+  refine ⟨trivial, ?_⟩
+  ring
+
+/-- The `a_ptrs` address agrees with `aElem`'s: the kernel's accumulated
+`e*stride_ak + k*(BK*stride_ak)` is `aElem`'s `(e + k*BK)*stride_ak`. -/
+theorem mdqAAddr_eq (stride_am stride_ak BM BK pm k : Nat) (idx : TileIndex [BM, BK]) :
+    mdqAAddr stride_am stride_ak BM BK pm k idx
+      = (pm * BM + idx.1.val) * stride_am + (idx.2.1.val + k * BK) * stride_ak := by
+  simp only [mdqAAddr]
+  ring
+
+/-- The `b_ptrs` address agrees with `bWord`'s. -/
+theorem mdqBAddr_eq (stride_bk stride_bn BN BK pn k : Nat) (idx : TileIndex [BK, BN]) :
+    mdqBAddr stride_bk stride_bn BN BK pn k idx
+      = (idx.1.val / 8 + k * (BK / 8)) * stride_bk
+        + (pn * BN + idx.2.1.val) * stride_bn := by
+  simp only [mdqBAddr]
+  ring
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
