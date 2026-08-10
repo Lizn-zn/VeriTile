@@ -428,6 +428,125 @@ theorem mdq_preLoop_eq (a_ptr c_ptr scales_ptr : RegionName)
           stride_bk stride_bn stride_scales_n stride_zeros_n NO_GROUPS BM BN BK GM := by
   rfl
 
+/-- The compiled K-loop body: the two loads, the `not NO_GROUPS` per-group reload,
+the unpack / scale / shift of `b`, the `tl.dot` accumulation, and the two pointer
+advances. -/
+def mdqLoopBody
+    (groupsize stride_ak stride_bk stride_scales_g stride_zeros_g : Nat)
+    (NO_GROUPS : Bool) (BM BN BK : Nat) : List Stmt :=
+  [ Stmt.assign .real [BM, BK] "a"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BM, BK] "a_ptrs"))
+        (MaskOpt.maskOther
+          (Op.remap [BM, BK] (Broadcast.consSame (Broadcast.consL Broadcast.nil)).leftIndex
+            (Op.ref .bool [BM, 1] "a_mask"))
+          (Op.broadcast (Op.const 0.0) [BM, BK]))),
+    Stmt.assign .nat [BK, BN] "b"
+      (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BK, BN] "b_ptrs")) MaskOpt.none),
+    Stmt.ifThen (Op.boolNot (Op.constBool NO_GROUPS))
+      [ Stmt.assign .nat [] "g_id"
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "k")
+            (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat groupsize)
+              (Op.constNat BK))),
+        Stmt.assign .ptr [BN] "ptr"
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN] "scales_ptrs")
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "g_id")
+              (Op.constNat stride_scales_g))),
+        Stmt.assign .real [BN] "scales"
+          (Op.load .real (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none),
+        Stmt.assign .ptr [BN] "ptr"
+          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN] "zeros_ptrs")
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "g_id")
+              (Op.constNat stride_zeros_g))),
+        Stmt.assign .nat [BN] "zeros"
+          (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none),
+        Stmt.assign .nat [BN] "zeros"
+          (Op.bitAnd Broadcast.scalarR
+            (Op.shiftRight (Broadcast.consSame Broadcast.nil) (Op.ref .nat [BN] "zeros")
+              (Op.ref .nat [BN] "zeros_shifter"))
+            (Op.constNat 15)),
+        Stmt.assign .real [BN] "zeros"
+          (Op.mul .real (Broadcast.consSame Broadcast.nil)
+            (Op.natToReal (Op.ref .nat [BN] "zeros"))
+            (Op.ref .real [BN] "scales")) ],
+    Stmt.assign .nat [BK, BN] "b"
+      (Op.bitAnd Broadcast.scalarR
+        (Op.shiftRight (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Op.ref .nat [BK, BN] "b")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BK] "shifter")))
+        (Op.constNat 15)),
+    Stmt.assign .real [BK, BN] "b"
+      (Op.sub .real (Broadcast.consR (Broadcast.consSame Broadcast.nil))
+        (Op.mul .real (Broadcast.consR (Broadcast.consSame Broadcast.nil))
+          (Op.natToReal (Op.ref .nat [BK, BN] "b"))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .real [BN] "scales")))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .real [BN] "zeros"))),
+    Stmt.assign .real [BM, BN] "accumulator"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "accumulator")
+        (Op.dot (batch := []) (Op.ref .real [BM, BK] "a") (Op.ref .real [BK, BN] "b"))),
+    Stmt.assign .ptr [BM, BK] "a_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BM, BK] "a_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat BK) (Op.constNat stride_ak))),
+    Stmt.assign .ptr [BK, BN] "b_ptrs"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BK, BN] "b_ptrs")
+        (Op.mul .nat Broadcast.nil
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat BK)
+            (Op.ref .nat [] "infearure_per_bits"))
+          (Op.constNat stride_bk))) ]
+
+/-- The compiled tail: the dead `c` binding, the output coordinates, the `C`
+pointer tile, the two-axis store mask, and the store — which writes
+`accumulator`, not `c`. -/
+def mdqPostLoop (c_ptr : RegionName) (M N stride_cm stride_cn BM BN : Nat) :
+    List Stmt :=
+  [ Stmt.assign .real [BM, BN] "c" (Op.ref .real [BM, BN] "accumulator"),
+    Stmt.assign .nat [BM] "offs_cm"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM))
+        (Op.arange BM)),
+    Stmt.assign .nat [BN] "offs_cn"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN))
+        (Op.arange BN)),
+    Stmt.assign .ptr [BM, BN] "c_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase c_ptr)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat stride_cm)
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat stride_cn)
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn"))))),
+    Stmt.assign .bool [BM, BN] "c_mask"
+      (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")) (Op.constNat M))
+        (Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn")) (Op.constNat N))),
+    Stmt.store .real [BM, BN] (MemAccess.ptr (Op.ref .ptr [BM, BN] "c_ptrs"))
+      (Op.ref .real [BM, BN] "accumulator")
+      (MaskOpt.mask (Op.ref .bool [BM, BN] "c_mask")) ]
+
+set_option maxRecDepth 20000 in
+/-- **Full body split (by `rfl`).** The lowered surface is exactly
+`mdqPreLoop ++ [forRangeDyn "k" 0 num_pid_k 1 mdqLoopBody] ++ mdqPostLoop`
+— 31 top-level statements, every one checked against the macro output. -/
+theorem mdq_body_eq (a_ptr c_ptr scales_ptr : RegionName)
+    (b_ptr zeros_ptr : Region .nat)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      groupsize : Nat) (NO_GROUPS : Bool) (BM BN BK GM : Nat) :
+    (matmul_dequantize_int4_surface a_ptr c_ptr scales_ptr b_ptr zeros_ptr
+        M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+        stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+        groupsize NO_GROUPS BM BN BK GM).toAlgKernel.body
+      = mdqPreLoop a_ptr scales_ptr b_ptr zeros_ptr M N K stride_am stride_ak
+            stride_bk stride_bn stride_scales_n stride_zeros_n NO_GROUPS BM BN BK GM
+        ++ [Stmt.forRangeDyn "k" (Op.constNat 0) (Op.ref .nat [] "num_pid_k")
+              (Op.constNat 1)
+              (mdqLoopBody groupsize stride_ak stride_bk
+                stride_scales_g stride_zeros_g NO_GROUPS BM BN BK)]
+        ++ mdqPostLoop c_ptr M N stride_cm stride_cn BM BN := by
+  rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
