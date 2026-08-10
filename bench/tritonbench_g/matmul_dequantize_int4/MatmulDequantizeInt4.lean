@@ -742,6 +742,81 @@ theorem mdqBNibbleTile_eq (s : BlockState) (b : Region .nat)
     Tile.expandDim_data, mdqShifter, TileShape.dropInsertedIndex,
     Broadcast.leftIndex, Broadcast.rightIndex, mdqBRaw_data]
 
+/-! ## Per-statement eval recipes
+
+Private copies, since bench ports never import each other. The `.ptr` family is
+new for this port — `chunk_bwd_dqkg` used block pointers, whose loads carry a
+boundary check; a `.ptr` load is unconditionally in bounds, so the mask is the
+only gate and there is no `ok` branch to discharge. -/
+
+/-- Unmasked `.ptr` load: every lane reads its own `(region, offset)`. -/
+private theorem mdq_load_ptr_none {dtype : TileDType} {sh : TileShape}
+    (nm : RegName) (t : BlockState) (pt : Tile .ptr sh)
+    (hp : t.regs .ptr sh nm = some pt) :
+    evalOp (Op.load dtype (MemAccess.ptr (Op.ref .ptr sh nm)) MaskOpt.none) t
+      = some (⟨fun i => t.readMemValue dtype (pt.data i).1 (pt.data i).2⟩ :
+          Tile dtype sh) := by
+  simp only [evalOp, evalOp_ref, hp]
+  rfl
+
+/-- `.ptr` load with `mask=` / `other=`: masked-out lanes take the `other` tile. -/
+private theorem mdq_load_ptr_maskOther {sh : TileShape}
+    (nm : RegName) (t : BlockState) (pt : Tile .ptr sh)
+    (mk : Op .bool sh) (ot : Op .real sh) (mv : Tile .bool sh) (ov : Tile .real sh)
+    (hp : t.regs .ptr sh nm = some pt)
+    (hm : evalOp mk t = some mv) (ho : evalOp ot t = some ov) :
+    evalOp (Op.load .real (MemAccess.ptr (Op.ref .ptr sh nm))
+        (MaskOpt.maskOther mk ot)) t
+      = some (⟨fun i => if mv.data i then
+            t.readMemValue .real (pt.data i).1 (pt.data i).2 else ov.data i⟩ :
+          Tile .real sh) := by
+  simp only [evalOp, evalOp_ref, hp, hm, ho]
+  rfl
+
+/-- Pointer advance / offset. -/
+private theorem mdq_ptrAdd_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (pnm : RegName) (t : BlockState) (pt : Tile .ptr a) (off : Op .nat b)
+    (ov : Tile .nat b)
+    (hp : t.regs .ptr a pnm = some pt) (ho : evalOp off t = some ov) :
+    evalOp (Op.ptrAdd bc (Op.ref .ptr a pnm) off) t = some (Tile.ptrAdd bc pt ov) := by
+  simp only [evalOp, evalOp_ref, hp, ho]
+  rfl
+
+/-- `&` on the `nat` channel — there is no `evalOp_bitAnd` in the library. -/
+private theorem mdq_bitAnd_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .nat a) (y : Op .nat b) (t : BlockState)
+    (vx : Tile .nat a) (vy : Tile .nat b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.bitAnd bc x y) t = some (Tile.bop (· &&& ·) bc vx vy) := by
+  simp only [evalOp, hx, hy]
+  rfl
+
+/-- `>>` on the `nat` channel. -/
+private theorem mdq_shiftRight_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .nat a) (y : Op .nat b) (t : BlockState)
+    (vx : Tile .nat a) (vy : Tile .nat b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.shiftRight bc x y) t = some (Tile.bop (· >>> ·) bc vx vy) := by
+  simp only [evalOp, hx, hy]
+  rfl
+
+/-- `Op.remap` — how the DSL rank-broadcasts the `[BM, 1]` load mask. -/
+private theorem mdq_remap_eval {dtype : TileDType} {inS outS : TileShape}
+    (map : TileIndex outS → TileIndex inS) (x : Op dtype inS) (t : BlockState)
+    (vx : Tile dtype inS) (hx : evalOp x t = some vx) :
+    evalOp (Op.remap outS map x) t = some (Tile.remap map vx) := by
+  simp only [evalOp, hx]
+  rfl
+
+/-- `tl.broadcast_to`-style scalar fill, as the load's `other=0.0` produces. -/
+private theorem mdq_broadcast_eval {dtype : TileDType} (e : Op dtype [])
+    (sh : TileShape) (t : BlockState) (v : Tile dtype [])
+    (hv : evalOp e t = some v) :
+    evalOp (Op.broadcast e sh) t
+      = some (⟨fun _ => v.data PUnit.unit⟩ : Tile dtype sh) := by
+  simp only [evalOp, hv]
+  rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
