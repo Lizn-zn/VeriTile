@@ -37,12 +37,11 @@ first pass of this table was wrong for six kernels because of it:
 * **Tile *dtype* keywords.** `tl.zeros(..., dtype=tl.int32)` is a `tl.zeros` call
   either way, so the name diff sees nothing. But `Op.dot` is `.real`-only in the
   AST, so an integer-accumulator `tl.dot` is not expressible at all.
-* **A name's dtype over its whole lifetime.** Python rebinds freely, so a Triton
-  kernel may hold `zeros` as int32, then float, then int32 again. The DSL's
-  inference environment fixes a register name's dtype at its **first** binding
-  (it absorbs a later nat→real promotion, but rejects a real→nat rebinding), and
-  nothing about the *call* being made reveals that. This is what actually blocks
-  the three `matmul_dequant*` kernels.
+* **Whether the surface elaborates at all.** A kernel can use only supported
+  forms and still fail to elaborate, because dtype *inference* is a separate
+  matter from dtype *support*. This is what blocks the three `matmul_dequant*`
+  kernels, and no scan of any kind would have predicted it — see the note under
+  the blocked table.
 
 The counts and both tables below are the corrected measurement.
 
@@ -69,11 +68,11 @@ forgotten.
 | `parallel_attention` | 481 | 4 |
 | `parallel_retention_attention` | 399 | 4 |
 
-Everything in the three `matmul_dequant*` kernels **except one thing** is within
-the surface — the 4-bit unpack (`>>` / `& 0xF` on non-negative nibbles), the
-`Region .nat` packed container, the `nat → ℝ` crossing at `* scales`, the
+Everything in the three `matmul_dequant*` kernels **except one statement** is
+within the surface — the 4-bit unpack (`>>` / `& 0xF` on non-negative nibbles),
+the `Region .nat` packed container, the `nat → ℝ` crossing at `* scales`, the
 rank-broadcast load mask, in-loop pointer advance, even the dead `c` binding.
-They are blocked only by dtype rebinding of `zeros`; see the lever table.
+See the note under the blocked table for what the one statement is.
 
 ## Not yet imported: blocked on a missing primitive (25)
 
@@ -101,9 +100,40 @@ They are blocked only by dtype rebinding of `zeros`; see the lever table.
 | `layer_norm_triton` | 231 | `while tl.atomic_cas(Lock, 0, 1) == 1` **inside** `_layer_norm_bwd_dx_fused` — `Stmt` has `forLoop`/`forRange`/`forRangeDyn` but no `while` |
 | `spinning_lock_reduction` | 99 | two `while`s, one a `tl.atomic_cas` spin whose exit depends on another program |
 | `streamk_matmul` | 295 | two `while`s plus three atomics |
-| `matmul_dequant_int4` | 303 | rebinds `zeros` int32 → float → int32 (unpack, `* scales`, then the in-loop group reload); the DSL's inference env fixes a name's dtype at its first binding |
-| `matmul_dequantize` | 358 | same `zeros` rebinding in `matmul4_kernel` |
-| `matmul_dequantize_int4` | 269 | same `zeros` rebinding |
+| `matmul_dequant_int4` | 303 | dtype inference fails inside the in-loop `if not NO_GROUPS` branch (see below) |
+| `matmul_dequantize` | 358 | same, in `matmul4_kernel` |
+| `matmul_dequantize_int4` | 269 | same |
+
+### The `matmul_dequant*` blocker is a DSL-inference failure, not a missing form
+
+Worth stating precisely, because it is the one entry here whose cause is **not
+yet known**, and because a wrong guess was published in the first version of this
+section.
+
+What is established: on `matmul_dequantize_int4`, the surface elaborates through
+the whole kernel until the statement
+
+```
+zeros = (zeros >> zeros_shifter) & 0xF
+```
+
+is added *inside the in-loop* `if not NO_GROUPS` branch. The same statement in
+the pre-loop `if NO_GROUPS` branch is fine. The error is
+`` `>>`: dtype mismatch ``, reported at the `triton {` opener, so it does not
+localize; the trigger was found by prefix bisection on the real file.
+
+What is **not** established: the mechanism. Several small kernels that appear to
+have the same shape elaborate fine — straight-line `nat → real → nat` rebinding
+of one name works, and so does rebinding inside an `if` inside a `for` — while
+small variations on them flip the outcome. Reduction to a minimal repro has not
+converged, so no mechanism is claimed here. In particular the earlier claim that
+"the inference environment fixes a name's dtype at its first binding" is **false**
+and was withdrawn: the register environment is an assoc list with prepend and
+find-first, and rebinding demonstrably works.
+
+Consequence for planning: the three kernels are blocked *today*, but on a bug of
+unknown size rather than on a design limit. Diagnosing it is the prerequisite for
+costing the lever — not the other way round.
 
 ### Unlock levers, ranked by kernel yield
 
@@ -117,18 +147,14 @@ They are blocked only by dtype rebinding of `zeros`; see the lever table.
 | IEEE special values (inf / NaN) + `libdevice.isfinited`/`finitef` | 1 | `isfinite_kernel` |
 | `while` statement in `Stmt` (+ a termination story) | 3 | `layer_norm_triton`, `spinning_lock_reduction`, `streamk_matmul` |
 | integer-channel `tl.dot` (int8×int8 → int32 accumulate) | 2 | `int8_dequant_matmul`, `int8_matmul_quantization` |
-| register-name dtype rebinding in the DSL's inference env | 3 | `matmul_dequant_int4`, `matmul_dequantize`, `matmul_dequantize_int4` |
+| a DSL dtype-inference fix, not yet diagnosed | 3 | `matmul_dequant_int4`, `matmul_dequantize`, `matmul_dequantize_int4` |
 | signed fixed-width integer arithmetic | 1 | `int4_matmul` |
 
 The column sums to 26, not 25: `uniform_sampling` needs both RNG and
 `tl.static_assert`, so it appears under two levers. Every other kernel appears
 once.
 
-Three of these are cheap. **Register-name dtype rebinding is the cheapest, and
-the highest-yield of the cheap ones**: `BlockState.regs` is already keyed by
-`(dtype, shape, name)`, so `zeros : .nat [BN]` and `zeros : .real [BN]` are
-*different slots* and the semantics model the rebinding with no change at all —
-only `DSL/Inference.lean` rejects it. Then `tl.static_assert` erases at the algorithm layer (it
+Two of these are cheap: `tl.static_assert` erases at the algorithm layer (it
 constrains `constexpr`s at Triton compile time, so the lowered kernel is
 unchanged), and `tl.broadcast_to` is the shape-explicit spelling of the
 `tl.broadcast` the DSL already has. Neither should land before its first

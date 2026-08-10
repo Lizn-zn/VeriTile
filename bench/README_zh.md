@@ -42,10 +42,9 @@ concurrency 边界、`tl.num_programs`、`atomic_add` proof shape)此后都已�
 | 被缺失 primitive 或 ℝ 模型限制阻塞 | 25 |
 
 那 25 个的解锁杠杆按产出排序:fp8 dtype channel(7)、RNG(4)、`Stmt` 里的
-`while` 语句(3)、**DSL 推断层允许寄存器名换 dtype 重绑定(3,最便宜的一条 ——
-语义层本来就支持)**、`tl.interleave`(2)、整数通道 `tl.dot`(2)、
-`tl.static_assert`(2,宏层 no-op)、`tl.broadcast_to`(1,别名)、
-IEEE inf/NaN + `libdevice.isfinited`(1)、有符号定宽整数算术(1)。逐 kernel 表、测法,以及"可移植"到底声称了什么和没声称什么,
+`while` 语句(3)、一个**尚未定因**的 DSL dtype 推断失败(3)、`tl.interleave`(2)、
+整数通道 `tl.dot`(2)、`tl.static_assert`(2,宏层 no-op)、`tl.broadcast_to`
+(1,别名)、IEEE inf/NaN + `libdevice.isfinited`(1)、有符号定宽整数算术(1)。逐 kernel 表、测法,以及"可移植"到底声称了什么和没声称什么,
 见 [`tritonbench_coverage.md`](./tritonbench_coverage.md)。
 
 判定是 *可表达性*,不是 *proof 可行性*:许多可表达的 kernel
