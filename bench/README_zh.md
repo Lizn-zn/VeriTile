@@ -38,14 +38,17 @@ concurrency 边界、`tl.num_programs`、`atomic_add` proof shape)此后都已�
 
 | 判定 | 数量 |
 |---|---:|
-| 现在就能移植 —— 用到的一切形式全在 DSL 里 | 9 |
-| 被缺失 primitive 或 ℝ 模型限制阻塞 | 22 |
+| 现在就能移植 —— 用到的一切形式全在 DSL 里 | 2 |
+| 被缺失 primitive 或 ℝ 模型限制阻塞 | 29 |
 
-那 22 个的解锁杠杆按产出排序:fp8 dtype channel(7)、RNG(4)、`Stmt` 里的
-`while` 语句(3)、`tl.interleave`(2)、整数通道 `tl.dot`(2)、
-`tl.static_assert`(2,宏层 no-op)、`tl.broadcast_to`(1,别名)、
-IEEE inf/NaN + `libdevice.isfinited`(1)、有符号定宽整数算术(1)。逐 kernel 表、测法,以及"可移植"到底声称了什么和没声称什么,
-见 [`tritonbench_coverage.md`](./tritonbench_coverage.md)。
+那 29 个的解锁杠杆按产出排序:fp8 dtype channel(7)、**降序 `for` range**(5)、
+RNG(4)、有符号定宽整数算术(3)、`Stmt` 里的 `while` 语句(3)、
+`tl.interleave`(2)、整数通道 `tl.dot`(2)、`tl.static_assert`(2,宏层 no-op)、
+`tl.broadcast_to`(1,别名)、IEEE inf/NaN + `libdevice.isfinited`(1)。逐 kernel
+表、测法,以及"可移植"到底声称了什么和没声称什么,见
+[`tritonbench_coverage.md`](./tritonbench_coverage.md) —— 包括 2026-08-10 那次把
+`现在就能移植` 从 9 改成 2 的复核:此前的判定是按"每个文件只看一个 jit kernel"
+形成的。
 
 判定是 *可表达性*,不是 *proof 可行性*:许多可表达的 kernel
 (FA-1 backward、RWKV6、Mamba SSM、chunked GLA)即便 primitive 今天能

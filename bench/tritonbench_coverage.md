@@ -8,8 +8,8 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | Anchor corpus | 184 |
 | **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **153** |
 | Not yet imported | 31 |
-| — of those, expressible with today's DSL surface | 9 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 22 |
+| — of those, expressible with today's DSL surface | 2 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 29 |
 
 ## What "expressible" means here, and what it does not
 
@@ -51,37 +51,56 @@ correctness depends on inter-program interleaving (spin locks, cooperative
 reductions) elaborate fine — the host launch is the trusted boundary — but their
 *specification* has to be chosen with that boundary in mind.
 
-## Not yet imported: portable now (9)
+## Not yet imported: portable now (2)
 
 Every form these use — including the non-`tl.` ones — is already in the DSL
-surface. Each row is one port-sized unit of work: import the `.py` **together
-with** its `.lean` port, because `bench/audit_tritonbench_g.sh` enforces
-`py_count == lean_count` — the guard that stops a kernel being imported and then
-forgotten.
+surface, and **every** `@triton.jit` kernel in the file has been checked, not just
+the one the file is named after. Each row is one port-sized unit of work: import the
+`.py` **together with** its `.lean` port, because `bench/audit_tritonbench_g.sh`
+enforces `py_count == lean_count` — the guard that stops a kernel being imported and
+then forgotten.
 
 | Kernel | `.py` lines | `@triton.jit` kernels |
 |---|---:|---:|
-| `bmm_optimized` | 233 | 1 |
-| `chunk_gla_fwd` | 369 | 5 |
-| `chunk_linear_attn` | 309 | 4 |
-| `chunk_retention` | 452 | 4 |
-| `chunk_retention_ops` | 364 | 4 |
-| `matmul_dequant_int4` | 303 | 2 |
-| `matmul_dequantize` | 358 | 3 |
-| `parallel_attention` | 481 | 4 |
-| `parallel_retention_attention` | 399 | 4 |
+| `bmm_optimized` | 232 | 1 |
+| `chunk_gla_fwd` | 368 | 5 |
 
-The three `matmul_dequant*` rows were briefly listed as blocked. They are not: the
-4-bit unpack (`>>` / `& 0xF` on non-negative nibbles), the `Region .nat` packed
-container, the `nat → ℝ` crossing at `* scales`, the rank-broadcast load mask,
-in-loop pointer advance and the dead `c` binding are all within the surface, and
-the one thing that did block them was a `PtrElems` inference bug, now fixed (see
-`bench/tests/PtrElemDType.lean`). **`matmul_dequantize_int4` is now ported** — the
-first of the three, and the demonstration that the whole family is reachable. The
-other two share its `matmul4_kernel`, so the same blocker is gone for them, but
-their *additional* jit kernels have not been elaborated yet.
+Neither is small. `bmm_optimized` has a 70-line body behind **10 `constexpr`
+branches** (16 configurations) — the most expensive shape in
+`bench/MAIN_THEOREM_CONVENTIONS.md`. `chunk_gla_fwd` is five kernels.
 
-## Not yet imported: blocked on a missing primitive (22)
+### Correction: this count was 9, and 7 of those were wrong
+
+The 9 became 2 on 2026-08-10, after `matmul_dequantize_int4` was ported and the
+remaining candidates were read kernel-by-kernel instead of scanned. Two distinct
+mistakes, both instances of the same root cause — **the verdict had been formed from
+one kernel per file, and from `tl.*` names rather than from the code**:
+
+* **The two `matmul_dequant*` siblings are blocked, not portable.** Both contain a
+  second jit kernel, `dequantize_kernel` (byte-identical between them), computing
+  `(((int32_b >> b_shift) & 0xF) - ((zp_b >> bzp_shift) & 0xF)) * scale_b`. That is
+  a subtraction of two nibbles **on the integer channel, before the crossing to
+  `ℝ`**, ranging over `[-15, 15]`. `Op.bitAnd` / `Op.shiftRight` are `.nat`-only in
+  the AST (`Core/Ast.lean`), the only cross-channel lift is `natToReal`, and `.nat`
+  subtraction truncates at `0` — so there is no faithful transcription. This is
+  *exactly* the `int4_matmul` blocker, which the previous version of this file cited
+  while asserting the siblings were free of it. They are free of it in
+  `matmul4_kernel`, which is why `matmul_dequantize_int4` (whose only jit kernel is
+  `matmul4_kernel`) did port — and not in the file as a whole.
+* **Five kernels contain a descending `for` loop inside a jit kernel** —
+  `range(NT - 1, -1, -1)`, or `range(hi, lo, -BTS)`. `stepForRangeAux` takes
+  `step : Nat` and advances while `cur < stop` (`Semantics/Step.lean`), so a
+  descending loop is not expressible at the semantics layer, never mind the surface.
+  A `tl.*` name diff cannot see this: the call is `range`, not `tl.range`.
+
+The two survivors were then checked properly: every `tl.*` form each uses is in the
+accepted set; the only Python-level operators on tiles are `&` on bool masks
+(`Op.boolAnd`), `//` and `%` on `nat` scalars; the only dtype keyword is
+`tl.float32` on accumulators; every `for` is ascending; `chunk_gla_fwd`'s
+`tl.sum(b, 1)` positional axis is accepted verbatim (`syntax num :
+tritonReduceKwarg`).
+
+## Not yet imported: blocked on a missing primitive (29)
 
 | Kernel | `.py` lines | missing `tl.*` |
 |---|---:|---|
@@ -101,14 +120,21 @@ their *additional* jit kernels have not been elaborated yet.
 | `seeded_dropout` | 60 | `tl.rand` |
 | `int8_matmul_kernel` | 271 | `tl.static_assert` |
 | `isfinite_kernel` | 262 | `libdevice.isfinited` / `finitef` — **and** an ℝ-model limit (see below) |
-| `int4_matmul` | 252 | signed integer arithmetic: after unpacking, `int_b - int_bzp` ranges over `[-15, 15]` **before** it crosses to `ℝ`, and the `.nat` channel truncates at `0`. Its three `matmul_dequant*` look-alikes multiply by `scales` first, which is why they are portable and this one is not. |
+| `int4_matmul` | 252 | signed integer arithmetic: after unpacking, `int_b - int_bzp` ranges over `[-15, 15]` **before** it crosses to `ℝ`, and the `.nat` channel truncates at `0`. |
+| `matmul_dequant_int4` | 302 | same signed-nibble subtraction, in its `dequantize_kernel`: `((int32_b >> s) & 0xF) - ((zp_b >> t) & 0xF)`. Its `matmul4_kernel` is fine — that one is what `matmul_dequantize_int4` ports. |
+| `matmul_dequantize` | 357 | same `dequantize_kernel` (byte-identical), plus a plain `matmul_kernel` that is fine |
+| `chunk_linear_attn` | 308 | `for i_t in range(NT - 1, -1, -1)` inside `chunk_linear_attn_bwd_kernel_dh` — descending loop, and `stepForRangeAux`'s step is a `Nat` advancing while `cur < stop` |
+| `chunk_retention` | 451 | descending `range(NT - 1, -1, -1)` inside `chunk_retention_bwd_kernel_dh` |
+| `chunk_retention_ops` | 363 | descending `range(NT - 1, -1, -1)` inside `chunk_retention_bwd_kernel_dh` |
+| `parallel_attention` | 480 | descending `range(hi, lo, -BTS)` inside `_parallel_rebased_bwd_dkv` |
+| `parallel_retention_attention` | 398 | descending `range(hi, lo, -BTS)` inside `_parallel_retention_bwd_dkv`, plus unary minus on index tiles |
 | `int8_dequant_matmul` | 212 | `tl.dot` into a `tl.zeros(..., dtype=tl.int32)` accumulator — `Op.dot` is `.real`-only in the AST |
 | `int8_matmul_quantization` | 268 | same int32-accumulator `tl.dot`, plus `.to(tl.int8)` quantization |
 | `layer_norm_triton` | 231 | `while tl.atomic_cas(Lock, 0, 1) == 1` **inside** `_layer_norm_bwd_dx_fused` — `Stmt` has `forLoop`/`forRange`/`forRangeDyn` but no `while` |
 | `spinning_lock_reduction` | 99 | two `while`s, one a `tl.atomic_cas` spin whose exit depends on another program |
 | `streamk_matmul` | 295 | two `while`s plus three atomics |
 
-### Resolved: the `matmul_dequant*` blocker was a `PtrElems` inference bug
+### Resolved for `matmul4_kernel`: the `PtrElems` inference bug
 
 Kept as a record, because it cost a wrong published diagnosis before the right
 one, and because the failure mode is invisible to both gates.
@@ -119,6 +145,10 @@ match. On its own that resolves a pointer name to whichever binding comes **last
 in the body** — everywhere in the body, *including before that binding*. The
 expansion driver passed the map through unchanged while threading `Env` properly,
 so:
+
+This unblocked `matmul_dequantize_int4`, whose only jit kernel is `matmul4_kernel`.
+It did **not** unblock the other two `matmul_dequant*` files; see the correction
+above for what actually blocks them.
 
 * `matmul4_kernel` binds `ptr` to `scales_ptrs` (`.real`) and then to
   `zeros_ptrs` (`.nat`), so **both** loads came back `.nat`, `scales` became
@@ -154,11 +184,19 @@ that fails.
 | IEEE special values (inf / NaN) + `libdevice.isfinited`/`finitef` | 1 | `isfinite_kernel` |
 | `while` statement in `Stmt` (+ a termination story) | 3 | `layer_norm_triton`, `spinning_lock_reduction`, `streamk_matmul` |
 | integer-channel `tl.dot` (int8×int8 → int32 accumulate) | 2 | `int8_dequant_matmul`, `int8_matmul_quantization` |
-| signed fixed-width integer arithmetic | 1 | `int4_matmul` |
+| signed fixed-width integer arithmetic | 3 | `int4_matmul`, `matmul_dequant_int4`, `matmul_dequantize` |
+| descending `for` range (a signed step, or a `Stmt` that counts down) | 5 | `chunk_linear_attn`, `chunk_retention`, `chunk_retention_ops`, `parallel_attention`, `parallel_retention_attention` |
 
-The column sums to 23, not 22: `uniform_sampling` needs both RNG and
+The column sums to 30, not 29: `uniform_sampling` needs both RNG and
 `tl.static_assert`, so it appears under two levers. Every other kernel appears
 once.
+
+The **descending-range** lever is new (2026-08-10) and is the second largest after
+fp8. It is cheaper than it looks: the five kernels all count down over chunk
+indices, so a `Stmt` constructor that counts down — or a `forRange` whose induction
+variable is `stop - 1 - i` — would do, with no new dtype channel and no new
+arithmetic. What it does need is its own invariant principle, the counting-down
+mirror of `forRangeDyn_inv`.
 
 Two of these are cheap: `tl.static_assert` erases at the algorithm layer (it
 constrains `constexpr`s at Triton compile time, so the lowered kernel is
