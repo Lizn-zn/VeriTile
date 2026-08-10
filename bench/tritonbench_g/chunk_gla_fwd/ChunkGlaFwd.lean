@@ -359,6 +359,293 @@ theorem cgf_body_eq (q v g h o A : RegionName)
         ++ cgfPostLoop v o A s_v_h s_v_t T V BT BV := by
   rfl
 
+/-! ## Per-statement eval recipes
+
+Local by necessity — bench files never import each other, so the block-pointer
+recipes proven for `chunk_gla_simple` are re-derived here under a `cgf_` prefix. -/
+
+/-- **2D `makeBlockPtrDynOffsets` eval recipe.** Given the base / two offset ops
+evaluate to scalars, the block-pointer op evaluates to the constant tile
+`load_bp_2d_ref` consumes. -/
+private theorem cgf_makeBlockPtr_2d_eval (rg : RegionName) (s : BlockState)
+    (baseOp : Op .nat []) (rowOffOp colOffOp : Op .nat [])
+    (parentShape blockShape strides : List Nat)
+    (base rowOff colOff : Nat)
+    (hbase : evalOp baseOp s = some (Tile.scalar base))
+    (hrow : evalOp rowOffOp s = some (Tile.scalar rowOff))
+    (hcol : evalOp colOffOp s = some (Tile.scalar colOff)) :
+    evalOp (Op.makeBlockPtrDynOffsets rg baseOp parentShape blockShape strides
+        [rowOffOp, colOffOp]) s
+      = some (⟨fun _ => BlockPtr.mk rg base parentShape blockShape strides
+          [rowOff, colOff]⟩ : Tile .blockPtr blockShape) := by
+  simp only [evalOp, hbase, hrow, hcol, List.mapM, List.mapM.loop, bind, Option.bind,
+    Tile.scalar, List.reverse_cons, List.reverse_nil, List.nil_append,
+    List.cons_append]
+
+/-- No-mask 2D block-pointer load through a bound register: lane `(i,j)` reads the
+genuine memory cell when in-bounds, else `0`. -/
+private theorem cgf_load_bp_2d (rg : RegionName) (s : BlockState) (name : RegName)
+    (base rows cols BR BS strideT strideS rowOff colOff : Nat)
+    (hreg : s.regs .blockPtr [BR, BS] name = some
+      ⟨fun _ => BlockPtr.mk rg base [rows, cols] [BR, BS] [strideT, strideS]
+        [rowOff, colOff]⟩) :
+    evalOp (Op.load .real
+      (MemAccess.blockPtr (Op.ref .blockPtr [BR, BS] name) [0, 1]) MaskOpt.none) s
+    = some ⟨fun idx : TileIndex [BR, BS] =>
+        if (rowOff + idx.1.val < rows ∧ colOff + idx.2.1.val < cols) then
+          some (s.readMem rg (base + (rowOff + idx.1.val) * strideT
+            + (colOff + idx.2.1.val) * strideS))
+        else some 0⟩ := by
+  simp only [evalOp, evalOp_ref, hreg, bind, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, j, rest⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets,
+    BlockPtr.inBounds_2d_offsets, BlockState.readMemValue_real]
+  by_cases h : rowOff + i.val < rows ∧ colOff + j.val < cols
+  · simp only [h, and_self, decide_true, if_true]
+  · simp only [h, decide_false, if_false, BlockState.defaultCarrier]
+    rfl
+
+/-- Scalar `name * c`. -/
+private theorem cgf_mulConst_eval (s : BlockState) (name : RegName) (val c : Nat)
+    (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat c)) s
+      = some (Tile.scalar (val * c)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hr, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- The `p_h` base: `i_bh * s_h_h + i_t * K * V`, all scalar `nat` steps. -/
+private theorem cgf_hBase_eval (s : BlockState) (s_h_h K V : Nat) (ibh it : Nat)
+    (hibh : s.regs .nat [] "i_bh" = some (Tile.scalar ibh))
+    (hit : s.regs .nat [] "i_t" = some (Tile.scalar it)) :
+    evalOp (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_h_h))
+        (Op.mul .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat K))
+          (Op.constNat V))) s
+      = some (Tile.scalar (ibh * s_h_h + it * K * V)) := by
+  rw [evalOp_add, cgf_mulConst_eval s "i_bh" ibh s_h_h hibh, evalOp_mul,
+    cgf_mulConst_eval s "i_t" it K hit]
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- The `p_A` base: `i_bh * T * BT`. -/
+private theorem cgf_aBase_eval (s : BlockState) (T BT : Nat) (ibh : Nat)
+    (hibh : s.regs .nat [] "i_bh" = some (Tile.scalar ibh)) :
+    evalOp (Op.mul .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat T))
+        (Op.constNat BT)) s
+      = some (Tile.scalar (ibh * T * BT)) := by
+  rw [evalOp_mul, cgf_mulConst_eval s "i_bh" ibh T hibh]
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- Tile `*` with both operand values known — the library's `evalOp_mul` is a `do`
+block, not a `rw` target once the operands are known. -/
+private theorem cgf_mulTile_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .real a) (y : Op .real b) (t : BlockState)
+    (vx : Tile .real a) (vy : Tile .real b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.mul .real bc x y) t
+      = some (Tile.bop NumericDType.real.mul bc vx vy) := by
+  rw [evalOp_mul, hx, hy]
+  rfl
+
+/-- Tile `+`. -/
+private theorem cgf_addTile_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .real a) (y : Op .real b) (t : BlockState)
+    (vx : Tile .real a) (vy : Tile .real b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.add .real bc x y) t
+      = some (Tile.bop NumericDType.real.add bc vx vy) := by
+  rw [evalOp_add, hx, hy]
+  rfl
+
+/-- `tl.exp`. -/
+private theorem cgf_exp_eval {sh : TileShape} (x : Op .real sh) (t : BlockState)
+    (vx : Tile .real sh) (hx : evalOp x t = some vx) :
+    evalOp (Op.exp x) t = some (Tile.uop WithBot.realExp vx) := by
+  simp only [evalOp, hx]
+  rfl
+
+/-- `tl.where(m, x, other)`. -/
+private theorem cgf_where_eval {dtype : TileDType} {sh : TileShape}
+    (c : Op .bool sh) (x y : Op dtype sh) (t : BlockState)
+    (vc : Tile .bool sh) (vx vy : Tile dtype sh)
+    (hc : evalOp c t = some vc) (hx : evalOp x t = some vx)
+    (hy : evalOp y t = some vy) :
+    evalOp (Op.where c x y) t = some (Tile.select vc vx vy) := by
+  rw [evalOp_where, hc, hx, hy]
+  rfl
+
+/-- Scalar fill (the `where`'s broadcast `0.0`). -/
+private theorem cgf_broadcast_eval {dtype : TileDType} (e : Op dtype [])
+    (sh : TileShape) (t : BlockState) (v : Tile dtype [])
+    (hv : evalOp e t = some v) :
+    evalOp (Op.broadcast e sh) t
+      = some (⟨fun _ => v.data PUnit.unit⟩ : Tile dtype sh) := by
+  simp only [evalOp, hv]
+  rfl
+
+/-- Evaluation unfolding for the `≥` comparison op. -/
+private theorem cgf_ge_def {dtype : TileDType} {a b shape : TileShape}
+    (h : ComparableDType dtype) (bc : Broadcast a b shape)
+    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.ge h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.cop h.ge bc vx vy)) := by
+  simp [evalOp]
+
+/-- The loop guard `i_k >= 0` on `nat` scalars is `true`. -/
+private theorem cgf_geGuard_eval (t : BlockState) (kb : Nat)
+    (hk : t.regs .nat [] "i_k" = some (Tile.scalar kb)) :
+    evalOp (Op.ge ComparableDType.nat Broadcast.nil (Op.ref .nat [] "i_k")
+        (Op.constNat 0)) t
+      = some (Tile.scalar Bool.true) := by
+  simp only [evalOp, evalOp_ref, hk, evalOp_constNat]
+  rfl
+
+/-- `Stmt.ifThen`'s step equation (well-founded recursion, so named). -/
+private theorem cgf_ifThen_step (cond : Op .bool []) (body : List Stmt)
+    (t : BlockState) :
+    stepStmt (Stmt.ifThen cond body) t
+      = (evalOp cond t).bind
+          (fun c => if c.data PUnit.unit then stepStmts body t else some t) := by
+  unfold stepStmt
+  cases evalOp cond t <;> rfl
+
+/-- A `WithBot ℝ` sum of `some`s is `some` of the real sum. -/
+private theorem cgf_withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) := by
+  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ))
+    = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
+  exact (WithBot.coe_sum Finset.univ g).symm
+
+/-- 2D dot element collapse for all-`some` operands. -/
+private theorem cgf_dot2d_elem {M K N : Nat} (a : Tile .real [M, K])
+    (b : Tile .real [K, N]) (m : Fin M) (n : Fin N) (fa fb : Fin K → ℝ)
+    (ha : ∀ e : Fin K, a.data (m, e, PUnit.unit) = some (fa e))
+    (hb : ∀ e : Fin K, b.data (e, n, PUnit.unit) = some (fb e)) :
+    (Tile.dot [] a b).data (m, n, PUnit.unit)
+      = some (Finset.univ.sum fun e : Fin K => fa e * fb e) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (a.data (m, e, PUnit.unit))
+          (b.data (e, n, PUnit.unit))))
+      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (fa e * fb e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [ha e, hb e]; rfl)]
+  exact cgf_withBot_sum_some _
+
+/-- `tl.dot` at rank 2, `erw`-only shapes. -/
+private theorem cgf_dot_eval {M K N : Nat} (x : Op .real [M, K]) (y : Op .real [K, N])
+    (t : BlockState) (vx : Tile .real [M, K]) (vy : Tile .real [K, N])
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.dot (batch := []) x y) t = some (Tile.dot [] vx vy) := by
+  erw [evalOp_dot, hx, hy]
+  rfl
+
+/-! ## The loop body's value tiles -/
+
+/-- `m_s` as the prologue leaves it: `true` exactly on the causal (lower) triangle. -/
+def cgfMsTile (BT : Nat) : Tile .bool [BT, BT] :=
+  ⟨fun idx => decide (idx.2.1.val ≤ idx.1.val)⟩
+
+/-- The `m_s` statement lands on `cgfMsTile`. -/
+private theorem cgf_ms_eval (t : BlockState) (BT : Nat) :
+    evalOp (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.arange BT))
+        (Op.expandDim ⟨0, by simp⟩ (Op.arange BT))) t
+      = some (cgfMsTile BT) := by
+  have h1N : evalOp (Op.expandDim (shape := [BT]) ⟨1, by simp⟩ (Op.arange BT)) t
+      = some (Tile.expandDim (shape := [BT]) ⟨1, by simp⟩
+          (Tile.vec fun i : Fin BT => (i.val : Nat))) := by
+    rw [evalOp_expandDim, evalOp_arange]
+    rfl
+  -- restate at the literal shape so `rw` can hit the do-block's bind head
+  have h1 : @evalOp .nat [BT, 1]
+        (Op.expandDim (shape := [BT]) ⟨1, by simp⟩ (Op.arange BT)) t
+      = some (Tile.expandDim (shape := [BT]) ⟨1, by simp⟩
+          (Tile.vec fun i : Fin BT => (i.val : Nat))) := h1N
+  have h0N : evalOp (Op.expandDim (shape := [BT]) ⟨0, by simp⟩ (Op.arange BT)) t
+      = some (Tile.expandDim (shape := [BT]) ⟨0, by simp⟩
+          (Tile.vec fun i : Fin BT => (i.val : Nat))) := by
+    rw [evalOp_expandDim, evalOp_arange]
+    rfl
+  have h0 : @evalOp .nat [1, BT]
+        (Op.expandDim (shape := [BT]) ⟨0, by simp⟩ (Op.arange BT)) t
+      = some (Tile.expandDim (shape := [BT]) ⟨0, by simp⟩
+          (Tile.vec fun i : Fin BT => (i.val : Nat))) := h0N
+  rw [cgf_ge_def, h1, h0]
+  show some _ = some (cgfMsTile BT)
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨i, j, u⟩ := idx
+  simp only [cgfMsTile, Tile.cop_data, Tile.expandDim_data, Tile.vec,
+    TileShape.dropInsertedIndex, Broadcast.leftIndex, Broadcast.rightIndex]
+  show ComparableDType.nat.ge _ _ = _
+  simp only [ComparableDType.ge]
+
+/-- `b_qg` as statement 7 leaves it: the guarded, scaled, gated query lane. -/
+noncomputable def cgfQgTile (s : BlockState) (q g : RegionName)
+    (s_k_h s_k_t : Nat) (scale : ℝ) (T K BT BK : Nat) (kb : Nat) :
+    Tile .real [BT, BK] :=
+  ⟨fun idx => some (qgElem s q g s_k_h s_k_t scale T K BT BK kb
+      idx.1.val idx.2.1.val)⟩
+
+/-- `b_h` as statement 8 leaves it. -/
+noncomputable def cgfHTile (s : BlockState) (h : RegionName)
+    (s_h_h s_h_t K V BV : Nat) (kb BK : Nat) : Tile .real [BK, BV] :=
+  ⟨fun idx => some (hGuarded s h s_h_h s_h_t K V BV kb BK idx.1.val idx.2.1.val)⟩
+
+/-- `b_o` after `i` K blocks: the partial inter-chunk sum. -/
+noncomputable def cgfAccTile (s : BlockState) (q g h : RegionName)
+    (s_k_h s_k_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV : Nat)
+    (i : Nat) : Tile .real [BT, BV] :=
+  ⟨fun idx => some (∑ kb : Fin i, ∑ e : Fin BK,
+      qgElem s q g s_k_h s_k_t scale T K BT BK kb.val idx.1.val e.val
+        * hGuarded s h s_h_h s_h_t K V BV kb.val BK e.val idx.2.1.val)⟩
+
+/-- At `i = 0` the accumulator is the zero tile `tl.zeros` produces. -/
+theorem cgfAccTile_zero (s : BlockState) (q g h : RegionName)
+    (s_k_h s_k_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV : Nat) :
+    cgfAccTile s q g h s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV 0
+      = (⟨fun _ => some 0⟩ : Tile .real [BT, BV]) := by
+  apply Tile.ext
+  intro idx
+  simp [cgfAccTile]
+
+/-- **The accumulator statement.** `b_o += tl.dot(b_qg, b_h)` extends the partial
+sum by one K block. -/
+theorem cgfAccTile_dot_succ (s : BlockState) (q g h : RegionName)
+    (s_k_h s_k_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV i : Nat) :
+    Tile.bop NumericDType.real.add
+        (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (cgfAccTile s q g h s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV i)
+        (Tile.dot [] (cgfQgTile s q g s_k_h s_k_t scale T K BT BK i)
+          (cgfHTile s h s_h_h s_h_t K V BV i BK))
+      = cgfAccTile s q g h s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV (i + 1) := by
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, p, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, cgfAccTile,
+    NumericDType.add, WithBot.realAdd]
+  rw [cgf_dot2d_elem _ _ r p
+    (fun e => qgElem s q g s_k_h s_k_t scale T K BT BK i r.val e.val)
+    (fun e => hGuarded s h s_h_h s_h_t K V BV i BK e.val p.val)
+    (fun e => rfl) (fun e => rfl)]
+  rw [show ∀ x y : ℝ, Option.map₂ (· + ·) (some x : WithBot ℝ) (some y) = some (x + y)
+    from fun _ _ => rfl]
+  exact congrArg some (Fin.sum_univ_castSucc
+    (f := fun kb : Fin (i + 1) => ∑ e : Fin BK,
+      qgElem s q g s_k_h s_k_t scale T K BT BK kb.val r.val e.val
+        * hGuarded s h s_h_h s_h_t K V BV kb.val BK e.val p.val)).symm
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkGlaFwd
