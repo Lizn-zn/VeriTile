@@ -1202,6 +1202,392 @@ theorem cbdLoop_collapse (v h do_ dh : RegionName)
       simp only [Option.bind_some]
       exact stepForRangeAux.step_ge one_ne_zero (by norm_num)
 
+/-! ## The post-loop chain's register values
+
+Nine compute statements, in the order the kernel issues them. The order is the
+whole content of `dgLastFinal`: `b_dg_last` picks up its `b_dk · b_k` reduction at
+the *gated* `b_dk`, before `b_dk` receives the `dot(trans(b_ds), b_q)` term. -/
+
+/-- The `axis=1` row reduction of `b_q * b_dq - b_k * b_dk`, collapsed out of
+`WithBot ℝ`. -/
+private theorem cbd_sum_map2_sub {n : Nat} (a b c d : Fin n → ℝ) :
+    (@Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ fun e =>
+        Option.map₂ (fun x y : ℝ => x - y)
+          (Option.map₂ (fun x y : ℝ => x * y) (some (a e)) (some (b e)))
+          (Option.map₂ (fun x y : ℝ => x * y) (some (c e)) (some (d e))))
+      = some (∑ e : Fin n, (a e * b e - c e * d e)) :=
+  cbd_coe_sum1 (fun e => a e * b e - c e * d e)
+
+/-- `>=` on the `nat` channel — there is no `evalOp_ge` in the library. -/
+private theorem cbd_ge_nat_eval {a b shape : TileShape} (bc : Broadcast a b shape)
+    (x : Op .nat a) (y : Op .nat b) (t : BlockState) (vx : Tile .nat a) (vy : Tile .nat b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.ge ComparableDType.nat bc x y) t
+      = some (Tile.cop ComparableDType.nat.ge bc vx vy) := by
+  simp only [evalOp, hx, hy, Option.bind_some, Option.bind_eq_bind]
+  rfl
+
+/-- `tl.broadcast_to` of a scalar — there is no `evalOp_broadcast` in the library. -/
+private theorem cbd_broadcast_eval {dtype : TileDType} (e : Op dtype [])
+    (sh : TileShape) (t : BlockState) (v : Tile dtype [])
+    (hv : evalOp e t = some v) :
+    evalOp (Op.broadcast e sh) t
+      = some (⟨fun _ => v.data PUnit.unit⟩ : Tile dtype sh) := by
+  simp only [evalOp, hv, Option.bind_some, Option.bind_eq_bind]
+
+/-- `b_dg_last` after `*= tl.exp(b_g_last)`. -/
+noncomputable def cbdDgLastGatedTile (s : BlockState) (g h dh : RegionName)
+    (s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [] :=
+  Tile.scalar (some (dgLastAcc s h dh s_h_h s_h_t K V BK BV NT
+    * Real.exp (gLastElem s g T BT)))
+
+/-- `b_dq` after the gate decay and the `scale`. -/
+noncomputable def cbdDqGatedTile (s : BlockState) (g h do_ : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat) :
+    Tile .real [BT, BK] :=
+  Tile.mat fun r e => some (dqGated s g h do_ s_v_h s_v_t s_h_h s_h_t scale
+    T K V BT BK BV NT r.val e.val)
+
+/-- `b_dk` after its gate decay. -/
+noncomputable def cbdDkGatedTile (s : BlockState) (g v dh : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [BT, BK] :=
+  Tile.mat fun r e => some (dkGated s g v dh s_v_h s_v_t s_h_h s_h_t
+    T K V BT BK BV NT r.val e.val)
+
+/-- `b_dg_last` after its `b_dk · b_k` reduction — the value `b_dg` consumes. -/
+noncomputable def cbdDgLastFinalTile (s : BlockState) (g k v h dh : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [] :=
+  Tile.scalar (some (dgLastFinal s g k v h dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+    T K V BT BK BV NT))
+
+/-- `b_ds` after the causal mask and the score decay. -/
+noncomputable def cbdDsMaskedTile (s : BlockState) (g v do_ : RegionName)
+    (s_v_h s_v_t : Nat) (scale : ℝ) (T V BT BV : Nat) : Tile .real [BT, BT] :=
+  Tile.mat fun r r' => some (dsMasked s g v do_ s_v_h s_v_t scale T V BT BV r.val r'.val)
+
+/-- `b_dq` at the store. -/
+noncomputable def cbdDqFinalTile (s : BlockState) (g k v h do_ : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) : Tile .real [BT, BK] :=
+  Tile.mat fun r e => some (dqSpec s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+    scale T K V BT BK BV NT r.val e.val)
+
+/-- `b_dk` at the store. -/
+noncomputable def cbdDkFinalTile (s : BlockState) (g q v do_ dh : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) : Tile .real [BT, BK] :=
+  Tile.mat fun r e => some (dkSpec s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+    scale T K V BT BK BV NT r.val e.val)
+
+/-- `b_dg` after its row reduction, before the last-row correction. -/
+noncomputable def cbdDgRowTile (s : BlockState) (g q k v h do_ dh : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) : Tile .real [BT] :=
+  Tile.vec fun r => some (∑ e : Fin BK,
+    (qkElem s q s_k_h s_k_t T K BT BK r.val e.val
+        * dqSpec s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+            T K V BT BK BV NT r.val e.val
+      - qkElem s k s_k_h s_k_t T K BT BK r.val e.val
+        * dkSpec s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+            T K V BT BK BV NT r.val e.val))
+
+/-- `b_dg` at the store. -/
+noncomputable def cbdDgFinalTile (s : BlockState) (g q k v h do_ dh : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) : Tile .real [BT] :=
+  Tile.vec fun r => some (dgSpec s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+    scale T K V BT BK BV NT r.val)
+
+/-- `b_dg_last *= tl.exp(b_g_last)`. -/
+private theorem cbd_dgLastGated_eval (s t : BlockState) (g h dh : RegionName)
+    (s_h_h s_h_t T K V BT BK BV NT : Nat)
+    (hacc : t.regs .real [] "b_dg_last"
+        = some (cbdDgLastTile s h dh s_h_h s_h_t K V BK BV NT))
+    (hgl : t.regs .real [] "b_g_last" = some (cbdBgLastTile s g T BT)) :
+    evalOp (Op.mul .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+      (Op.exp (Op.ref .real [] "b_g_last"))) t
+      = some (cbdDgLastGatedTile s g h dh s_h_h s_h_t T K V BT BK BV NT) := by
+  erw [evalOp_mul, evalOp_ref, hacc, evalOp_exp, evalOp_ref, hgl]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro _
+  simp only [Tile.bop_data, Tile.uop_data, cbdDgLastTile, cbdDgLastGatedTile,
+    cbdBgLastTile, gLastElem, Tile.scalar, Broadcast.rightIndex,
+    NumericDType.mul, WithBot.realMul, WithBot.realExp_some]
+  rfl
+
+/-- `b_dq = b_dq * tl.exp(b_g)[:, None] * scale`. -/
+private theorem cbd_dqGated_eval (s t : BlockState) (g h do_ : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat)
+    (hdq : t.regs .real [BT, BK] "b_dq"
+        = some (cbdDqTile s h do_ s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT))
+    (hg : t.regs .real [BT] "b_g" = some (cbdBgTile s g T BT)) :
+    evalOp (Op.mul .real Broadcast.scalarR
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BT, BK] "b_dq")
+        (Op.expandDim ⟨1, by simp⟩ (Op.exp (Op.ref .real [BT] "b_g"))))
+      (Op.const scale)) t
+      = some (cbdDqGatedTile s g h do_ s_v_h s_v_t s_h_h s_h_t scale
+          T K V BT BK BV NT) := by
+  erw [evalOp_mul, evalOp_mul, evalOp_ref, hdq, evalOp_expandDim, evalOp_exp,
+    evalOp_ref, hg, evalOp_const]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, e, u⟩ := idx
+  simp [cbdDqGatedTile, cbdDqTile, dqGated, Tile.expandDim,
+    TileShape.dropInsertedIndex]
+  rw [cbdBgTile_data]
+  rfl
+
+/-- `b_dk = b_dk * tl.exp(0.0 - b_g + b_g_last)[:, None]`. -/
+private theorem cbd_dkGated_eval (s t : BlockState) (g v dh : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat)
+    (hdk : t.regs .real [BT, BK] "b_dk"
+        = some (cbdDkTile s v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT))
+    (hg : t.regs .real [BT] "b_g" = some (cbdBgTile s g T BT))
+    (hgl : t.regs .real [] "b_g_last" = some (cbdBgLastTile s g T BT)) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      (Op.ref .real [BT, BK] "b_dk")
+      (Op.expandDim ⟨1, by simp⟩
+        (Op.exp (Op.add .real Broadcast.scalarR
+          (Op.sub .real Broadcast.scalarL (Op.const 0.0) (Op.ref .real [BT] "b_g"))
+          (Op.ref .real [] "b_g_last"))))) t
+      = some (cbdDkGatedTile s g v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT) := by
+  erw [evalOp_mul, evalOp_ref, hdk, evalOp_expandDim, evalOp_exp, evalOp_add,
+    evalOp_sub, evalOp_const, evalOp_ref, hg, evalOp_ref, hgl]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, e, u⟩ := idx
+  simp [cbdDkGatedTile, cbdDkTile, dkGated, Tile.expandDim,
+    TileShape.dropInsertedIndex]
+  rw [cbdBgTile_data, cbdBgLastTile_data]
+  simp [NumericDType.mul, NumericDType.add, NumericDType.sub]
+  norm_num
+
+/-- `b_dg_last += tl.sum(b_dk * b_k)`, at the *gated* `b_dk`. -/
+private theorem cbd_dgLastFinal_eval (s t : BlockState) (g k v h dh : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat)
+    (hacc : t.regs .real [] "b_dg_last"
+        = some (cbdDgLastGatedTile s g h dh s_h_h s_h_t T K V BT BK BV NT))
+    (hdk : t.regs .real [BT, BK] "b_dk"
+        = some (cbdDkGatedTile s g v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT))
+    (hk : t.regs .real [BT, BK] "b_k" = some (cbdQkTile s k s_k_h s_k_t T K BT BK)) :
+    evalOp (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+      (Op.reduceSum (shape := [BT]) ⟨0, by simp⟩ Bool.false
+        (Op.reduceSum ⟨1, by simp⟩ Bool.false
+          (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [BT, BK] "b_dk") (Op.ref .real [BT, BK] "b_k"))))) t
+      = some (cbdDgLastFinalTile s g k v h dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+          T K V BT BK BV NT) := by
+  erw [evalOp_add, evalOp_ref, hacc, evalOp_reduceSum, evalOp_reduceSum, evalOp_mul,
+    evalOp_ref, hdk, evalOp_ref, hk]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro _
+  simp only [cbdDgLastFinalTile, cbdDgLastGatedTile, cbdDkGatedTile, cbdQkTile,
+    Tile.scalar, Tile.mat_data, Tile.bop_data, Tile.reduceSum_false,
+    Tile.reduceSumDrop_data, TileShape.axisDim, TileShape.insertAxisIndex,
+    NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul,
+    Broadcast.leftIndex, Broadcast.rightIndex, dgLastFinal]
+  erw [cbd_coe_sum2]
+  simp
+
+/-- `b_ds = tl.where(o_i[:, None] >= o_i[None, :], b_ds * scale * tl.exp(...), 0.0)`. -/
+private theorem cbd_dsMasked_eval (s t : BlockState) (g v do_ : RegionName)
+    (s_v_h s_v_t : Nat) (scale : ℝ) (T V BT BV : Nat)
+    (hds : t.regs .real [BT, BT] "b_ds" = some (cbdDsTile s v do_ s_v_h s_v_t T V BT BV))
+    (hoi : t.regs .nat [BT] "o_i" = some (Tile.vec (fun i : Fin BT => i.val)))
+    (hg : t.regs .real [BT] "b_g" = some (cbdBgTile s g T BT)) :
+    evalOp (Op.where
+      (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BT] "o_i"))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BT] "o_i")))
+      (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.mul .real Broadcast.scalarR (Op.ref .real [BT, BT] "b_ds") (Op.const scale))
+        (Op.exp (Op.sub .real (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "b_g"))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .real [BT] "b_g")))))
+      (Op.broadcast (Op.const 0.0) [BT, BT])) t
+      = some (cbdDsMaskedTile s g v do_ s_v_h s_v_t scale T V BT BV) := by
+  have hge : evalOp
+      (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BT] "o_i"))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BT] "o_i"))) t
+      = some (Tile.cop ComparableDType.nat.ge
+          (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Tile.expandDim ⟨1, by simp⟩ (Tile.vec (fun i : Fin BT => i.val)))
+          (Tile.expandDim ⟨0, by simp⟩ (Tile.vec (fun i : Fin BT => i.val)))) :=
+    cbd_ge_nat_eval _ _ _ t _ _
+      (evalOp_expandDim_ref_of_regs .nat [BT] _ "o_i" t _ hoi)
+      (evalOp_expandDim_ref_of_regs .nat [BT] _ "o_i" t _ hoi)
+  have hzero : evalOp (Op.broadcast (Op.const 0.0) [BT, BT]) t
+      = some (⟨fun _ => some (0.0 : ℝ)⟩ : Tile .real [BT, BT]) :=
+    cbd_broadcast_eval _ _ t _ (evalOp_const 0.0 t)
+  erw [evalOp_where, hge, evalOp_mul, evalOp_mul, evalOp_ref, hds, evalOp_const,
+    evalOp_exp, evalOp_sub, evalOp_expandDim, evalOp_ref, hg, evalOp_expandDim,
+    evalOp_ref, hg, hzero]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, r', u⟩ := idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Tile.uop_data,
+    Tile.expandDim_data, Tile.vec, Tile.mat_data, Tile.scalar,
+    TileShape.dropInsertedIndex, Broadcast.leftIndex, Broadcast.rightIndex,
+    ComparableDType.ge, NumericDType.mul, NumericDType.sub, WithBot.realMul,
+    WithBot.realSub, cbdDsTile, cbdDsMaskedTile, dsMasked, decide_eq_true_eq]
+  by_cases hle : r'.val ≤ r.val
+  · simp [hle]
+    rw [cbdBgTile_data, cbdBgTile_data]
+    rfl
+  · simp [hle]
+    norm_num
+
+/-- `b_dq += tl.dot(b_ds, b_k)`. -/
+private theorem cbd_dqFinal_eval (s t : BlockState) (g k v h do_ : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat)
+    (hdq : t.regs .real [BT, BK] "b_dq"
+        = some (cbdDqGatedTile s g h do_ s_v_h s_v_t s_h_h s_h_t scale T K V BT BK BV NT))
+    (hds : t.regs .real [BT, BT] "b_ds"
+        = some (cbdDsMaskedTile s g v do_ s_v_h s_v_t scale T V BT BV))
+    (hk : t.regs .real [BT, BK] "b_k" = some (cbdQkTile s k s_k_h s_k_t T K BT BK)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Op.ref .real [BT, BK] "b_dq")
+      (Op.dot (batch := []) (Op.ref .real [BT, BT] "b_ds")
+        (Op.ref .real [BT, BK] "b_k"))) t
+      = some (cbdDqFinalTile s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+          scale T K V BT BK BV NT) := by
+  erw [evalOp_add, evalOp_ref, hdq, evalOp_dot, evalOp_ref, hds, evalOp_ref, hk]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, e, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.rightIndex_consSame, Broadcast.rightIndex_nil]
+  rw [tile_dot_data BT BT BK _ _ r e
+    (fun r' => dsMasked s g v do_ s_v_h s_v_t scale T V BT BV r.val r'.val)
+    (fun r' => qkElem s k s_k_h s_k_t T K BT BK r'.val e.val)
+    (fun _ => rfl) (fun _ => rfl)]
+  simp [cbdDqFinalTile, cbdDqGatedTile, Tile.mat_data, dqSpec, NumericDType.add,
+    WithBot.realAdd, Broadcast.leftIndex]
+
+/-- `b_dk += tl.dot(tl.trans(b_ds), b_q)`. -/
+private theorem cbd_dkFinal_eval (s t : BlockState) (g q v do_ dh : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat)
+    (hdk : t.regs .real [BT, BK] "b_dk"
+        = some (cbdDkGatedTile s g v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT))
+    (hds : t.regs .real [BT, BT] "b_ds"
+        = some (cbdDsMaskedTile s g v do_ s_v_h s_v_t scale T V BT BV))
+    (hq : t.regs .real [BT, BK] "b_q" = some (cbdQkTile s q s_k_h s_k_t T K BT BK)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Op.ref .real [BT, BK] "b_dk")
+      (Op.dot (batch := []) (Op.transpose (Op.ref .real [BT, BT] "b_ds"))
+        (Op.ref .real [BT, BK] "b_q"))) t
+      = some (cbdDkFinalTile s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+          scale T K V BT BK BV NT) := by
+  erw [evalOp_add, evalOp_ref, hdk, evalOp_dot, evalOp_transpose, evalOp_ref, hds,
+    evalOp_ref, hq]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, e, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.rightIndex_consSame, Broadcast.rightIndex_nil]
+  rw [tile_dot_data BT BT BK _ _ r e
+    (fun r' => dsMasked s g v do_ s_v_h s_v_t scale T V BT BV r'.val r.val)
+    (fun r' => qkElem s q s_k_h s_k_t T K BT BK r'.val e.val)
+    (fun _ => rfl) (fun _ => rfl)]
+  simp [cbdDkFinalTile, cbdDkGatedTile, Tile.mat_data, dkSpec, NumericDType.add,
+    WithBot.realAdd, Broadcast.leftIndex]
+
+/-- `b_dg += tl.sum(b_q * b_dq - b_k * b_dk, axis=1)`, from zero. -/
+private theorem cbd_dgRow_eval (s t : BlockState) (g q k v h do_ dh : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat)
+    (hdg : t.regs .real [BT] "b_dg" = some (cbdZero [BT]))
+    (hq : t.regs .real [BT, BK] "b_q" = some (cbdQkTile s q s_k_h s_k_t T K BT BK))
+    (hk : t.regs .real [BT, BK] "b_k" = some (cbdQkTile s k s_k_h s_k_t T K BT BK))
+    (hdq : t.regs .real [BT, BK] "b_dq"
+        = some (cbdDqFinalTile s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+            scale T K V BT BK BV NT))
+    (hdk : t.regs .real [BT, BK] "b_dk"
+        = some (cbdDkFinalTile s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+            scale T K V BT BK BV NT)) :
+    evalOp (Op.add .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BT] "b_dg")
+      (Op.reduceSum ⟨1, by simp⟩ Bool.false
+        (Op.sub .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [BT, BK] "b_q") (Op.ref .real [BT, BK] "b_dq"))
+          (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [BT, BK] "b_k") (Op.ref .real [BT, BK] "b_dk"))))) t
+      = some (cbdDgRowTile s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+          scale T K V BT BK BV NT) := by
+  erw [evalOp_add, evalOp_ref, hdg, evalOp_reduceSum, evalOp_sub, evalOp_mul,
+    evalOp_ref, hq, evalOp_ref, hdq, evalOp_mul, evalOp_ref, hk, evalOp_ref, hdk]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, u⟩ := idx
+  simp only [Tile.bop_data, Tile.reduceSum_false, Tile.reduceSumDrop_data,
+    TileShape.axisDim, TileShape.insertAxisIndex, Tile.mat_data, cbdQkTile,
+    cbdDqFinalTile, cbdDkFinalTile, NumericDType.sub, NumericDType.mul,
+    WithBot.realSub, WithBot.realMul, Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [cbd_sum_map2_sub]
+  simp [cbdDgRowTile, cbdZero, Tile.vec, NumericDType.add, WithBot.realAdd]
+
+/-- `b_dg = tl.where(o_i < min(BT, T - i_t*BT) - 1, b_dg, b_dg + b_dg_last)`. -/
+private theorem cbd_dgFinal_eval (s t : BlockState) (g q k v h do_ dh : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat)
+    (hit : t.regs .nat [] "i_t" = some (Tile.scalar (s.pids 1)))
+    (hoi : t.regs .nat [BT] "o_i" = some (Tile.vec (fun i : Fin BT => i.val)))
+    (hdg : t.regs .real [BT] "b_dg"
+        = some (cbdDgRowTile s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+            scale T K V BT BK BV NT))
+    (hdgl : t.regs .real [] "b_dg_last"
+        = some (cbdDgLastFinalTile s g k v h dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+            T K V BT BK BV NT)) :
+    evalOp (Op.where
+      (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [BT] "o_i")
+        (Op.sub .nat Broadcast.nil
+          (Op.where
+            (Op.lt ComparableDType.nat Broadcast.nil (Op.constNat BT)
+              (Op.sub .nat Broadcast.nil (Op.constNat T)
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))))
+            (Op.constNat BT)
+            (Op.sub .nat Broadcast.nil (Op.constNat T)
+              (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))))
+          (Op.constNat 1)))
+      (Op.ref .real [BT] "b_dg")
+      (Op.add .real Broadcast.scalarR (Op.ref .real [BT] "b_dg")
+        (Op.ref .real [] "b_dg_last"))) t
+      = some (cbdDgFinalTile s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+          scale T K V BT BK BV NT) := by
+  have hmin : evalOp
+      (Op.where
+        (Op.lt ComparableDType.nat Broadcast.nil (Op.constNat BT)
+          (Op.sub .nat Broadcast.nil (Op.constNat T)
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))))
+        (Op.constNat BT)
+        (Op.sub .nat Broadcast.nil (Op.constNat T)
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT)))) t
+      = some (Tile.scalar (min BT (T - s.pids 1 * BT))) :=
+    cbd_min_eval t _ _ BT (T - s.pids 1 * BT) (evalOp_constNat BT t)
+      (cbd_sub_eval t _ _ T (s.pids 1 * BT) (evalOp_constNat T t)
+        (cbd_mulRef_eval t "i_t" (s.pids 1) BT hit))
+  erw [evalOp_where, evalOp_lt, evalOp_ref, hoi,
+    cbd_sub_eval t _ _ (min BT (T - s.pids 1 * BT)) 1 hmin (evalOp_constNat 1 t),
+    evalOp_ref, hdg, evalOp_add, evalOp_ref, hdg, evalOp_ref, hdgl]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, u⟩ := idx
+  simp only [Tile.select_data, Tile.cop_data, Tile.bop_data, Tile.vec, Tile.scalar,
+    Broadcast.leftIndex, ComparableDType.lt, NumericDType.add,
+    WithBot.realAdd, cbdDgRowTile, cbdDgLastFinalTile, cbdDgFinalTile, dgSpec,
+    decide_eq_true_eq]
+  by_cases hlt : r.val < min BT (T - s.pids 1 * BT) - 1
+  · simp [hlt]
+  · simp [hlt]
+
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkBwdDqkg
