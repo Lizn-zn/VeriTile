@@ -54,13 +54,15 @@ actual surface (95 `tl.*` forms, extracted from `VeriTile/Triton/DSL/**`):
 
 | Verdict | Count |
 |---|---:|
-| Portable now — every form it uses already in the DSL | 10 |
-| Blocked on a missing primitive, or on an ℝ-model limit | 22 |
+| Portable now — every form it uses already in the DSL | 7 |
+| Blocked on a missing primitive, or on an ℝ-model limit | 25 |
 
-Ranked unlock levers for the 22: fp8 dtype channel (7), RNG (4), a `while`
-statement in `Stmt` (3), `tl.interleave` (2), an integer-channel `tl.dot` (2),
-`tl.static_assert` (2, a macro no-op), `tl.broadcast_to` (1, an alias), IEEE
-inf/NaN + `libdevice.isfinited` (1), signed fixed-width integer arithmetic (1). See [`tritonbench_coverage.md`](./tritonbench_coverage.md) for
+Ranked unlock levers for the 25: fp8 dtype channel (7), RNG (4), a `while`
+statement in `Stmt` (3), register-name dtype rebinding in the DSL's inference env
+(3, and the cheapest of them — the semantics already model it), `tl.interleave`
+(2), an integer-channel `tl.dot` (2), `tl.static_assert` (2, a macro no-op),
+`tl.broadcast_to` (1, an alias), IEEE inf/NaN + `libdevice.isfinited` (1), signed
+fixed-width integer arithmetic (1). See [`tritonbench_coverage.md`](./tritonbench_coverage.md) for
 the per-kernel table, the method, and what "portable" does and does not claim.
 
 The "OK" verdict is *expressibility*, not *proof feasibility*: many `OK`
