@@ -651,6 +651,15 @@ private theorem cbd_add_eval (t : BlockState) (a b : Op .nat []) (va vb : Nat)
   simp only [ha, hb, Option.bind_some, Option.bind_eq_bind]
   rfl
 
+/-- `a * c` on a `nat` scalar with a literal. -/
+private theorem cbd_mulConst_eval (t : BlockState) (a : Op .nat []) (va c : Nat)
+    (ha : evalOp a t = some (Tile.scalar va)) :
+    evalOp (Op.mul .nat Broadcast.nil a (Op.constNat c)) t
+      = some (Tile.scalar (va * c)) := by
+  rw [evalOp_mul]
+  simp only [ha, evalOp_constNat, Option.bind_some, Option.bind_eq_bind]
+  rfl
+
 /-- `a - b` on `nat` scalars (truncated, as `Nat` subtraction). -/
 private theorem cbd_sub_eval (t : BlockState) (a b : Op .nat []) (va vb : Nat)
     (ha : evalOp a t = some (Tile.scalar va))
@@ -1728,6 +1737,167 @@ private theorem cbd_store_1d_props (R : RegionName) (len stride B0 off base : Na
     exact BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
       R _ f _ _ t rg o hrg
 
+
+set_option maxHeartbeats 2000000 in
+/-- **Post-loop run.** The nineteen tail statements: the `q`/`k` loads, the nine
+compute steps, the three output block pointers, and the three stores. Concludes
+about the three regions' readback at every in-region lane. -/
+theorem cbdPostLoop_run (q k dq dk dg g v h do_ dh : RegionName) (s t : BlockState)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat)
+    (hmemQ : ∀ off, t.readMem q off = s.readMem q off)
+    (hmemK : ∀ off, t.readMem k off = s.readMem k off)
+    (hDqDk : dq ≠ dk) (hDqDg : dq ≠ dg) (hDkDg : dk ≠ dg)
+    (hInj : Function.Injective
+      (fun i : TileIndex [BT, BK] => cbdQkAddr s s_k_h s_k_t BT BK i))
+    (hik : t.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)))
+    (hit : t.regs .nat [] "i_t" = some (Tile.scalar (s.pids 1)))
+    (hibh : t.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hnbh : t.regs .nat [] "n_bh" = some (Tile.scalar (s.numPids 2)))
+    (hoi : t.regs .nat [BT] "o_i" = some (Tile.vec (fun i : Fin BT => i.val)))
+    (hg : t.regs .real [BT] "b_g" = some (cbdBgTile s g T BT))
+    (hgl : t.regs .real [] "b_g_last" = some (cbdBgLastTile s g T BT))
+    (hdg0 : t.regs .real [BT] "b_dg" = some (cbdZero [BT]))
+    (hdgl : t.regs .real [] "b_dg_last"
+        = some (cbdDgLastTile s h dh s_h_h s_h_t K V BK BV NT))
+    (hds : t.regs .real [BT, BT] "b_ds" = some (cbdDsTile s v do_ s_v_h s_v_t T V BT BV))
+    (hdq : t.regs .real [BT, BK] "b_dq"
+        = some (cbdDqTile s h do_ s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT))
+    (hdk : t.regs .real [BT, BK] "b_dk"
+        = some (cbdDkTile s v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)) :
+    ∃ sF, stepStmts (cbdPostLoop q k dq dk dg s_k_h s_k_t scale T K BT BK) t = some sF
+      ∧ (∀ i : TileIndex [BT, BK],
+          (s.pids 1 * BT + i.1.val < T ∧ s.pids 0 * BK + i.2.1.val < K) →
+          sF.readMem dq (cbdQkAddr s s_k_h s_k_t BT BK i)
+            = dqSpec s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+                T K V BT BK BV NT i.1.val i.2.1.val)
+      ∧ (∀ i : TileIndex [BT, BK],
+          (s.pids 1 * BT + i.1.val < T ∧ s.pids 0 * BK + i.2.1.val < K) →
+          sF.readMem dk (cbdQkAddr s s_k_h s_k_t BT BK i)
+            = dkSpec s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+                T K V BT BK BV NT i.1.val i.2.1.val)
+      ∧ (∀ i : TileIndex [BT], s.pids 1 * BT + i.1.val < T →
+          sF.readMem dg (cbdDgAddr s T BT i)
+            = dgSpec s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+                T K V BT BK BV NT i.1.val) := by
+  unfold cbdPostLoop
+  -- p_q, p_k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_2d q T K s_k_t 1 BT BK _ _ _ t (s.pids 2 * s_k_h) (s.pids 1 * BT)
+      (s.pids 0 * BK)
+      (cbd_mulRef_eval t "i_bh" (s.pids 2) s_k_h hibh)
+      (cbd_mulRef_eval t "i_t" (s.pids 1) BT hit)
+      (cbd_mulRef_eval t "i_k" (s.pids 0) BK hik)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_2d k T K s_k_t 1 BT BK _ _ _ _ (s.pids 2 * s_k_h) (s.pids 1 * BT)
+      (s.pids 0 * BK)
+      (cbd_mulRef_eval _ "i_bh" (s.pids 2) s_k_h (by simp [hibh]))
+      (cbd_mulRef_eval _ "i_t" (s.pids 1) BT (by simp [hit]))
+      (cbd_mulRef_eval _ "i_k" (s.pids 0) BK (by simp [hik]))))]
+  -- b_k, b_q
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_load_qk_eq s _ k "p_k" s_k_h s_k_t T K BT BK
+      (by intro off; simp [hmemK]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_load_qk_eq s _ q "p_q" s_k_h s_k_t T K BT BK
+      (by intro off; simp [hmemQ]) (by simp)))]
+  -- the nine compute steps
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dgLastGated_eval s _ g h dh s_h_h s_h_t T K V BT BK BV NT
+      (by simp [hdgl]) (by simp [hgl])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dqGated_eval s _ g h do_ s_v_h s_v_t s_h_h s_h_t scale T K V BT BK BV NT
+      (by simp [hdq]) (by simp [hg])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dkGated_eval s _ g v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT
+      (by simp [hdk]) (by simp [hg]) (by simp [hgl])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dgLastFinal_eval s _ g k v h dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+      T K V BT BK BV NT (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dsMasked_eval s _ g v do_ s_v_h s_v_t scale T V BT BV
+      (by simp [hds]) (by simp [hoi]) (by simp [hg])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dqFinal_eval s _ g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+      T K V BT BK BV NT (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dkFinal_eval s _ g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+      T K V BT BK BV NT (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dgRow_eval s _ g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+      T K V BT BK BV NT (by simp [hdg0]) (by simp) (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dgFinal_eval s _ g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+      T K V BT BK BV NT (by simp [hit]) (by simp [hoi]) (by simp) (by simp)))]
+  -- p_dq, p_dk, p_dg
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_2d dq T K s_k_t 1 BT BK _ _ _ _ (s.pids 2 * s_k_h) (s.pids 1 * BT)
+      (s.pids 0 * BK)
+      (cbd_mulRef_eval _ "i_bh" (s.pids 2) s_k_h (by simp [hibh]))
+      (cbd_mulRef_eval _ "i_t" (s.pids 1) BT (by simp [hit]))
+      (cbd_mulRef_eval _ "i_k" (s.pids 0) BK (by simp [hik]))))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_2d dk T K s_k_t 1 BT BK _ _ _ _ (s.pids 2 * s_k_h) (s.pids 1 * BT)
+      (s.pids 0 * BK)
+      (cbd_mulRef_eval _ "i_bh" (s.pids 2) s_k_h (by simp [hibh]))
+      (cbd_mulRef_eval _ "i_t" (s.pids 1) BT (by simp [hit]))
+      (cbd_mulRef_eval _ "i_k" (s.pids 0) BK (by simp [hik]))))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_1d dg T 1 BT _ _ _ ((s.pids 0 * s.numPids 2 + s.pids 2) * T)
+      (s.pids 1 * BT)
+      (cbd_mulConst_eval _ _ (s.pids 0 * s.numPids 2 + s.pids 2) T
+        (cbd_add_eval _ _ _ (s.pids 0 * s.numPids 2) (s.pids 2)
+          (cbd_mulRefRef_eval _ "i_k" "n_bh" (s.pids 0) (s.numPids 2)
+            (by simp [hik]) (by simp [hnbh]))
+          (by rw [evalOp_ref]; simp [hibh])))
+      (cbd_mulRef_eval _ "i_t" (s.pids 1) BT (by simp [hit]))))]
+  -- the three stores
+  rw [stepStmts.cons_some (cbd_store_2d_eq dq T K s_k_t 1 BT BK (s.pids 1 * BT)
+    (s.pids 0 * BK) (s.pids 2 * s_k_h) "p_dq" "b_dq" _
+    (cbdDqFinalTile s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+      T K V BT BK BV NT)
+    (fun i => dqSpec s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+        T K V BT BK BV NT i.1.val i.2.1.val)
+    (fun _ => rfl) (by simp) (by simp))]
+  obtain ⟨hp1, hr1, hread1, hoth1⟩ := cbd_store_2d_props dq T K s_k_t 1 BT BK
+    (s.pids 1 * BT) (s.pids 0 * BK) (s.pids 2 * s_k_h) _
+    (fun i => dqSpec s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+        T K V BT BK BV NT i.1.val i.2.1.val) hInj
+  rw [stepStmts.cons_some (cbd_store_2d_eq dk T K s_k_t 1 BT BK (s.pids 1 * BT)
+    (s.pids 0 * BK) (s.pids 2 * s_k_h) "p_dk" "b_dk" _
+    (cbdDkFinalTile s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+      T K V BT BK BV NT)
+    (fun i => dkSpec s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+        T K V BT BK BV NT i.1.val i.2.1.val)
+    (fun _ => rfl) (by rw [hr1]; simp) (by rw [hr1]; simp))]
+  obtain ⟨hp2, hr2, hread2, hoth2⟩ := cbd_store_2d_props dk T K s_k_t 1 BT BK
+    (s.pids 1 * BT) (s.pids 0 * BK) (s.pids 2 * s_k_h)
+    (cbdStore2State dq T K s_k_t 1 BT BK (s.pids 1 * BT) (s.pids 0 * BK)
+      (s.pids 2 * s_k_h)
+      (fun i => dqSpec s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+          T K V BT BK BV NT i.1.val i.2.1.val) _)
+    (fun i => dkSpec s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+        T K V BT BK BV NT i.1.val i.2.1.val) hInj
+  rw [stepStmts.cons_some (cbd_store_1d_eq dg T 1 BT (s.pids 1 * BT)
+    ((s.pids 0 * s.numPids 2 + s.pids 2) * T) "p_dg" "b_dg" _
+    (cbdDgFinalTile s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+      T K V BT BK BV NT)
+    (fun i => dgSpec s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+        T K V BT BK BV NT i.1.val)
+    (fun _ => rfl) (by rw [hr2, hr1]; simp) (by rw [hr2, hr1]; simp))]
+  obtain ⟨hp3, hr3, hread3, hoth3⟩ := cbd_store_1d_props dg T 1 BT (s.pids 1 * BT)
+    ((s.pids 0 * s.numPids 2 + s.pids 2) * T) _
+    (fun i => dgSpec s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+        T K V BT BK BV NT i.1.val) Nat.one_pos
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_⟩
+  · intro i hi
+    rw [hoth3 dq _ hDqDg, hoth2 dq _ hDqDk]
+    exact hread1 i hi
+  · intro i hi
+    rw [hoth3 dk _ hDkDg]
+    exact hread2 i hi
+  · intro i hi
+    exact hread3 i hi
 
 end Correct_without_Rounding
 
