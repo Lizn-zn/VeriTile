@@ -362,13 +362,14 @@ def mdqGroupPreload (BN : Nat) : List Stmt :=
         (Op.natToReal (Op.ref .nat [BN] "zeros"))
         (Op.ref .real [BN] "scales")) ]
 
-/-- The prologue's **second** twelve statements: the offset vectors, the four
-pointer tiles, the row mask, the two shifters, the `NO_GROUPS` pre-load and the
-zeroed accumulator. Split from the scalars so that neither walk has to read a
-register through a twenty-deep `setReg` tower. -/
-def mdqPreLoopTiles (a_ptr scales_ptr : RegionName) (b_ptr zeros_ptr : Region .nat)
+/-- The prologue's **ten index statements**: the offset vectors, the four pointer
+tiles, the row mask and the two shifters. Split off from the scalars, and from the
+pre-load that follows, so that no walk has to read a register through a twenty-deep
+`setReg` tower — and so that the opaque state the pre-load returns is only ever
+consumed by two statements. -/
+def mdqPreLoopIndex (a_ptr scales_ptr : RegionName) (b_ptr zeros_ptr : Region .nat)
     (M stride_am stride_ak stride_bk stride_bn
-      stride_scales_n stride_zeros_n : Nat) (NO_GROUPS : Bool)
+      stride_scales_n stride_zeros_n : Nat)
     (BM BN BK : Nat) : List Stmt :=
   [ Stmt.assign .nat [BM] "offs_am"
       (Op.add .nat Broadcast.scalarL
@@ -421,9 +422,18 @@ def mdqPreLoopTiles (a_ptr scales_ptr : RegionName) (b_ptr zeros_ptr : Region .n
       (Op.mul .nat Broadcast.scalarR
         (Op.mod IntegralDType.nat Broadcast.scalarR (Op.ref .nat [BN] "offs_bn")
           (Op.ref .nat [] "infearure_per_bits"))
-        (Op.ref .nat [] "bits")),
-    Stmt.ifThen (Op.constBool NO_GROUPS) (mdqGroupPreload BN),
-    Stmt.assign .real [BM, BN] "accumulator" (Op.full [BM, BN] (Op.const 0)) ]
+        (Op.ref .nat [] "bits")) ]
+
+/-- The prologue's second half: the ten index statements, the `NO_GROUPS` pre-load
+and the zeroed accumulator. -/
+def mdqPreLoopTiles (a_ptr scales_ptr : RegionName) (b_ptr zeros_ptr : Region .nat)
+    (M stride_am stride_ak stride_bk stride_bn
+      stride_scales_n stride_zeros_n : Nat) (NO_GROUPS : Bool)
+    (BM BN BK : Nat) : List Stmt :=
+  mdqPreLoopIndex a_ptr scales_ptr b_ptr zeros_ptr M stride_am stride_ak stride_bk
+      stride_bn stride_scales_n stride_zeros_n BM BN BK
+    ++ [ Stmt.ifThen (Op.constBool NO_GROUPS) (mdqGroupPreload BN),
+         Stmt.assign .real [BM, BN] "accumulator" (Op.full [BM, BN] (Op.const 0)) ]
 
 /-- The compiled prologue: `mdqPreLoopScalars` then `mdqPreLoopTiles`. -/
 def mdqPreLoop (a_ptr scales_ptr : RegionName) (b_ptr zeros_ptr : Region .nat)
@@ -1716,6 +1726,13 @@ the same shape — `Tile.bop f Broadcast.nil (Tile.scalar u) (Tile.scalar v)` is
 `Tile.scalar (f u v)` by `rfl` — so those recipes are listed together, followed by
 one `evalOp` lemma per index tile that lands directly on the named tile. -/
 
+/-- `setReg` leaves memory alone, at **function** level. The library's
+`setReg_mem` is pointwise, and closing a twelve-deep tower's `t.mem = s.mem` by a
+single `rfl` overruns `whnf`; twelve cheap rewrites do not. -/
+private theorem mdq_setReg_mem {dtype : TileDType} {sh : TileShape}
+    (s : BlockState) (nm : RegName) (v : Tile dtype sh) :
+    (s.setReg nm dtype sh v).mem = s.mem := rfl
+
 /-- `Op.div` on any numeric channel (this is what `tl.cdiv` expands to; `//` is
 `Op.floorDiv`). -/
 private theorem mdq_divTile_eval {dtype : TileDType} (h : NumericDType dtype)
@@ -1889,8 +1906,9 @@ private theorem mdq_aPtrsInit_eval (a : RegionName) (t : BlockState)
 /-- `a_mask = offs_am[:, None] < M`. -/
 private theorem mdq_aMaskInit_eval (t : BlockState) (M BM pm : Nat)
     (ham : t.regs .nat [BM] "offs_am" = some (mdqOffsTile (pm * BM) BM)) :
-    evalOp (Op.lt ComparableDType.nat Broadcast.scalarR
-        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am")) (Op.constNat M)) t
+    evalOp ((Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am"))
+        (Op.constNat M) : Op .bool [BM, 1])) t
       = some (mdqAMask M BM pm) := by
   rw [mdq_ltTile_eval ComparableDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar M)
     (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact ham))
@@ -2129,6 +2147,347 @@ private theorem mdq_groupPreload_run (s0 : BlockState) (scales : RegionName)
     refine ⟨t, ?_, rfl, rfl, fun _ _ _ _ _ => rfl, fun hf => absurd hf (by simp)⟩
     rw [mdq_ifThen_step, mdq_constBool_eval]
     rfl
+
+/-! ### The pid swizzle, statement by statement
+
+Each recipe lands on the **named** quantity rather than on raw arithmetic, so the
+walk below carries `numPidM` / `groupId` / `pidM` and never a `(M + BM - 1) / BM`.
+Each is definitionally the arithmetic it names, which is why the `rw` closes. -/
+
+private theorem mdq_cdiv_eval (t : BlockState) (X BX : Nat) :
+    evalOp (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat X) (Op.constNat BX)) (Op.constNat 1))
+        (Op.constNat BX)) t
+      = some (Tile.scalar ((X + BX - 1) / BX)) :=
+  mdq_divScalarNat_eval _ _ t (X + BX - 1) BX
+    (mdq_subScalarNat_eval _ _ t (X + BX) 1
+      (mdq_addScalarNat_eval _ _ t X BX (evalOp_constNat _ _) (evalOp_constNat _ _))
+      (evalOp_constNat _ _))
+    (evalOp_constNat _ _)
+
+private theorem mdq_numPidM_eval (t : BlockState) (M BM : Nat) :
+    evalOp (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat M) (Op.constNat BM)) (Op.constNat 1))
+        (Op.constNat BM)) t
+      = some (Tile.scalar (numPidM M BM)) := mdq_cdiv_eval t M BM
+
+private theorem mdq_numPidN_eval (t : BlockState) (N BN : Nat) :
+    evalOp (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat N) (Op.constNat BN)) (Op.constNat 1))
+        (Op.constNat BN)) t
+      = some (Tile.scalar (numPidN N BN)) := mdq_cdiv_eval t N BN
+
+private theorem mdq_numPidK_eval (t : BlockState) (K BK : Nat) :
+    evalOp (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat K) (Op.constNat BK)) (Op.constNat 1))
+        (Op.constNat BK)) t
+      = some (Tile.scalar (numPidK K BK)) := mdq_cdiv_eval t K BK
+
+private theorem mdq_numPidInGroup_eval (t : BlockState) (N BN GM : Nat)
+    (hnpn : t.regs .nat [] "num_pid_n" = some (Tile.scalar (numPidN N BN))) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.constNat GM)
+        (Op.ref .nat [] "num_pid_n")) t
+      = some (Tile.scalar (numPidInGroup N BN GM)) := by
+  rw [mdq_mulScalarNat_eval _ _ t GM (numPidN N BN) (evalOp_constNat _ _)
+    (by rw [evalOp_ref]; exact hnpn)]
+  rfl
+
+private theorem mdq_groupId_eval (s t : BlockState) (N BN GM : Nat)
+    (hpid : t.regs .nat [] "pid" = some (Tile.scalar (s.pids 0)))
+    (hnig : t.regs .nat [] "num_pid_in_group"
+      = some (Tile.scalar (numPidInGroup N BN GM))) :
+    evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+        (Op.ref .nat [] "num_pid_in_group")) t
+      = some (Tile.scalar (groupId s N BN GM)) := by
+  rw [mdq_floorDivScalar_eval _ _ t (s.pids 0) (numPidInGroup N BN GM)
+    (by rw [evalOp_ref]; exact hpid) (by rw [evalOp_ref]; exact hnig)]
+  rfl
+
+private theorem mdq_firstPidM_eval (s t : BlockState) (N BN GM : Nat)
+    (hgid : t.regs .nat [] "group_id" = some (Tile.scalar (groupId s N BN GM))) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] "group_id")
+        (Op.constNat GM)) t
+      = some (Tile.scalar (firstPidM s N BN GM)) := by
+  rw [mdq_mulScalarNat_eval _ _ t (groupId s N BN GM) GM
+    (by rw [evalOp_ref]; exact hgid) (evalOp_constNat _ _)]
+  rfl
+
+private theorem mdq_groupSizeM_eval (s t : BlockState) (M N BM BN GM : Nat)
+    (hnpm : t.regs .nat [] "num_pid_m" = some (Tile.scalar (numPidM M BM)))
+    (hfpm : t.regs .nat [] "first_pid_m"
+      = some (Tile.scalar (firstPidM s N BN GM))) :
+    evalOp (Op.where
+        (Op.lt ComparableDType.nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m")
+            (Op.ref .nat [] "first_pid_m"))
+          (Op.constNat GM))
+        (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m")
+          (Op.ref .nat [] "first_pid_m"))
+        (Op.constNat GM)) t
+      = some (Tile.scalar (groupSizeM s M N BM BN GM)) := by
+  have hsub : evalOp (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m")
+      (Op.ref .nat [] "first_pid_m")) t
+      = some (Tile.scalar (numPidM M BM - firstPidM s N BN GM)) :=
+    mdq_subScalarNat_eval _ _ t _ _ (by rw [evalOp_ref]; exact hnpm)
+      (by rw [evalOp_ref]; exact hfpm)
+  rw [mdq_whereScalarNat_eval _ _ _ t
+    (decide (numPidM M BM - firstPidM s N BN GM < GM))
+    (numPidM M BM - firstPidM s N BN GM) GM
+    (mdq_ltScalarNat_eval _ _ t _ _ hsub (evalOp_constNat _ _)) hsub
+    (evalOp_constNat _ _)]
+  simp only [decide_eq_true_eq, mdq_min_as_where, groupSizeM]
+
+private theorem mdq_pidM_eval (s t : BlockState) (M N BM BN GM : Nat)
+    (hfpm : t.regs .nat [] "first_pid_m" = some (Tile.scalar (firstPidM s N BN GM)))
+    (hpid : t.regs .nat [] "pid" = some (Tile.scalar (s.pids 0)))
+    (hgsm : t.regs .nat [] "group_size_m"
+      = some (Tile.scalar (groupSizeM s M N BM BN GM))) :
+    evalOp (Op.add .nat Broadcast.nil (Op.ref .nat [] "first_pid_m")
+        (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+          (Op.ref .nat [] "group_size_m"))) t
+      = some (Tile.scalar (pidM s M N BM BN GM)) := by
+  rw [mdq_addScalarNat_eval _ _ t (firstPidM s N BN GM)
+    (s.pids 0 % groupSizeM s M N BM BN GM) (by rw [evalOp_ref]; exact hfpm)
+    (mdq_modScalarNat_eval _ _ t _ _ (by rw [evalOp_ref]; exact hpid)
+      (by rw [evalOp_ref]; exact hgsm))]
+  rfl
+
+private theorem mdq_pidN_eval (s t : BlockState) (M N BM BN GM : Nat)
+    (hpid : t.regs .nat [] "pid" = some (Tile.scalar (s.pids 0)))
+    (hnig : t.regs .nat [] "num_pid_in_group"
+      = some (Tile.scalar (numPidInGroup N BN GM)))
+    (hgsm : t.regs .nat [] "group_size_m"
+      = some (Tile.scalar (groupSizeM s M N BM BN GM))) :
+    evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil
+        (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+          (Op.ref .nat [] "num_pid_in_group"))
+        (Op.ref .nat [] "group_size_m")) t
+      = some (Tile.scalar (pidN s M N BM BN GM)) := by
+  rw [mdq_floorDivScalar_eval _ _ t (s.pids 0 % numPidInGroup N BN GM)
+    (groupSizeM s M N BM BN GM)
+    (mdq_modScalarNat_eval _ _ t _ _ (by rw [evalOp_ref]; exact hpid)
+      (by rw [evalOp_ref]; exact hnig))
+    (by rw [evalOp_ref]; exact hgsm)]
+  rfl
+
+private theorem mdq_offsK_eval (t : BlockState) (BK : Nat) :
+    evalOp (Op.arange BK) t = some (mdqOffsTile 0 BK) := by
+  rw [evalOp_arange, mdq_arange_eq_offs]
+
+/-! ### The prologue walks -/
+
+/-- The twelve scalar statements. Memory is untouched, and the only registers
+anything downstream reads are the two packing constants, the K trip count and the
+block coordinates. -/
+theorem mdqPreLoopScalars_run (s : BlockState) (M N K BM BN BK GM : Nat) :
+    ∃ t, stepStmts (mdqPreLoopScalars M N K BM BN BK GM) s = some t
+      ∧ t.mem = s.mem
+      ∧ t.pids = s.pids
+      ∧ t.regs .nat [] "bits" = some (Tile.scalar 4)
+      ∧ t.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8)
+      ∧ t.regs .nat [] "num_pid_k" = some (Tile.scalar (numPidK K BK))
+      ∧ t.regs .nat [] "pid_m" = some (Tile.scalar (pidM s M N BM BN GM))
+      ∧ t.regs .nat [] "pid_n" = some (Tile.scalar (pidN s M N BM BN GM)) := by
+  unfold mdqPreLoopScalars
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 4 s))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 8 _))]
+  -- `pid` carries `(state).pids 0`; every later reader reconciles that with
+  -- `s.pids 0` by `simp`, since `setReg` leaves `pids` alone.
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (mdq_numPidM_eval _ M BM))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (mdq_numPidN_eval _ N BN))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (mdq_numPidK_eval _ K BK))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_numPidInGroup_eval _ N BN GM (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_groupId_eval s _ N BN GM (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_firstPidM_eval s _ N BN GM (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_groupSizeM_eval s _ M N BM BN GM (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_pidM_eval s _ M N BM BN GM (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_pidN_eval s _ M N BM BN GM (by simp) (by simp) (by simp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [mdq_setReg_mem]
+
+/-- The ten index statements. Everything they read is either written here or is one
+of the four registers the scalar half left behind. -/
+theorem mdqPreLoopIndex_run (a scales : RegionName) (b zeros : Region .nat)
+    (M stride_am stride_ak stride_bk stride_bn stride_scales_n stride_zeros_n
+      BM BN BK pm pn : Nat) (t : BlockState)
+    (hbits : t.regs .nat [] "bits" = some (Tile.scalar 4))
+    (hipb : t.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8))
+    (hpm : t.regs .nat [] "pid_m" = some (Tile.scalar pm))
+    (hpn : t.regs .nat [] "pid_n" = some (Tile.scalar pn)) :
+    ∃ t', stepStmts (mdqPreLoopIndex a scales b zeros M stride_am stride_ak stride_bk
+          stride_bn stride_scales_n stride_zeros_n BM BN BK) t = some t'
+      ∧ t'.mem = t.mem
+      ∧ t'.pids = t.pids
+      ∧ (∀ (dtype : TileDType) (sh : TileShape) (nm : RegName),
+          nm ≠ "offs_am" → nm ≠ "offs_bn" → nm ≠ "offs_k" → nm ≠ "a_ptrs" →
+          nm ≠ "a_mask" → nm ≠ "b_ptrs" → nm ≠ "scales_ptrs" → nm ≠ "zeros_ptrs" →
+          nm ≠ "shifter" → nm ≠ "zeros_shifter" →
+          t'.regs dtype sh nm = t.regs dtype sh nm)
+      ∧ t'.regs .bool [BM, 1] "a_mask" = some (mdqAMask M BM pm)
+      ∧ t'.regs .nat [BK] "shifter" = some (mdqShifter BK)
+      ∧ t'.regs .nat [BN] "zeros_shifter" = some (mdqZerosShifter BN pn)
+      ∧ t'.regs .ptr [BN] "scales_ptrs"
+          = some (mdqScalesPtrs scales stride_scales_n BN pn)
+      ∧ t'.regs .ptr [BN] "zeros_ptrs"
+          = some (mdqZerosPtrs zeros stride_zeros_n BN pn)
+      ∧ t'.regs .ptr [BM, BK] "a_ptrs"
+          = some (mdqAPtrs a stride_am stride_ak BM BK pm 0)
+      ∧ t'.regs .ptr [BK, BN] "b_ptrs"
+          = some (mdqBPtrs b stride_bk stride_bn BN BK pn 0) := by
+  unfold mdqPreLoopIndex
+  -- the three offset vectors
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_offs_eval "pid_m" t BM pm BM hpm))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_offs_eval "pid_n" _ BN pn BN (by simpa using hpn)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (mdq_offsK_eval _ BK))]
+  -- the four pointer tiles, the row mask and the two shifters
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_aPtrsInit_eval a _ stride_am stride_ak BM BK pm (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_aMaskInit_eval _ M BM pm (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_bPtrsInit_eval b _ stride_bk stride_bn BN BK pn (by simp) (by simp)
+      (by simpa using hipb)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_scalesPtrsInit_eval scales _ stride_scales_n BN pn (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_zerosPtrsInit_eval zeros _ stride_zeros_n BN pn (by simp)
+      (by simpa using hipb)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_shifterInit_eval _ BK (by simp) (by simpa using hipb)
+      (by simpa using hbits)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_zerosShifterInit_eval _ BN pn (by simp) (by simpa using hipb)
+      (by simpa using hbits)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp [mdq_setReg_mem]
+  · simp
+  · intro dtype sh nm h1 h2 h3 h4 h5 h6 h7 h8 h9 h10
+    simp [h1, h2, h3, h4, h5, h6, h7, h8, h9, h10]
+  all_goals simp
+
+/-- The prologue's second half, ending on `mdqInv` at step `0`. `num_pid_k` is
+carried through untouched — the loop combinator reads it from the post-prologue
+state. -/
+theorem mdqPreLoopTiles_run (s0 : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M N K groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK GM : Nat) (t : BlockState)
+    (hmem : t.mem = s0.mem)
+    (hpids : t.pids = s0.pids)
+    (hbits : t.regs .nat [] "bits" = some (Tile.scalar 4))
+    (hipb : t.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8))
+    (hpm : t.regs .nat [] "pid_m" = some (Tile.scalar (pidM s0 M N BM BN GM)))
+    (hpn : t.regs .nat [] "pid_n" = some (Tile.scalar (pidN s0 M N BM BN GM))) :
+    ∃ t', stepStmts (mdqPreLoopTiles a scales b zeros M stride_am stride_ak
+          stride_bk stride_bn stride_scales_n stride_zeros_n NO_GROUPS BM BN BK) t
+        = some t'
+      ∧ t'.regs .nat [] "num_pid_k" = t.regs .nat [] "num_pid_k"
+      ∧ mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+          stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+          stride_zeros_n BM BN BK GM 0 t' := by
+  obtain ⟨t1, hrun1, h1mem, h1pids, h1keep, h1mask, h1shift, h1zshift, h1sp, h1zp,
+    h1ap, h1bp⟩ :=
+    mdqPreLoopIndex_run a scales b zeros M stride_am stride_ak stride_bk stride_bn
+      stride_scales_n stride_zeros_n BM BN BK (pidM s0 M N BM BN GM)
+      (pidN s0 M N BM BN GM) t hbits hipb hpm hpn
+  unfold mdqPreLoopTiles
+  rw [stepStmts.append_some hrun1]
+  -- the `NO_GROUPS` pre-load, then the zeroed accumulator
+  obtain ⟨t2, hpre, h2mem, h2pids, h2keep, h2load⟩ :=
+    mdq_groupPreload_run s0 scales zeros t1 NO_GROUPS stride_scales_g stride_scales_n
+      stride_zeros_g stride_zeros_n BN (pidN s0 M N BM BN GM)
+      (h1mem.trans hmem) h1sp h1zp h1zshift
+  rw [stepStmts.cons_some hpre]
+  -- The accumulator statement is bundled into an opaque `t3` for the same reason the
+  -- two branches are: every register below is then reached by a named rewrite rather
+  -- than by `simp`-ing through a `setReg` applied to a state that is itself opaque.
+  obtain ⟨t3, hrun3, h3mem, h3pids, h3keep, h3acc⟩ :
+      ∃ t3, stepStmt (Stmt.assign .real [BM, BN] "accumulator"
+              (Op.full [BM, BN] (Op.const 0))) t2 = some t3
+        ∧ t3.mem = t2.mem
+        ∧ t3.pids = t2.pids
+        ∧ (∀ (dtype : TileDType) (sh : TileShape) (nm : RegName),
+            nm ≠ "accumulator" → t3.regs dtype sh nm = t2.regs dtype sh nm)
+        ∧ t3.regs .real [BM, BN] "accumulator"
+            = some (mdqAccTile s0 a scales b zeros NO_GROUPS M groupsize stride_am
+                stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+                stride_zeros_g stride_zeros_n BM BN BK (pidM s0 M N BM BN GM)
+                (pidN s0 M N BM BN GM) 0) := by
+    refine ⟨_, stepStmt_assign_eq_some
+      (show evalOp (Op.full [BM, BN] (Op.const 0)) t2
+          = some (mdqAccTile s0 a scales b zeros NO_GROUPS M groupsize stride_am
+              stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+              stride_zeros_g stride_zeros_n BM BN BK (pidM s0 M N BM BN GM)
+              (pidN s0 M N BM BN GM) 0) from by
+        rw [mdqAccTile_zero]
+        exact mdq_full_eval [BM, BN] (Op.const 0) t2 _ (evalOp_const 0 t2)),
+      rfl, rfl, ?_, ?_⟩
+    · intro dtype sh nm h
+      simp [h]
+    · simp
+  rw [stepStmts.cons_some hrun3, stepStmts.nil]
+  -- Every register is now reached through the three preservation clauses.
+  have keep31 : ∀ (dtype : TileDType) (sh : TileShape) (nm : RegName),
+      nm ≠ "accumulator" → nm ≠ "scales" → nm ≠ "zeros" →
+      t3.regs dtype sh nm = t1.regs dtype sh nm := by
+    intro dtype sh nm h1 h2 h3
+    rw [h3keep dtype sh nm h1, h2keep dtype sh nm h2 h3]
+  refine ⟨_, rfl, ?_, Nat.zero_le _, h3mem.trans (h2mem.trans (h1mem.trans hmem)),
+    h3pids.trans (h2pids.trans (h1pids.trans hpids)), ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    ?_, ?_, ?_, h3acc, ?_⟩
+  · rw [keep31 .nat [] "num_pid_k" (by decide) (by decide) (by decide),
+      h1keep .nat [] "num_pid_k" (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+  · rw [keep31 .nat [] "bits" (by decide) (by decide) (by decide),
+      h1keep .nat [] "bits" (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hbits
+  · rw [keep31 .nat [] "infearure_per_bits" (by decide) (by decide) (by decide),
+      h1keep .nat [] "infearure_per_bits" (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)
+        (by decide)]
+    exact hipb
+  · rw [keep31 .nat [] "pid_m" (by decide) (by decide) (by decide),
+      h1keep .nat [] "pid_m" (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hpm
+  · rw [keep31 .nat [] "pid_n" (by decide) (by decide) (by decide),
+      h1keep .nat [] "pid_n" (by decide) (by decide) (by decide) (by decide)
+        (by decide) (by decide) (by decide) (by decide) (by decide) (by decide)]
+    exact hpn
+  · rw [keep31 .bool [BM, 1] "a_mask" (by decide) (by decide) (by decide)]
+    exact h1mask
+  · rw [keep31 .nat [BK] "shifter" (by decide) (by decide) (by decide)]
+    exact h1shift
+  · rw [keep31 .nat [BN] "zeros_shifter" (by decide) (by decide) (by decide)]
+    exact h1zshift
+  · rw [keep31 .ptr [BN] "scales_ptrs" (by decide) (by decide) (by decide)]
+    exact h1sp
+  · rw [keep31 .ptr [BN] "zeros_ptrs" (by decide) (by decide) (by decide)]
+    exact h1zp
+  · rw [keep31 .ptr [BM, BK] "a_ptrs" (by decide) (by decide) (by decide)]
+    exact h1ap
+  · rw [keep31 .ptr [BK, BN] "b_ptrs" (by decide) (by decide) (by decide)]
+    exact h1bp
+  · intro hf
+    obtain ⟨hs, hz⟩ := h2load hf
+    exact ⟨(h3keep .real [BN] "scales" (by decide)).trans hs,
+      (h3keep .real [BN] "zeros" (by decide)).trans hz⟩
 
 end Correct_without_Rounding
 
