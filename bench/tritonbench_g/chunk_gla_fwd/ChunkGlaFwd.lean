@@ -112,6 +112,111 @@ theorem chunk_gla_fwd_o_surface_toAlgorithm_supported
       scale T K V BT BK BV).toAlgorithm? = Except.ok alg := by
   simp [chunk_gla_fwd_o_surface, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
 
+/-! ## Closed-form specification
+
+Every accessor is a raw read at the address its block pointer computes; the
+boundary check lives in the *guarded* accessors below, matching the semantics of a
+`boundary_check=(0, 1)` load, which yields `0` outside the parent shape.
+
+The number of K blocks is `numKB K BK = cdiv(K, BK)`, and the spec sums over **all**
+of them — this port does not assume the launcher's single-block regime, unlike the
+ported `chunk_gla_simple`, whose headline carries `K = BK`. That is affordable here
+because the kernel recomputes its three block pointers from `i_k` on every iteration
+instead of advancing them, so the loop invariant has nothing to carry but the partial
+sum. -/
+
+/-- `cdiv(K, BK)` — the K-block trip count. -/
+def numKB (K BK : Nat) : Nat := (K + BK - 1) / BK
+
+/-- Global row (time) index of tile lane `i`: `i_t · BT + i`. -/
+def tIndex (s : BlockState) (BT : Nat) (i : Nat) : Nat := s.pids 1 * BT + i
+
+/-- Global key index of lane `e` in K block `kb`: `kb · BK + e`. -/
+def kIndex (BK kb e : Nat) : Nat := kb * BK + e
+
+/-- Global value (column) index of tile lane `p`: `i_v · BV + p`. -/
+def vIndex (s : BlockState) (BV : Nat) (p : Nat) : Nat := s.pids 0 * BV + p
+
+/-- `q[i, kIndex kb e]`, at the address `p_q` computes. -/
+noncomputable def qElem (s : BlockState) (q : RegionName) (s_k_h s_k_t BT BK : Nat)
+    (kb : Nat) (i e : Nat) : ℝ :=
+  s.readMem q (s.pids 2 * s_k_h + tIndex s BT i * s_k_t + kIndex BK kb e * 1)
+
+/-- `g[i, kIndex kb e]` — the **2-D** gate, on `q`'s own layout (same base stride
+`s_k_h`, same parent shape `(T, K)`). This is what separates this kernel from
+`chunk_gla_simple`, whose gate is a `[T]` vector read once after the loop. -/
+noncomputable def gElem (s : BlockState) (g : RegionName) (s_k_h s_k_t BT BK : Nat)
+    (kb : Nat) (i e : Nat) : ℝ :=
+  s.readMem g (s.pids 2 * s_k_h + tIndex s BT i * s_k_t + kIndex BK kb e * 1)
+
+/-- `h[kIndex kb e, vIndex p]`, the chunk state at base `h + i_bh·s_h_h + i_t·K·V`. -/
+noncomputable def hElem (s : BlockState) (h : RegionName) (s_h_h s_h_t K V BV : Nat)
+    (kb BK : Nat) (e p : Nat) : ℝ :=
+  s.readMem h (s.pids 2 * s_h_h + s.pids 1 * K * V + kIndex BK kb e * s_h_t
+    + vIndex s BV p * 1)
+
+/-- `v[j, vIndex p]`. -/
+noncomputable def vElem (s : BlockState) (v : RegionName) (s_v_h s_v_t BT BV : Nat)
+    (j p : Nat) : ℝ :=
+  s.readMem v (s.pids 2 * s_v_h + tIndex s BT j * s_v_t + vIndex s BV p * 1)
+
+/-- `A[i, j]`, the intra-chunk attention matrix the other four kernels built, at base
+`A + i_bh·T·BT` with parent shape `(T, BT)` and strides `(BT, 1)`. -/
+noncomputable def aElem (s : BlockState) (A : RegionName) (T BT : Nat)
+    (i j : Nat) : ℝ :=
+  s.readMem A (s.pids 2 * T * BT + tIndex s BT i * BT + j * 1)
+
+/-! ### The guarded forms — what a `boundary_check=(0, 1)` load actually delivers -/
+
+/-- The gated query lane, as the loop body's `b_qg` holds it:
+`(q · scale) · exp(g)`, or `0` outside the `(T, K)` parent window. `q` and `g` share
+one block-pointer geometry, so one guard covers both — and an out-of-bounds lane is
+`0` regardless of the gate, since the load returns `0` and `0 · exp(0) = 0`. -/
+noncomputable def qgElem (s : BlockState) (q g : RegionName)
+    (s_k_h s_k_t : Nat) (scale : ℝ) (T K BT BK : Nat) (kb i e : Nat) : ℝ :=
+  if tIndex s BT i < T ∧ kIndex BK kb e < K then
+    qElem s q s_k_h s_k_t BT BK kb i e * scale
+      * Real.exp (gElem s g s_k_h s_k_t BT BK kb i e)
+  else 0
+
+/-- The chunk-state lane, as `b_h` holds it. -/
+noncomputable def hGuarded (s : BlockState) (h : RegionName)
+    (s_h_h s_h_t : Nat) (K V BV : Nat) (kb BK e p : Nat) : ℝ :=
+  if kIndex BK kb e < K ∧ vIndex s BV p < V then
+    hElem s h s_h_h s_h_t K V BV kb BK e p
+  else 0
+
+/-- The value lane, as `b_v` holds it. -/
+noncomputable def vGuarded (s : BlockState) (v : RegionName)
+    (s_v_h s_v_t : Nat) (T V BT BV : Nat) (j p : Nat) : ℝ :=
+  if tIndex s BT j < T ∧ vIndex s BV p < V then
+    vElem s v s_v_h s_v_t BT BV j p
+  else 0
+
+/-- The intra-chunk matrix lane, as `b_A` holds it after `tl.where(m_s, b_A, 0.)`:
+the causal mask `i ≥ j` on top of the row boundary check. The **column** check is
+vacuous — `p_A`'s parent shape is `(T, BT)` and the lane index `j` is a `Fin BT` — so
+only the row guard bites. -/
+noncomputable def aMasked (s : BlockState) (A : RegionName) (T BT : Nat)
+    (i j : Nat) : ℝ :=
+  if j ≤ i then (if tIndex s BT i < T then aElem s A T BT i j else 0) else 0
+
+/-- **The stored value.** Lane `(i, p)` of `b_o` after the K loop and the intra-chunk
+`tl.dot`: the inter-chunk sum over every K block, plus the causally-masked `A · V`. -/
+noncomputable def cgfOutput (s : BlockState) (q v g h A : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV : Nat) (i p : Nat) : ℝ :=
+  (∑ kb : Fin (numKB K BK), ∑ e : Fin BK,
+      qgElem s q g s_k_h s_k_t scale T K BT BK kb.val i e.val
+        * hGuarded s h s_h_h s_h_t K V BV kb.val BK e.val p)
+    + ∑ j : Fin BT,
+        aMasked s A T BT i j.val * vGuarded s v s_v_h s_v_t T V BT BV j.val p
+
+/-- The output store address for lane `(i, p)` — `p_o` shares `p_v`'s layout. -/
+def outOffset (s : BlockState) (s_v_h s_v_t BT BV : Nat)
+    (idx : TileIndex [BT, BV]) : Nat :=
+  s.pids 2 * s_v_h + tIndex s BT idx.1.val * s_v_t + vIndex s BV idx.2.1.val * 1
+
 /-! ## Compiled body decomposition
 
 The algorithm-lowered statement lists, checked against the macro output by `rfl`
