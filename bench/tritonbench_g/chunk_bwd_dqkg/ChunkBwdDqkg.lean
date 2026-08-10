@@ -348,7 +348,7 @@ def cbdLoopBody (v h do_ dh : RegionName)
       (Op.load .real (.blockPtr (Op.ref .blockPtr [BV, BK] "p_dh") [0, 1]) .none),
     Stmt.assign .real [] "b_dg_last"
       (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
-        (Op.reduceSum ⟨0, by simp [TileShape.eraseAxis]⟩ Bool.false
+        (Op.reduceSum (shape := [BV]) ⟨0, by simp⟩ Bool.false
           (Op.reduceSum ⟨1, by simp⟩ Bool.false
             (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
               (Op.ref .real [BV, BK] "b_h") (Op.ref .real [BV, BK] "b_dh"))))),
@@ -449,7 +449,7 @@ def cbdPostLoop (q k dq dk dg : RegionName)
             (Op.ref .real [] "b_g_last"))))),
     Stmt.assign .real [] "b_dg_last"
       (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
-        (Op.reduceSum ⟨0, by simp [TileShape.eraseAxis]⟩ Bool.false
+        (Op.reduceSum (shape := [BT]) ⟨0, by simp⟩ Bool.false
           (Op.reduceSum ⟨1, by simp⟩ Bool.false
             (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
               (Op.ref .real [BT, BK] "b_dk") (Op.ref .real [BT, BK] "b_k"))))),
@@ -804,6 +804,264 @@ theorem cbdPreLoop_run (g : RegionName) (T BT BK : Nat) (s : BlockState) :
   rw [stepStmts.nil]
   refine ⟨_, rfl, by simp, by simp, by intro rg off; simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
     ?_, ?_, ?_, ?_, ?_⟩ <;> simp
+
+/-! ## The value-axis loop body's loads
+
+Four block pointers and four boundary-checked loads. The `i_v = 0` pinning shows
+up only as the column offset `0 * BV`, which the bridges normalise away. -/
+
+/-- Boundary-checked 2-D block-pointer load: in-region lanes read
+`base + (o0 + i)*st0 + (o1 + j)*st1`, the rest read `0`. -/
+private theorem cbd_load_2d (R : RegionName) (d0 d1 st0 st1 B0 B1 o0 o1 base : Nat)
+    (bpName : RegName) (t : BlockState)
+    (hbp : t.regs .blockPtr [B0, B1] bpName = some (⟨fun _ : TileIndex [B0, B1] =>
+        { region := R, baseOffset := base, parentShape := [d0, d1],
+          blockShape := [B0, B1], strides := [st0, st1], offsets := [o0, o1] }⟩ :
+        Tile .blockPtr [B0, B1])) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [B0, B1] bpName) [0, 1]) MaskOpt.none) t
+      = some (⟨fun idx : TileIndex [B0, B1] =>
+          if o0 + idx.1.val < d0 ∧ o1 + idx.2.1.val < d1 then
+            some (t.readMem R
+              (base + (o0 + idx.1.val) * st0 + (o1 + idx.2.1.val) * st1))
+          else some 0⟩ : Tile .real [B0, B1]) := by
+  simp only [evalOp, evalOp_ref, hbp]
+  refine congrArg some ?_
+  congr 1
+  funext idx
+  obtain ⟨i0, i1, u⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.inBounds_2d_offsets,
+    BlockPtr.address_2d_offsets, BlockState.readMemValue_real, decide_eq_true_eq]
+  by_cases hh : o0 + i0.val < d0 ∧ o1 + i1.val < d1
+  · simp [hh]
+  · simp [hh, BlockState.defaultCarrier]
+
+/-- `b_v` / `b_do` — the `(T, V)` value tile of this time chunk. -/
+noncomputable def cbdVoTile (s : BlockState) (rg : RegionName)
+    (s_v_h s_v_t T V BT BV : Nat) : Tile .real [BT, BV] :=
+  Tile.mat fun r c => some (voElem s rg s_v_h s_v_t T V BT r.val c.val)
+
+/-- `b_h` / `b_dh` — the `(V, NT*K)` state tile of this `(i_t, i_k)` block. -/
+noncomputable def cbdHTile (s : BlockState) (rg : RegionName)
+    (s_h_h s_h_t K V BK BV NT : Nat) : Tile .real [BV, BK] :=
+  Tile.mat fun a e => some (hElem s rg s_h_h s_h_t K V BK NT a.val e.val)
+
+/-- `b_q` / `b_k` — the `(T, K)` key tile of this `(i_t, i_k)` block. -/
+noncomputable def cbdQkTile (s : BlockState) (rg : RegionName)
+    (s_k_h s_k_t T K BT BK : Nat) : Tile .real [BT, BK] :=
+  Tile.mat fun r e => some (qkElem s rg s_k_h s_k_t T K BT BK r.val e.val)
+
+/-- The `b_v` / `b_do` load, phrased against the launch state's memory. -/
+private theorem cbd_load_vo_eq (s t : BlockState) (rg : RegionName) (bpName : RegName)
+    (s_v_h s_v_t T V BT BV : Nat)
+    (hmem : ∀ off, t.readMem rg off = s.readMem rg off)
+    (hbp : t.regs .blockPtr [BT, BV] bpName = some (⟨fun _ : TileIndex [BT, BV] =>
+        { region := rg, baseOffset := s.pids 2 * s_v_h, parentShape := [T, V],
+          blockShape := [BT, BV], strides := [s_v_t, 1],
+          offsets := [s.pids 1 * BT, 0 * BV] }⟩ : Tile .blockPtr [BT, BV])) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BV] bpName) [0, 1]) MaskOpt.none) t
+      = some (cbdVoTile s rg s_v_h s_v_t T V BT BV) := by
+  rw [cbd_load_2d rg T V s_v_t 1 BT BV (s.pids 1 * BT) (0 * BV)
+    (s.pids 2 * s_v_h) bpName t hbp]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨i0, i1, u⟩ := idx
+  simp only [cbdVoTile, Tile.mat_data, voElem, Nat.zero_mul, Nat.zero_add, Nat.mul_one]
+  split <;> simp [hmem]
+
+/-- The `b_h` / `b_dh` load, phrased against the launch state's memory. -/
+private theorem cbd_load_h_eq (s t : BlockState) (rg : RegionName) (bpName : RegName)
+    (s_h_h s_h_t K V BK BV NT : Nat)
+    (hmem : ∀ off, t.readMem rg off = s.readMem rg off)
+    (hbp : t.regs .blockPtr [BV, BK] bpName = some (⟨fun _ : TileIndex [BV, BK] =>
+        { region := rg, baseOffset := s.pids 2 * s_h_h, parentShape := [V, NT * K],
+          blockShape := [BV, BK], strides := [1, s_h_t],
+          offsets := [0 * BV, s.pids 1 * K + s.pids 0 * BK] }⟩ :
+        Tile .blockPtr [BV, BK])) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BV, BK] bpName) [0, 1]) MaskOpt.none) t
+      = some (cbdHTile s rg s_h_h s_h_t K V BK BV NT) := by
+  rw [cbd_load_2d rg V (NT * K) 1 s_h_t BV BK (0 * BV) (s.pids 1 * K + s.pids 0 * BK)
+    (s.pids 2 * s_h_h) bpName t hbp]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨i0, i1, u⟩ := idx
+  simp only [cbdHTile, Tile.mat_data, hElem, Nat.zero_mul, Nat.zero_add, Nat.mul_one,
+    Nat.add_assoc]
+  split <;> simp [hmem]
+
+/-- The `b_q` / `b_k` load, phrased against the launch state's memory. -/
+private theorem cbd_load_qk_eq (s t : BlockState) (rg : RegionName) (bpName : RegName)
+    (s_k_h s_k_t T K BT BK : Nat)
+    (hmem : ∀ off, t.readMem rg off = s.readMem rg off)
+    (hbp : t.regs .blockPtr [BT, BK] bpName = some (⟨fun _ : TileIndex [BT, BK] =>
+        { region := rg, baseOffset := s.pids 2 * s_k_h, parentShape := [T, K],
+          blockShape := [BT, BK], strides := [s_k_t, 1],
+          offsets := [s.pids 1 * BT, s.pids 0 * BK] }⟩ : Tile .blockPtr [BT, BK])) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BK] bpName) [0, 1]) MaskOpt.none) t
+      = some (cbdQkTile s rg s_k_h s_k_t T K BT BK) := by
+  rw [cbd_load_2d rg T K s_k_t 1 BT BK (s.pids 1 * BT) (s.pids 0 * BK)
+    (s.pids 2 * s_k_h) bpName t hbp]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨i0, i1, u⟩ := idx
+  simp only [cbdQkTile, Tile.mat_data, qkElem, Nat.mul_one, Nat.add_assoc]
+  split <;> simp [hmem]
+
+
+/-! ### The four accumulations
+
+Each accumulator enters the (single) pass at zero, so its exit value is one term.
+The four tiles below are the element specs of the same name, lifted to tiles. -/
+
+/-- `b_dg_last` after the loop: the full `h · dh` reduction. -/
+noncomputable def cbdDgLastTile (s : BlockState) (h dh : RegionName)
+    (s_h_h s_h_t K V BK BV NT : Nat) : Tile .real [] :=
+  Tile.scalar (some (dgLastAcc s h dh s_h_h s_h_t K V BK BV NT))
+
+/-- `b_ds` after the loop. -/
+noncomputable def cbdDsTile (s : BlockState) (v do_ : RegionName)
+    (s_v_h s_v_t T V BT BV : Nat) : Tile .real [BT, BT] :=
+  Tile.mat fun r r' => some (dsAcc s v do_ s_v_h s_v_t T V BT BV r.val r'.val)
+
+/-- `b_dq` after the loop. -/
+noncomputable def cbdDqTile (s : BlockState) (h do_ : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [BT, BK] :=
+  Tile.mat fun r e =>
+    some (dqAcc s h do_ s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT r.val e.val)
+
+/-- `b_dk` after the loop. -/
+noncomputable def cbdDkTile (s : BlockState) (v dh : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [BT, BK] :=
+  Tile.mat fun r e =>
+    some (dkAcc s v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT r.val e.val)
+
+/-- A `WithBot ℝ` sum of `some`s is the `some` of the `ℝ` sum. -/
+private theorem cbd_coe_sum1 {n : Nat} (f : Fin n → ℝ) :
+    (@Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ fun e => (some (f e) : WithBot ℝ))
+      = some (∑ e : Fin n, f e) := by
+  show (Finset.univ.sum fun e => ((f e : ℝ) : WithBot ℝ)) = _
+  rw [← WithBot.coe_sum]
+  rfl
+
+/-- A `WithBot ℝ` double sum of pointwise products collapses to the `ℝ` double sum.
+`tl.sum` on a rank-2 tile lands in this shape after both axes are dropped. -/
+private theorem cbd_coe_sum2 {m n : Nat} (f g : Fin m → Fin n → ℝ) :
+    (@Finset.sum (Fin m) (WithBot ℝ) _ Finset.univ fun a =>
+        @Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ fun e =>
+          Option.map₂ (fun x y : ℝ => x * y) (some (f a e)) (some (g a e)))
+      = some (∑ a : Fin m, ∑ e : Fin n, f a e * g a e) := by
+  rw [show (@Finset.sum (Fin m) (WithBot ℝ) _ Finset.univ fun a =>
+        @Finset.sum (Fin n) (WithBot ℝ) _ Finset.univ fun e =>
+          Option.map₂ (fun x y : ℝ => x * y) (some (f a e)) (some (g a e)))
+      = (@Finset.sum (Fin m) (WithBot ℝ) _ Finset.univ fun a =>
+          (some (∑ e : Fin n, f a e * g a e) : WithBot ℝ))
+      from Finset.sum_congr rfl fun a _ => cbd_coe_sum1 _]
+  exact cbd_coe_sum1 _
+
+/-- `b_dg_last += tl.sum(b_h * b_dh)` from zero. -/
+private theorem cbd_dgLastAcc_eval (s t : BlockState) (h dh : RegionName)
+    (s_h_h s_h_t K V BK BV NT : Nat)
+    (hacc : t.regs .real [] "b_dg_last" = some (cbdZero []))
+    (hh : t.regs .real [BV, BK] "b_h" = some (cbdHTile s h s_h_h s_h_t K V BK BV NT))
+    (hdh : t.regs .real [BV, BK] "b_dh" = some (cbdHTile s dh s_h_h s_h_t K V BK BV NT)) :
+    evalOp (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+      (Op.reduceSum (shape := [BV]) ⟨0, by simp⟩ Bool.false
+        (Op.reduceSum ⟨1, by simp⟩ Bool.false
+          (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.ref .real [BV, BK] "b_h") (Op.ref .real [BV, BK] "b_dh"))))) t
+      = some (cbdDgLastTile s h dh s_h_h s_h_t K V BK BV NT) := by
+  erw [evalOp_add, evalOp_ref, hacc, evalOp_reduceSum, evalOp_reduceSum, evalOp_mul,
+    evalOp_ref, hh, evalOp_ref, hdh]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro _
+  simp only [cbdDgLastTile, cbdZero, cbdHTile, Tile.scalar, Tile.mat_data,
+    Tile.bop_data, Tile.reduceSum_false, Tile.reduceSumDrop_data, TileShape.axisDim,
+    TileShape.insertAxisIndex,
+    NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul,
+    Broadcast.leftIndex, Broadcast.rightIndex, dgLastAcc]
+  erw [cbd_coe_sum2]
+  simp
+
+/-- `b_ds += tl.dot(b_do, tl.trans(b_v))` from zero. -/
+private theorem cbd_dsAcc_eval (s t : BlockState) (v do_ : RegionName)
+    (s_v_h s_v_t T V BT BV : Nat)
+    (hds : t.regs .real [BT, BT] "b_ds" = some (cbdZero [BT, BT]))
+    (hdo : t.regs .real [BT, BV] "b_do" = some (cbdVoTile s do_ s_v_h s_v_t T V BT BV))
+    (hv : t.regs .real [BT, BV] "b_v" = some (cbdVoTile s v s_v_h s_v_t T V BT BV)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Op.ref .real [BT, BT] "b_ds")
+      (Op.dot (batch := []) (Op.ref .real [BT, BV] "b_do")
+        (Op.transpose (Op.ref .real [BT, BV] "b_v")))) t
+      = some (cbdDsTile s v do_ s_v_h s_v_t T V BT BV) := by
+  erw [evalOp_add, evalOp_ref, hds, evalOp_dot, evalOp_ref, hdo, evalOp_transpose,
+    evalOp_ref, hv]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, r', u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.rightIndex_consSame, Broadcast.rightIndex_nil]
+  rw [tile_dot_data BT BV BT _ _ r r'
+      (fun c => voElem s do_ s_v_h s_v_t T V BT r.val c.val)
+      (fun c => voElem s v s_v_h s_v_t T V BT r'.val c.val)
+      (fun _ => rfl) (fun _ => rfl)]
+  simp [cbdDsTile, cbdZero, Tile.mat_data, dsAcc, NumericDType.add,
+    WithBot.realAdd, Broadcast.leftIndex]
+
+/-- `b_dq += tl.dot(b_do, b_h)` from zero. -/
+private theorem cbd_dqAcc_eval (s t : BlockState) (h do_ : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat)
+    (hdq : t.regs .real [BT, BK] "b_dq" = some (cbdZero [BT, BK]))
+    (hdo : t.regs .real [BT, BV] "b_do" = some (cbdVoTile s do_ s_v_h s_v_t T V BT BV))
+    (hh : t.regs .real [BV, BK] "b_h" = some (cbdHTile s h s_h_h s_h_t K V BK BV NT)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Op.ref .real [BT, BK] "b_dq")
+      (Op.dot (batch := []) (Op.ref .real [BT, BV] "b_do")
+        (Op.ref .real [BV, BK] "b_h"))) t
+      = some (cbdDqTile s h do_ s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT) := by
+  erw [evalOp_add, evalOp_ref, hdq, evalOp_dot, evalOp_ref, hdo, evalOp_ref, hh]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, e, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.rightIndex_consSame, Broadcast.rightIndex_nil]
+  rw [tile_dot_data BT BV BK _ _ r e
+      (fun c => voElem s do_ s_v_h s_v_t T V BT r.val c.val)
+      (fun c => hElem s h s_h_h s_h_t K V BK NT c.val e.val)
+      (fun _ => rfl) (fun _ => rfl)]
+  simp [cbdDqTile, cbdZero, Tile.mat_data, dqAcc, NumericDType.add,
+    WithBot.realAdd, Broadcast.leftIndex]
+
+/-- `b_dk += tl.dot(b_v, b_dh)` from zero. -/
+private theorem cbd_dkAcc_eval (s t : BlockState) (v dh : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat)
+    (hdk : t.regs .real [BT, BK] "b_dk" = some (cbdZero [BT, BK]))
+    (hv : t.regs .real [BT, BV] "b_v" = some (cbdVoTile s v s_v_h s_v_t T V BT BV))
+    (hdh : t.regs .real [BV, BK] "b_dh" = some (cbdHTile s dh s_h_h s_h_t K V BK BV NT)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+      (Op.ref .real [BT, BK] "b_dk")
+      (Op.dot (batch := []) (Op.ref .real [BT, BV] "b_v")
+        (Op.ref .real [BV, BK] "b_dh"))) t
+      = some (cbdDkTile s v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT) := by
+  erw [evalOp_add, evalOp_ref, hdk, evalOp_dot, evalOp_ref, hv, evalOp_ref, hdh]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, e, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.rightIndex_consSame, Broadcast.rightIndex_nil]
+  rw [tile_dot_data BT BV BK _ _ r e
+      (fun c => voElem s v s_v_h s_v_t T V BT r.val c.val)
+      (fun c => hElem s dh s_h_h s_h_t K V BK NT c.val e.val)
+      (fun _ => rfl) (fun _ => rfl)]
+  simp [cbdDkTile, cbdZero, Tile.mat_data, dkAcc, NumericDType.add,
+    WithBot.realAdd, Broadcast.leftIndex]
+
 
 /-! ## The single value-block regime
 
