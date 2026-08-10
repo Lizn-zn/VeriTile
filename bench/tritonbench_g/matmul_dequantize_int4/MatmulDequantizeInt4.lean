@@ -613,6 +613,135 @@ theorem mdqBAddr_eq (stride_bk stride_bn BN BK pn k : Nat) (idx : TileIndex [BK,
   simp only [mdqBAddr]
   ring
 
+/-! ## The loop body's value tiles
+
+Each is named in the form the eval recipes will produce, with a separate `_data`
+bridge to the spec accessor — the same split that kept `chunk_bwd_dqkg`'s address
+arithmetic out of its step proofs. -/
+
+/-- `a_mask` as the prologue leaves it: a `[BM, 1]` bool tile, `true` exactly on
+in-region rows. -/
+def mdqAMask (M BM pm : Nat) : Tile .bool [BM, 1] :=
+  ⟨fun idx => decide (pm * BM + idx.1.val < M)⟩
+
+/-- `shifter[e] = (e % 8) * 4` — `offs_k` is `arange BK`, so lane `e` holds `e`. -/
+def mdqShifter (BK : Nat) : Tile .nat [BK] := ⟨fun idx => idx.1.val % 8 * 4⟩
+
+/-- `zeros_shifter[c] = ((pn*BN + c) % 8) * 4`. -/
+def mdqZerosShifter (BN pn : Nat) : Tile .nat [BN] :=
+  ⟨fun idx => (pn * BN + idx.1.val) % 8 * 4⟩
+
+/-- `a` at K step `k`. In-region rows read memory; the rest read the load's
+`other=0.0`. The mask is rank-broadcast from `[BM, 1]`, so it does not depend on
+the K lane — which is exactly why there is no K-axis boundary handling. -/
+noncomputable def mdqATile (s : BlockState) (a : RegionName)
+    (M stride_am stride_ak BM BK pm k : Nat) : Tile .real [BM, BK] :=
+  ⟨fun idx => if pm * BM + idx.1.val < M then
+      some (s.readMem a (mdqAAddr stride_am stride_ak BM BK pm k idx)) else some 0⟩
+
+/-- The loaded packed weight words at K step `k`. Unmasked. -/
+noncomputable def mdqBRaw (s : BlockState) (b : Region .nat)
+    (stride_bk stride_bn BN BK pn k : Nat) : Tile .nat [BK, BN] :=
+  ⟨fun idx => s.readMemValue .nat b (mdqBAddr stride_bk stride_bn BN BK pn k idx)⟩
+
+/-- `b` after the nibble extraction. -/
+noncomputable def mdqBNibbleTile (s : BlockState) (b : Region .nat)
+    (stride_bk stride_bn BN BK pn k : Nat) : Tile .nat [BK, BN] :=
+  ⟨fun idx => bNibble s b stride_bk stride_bn BN BK pn k idx.1.val idx.2.1.val⟩
+
+/-- `accumulator` after `i` K steps: the partial sum the invariant carries. -/
+noncomputable def mdqAccTile (s : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK pm pn : Nat) (i : Nat) : Tile .real [BM, BN] :=
+  ⟨fun idx => some (∑ j : Fin i,
+      accStep s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+        stride_bk stride_bn stride_scales_g stride_scales_n
+        stride_zeros_g stride_zeros_n BM BN BK pm pn j.val idx.1.val idx.2.1.val)⟩
+
+/-- At `i = 0` the accumulator is the zero tile `tl.zeros` produces. -/
+theorem mdqAccTile_zero (s : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK pm pn : Nat) :
+    mdqAccTile s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+        stride_bk stride_bn stride_scales_g stride_scales_n
+        stride_zeros_g stride_zeros_n BM BN BK pm pn 0
+      = (⟨fun _ => some 0⟩ : Tile .real [BM, BN]) := by
+  apply Tile.ext
+  intro idx
+  simp [mdqAccTile]
+
+/-- At `i = numPidK` the accumulator is `accSpec` — the stored value. -/
+theorem mdqAccTile_full (s : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M K groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK pm pn : Nat) (idx : TileIndex [BM, BN]) :
+    (mdqAccTile s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+        stride_bk stride_bn stride_scales_g stride_scales_n
+        stride_zeros_g stride_zeros_n BM BN BK pm pn (numPidK K BK)).data idx
+      = some (accSpec s a scales b zeros NO_GROUPS M K groupsize stride_am
+          stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+          stride_zeros_g stride_zeros_n BM BN BK pm pn idx.1.val idx.2.1.val) := by
+  rfl
+
+/-- **The invariant's accumulator step.** Extending the partial sum by one K step
+adds that step's `tl.dot` contribution — the algebraic content of the fold. -/
+theorem mdqAccTile_succ (s : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK pm pn i : Nat) (idx : TileIndex [BM, BN]) :
+    (mdqAccTile s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+        stride_bk stride_bn stride_scales_g stride_scales_n
+        stride_zeros_g stride_zeros_n BM BN BK pm pn (i + 1)).data idx
+      = some ((∑ j : Fin i,
+            accStep s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+              stride_bk stride_bn stride_scales_g stride_scales_n
+              stride_zeros_g stride_zeros_n BM BN BK pm pn j.val
+              idx.1.val idx.2.1.val)
+          + accStep s a scales b zeros NO_GROUPS M groupsize stride_am stride_ak
+              stride_bk stride_bn stride_scales_g stride_scales_n
+              stride_zeros_g stride_zeros_n BM BN BK pm pn i
+              idx.1.val idx.2.1.val) := by
+  simp only [mdqAccTile]
+  exact congrArg some (Fin.sum_univ_castSucc _)
+
+
+/-! ### Bridges from the tiles to the spec accessors -/
+
+theorem mdqATile_data (s : BlockState) (a : RegionName)
+    (M stride_am stride_ak BM BK pm k : Nat) (idx : TileIndex [BM, BK]) :
+    (mdqATile s a M stride_am stride_ak BM BK pm k).data idx
+      = some (aElem s a M stride_am stride_ak BM BK pm idx.1.val k idx.2.1.val) := by
+  simp only [mdqATile, aElem, mdqAAddr_eq]
+  split <;> rfl
+
+theorem mdqBRaw_data (s : BlockState) (b : Region .nat)
+    (stride_bk stride_bn BN BK pn k : Nat) (idx : TileIndex [BK, BN]) :
+    (mdqBRaw s b stride_bk stride_bn BN BK pn k).data idx
+      = bWord s b stride_bk stride_bn BN BK pn k idx.1.val idx.2.1.val := by
+  simp only [mdqBRaw, bWord, mdqBAddr_eq]
+
+/-- The nibble tile is `bitAnd 15` over `shiftRight`, applied to the raw words —
+i.e. exactly the two compiled statements, read back through `bNibble`. -/
+theorem mdqBNibbleTile_eq (s : BlockState) (b : Region .nat)
+    (stride_bk stride_bn BN BK pn k : Nat) :
+    mdqBNibbleTile s b stride_bk stride_bn BN BK pn k
+      = Tile.bop (· &&& ·) Broadcast.scalarR
+          (Tile.bop (· >>> ·) (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (mdqBRaw s b stride_bk stride_bn BN BK pn k)
+            (Tile.expandDim ⟨1, by simp⟩ (mdqShifter BK)))
+          (Tile.scalar 15) := by
+  apply Tile.ext
+  intro idx
+  simp only [mdqBNibbleTile, bNibble, Tile.bop_data, Tile.scalar,
+    Tile.expandDim_data, mdqShifter, TileShape.dropInsertedIndex,
+    Broadcast.leftIndex, Broadcast.rightIndex, mdqBRaw_data]
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
