@@ -290,6 +290,137 @@ noncomputable def dgSpec (s : BlockState) (g q k v h do_ dh : RegionName)
        else dgLastFinal s g k v h dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
               T K V BT BK BV NT)
 
+
+/-! ## Compiled body decomposition
+
+The algorithm-lowered statement lists, checked against the macro output by `rfl`.
+Two lowerings worth naming because they are not guessable from the source text:
+`min(a, b)` becomes `Op.where (Op.lt …) a b` (there is no `Op.min`), and an
+axis-less `tl.sum` on a rank-2 tile drops the **last** remaining axis each time,
+so it is `reduceSum ⟨0,_⟩ (reduceSum ⟨1,_⟩ ·)`. -/
+
+/-- `tl.cdiv(V, BV)` — the value-axis loop's trip count. -/
+def cbdStopOp (V BV : Nat) : Op .nat [] :=
+  Op.div .nat Broadcast.nil
+    (Op.sub .nat Broadcast.nil
+      (Op.add .nat Broadcast.nil (Op.constNat V) (Op.constNat BV)) (Op.constNat 1))
+    (Op.constNat BV)
+
+/-- The compiled value-axis loop body: four block-pointer constructions, four
+masked loads, and the four accumulations. -/
+def cbdLoopBody (v h do_ dh : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat) : List Stmt :=
+  [ Stmt.assign .blockPtr [BT, BV] "p_v"
+      (Op.makeBlockPtrDynOffsets v
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_v_h)) [T, V]
+        [BT, BV] [s_v_t, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV)]),
+    Stmt.assign .blockPtr [BV, BK] "p_h"
+      (Op.makeBlockPtrDynOffsets h
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_h_h)) [V, NT * K]
+        [BV, BK] [1, s_h_t]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV),
+          Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat K))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK))]),
+    Stmt.assign .blockPtr [BT, BV] "p_do"
+      (Op.makeBlockPtrDynOffsets do_
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_v_h)) [T, V]
+        [BT, BV] [s_v_t, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV)]),
+    Stmt.assign .blockPtr [BV, BK] "p_dh"
+      (Op.makeBlockPtrDynOffsets dh
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_h_h)) [V, NT * K]
+        [BV, BK] [1, s_h_t]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_v") (Op.constNat BV),
+          Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat K))
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK))]),
+    Stmt.assign .real [BT, BV] "b_v"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BT, BV] "p_v") [0, 1]) .none),
+    Stmt.assign .real [BT, BV] "b_do"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BT, BV] "p_do") [0, 1]) .none),
+    Stmt.assign .real [BV, BK] "b_h"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BV, BK] "p_h") [0, 1]) .none),
+    Stmt.assign .real [BV, BK] "b_dh"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BV, BK] "p_dh") [0, 1]) .none),
+    Stmt.assign .real [] "b_dg_last"
+      (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+        (Op.reduceSum ⟨0, by simp [TileShape.eraseAxis]⟩ Bool.false
+          (Op.reduceSum ⟨1, by simp⟩ Bool.false
+            (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [BV, BK] "b_h") (Op.ref .real [BV, BK] "b_dh"))))),
+    Stmt.assign .real [BT, BT] "b_ds"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BT, BT] "b_ds")
+        (Op.dot (batch := []) (Op.ref .real [BT, BV] "b_do")
+          (Op.transpose (Op.ref .real [BT, BV] "b_v")))),
+    Stmt.assign .real [BT, BK] "b_dq"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BT, BK] "b_dq")
+        (Op.dot (batch := []) (Op.ref .real [BT, BV] "b_do")
+          (Op.ref .real [BV, BK] "b_h"))),
+    Stmt.assign .real [BT, BK] "b_dk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BT, BK] "b_dk")
+        (Op.dot (batch := []) (Op.ref .real [BT, BV] "b_v")
+          (Op.ref .real [BV, BK] "b_dh"))) ]
+
+
+/-- The compiled prologue: the four ids, `o_i`, the `g` block pointer and its
+load, `last_idx` / `b_g_last`, and the five zero-initialised accumulators. -/
+def cbdPreLoop (g : RegionName) (T BT BK : Nat) : List Stmt :=
+[ Stmt.assign .nat [] "i_k" (Op.programId 0),
+    Stmt.assign .nat [] "i_t" (Op.programId 1),
+    Stmt.assign .nat [] "i_bh" (Op.programId 2),
+    Stmt.assign .nat [] "n_bh" (Op.numPrograms 2),
+    Stmt.assign .nat [BT] "o_i" (Op.arange BT),
+    Stmt.assign .blockPtr [BT] "p_g"
+      (Op.makeBlockPtrDynOffsets g
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat T))
+        [T] [BT] [1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT)]),
+    Stmt.assign .real [BT] "b_g"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BT] "p_g") [0]) .none),
+    Stmt.assign .nat [] "last_idx"
+      (Op.sub .nat Broadcast.nil
+        (Op.where
+        (Op.lt ComparableDType.nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))
+          (Op.constNat BT))
+          (Op.constNat T))
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))
+          (Op.constNat BT))
+        (Op.constNat T))
+        (Op.constNat 1)),
+    Stmt.assign .real [] "b_g_last"
+      (Op.load .real
+          (MemAccess.region g
+        (Op.add .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat T))
+          (Op.ref .nat [] "last_idx"))) MaskOpt.none),
+    Stmt.assign .real [BT, BK] "b_dq" (Op.full [BT, BK] (Op.const 0)),
+    Stmt.assign .real [BT, BK] "b_dk" (Op.full [BT, BK] (Op.const 0)),
+    Stmt.assign .real [BT, BT] "b_ds" (Op.full [BT, BT] (Op.const 0)),
+    Stmt.assign .real [] "b_dg_last" (Op.full [] (Op.const 0)),
+    Stmt.assign .real [BT] "b_dg" (Op.full [BT] (Op.const 0)) ]
+
+/-- **Body prefix (by `rfl`).** The lowered surface begins with the prologue
+followed by the value-axis `forRangeDyn` carrying `cbdLoopBody`. This is the
+check that the hand-compiled statement lists match what the macro emits. -/
+theorem cbd_body_prefix (q k v h g do_ dh dq dk dg : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat) :
+    ((chunk_bwd_dqkg_surface q k v h g do_ dh dq dk dg s_k_h s_k_t s_v_h s_v_t
+        s_h_h s_h_t scale T K V BT BK BV NT).toAlgKernel.body).take 15
+      = cbdPreLoop g T BT BK
+        ++ [Stmt.forRangeDyn "i_v" (Op.constNat 0) (cbdStopOp V BV) (Op.constNat 1)
+              (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)] := by
+  rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkBwdDqkg
