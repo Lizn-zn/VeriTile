@@ -28,11 +28,11 @@ stride stays symbolic.
 
 ```
 chunk_bwd_dqkg_exec_genuine                     ← ★ TOP THEOREM (exec-level, general)
-  ├─ cbd_body_eq             the 34-statement lowering, checked by `rfl`
+  ├─ cbd_body_eq             the 35-statement lowering, checked by `rfl`
   ├─ cbdPreLoop_run          14 statements: ids, o_i, the two `g` tiles, 5 zeros
   ├─ cbdLoop_collapse        `ceil(V/BV) = 1` ⇒ one pass at `i_v = 0`
   ├─ cbdLoopBody_run         12 statements: 4 block ptrs, 4 loads, 4 accumulations
-  └─ cbdPostLoop_run         19 statements: q/k loads, 9 compute steps, 3 stores
+  └─ cbdPostLoop_run         20 statements: q/k loads, 10 compute steps, 3 stores
        └─ cbd_store_2d_props / cbd_store_1d_props   scatter readback
 cbdQkAddr_injective                             discharges the headline's `hInj`
 ```
@@ -49,16 +49,15 @@ host launch (the 3-D grid `(NK, NT, B*H)`, the host-computed `BT/BK/BV/NT`, and
 the `dg` pre-fill with `-1e9`) are the *trusted boundary*. The `.to(...)` dtype
 round-trips erase to the identity at the algorithm layer.
 
-Two mechanical transcription notes, per `bench/MAIN_THEOREM_CONVENTIONS.md`:
+Two spelling notes, per `bench/MAIN_THEOREM_CONVENTIONS.md`. Both are surface
+syntax, not semantics - the statement structure and every shape match the source:
 
-* `b_dg_last` is a `tl.zeros([1,], ...)` one-lane tile in the source, used only
-  ever as a scalar (`+=` a full reduction, `*=` a scalar, and broadcast into a
-  `[BT]` add). It is modelled as a `[]`-shaped scalar tile - same values, one
-  fewer index to carry.
 * Integer literals inside index arithmetic are written `$(1)` rather than `1`.
   A bare literal is inferred `.real` by the DSL's expression typing, so
   `min(...) - 1` does not elaborate while `min(...) - $(1)` is the intended
-  `.nat` reading. Spelling, not semantics.
+  `.nat` reading.
+* The DSL has no unary minus, so the source's `tl.exp(-b_g + b_g_last)` is
+  transcribed `tl.exp(0.0 - b_g + b_g_last)`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkBwdDqkg
@@ -94,7 +93,7 @@ def chunk_bwd_dqkg_surface
   b_dq = tl.zeros([$(BT), $(BK)], dtype=tl.float32)
   b_dk = tl.zeros([$(BT), $(BK)], dtype=tl.float32)
   b_ds = tl.zeros([$(BT), $(BT)], dtype=tl.float32)
-  b_dg_last = tl.zeros([], dtype=tl.float32)
+  b_dg_last = tl.zeros([$(1)], dtype=tl.float32)
   b_dg = tl.zeros([$(BT)], dtype=tl.float32)
   for i_v in range($(0), tl.cdiv($(V), $(BV)), $(1)) {
     p_v = tl.make_block_ptr(base=v + i_bh * $(s_v_h),
@@ -116,9 +115,9 @@ def chunk_bwd_dqkg_surface
     b_h = tl.load(p_h, boundary_check=([0, 1] : List Nat))
     b_dh = tl.load(p_dh, boundary_check=([0, 1] : List Nat))
     b_dg_last += tl.sum(b_h * b_dh)
-    b_ds += tl.dot(b_do, tl.trans(b_v), allow_tf32=false)
-    b_dq += tl.dot(b_do, (b_h).to(b_do.dtype), allow_tf32=false)
-    b_dk += tl.dot(b_v, (b_dh).to(b_v.dtype), allow_tf32=false)
+    b_ds += tl.dot(b_do, tl.trans(b_v))
+    b_dq += tl.dot(b_do, (b_h).to(b_do.dtype))
+    b_dk += tl.dot(b_v, (b_dh).to(b_v.dtype))
   }
   p_q = tl.make_block_ptr(base=q + i_bh * $(s_k_h),
     shape=($(T), $(K)), strides=($(s_k_t), $(1)),
@@ -134,8 +133,9 @@ def chunk_bwd_dqkg_surface
   b_dg_last += tl.sum(b_dk * b_k)
   b_ds = tl.where(o_i[:, None] >= o_i[None, :],
     b_ds * $(scale) * tl.exp(b_g[:, None] - b_g[None, :]), 0.0)
-  b_dq += tl.dot((b_ds).to(b_k.dtype), b_k, allow_tf32=false)
-  b_dk += tl.dot(tl.trans((b_ds).to(b_k.dtype)), b_q, allow_tf32=false)
+  b_ds = (b_ds).to(b_k.dtype)
+  b_dq += tl.dot(b_ds, b_k)
+  b_dk += tl.dot(tl.trans(b_ds), b_q)
   b_dg += tl.sum(b_q * b_dq - b_k * b_dk, axis=1)
   b_dg = tl.where(o_i < min($(BT), $(T) - i_t * $(BT)) - $(1), b_dg, b_dg + b_dg_last)
   p_dq = tl.make_block_ptr(base=dq + i_bh * $(s_k_h),
@@ -364,8 +364,8 @@ def cbdLoopBody (v h do_ dh : RegionName)
       (Op.load .real (.blockPtr (Op.ref .blockPtr [BV, BK] "p_h") [0, 1]) .none),
     Stmt.assign .real [BV, BK] "b_dh"
       (Op.load .real (.blockPtr (Op.ref .blockPtr [BV, BK] "p_dh") [0, 1]) .none),
-    Stmt.assign .real [] "b_dg_last"
-      (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+    Stmt.assign .real [1] "b_dg_last"
+      (Op.add .real Broadcast.scalarR (Op.ref .real [1] "b_dg_last")
         (Op.reduceSum (shape := [BV]) ⟨0, by simp⟩ Bool.false
           (Op.reduceSum ⟨1, by simp⟩ Bool.false
             (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
@@ -424,7 +424,7 @@ def cbdPreLoop (g : RegionName) (T BT BK : Nat) : List Stmt :=
     Stmt.assign .real [BT, BK] "b_dq" (Op.full [BT, BK] (Op.const 0)),
     Stmt.assign .real [BT, BK] "b_dk" (Op.full [BT, BK] (Op.const 0)),
     Stmt.assign .real [BT, BT] "b_ds" (Op.full [BT, BT] (Op.const 0)),
-    Stmt.assign .real [] "b_dg_last" (Op.full [] (Op.const 0)),
+    Stmt.assign .real [1] "b_dg_last" (Op.full [1] (Op.const 0)),
     Stmt.assign .real [BT] "b_dg" (Op.full [BT] (Op.const 0)) ]
 
 
@@ -449,8 +449,8 @@ def cbdPostLoop (q k dq dk dg : RegionName)
       (Op.load .real (.blockPtr (Op.ref .blockPtr [BT, BK] "p_k") [0, 1]) .none),
     Stmt.assign .real [BT, BK] "b_q"
       (Op.load .real (.blockPtr (Op.ref .blockPtr [BT, BK] "p_q") [0, 1]) .none),
-    Stmt.assign .real [] "b_dg_last"
-      (Op.mul .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+    Stmt.assign .real [1] "b_dg_last"
+      (Op.mul .real Broadcast.scalarR (Op.ref .real [1] "b_dg_last")
         (Op.exp (Op.ref .real [] "b_g_last"))),
     Stmt.assign .real [BT, BK] "b_dq"
       (Op.mul .real Broadcast.scalarR
@@ -465,8 +465,8 @@ def cbdPostLoop (q k dq dk dg : RegionName)
           (Op.exp (Op.add .real Broadcast.scalarR
             (Op.sub .real Broadcast.scalarL (Op.const 0.0) (Op.ref .real [BT] "b_g"))
             (Op.ref .real [] "b_g_last"))))),
-    Stmt.assign .real [] "b_dg_last"
-      (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+    Stmt.assign .real [1] "b_dg_last"
+      (Op.add .real Broadcast.scalarR (Op.ref .real [1] "b_dg_last")
         (Op.reduceSum (shape := [BT]) ⟨0, by simp⟩ Bool.false
           (Op.reduceSum ⟨1, by simp⟩ Bool.false
             (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
@@ -482,6 +482,7 @@ def cbdPostLoop (q k dq dk dg : RegionName)
             (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "b_g"))
             (Op.expandDim ⟨0, by simp⟩ (Op.ref .real [BT] "b_g")))))
         (Op.broadcast (Op.const 0.0) [BT, BT])),
+    Stmt.assign .real [BT, BT] "b_ds" (Op.ref .real [BT, BT] "b_ds"),
     Stmt.assign .real [BT, BK] "b_dq"
       (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
         (Op.ref .real [BT, BK] "b_dq")
@@ -512,8 +513,8 @@ def cbdPostLoop (q k dq dk dg : RegionName)
                 (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))))
             (Op.constNat 1)))
         (Op.ref .real [BT] "b_dg")
-        (Op.add .real Broadcast.scalarR (Op.ref .real [BT] "b_dg")
-          (Op.ref .real [] "b_dg_last"))),
+        (Op.add .real (Broadcast.consR Broadcast.nil) (Op.ref .real [BT] "b_dg")
+          (Op.ref .real [1] "b_dg_last"))),
     Stmt.assign .blockPtr [BT, BK] "p_dq"
       (Op.makeBlockPtrDynOffsets dq
         (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_k_h)) [T, K]
@@ -548,7 +549,7 @@ def cbdPostLoop (q k dq dk dg : RegionName)
 set_option maxRecDepth 8000 in
 /-- **Full body split (by `rfl`).** The lowered surface is exactly
 `cbdPreLoop ++ [forRangeDyn "i_v" 0 (cbdStopOp V BV) 1 cbdLoopBody] ++ cbdPostLoop`
-— 34 statements, every one checked against the macro output rather than assumed. -/
+— 35 statements, every one checked against the macro output rather than assumed. -/
 theorem cbd_body_eq (q k v h g do_ dh dq dk dg : RegionName)
     (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat) :
     (chunk_bwd_dqkg_surface q k v h g do_ dh dq dk dg s_k_h s_k_t s_v_h s_v_t
@@ -668,6 +669,12 @@ private theorem cbd_add_eval (t : BlockState) (a b : Op .nat []) (va vb : Nat)
   rw [evalOp_add]
   simp only [ha, hb, Option.bind_some, Option.bind_eq_bind]
   rfl
+
+/-- A bare register read — the shape an erased `.to(...)` cast leaves behind. -/
+private theorem cbd_ref_eval {dtype : TileDType} {shape : TileShape} (nm : RegName)
+    (t : BlockState) (v : Tile dtype shape) (h : t.regs dtype shape nm = some v) :
+    evalOp (Op.ref dtype shape nm) t = some v := by
+  rw [evalOp_ref]; exact h
 
 /-- `a * c` on a `nat` scalar with a literal. -/
 private theorem cbd_mulConst_eval (t : BlockState) (a : Op .nat []) (va c : Nat)
@@ -792,7 +799,7 @@ theorem cbdPreLoop_run (g : RegionName) (T BT BK : Nat) (s : BlockState) :
       ∧ s0.regs .real [BT, BK] "b_dq" = some (cbdZero [BT, BK])
       ∧ s0.regs .real [BT, BK] "b_dk" = some (cbdZero [BT, BK])
       ∧ s0.regs .real [BT, BT] "b_ds" = some (cbdZero [BT, BT])
-      ∧ s0.regs .real [] "b_dg_last" = some (cbdZero [])
+      ∧ s0.regs .real [1] "b_dg_last" = some (cbdZero [1])
       ∧ s0.regs .real [BT] "b_dg" = some (cbdZero [BT]) := by
   unfold cbdPreLoop
   -- the four grid coordinates
@@ -826,7 +833,7 @@ theorem cbdPreLoop_run (g : RegionName) (T BT BK : Nat) (s : BlockState) :
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [BT, BK] _))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [BT, BK] _))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [BT, BT] _))]
-  rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [] _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [1] _))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some (cbd_full_zero_eval [BT] _))]
   rw [stepStmts.nil]
   refine ⟨_, rfl, by simp, by simp, by intro rg off; simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
@@ -948,8 +955,8 @@ The four tiles below are the element specs of the same name, lifted to tiles. -/
 
 /-- `b_dg_last` after the loop: the full `h · dh` reduction. -/
 noncomputable def cbdDgLastTile (s : BlockState) (h dh : RegionName)
-    (s_h_h s_h_t K V BK BV NT : Nat) : Tile .real [] :=
-  Tile.scalar (some (dgLastAcc s h dh s_h_h s_h_t K V BK BV NT))
+    (s_h_h s_h_t K V BK BV NT : Nat) : Tile .real [1] :=
+  Tile.vec (fun _ => some (dgLastAcc s h dh s_h_h s_h_t K V BK BV NT))
 
 /-- `b_ds` after the loop. -/
 noncomputable def cbdDsTile (s : BlockState) (v do_ : RegionName)
@@ -994,10 +1001,10 @@ private theorem cbd_coe_sum2 {m n : Nat} (f g : Fin m → Fin n → ℝ) :
 /-- `b_dg_last += tl.sum(b_h * b_dh)` from zero. -/
 private theorem cbd_dgLastAcc_eval (s t : BlockState) (h dh : RegionName)
     (s_h_h s_h_t K V BK BV NT : Nat)
-    (hacc : t.regs .real [] "b_dg_last" = some (cbdZero []))
+    (hacc : t.regs .real [1] "b_dg_last" = some (cbdZero [1]))
     (hh : t.regs .real [BV, BK] "b_h" = some (cbdHTile s h s_h_h s_h_t K V BK BV NT))
     (hdh : t.regs .real [BV, BK] "b_dh" = some (cbdHTile s dh s_h_h s_h_t K V BK BV NT)) :
-    evalOp (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+    evalOp (Op.add .real Broadcast.scalarR (Op.ref .real [1] "b_dg_last")
       (Op.reduceSum (shape := [BV]) ⟨0, by simp⟩ Bool.false
         (Op.reduceSum ⟨1, by simp⟩ Bool.false
           (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
@@ -1008,7 +1015,7 @@ private theorem cbd_dgLastAcc_eval (s t : BlockState) (h dh : RegionName)
   refine congrArg some ?_
   apply Tile.ext
   intro _
-  simp only [cbdDgLastTile, cbdZero, cbdHTile, Tile.scalar, Tile.mat_data,
+  simp only [cbdDgLastTile, cbdZero, cbdHTile, Tile.mat_data,
     Tile.bop_data, Tile.reduceSum_false, Tile.reduceSumDrop_data, TileShape.axisDim,
     TileShape.insertAxisIndex,
     NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul,
@@ -1127,7 +1134,7 @@ theorem cbdLoopBody_run (v h do_ dh : RegionName) (s t : BlockState)
     (hdq0 : t.regs .real [BT, BK] "b_dq" = some (cbdZero [BT, BK]))
     (hdk0 : t.regs .real [BT, BK] "b_dk" = some (cbdZero [BT, BK]))
     (hds0 : t.regs .real [BT, BT] "b_ds" = some (cbdZero [BT, BT]))
-    (hdgl0 : t.regs .real [] "b_dg_last" = some (cbdZero [])) :
+    (hdgl0 : t.regs .real [1] "b_dg_last" = some (cbdZero [1])) :
     ∃ s1, stepStmts (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t
           T K V BT BK BV NT) t = some s1
       ∧ s1.pids = t.pids
@@ -1141,7 +1148,7 @@ theorem cbdLoopBody_run (v h do_ dh : RegionName) (s t : BlockState)
       ∧ s1.regs .real [BT] "b_g" = t.regs .real [BT] "b_g"
       ∧ s1.regs .real [] "b_g_last" = t.regs .real [] "b_g_last"
       ∧ s1.regs .real [BT] "b_dg" = t.regs .real [BT] "b_dg"
-      ∧ s1.regs .real [] "b_dg_last"
+      ∧ s1.regs .real [1] "b_dg_last"
           = some (cbdDgLastTile s h dh s_h_h s_h_t K V BK BV NT)
       ∧ s1.regs .real [BT, BT] "b_ds" = some (cbdDsTile s v do_ s_v_h s_v_t T V BT BV)
       ∧ s1.regs .real [BT, BK] "b_dq"
@@ -1231,7 +1238,7 @@ theorem cbdLoop_collapse (v h do_ dh : RegionName)
 
 /-! ## The post-loop chain's register values
 
-Nine compute statements, in the order the kernel issues them. The order is the
+Ten compute statements, in the order the kernel issues them. The order is the
 whole content of `dgLastFinal`: `b_dg_last` picks up its `b_dk · b_k` reduction at
 the *gated* `b_dk`, before `b_dk` receives the `dot(trans(b_ds), b_q)` term. -/
 
@@ -1264,8 +1271,8 @@ private theorem cbd_broadcast_eval {dtype : TileDType} (e : Op dtype [])
 
 /-- `b_dg_last` after `*= tl.exp(b_g_last)`. -/
 noncomputable def cbdDgLastGatedTile (s : BlockState) (g h dh : RegionName)
-    (s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [] :=
-  Tile.scalar (some (dgLastAcc s h dh s_h_h s_h_t K V BK BV NT
+    (s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [1] :=
+  Tile.vec (fun _ => some (dgLastAcc s h dh s_h_h s_h_t K V BK BV NT
     * Real.exp (gLastElem s g T BT)))
 
 /-- `b_dq` after the gate decay and the `scale`. -/
@@ -1283,8 +1290,8 @@ noncomputable def cbdDkGatedTile (s : BlockState) (g v dh : RegionName)
 
 /-- `b_dg_last` after its `b_dk · b_k` reduction — the value `b_dg` consumes. -/
 noncomputable def cbdDgLastFinalTile (s : BlockState) (g k v h dh : RegionName)
-    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [] :=
-  Tile.scalar (some (dgLastFinal s g k v h dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat) : Tile .real [1] :=
+  Tile.vec (fun _ => some (dgLastFinal s g k v h dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
     T K V BT BK BV NT))
 
 /-- `b_ds` after the causal mask and the score decay. -/
@@ -1328,10 +1335,10 @@ noncomputable def cbdDgFinalTile (s : BlockState) (g q k v h do_ dh : RegionName
 /-- `b_dg_last *= tl.exp(b_g_last)`. -/
 private theorem cbd_dgLastGated_eval (s t : BlockState) (g h dh : RegionName)
     (s_h_h s_h_t T K V BT BK BV NT : Nat)
-    (hacc : t.regs .real [] "b_dg_last"
+    (hacc : t.regs .real [1] "b_dg_last"
         = some (cbdDgLastTile s h dh s_h_h s_h_t K V BK BV NT))
     (hgl : t.regs .real [] "b_g_last" = some (cbdBgLastTile s g T BT)) :
-    evalOp (Op.mul .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [1] "b_dg_last")
       (Op.exp (Op.ref .real [] "b_g_last"))) t
       = some (cbdDgLastGatedTile s g h dh s_h_h s_h_t T K V BT BK BV NT) := by
   erw [evalOp_mul, evalOp_ref, hacc, evalOp_exp, evalOp_ref, hgl]
@@ -1339,7 +1346,7 @@ private theorem cbd_dgLastGated_eval (s t : BlockState) (g h dh : RegionName)
   apply Tile.ext
   intro _
   simp only [Tile.bop_data, Tile.uop_data, cbdDgLastTile, cbdDgLastGatedTile,
-    cbdBgLastTile, gLastElem, Tile.scalar, Broadcast.rightIndex,
+    cbdBgLastTile, gLastElem, Broadcast.rightIndex,
     NumericDType.mul, WithBot.realMul, WithBot.realExp_some]
   rfl
 
@@ -1396,12 +1403,12 @@ private theorem cbd_dkGated_eval (s t : BlockState) (g v dh : RegionName)
 /-- `b_dg_last += tl.sum(b_dk * b_k)`, at the *gated* `b_dk`. -/
 private theorem cbd_dgLastFinal_eval (s t : BlockState) (g k v h dh : RegionName)
     (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat)
-    (hacc : t.regs .real [] "b_dg_last"
+    (hacc : t.regs .real [1] "b_dg_last"
         = some (cbdDgLastGatedTile s g h dh s_h_h s_h_t T K V BT BK BV NT))
     (hdk : t.regs .real [BT, BK] "b_dk"
         = some (cbdDkGatedTile s g v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT))
     (hk : t.regs .real [BT, BK] "b_k" = some (cbdQkTile s k s_k_h s_k_t T K BT BK)) :
-    evalOp (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+    evalOp (Op.add .real Broadcast.scalarR (Op.ref .real [1] "b_dg_last")
       (Op.reduceSum (shape := [BT]) ⟨0, by simp⟩ Bool.false
         (Op.reduceSum ⟨1, by simp⟩ Bool.false
           (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
@@ -1414,7 +1421,7 @@ private theorem cbd_dgLastFinal_eval (s t : BlockState) (g k v h dh : RegionName
   apply Tile.ext
   intro _
   simp only [cbdDgLastFinalTile, cbdDgLastGatedTile, cbdDkGatedTile, cbdQkTile,
-    Tile.scalar, Tile.mat_data, Tile.bop_data, Tile.reduceSum_false,
+    Tile.mat_data, Tile.bop_data, Tile.reduceSum_false,
     Tile.reduceSumDrop_data, TileShape.axisDim, TileShape.insertAxisIndex,
     NumericDType.add, NumericDType.mul, WithBot.realAdd, WithBot.realMul,
     Broadcast.leftIndex, Broadcast.rightIndex, dgLastFinal]
@@ -1568,7 +1575,7 @@ private theorem cbd_dgFinal_eval (s t : BlockState) (g q k v h do_ dh : RegionNa
     (hdg : t.regs .real [BT] "b_dg"
         = some (cbdDgRowTile s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
             scale T K V BT BK BV NT))
-    (hdgl : t.regs .real [] "b_dg_last"
+    (hdgl : t.regs .real [1] "b_dg_last"
         = some (cbdDgLastFinalTile s g k v h dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
             T K V BT BK BV NT)) :
     evalOp (Op.where
@@ -1583,8 +1590,8 @@ private theorem cbd_dgFinal_eval (s t : BlockState) (g q k v h do_ dh : RegionNa
               (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))))
           (Op.constNat 1)))
       (Op.ref .real [BT] "b_dg")
-      (Op.add .real Broadcast.scalarR (Op.ref .real [BT] "b_dg")
-        (Op.ref .real [] "b_dg_last"))) t
+      (Op.add .real (Broadcast.consR Broadcast.nil) (Op.ref .real [BT] "b_dg")
+        (Op.ref .real [1] "b_dg_last"))) t
       = some (cbdDgFinalTile s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
           scale T K V BT BK BV NT) := by
   have hmin : evalOp
@@ -1757,7 +1764,7 @@ private theorem cbd_store_1d_props (R : RegionName) (len stride B0 off base : Na
 
 
 set_option maxHeartbeats 2000000 in
-/-- **Post-loop run.** The nineteen tail statements: the `q`/`k` loads, the nine
+/-- **Post-loop run.** The twenty tail statements: the `q`/`k` loads, the ten
 compute steps, the three output block pointers, and the three stores. Concludes
 about the three regions' readback at every in-region lane. -/
 theorem cbdPostLoop_run (q k dq dk dg g v h do_ dh : RegionName) (s t : BlockState)
@@ -1775,7 +1782,7 @@ theorem cbdPostLoop_run (q k dq dk dg g v h do_ dh : RegionName) (s t : BlockSta
     (hg : t.regs .real [BT] "b_g" = some (cbdBgTile s g T BT))
     (hgl : t.regs .real [] "b_g_last" = some (cbdBgLastTile s g T BT))
     (hdg0 : t.regs .real [BT] "b_dg" = some (cbdZero [BT]))
-    (hdgl : t.regs .real [] "b_dg_last"
+    (hdgl : t.regs .real [1] "b_dg_last"
         = some (cbdDgLastTile s h dh s_h_h s_h_t K V BK BV NT))
     (hds : t.regs .real [BT, BT] "b_ds" = some (cbdDsTile s v do_ s_v_h s_v_t T V BT BV))
     (hdq : t.regs .real [BT, BK] "b_dq"
@@ -1834,6 +1841,10 @@ theorem cbdPostLoop_run (q k dq dk dg g v h do_ dh : RegionName) (s t : BlockSta
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (cbd_dsMasked_eval s _ g v do_ s_v_h s_v_t scale T V BT BV
       (by simp [hds]) (by simp [hoi]) (by simp [hg])))]
+  -- `b_ds = (b_ds).to(b_k.dtype)` — an identity at the algorithm layer
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_ref_eval "b_ds" _ (cbdDsMaskedTile s g v do_ s_v_h s_v_t scale T V BT BV)
+      (by simp)))]
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
     (cbd_dqFinal_eval s _ g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
       T K V BT BK BV NT (by simp) (by simp) (by simp)))]
