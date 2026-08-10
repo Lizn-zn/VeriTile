@@ -950,6 +950,94 @@ theorem mdqInv_readMemValue (s0 : BlockState) (a scales : RegionName)
   simp only [BlockState.readMemValue, BlockState.readMemAs, BlockState.readMemTyped,
     hmem]
 
+/-! ### The two K-step loads, bridged to the named tiles -/
+
+/-- The `a` load — pointer tile, rank-broadcast mask, `other=0.0` — lands exactly
+on `mdqATile`, and on the *launch* state's memory. -/
+private theorem mdq_aLoad_eq (s0 : BlockState) (a : RegionName) (t : BlockState)
+    (M stride_am stride_ak BM BK pm i : Nat)
+    (hmem : t.mem = s0.mem)
+    (hap : t.regs .ptr [BM, BK] "a_ptrs"
+      = some (mdqAPtrs a stride_am stride_ak BM BK pm i))
+    (hmask : t.regs .bool [BM, 1] "a_mask" = some (mdqAMask M BM pm)) :
+    evalOp (Op.load .real (MemAccess.ptr (Op.ref .ptr [BM, BK] "a_ptrs"))
+        (MaskOpt.maskOther
+          (Op.remap [BM, BK]
+            (Broadcast.consSame (Broadcast.consL Broadcast.nil)).leftIndex
+            (Op.ref .bool [BM, 1] "a_mask"))
+          (Op.broadcast (Op.const 0.0) [BM, BK]))) t
+      = some (mdqATile s0 a M stride_am stride_ak BM BK pm i) := by
+  rw [mdq_load_ptr_maskOther "a_ptrs" t
+    (mdqAPtrs a stride_am stride_ak BM BK pm i) _ _
+    (Tile.remap (Broadcast.consSame (Broadcast.consL Broadcast.nil)).leftIndex
+      (mdqAMask M BM pm))
+    (⟨fun _ => some (0.0 : ℝ)⟩ : Tile .real [BM, BK])
+    hap
+    (mdq_remap_eval _ _ t _ (by rw [evalOp_ref]; exact hmask))
+    (mdq_broadcast_eval _ _ t _ (evalOp_const 0.0 t))]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, e, u⟩ := idx
+  simp only [mdqATile, mdqAPtrs, Tile.remap, mdqAMask, Broadcast.leftIndex,
+    BlockState.readMemValue_real, BlockState.readMem, hmem, decide_eq_true_eq]
+  split
+  · rfl
+  · norm_num
+
+/-- The packed-weight load lands on `mdqBRaw`, on the launch state's memory. -/
+private theorem mdq_bLoad_eq (s0 : BlockState) (b : Region .nat) (t : BlockState)
+    (stride_bk stride_bn BN BK pn i : Nat)
+    (hmem : t.mem = s0.mem)
+    (hbp : t.regs .ptr [BK, BN] "b_ptrs"
+      = some (mdqBPtrs b stride_bk stride_bn BN BK pn i)) :
+    evalOp (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BK, BN] "b_ptrs"))
+        MaskOpt.none) t
+      = some (mdqBRaw s0 b stride_bk stride_bn BN BK pn i) := by
+  rw [mdq_load_ptr_none "b_ptrs" t (mdqBPtrs b stride_bk stride_bn BN BK pn i) hbp]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp only [mdqBRaw, mdqBPtrs, BlockState.readMemValue, BlockState.readMemTyped,
+    hmem]
+
+/-- A `[BN]` `.real` load through an offset `scales_ptrs` lands on `mdqScalesTile`
+at that group row. -/
+private theorem mdq_scalesLoad_eq (s0 : BlockState) (scales : RegionName)
+    (t : BlockState) (stride_scales_g stride_scales_n BN pn g : Nat)
+    (hmem : t.mem = s0.mem)
+    (hp : t.regs .ptr [BN] "ptr"
+      = some (Tile.ptrAdd Broadcast.scalarR
+          (mdqScalesPtrs scales stride_scales_n BN pn)
+          (Tile.scalar (g * stride_scales_g)))) :
+    evalOp (Op.load .real (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none) t
+      = some (mdqScalesTile s0 scales stride_scales_g stride_scales_n BN pn g) := by
+  rw [mdq_load_ptr_none "ptr" t _ hp]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp only [mdqScalesTile, scalesElem, mdqScalesPtrs_offset,
+    BlockState.readMemValue_real, BlockState.readMem, hmem]
+
+/-- The packed zero-point load through an offset `zeros_ptrs` lands on
+`zerosWord` at that group row. -/
+private theorem mdq_zerosLoad_eq (s0 : BlockState) (zeros : Region .nat)
+    (t : BlockState) (stride_zeros_g stride_zeros_n BN pn g : Nat)
+    (hmem : t.mem = s0.mem)
+    (hp : t.regs .ptr [BN] "ptr"
+      = some (Tile.ptrAdd Broadcast.scalarR
+          (mdqZerosPtrs zeros stride_zeros_n BN pn)
+          (Tile.scalar (g * stride_zeros_g)))) :
+    evalOp (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none) t
+      = some (⟨fun idx => zerosWord s0 zeros stride_zeros_g stride_zeros_n BN pn g
+          idx.1.val⟩ : Tile .nat [BN]) := by
+  rw [mdq_load_ptr_none "ptr" t _ hp]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp only [zerosWord, mdqZerosPtrs_offset, BlockState.readMemValue,
+    BlockState.readMemTyped, hmem]
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
