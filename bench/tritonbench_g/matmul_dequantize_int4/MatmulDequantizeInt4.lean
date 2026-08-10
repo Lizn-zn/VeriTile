@@ -817,6 +817,139 @@ private theorem mdq_broadcast_eval {dtype : TileDType} (e : Op dtype [])
   simp only [evalOp, hv]
   rfl
 
+/-! ## The scales / zeros channel
+
+Both are `[BN]` tiles whose base pointer is set up once in the prologue and then
+offset by `g_id * stride_*_g` inside the loop (or not offset at all, under
+`NO_GROUPS`). Naming the two base address functions keeps the group row as the
+only moving part. -/
+
+/-- `scales_ptrs` lane `c`. -/
+def mdqScalesAddr (stride_scales_n BN pn : Nat) (idx : TileIndex [BN]) : Nat :=
+  (pn * BN + idx.1.val) * stride_scales_n
+
+/-- `zeros_ptrs` lane `c` — eight zero-points share a word along N. -/
+def mdqZerosAddr (stride_zeros_n BN pn : Nat) (idx : TileIndex [BN]) : Nat :=
+  (pn * BN + idx.1.val) / 8 * stride_zeros_n
+
+noncomputable def mdqScalesPtrs (scales : RegionName) (stride_scales_n BN pn : Nat) :
+    Tile .ptr [BN] :=
+  ⟨fun idx => (scales, mdqScalesAddr stride_scales_n BN pn idx)⟩
+
+noncomputable def mdqZerosPtrs (zeros : Region .nat) (stride_zeros_n BN pn : Nat) :
+    Tile .ptr [BN] :=
+  ⟨fun idx => (Region.cast zeros, mdqZerosAddr stride_zeros_n BN pn idx)⟩
+
+/-- `scales` as either branch leaves it, at group row `g`. -/
+noncomputable def mdqScalesTile (s : BlockState) (scales : RegionName)
+    (stride_scales_g stride_scales_n BN pn g : Nat) : Tile .real [BN] :=
+  ⟨fun idx => some (scalesElem s scales stride_scales_g stride_scales_n BN pn g
+      idx.1.val)⟩
+
+/-- `zeros` as either branch leaves it — already **scaled**, since both branches
+end with `zeros = zeros * scales`. -/
+noncomputable def mdqZerosTile (s : BlockState) (scales : RegionName)
+    (zeros : Region .nat)
+    (stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n BN pn g : Nat) :
+    Tile .real [BN] :=
+  ⟨fun idx => some (zeroScaled s scales zeros stride_scales_g stride_scales_n
+      stride_zeros_g stride_zeros_n BN pn g idx.1.val)⟩
+
+/-- Offsetting `scales_ptrs` by `g * stride_scales_g` lands on `scalesElem`'s
+address at group row `g`. -/
+theorem mdqScalesPtrs_offset (scales : RegionName)
+    (stride_scales_g stride_scales_n BN pn g : Nat) (idx : TileIndex [BN]) :
+    (Tile.ptrAdd Broadcast.scalarR (mdqScalesPtrs scales stride_scales_n BN pn)
+        (Tile.scalar (g * stride_scales_g))).data idx
+      = (scales, (pn * BN + idx.1.val) * stride_scales_n + g * stride_scales_g) := by
+  simp only [Tile.ptrAdd_data, mdqScalesPtrs, mdqScalesAddr, Tile.scalar,
+    Broadcast.leftIndex]
+
+/-- Likewise for `zeros_ptrs` and `zerosWord`'s address. -/
+theorem mdqZerosPtrs_offset (zeros : Region .nat)
+    (stride_zeros_g stride_zeros_n BN pn g : Nat) (idx : TileIndex [BN]) :
+    (Tile.ptrAdd Broadcast.scalarR (mdqZerosPtrs zeros stride_zeros_n BN pn)
+        (Tile.scalar (g * stride_zeros_g))).data idx
+      = (Region.cast zeros,
+          (pn * BN + idx.1.val) / 8 * stride_zeros_n + g * stride_zeros_g) := by
+  simp only [Tile.ptrAdd_data, mdqZerosPtrs, mdqZerosAddr, Tile.scalar,
+    Broadcast.leftIndex]
+
+
+/-! ## The K-loop invariant
+
+`i ≤ numPidK` is part of the predicate on purpose: `forRangeDyn_inv` concludes
+only `stop ≤ final`, so carrying the upper bound is what pins `final = stop` and
+lets the readout use `mdqAccTile_full`.
+
+The `NO_GROUPS` case is the one that makes this invariant unlike a plain
+carry-fold: under that flag `scales`/`zeros` are loop-invariant (loaded once,
+before the loop, at group row `0`), while otherwise they are re-established by the
+body at row `groupRow`. Both are covered by asking only that the registers hold
+the *tiles for the row `groupRow NO_GROUPS groupsize BK i`* — which under
+`NO_GROUPS` is `0` for every `i`. -/
+
+/-- The state carried across K steps. -/
+noncomputable def mdqInv (s0 : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M N K groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK GM : Nat) (i : Nat) (s : BlockState) : Prop :=
+  i ≤ numPidK K BK
+  ∧ s.mem = s0.mem
+  ∧ s.pids = s0.pids
+  ∧ s.regs .nat [] "bits" = some (Tile.scalar 4)
+  ∧ s.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8)
+  ∧ s.regs .nat [] "pid_m" = some (Tile.scalar (pidM s0 M N BM BN GM))
+  ∧ s.regs .nat [] "pid_n" = some (Tile.scalar (pidN s0 M N BM BN GM))
+  ∧ s.regs .bool [BM, 1] "a_mask"
+      = some (mdqAMask M BM (pidM s0 M N BM BN GM))
+  ∧ s.regs .nat [BK] "shifter" = some (mdqShifter BK)
+  ∧ s.regs .nat [BN] "zeros_shifter"
+      = some (mdqZerosShifter BN (pidN s0 M N BM BN GM))
+  ∧ s.regs .ptr [BN] "scales_ptrs"
+      = some (mdqScalesPtrs scales stride_scales_n BN (pidN s0 M N BM BN GM))
+  ∧ s.regs .ptr [BN] "zeros_ptrs"
+      = some (mdqZerosPtrs zeros stride_zeros_n BN (pidN s0 M N BM BN GM))
+  ∧ s.regs .ptr [BM, BK] "a_ptrs"
+      = some (mdqAPtrs a stride_am stride_ak BM BK (pidM s0 M N BM BN GM) i)
+  ∧ s.regs .ptr [BK, BN] "b_ptrs"
+      = some (mdqBPtrs b stride_bk stride_bn BN BK (pidN s0 M N BM BN GM) i)
+  ∧ s.regs .real [BM, BN] "accumulator"
+      = some (mdqAccTile s0 a scales b zeros NO_GROUPS M groupsize stride_am
+          stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+          stride_zeros_g stride_zeros_n BM BN BK (pidM s0 M N BM BN GM)
+          (pidN s0 M N BM BN GM) i)
+  ∧ (NO_GROUPS = Bool.true →
+      s.regs .real [BN] "scales"
+        = some (mdqScalesTile s0 scales stride_scales_g stride_scales_n BN
+            (pidN s0 M N BM BN GM) 0)
+      ∧ s.regs .real [BN] "zeros"
+        = some (mdqZerosTile s0 scales zeros stride_scales_g stride_scales_n
+            stride_zeros_g stride_zeros_n BN (pidN s0 M N BM BN GM) 0))
+
+/-- Under `NO_GROUPS` the group row is `0` at every step, so the loop-invariant
+pre-load is exactly what every iteration needs. -/
+theorem groupRow_of_noGroups (groupsize BK i : Nat) :
+    groupRow Bool.true groupsize BK i = 0 := by
+  simp [groupRow]
+
+/-- `mdqInv` pins memory as a function, so every read agrees with the launch
+state — including the `.nat` reads the packed channels use. -/
+theorem mdqInv_readMemValue (s0 : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M N K groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK GM i : Nat) (s : BlockState)
+    (h : mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+      stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+      stride_zeros_n BM BN BK GM i s)
+    (dtype : TileDType) (rg : RegionName) (off : Nat) :
+    s.readMemValue dtype rg off = s0.readMemValue dtype rg off := by
+  obtain ⟨_, hmem, _⟩ := h
+  simp only [BlockState.readMemValue, BlockState.readMemAs, BlockState.readMemTyped,
+    hmem]
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
