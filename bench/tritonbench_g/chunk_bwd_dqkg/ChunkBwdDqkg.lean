@@ -24,6 +24,24 @@ launcher-consistent narrowing as `chunk_delta_fwd`'s `BC = BT`, and it is stated
 as an explicit hypothesis rather than baked into a literal - every dimension and
 stride stays symbolic.
 
+## Proof map
+
+```
+chunk_bwd_dqkg_exec_genuine                     ← ★ TOP THEOREM (exec-level, general)
+  ├─ cbd_body_eq             the 34-statement lowering, checked by `rfl`
+  ├─ cbdPreLoop_run          14 statements: ids, o_i, the two `g` tiles, 5 zeros
+  ├─ cbdLoop_collapse        `ceil(V/BV) = 1` ⇒ one pass at `i_v = 0`
+  ├─ cbdLoopBody_run         12 statements: 4 block ptrs, 4 loads, 4 accumulations
+  └─ cbdPostLoop_run         19 statements: q/k loads, 9 compute steps, 3 stores
+       └─ cbd_store_2d_props / cbd_store_1d_props   scatter readback
+cbdQkAddr_injective                             discharges the headline's `hInj`
+```
+
+The stored values are `dqSpec` / `dkSpec` / `dgSpec`, built bottom-up from the
+kernel's own masked accessors (`gElem`, `voElem`, `hElem`, `qkElem`) over the
+**launch** state's memory — no output region is ever read back into a spec, so no
+part of the trust path is self-referential.
+
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` and the
@@ -1898,6 +1916,122 @@ theorem cbdPostLoop_run (q k dq dk dg g v h do_ dh : RegionName) (s t : BlockSta
     exact hread2 i hi
   · intro i hi
     exact hread3 i hi
+
+/-! ### Discharging the address-injectivity side condition -/
+
+/-- Row-major address splitting: `A*st + x = B*st + y` with `x, y < st` forces
+both components equal. -/
+private theorem cbd_addr_inj {st A B x y : Nat} (hx : x < st) (hy : y < st)
+    (heq : A * st + x = B * st + y) : A = B ∧ x = y := by
+  have hst : 0 < st := Nat.lt_of_le_of_lt (Nat.zero_le x) hx
+  have hA : (A * st + x) / st = A := by
+    rw [Nat.mul_comm, Nat.mul_add_div hst, Nat.div_eq_of_lt hx, Nat.add_zero]
+  have hB : (B * st + y) / st = B := by
+    rw [Nat.mul_comm, Nat.mul_add_div hst, Nat.div_eq_of_lt hy, Nat.add_zero]
+  have hAB : A = B := by rw [← hA, heq, hB]
+  refine ⟨hAB, ?_⟩
+  subst hAB
+  exact Nat.add_left_cancel heq
+
+/-- **The main theorem's `hInj` is dischargeable.** The `(T, K)` store address map
+is injective as soon as this program's key block fits inside one row
+(`i_k*BK + BK ≤ s_k_t`) — which is exactly what the launcher gives: it passes
+`s_k_t = K` with `NK*BK` covering `K`. Stated separately so the headline keeps
+the weaker hypothesis. -/
+theorem cbdQkAddr_injective (s : BlockState) (s_k_h s_k_t BT BK : Nat)
+    (hfit : s.pids 0 * BK + BK ≤ s_k_t) :
+    Function.Injective
+      (fun i : TileIndex [BT, BK] => cbdQkAddr s s_k_h s_k_t BT BK i) := by
+  intro a b hab
+  obtain ⟨a0, a1, ua⟩ := a
+  obtain ⟨b0, b1, ub⟩ := b
+  simp only [cbdQkAddr, Nat.mul_one] at hab
+  have hx : s.pids 0 * BK + a1.val < s_k_t :=
+    Nat.lt_of_lt_of_le (by have := a1.isLt; omega) hfit
+  have hy : s.pids 0 * BK + b1.val < s_k_t :=
+    Nat.lt_of_lt_of_le (by have := b1.isLt; omega) hfit
+  rw [Nat.add_assoc, Nat.add_assoc] at hab
+  obtain ⟨hRow, hCol⟩ := cbd_addr_inj hx hy (Nat.add_left_cancel hab)
+  simp only [Prod.mk.injEq]
+  exact ⟨Fin.ext (Nat.add_left_cancel hRow), Fin.ext (Nat.add_left_cancel hCol), trivial⟩
+
+/-! ## ★ Main theorem
+
+`exec`-level and dimension-general: every dimension, stride and the `scale` stay
+symbolic parameters. The three regimes the theorem is stated in are all explicit
+hypotheses, not baked-in literals:
+
+* `0 < V` and `V ≤ BV` — the launcher's own single value-block regime
+  (`BV = min(next_power_of_2(V), 64)`);
+* `dq`, `dk`, `dg` pairwise distinct — the core deliberately permits a kernel to
+  name one region twice, so this cannot be derived;
+* the `(T, K)` block-pointer address map is injective on the `[BT, BK]` block —
+  the usual no-aliasing side condition for a scatter readback.
+-/
+
+set_option maxHeartbeats 1000000 in
+/-- **★ `chunk_bwd_dqkg` end-to-end.** Running the whole per-program body from a
+launch state stores, at every in-region lane, exactly `dqSpec` / `dkSpec` /
+`dgSpec` — the closed forms built from the kernel's own masked accessors. -/
+specification chunk_bwd_dqkg_exec_genuine
+    (q k v h g do_ dh dq dk dg : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) (s : BlockState)
+    (hV : 0 < V) (hVB : V ≤ BV)
+    (hDqDk : dq ≠ dk) (hDqDg : dq ≠ dg) (hDkDg : dk ≠ dg)
+    (hInj : Function.Injective
+      (fun i : TileIndex [BT, BK] => cbdQkAddr s s_k_h s_k_t BT BK i)) :
+    ∃ sF, exec (chunk_bwd_dqkg_surface q k v h g do_ dh dq dk dg
+        s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale T K V BT BK BV NT).toAlgKernel s
+        = some sF
+      ∧ (∀ i : TileIndex [BT, BK],
+          (s.pids 1 * BT + i.1.val < T ∧ s.pids 0 * BK + i.2.1.val < K) →
+          sF.readMem dq (cbdQkAddr s s_k_h s_k_t BT BK i)
+            = dqSpec s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+                T K V BT BK BV NT i.1.val i.2.1.val)
+      ∧ (∀ i : TileIndex [BT, BK],
+          (s.pids 1 * BT + i.1.val < T ∧ s.pids 0 * BK + i.2.1.val < K) →
+          sF.readMem dk (cbdQkAddr s s_k_h s_k_t BT BK i)
+            = dkSpec s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+                T K V BT BK BV NT i.1.val i.2.1.val)
+      ∧ (∀ i : TileIndex [BT], s.pids 1 * BT + i.1.val < T →
+          sF.readMem dg (cbdDgAddr s T BT i)
+            = dgSpec s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+                T K V BT BK BV NT i.1.val) := by
+  rw [exec, cbd_body_eq]
+  -- prologue
+  obtain ⟨s0, hpre, hpidsP, hnpidsP, hmemP, hikP, hitP, hibhP, hnbhP, hoiP, hgP,
+    hglP, hdqP, hdkP, hdsP, hdglP, hdgP⟩ := cbdPreLoop_run g T BT BK s
+  rw [List.append_assoc, stepStmts.append_some hpre]
+  rw [show [Stmt.forRangeDyn "i_v" (Op.constNat 0) (cbdStopOp V BV) (Op.constNat 1)
+          (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)]
+        ++ cbdPostLoop q k dq dk dg s_k_h s_k_t scale T K BT BK
+      = Stmt.forRangeDyn "i_v" (Op.constNat 0) (cbdStopOp V BV) (Op.constNat 1)
+          (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)
+        :: cbdPostLoop q k dq dk dg s_k_h s_k_t scale T K BT BK from rfl]
+  -- the collapsed value-axis loop
+  obtain ⟨s1, hloop, hpidsL, hnpidsL, hmemL, hikL, hitL, hibhL, hnbhL, hoiL, hgL,
+    hglL, hdgL, hdglL, hdsL, hdqL, hdkL⟩ :=
+    cbdLoopBody_run v h do_ dh s (s0.setReg "i_v" .nat [] (Tile.scalar 0))
+      s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT
+      (by intro off; simp [hmemP]) (by intro off; simp [hmemP])
+      (by intro off; simp [hmemP]) (by intro off; simp [hmemP])
+      (by simp [hikP]) (by simp [hitP]) (by simp [hibhP]) (by simp)
+      (by simp [hdqP]) (by simp [hdkP]) (by simp [hdsP]) (by simp [hdglP])
+  rw [stepStmts.cons_some (by rw [cbdLoop_collapse v h do_ dh s_v_h s_v_t s_h_h s_h_t
+    T K V BT BK BV NT hV hVB s0]; exact hloop)]
+  -- post-loop
+  obtain ⟨sF, hpost, hdqF, hdkF, hdgF⟩ :=
+    cbdPostLoop_run q k dq dk dg g v h do_ dh s s1
+      s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale T K V BT BK BV NT
+      (by intro off; rw [hmemL]; simp [hmemP]) (by intro off; rw [hmemL]; simp [hmemP])
+      hDqDk hDqDg hDkDg hInj
+      (by rw [hikL]; simp [hikP]) (by rw [hitL]; simp [hitP])
+      (by rw [hibhL]; simp [hibhP]) (by rw [hnbhL]; simp [hnbhP])
+      (by rw [hoiL]; simp [hoiP]) (by rw [hgL]; simp [hgP])
+      (by rw [hglL]; simp [hglP]) (by rw [hdgL]; simp [hdgP])
+      hdglL hdsL hdqL hdkL
+  exact ⟨sF, hpost, hdqF, hdkF, hdgF⟩
 
 end Correct_without_Rounding
 
