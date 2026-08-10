@@ -1,6 +1,6 @@
 # VeriTile
 
-Lean 4 formal verification of Triton GPU kernels: **152 ported TritonBench-G
+Lean 4 formal verification of Triton GPU kernels: **153 ported TritonBench-G
 kernels** (`bench/tritonbench_g/<kernel>/`, each a faithful `.py` + `.lean`
 pair) plus kernel showcases under `bench/examples/` — one self-contained
 `.lean` per kernel correctness/equivalence story — and infra smoke tests
@@ -22,7 +22,7 @@ KernelLemmas, Correctness, Float, DSL, Math, Launch, Concurrency).
 
 - Library: `lake build` must exit 0. **Judge Lean by exit code, never by
   tail-ing output** (early parse errors scroll off).
-- Bench ports: `bash bench/check_ports.sh` → `152 ok, 0 fail` (~4 min; bench is
+- Bench ports: `bash bench/check_ports.sh` → `153 ok, 0 fail` (~4 min; bench is
   standalone, not in any lake target).
 - Showcase: `lake env lean bench/examples/<F>.lean` exit 0, zero `sorry`.
 

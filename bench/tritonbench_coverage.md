@@ -6,9 +6,9 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **152** |
-| Not yet imported | 32 |
-| — of those, expressible with today's DSL surface | 10 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **153** |
+| Not yet imported | 31 |
+| — of those, expressible with today's DSL surface | 9 |
 | — of those, blocked on a missing primitive or an ℝ-model limit | 22 |
 
 ## What "expressible" means here, and what it does not
@@ -51,7 +51,7 @@ correctness depends on inter-program interleaving (spin locks, cooperative
 reductions) elaborate fine — the host launch is the trusted boundary — but their
 *specification* has to be chosen with that boundary in mind.
 
-## Not yet imported: portable now (10)
+## Not yet imported: portable now (9)
 
 Every form these use — including the non-`tl.` ones — is already in the DSL
 surface. Each row is one port-sized unit of work: import the `.py` **together
@@ -68,7 +68,6 @@ forgotten.
 | `chunk_retention_ops` | 364 | 4 |
 | `matmul_dequant_int4` | 303 | 2 |
 | `matmul_dequantize` | 358 | 3 |
-| `matmul_dequantize_int4` | 269 | 1 |
 | `parallel_attention` | 481 | 4 |
 | `parallel_retention_attention` | 399 | 4 |
 
@@ -77,9 +76,10 @@ The three `matmul_dequant*` rows were briefly listed as blocked. They are not: t
 container, the `nat → ℝ` crossing at `* scales`, the rank-broadcast load mask,
 in-loop pointer advance and the dead `c` binding are all within the surface, and
 the one thing that did block them was a `PtrElems` inference bug, now fixed (see
-`bench/tests/PtrElemDType.lean`). `matmul_dequantize_int4`'s full surface has been
-elaborated end-to-end; the other two share its `matmul4_kernel`, so the same
-blocker is gone, but their *additional* jit kernels have not been elaborated yet.
+`bench/tests/PtrElemDType.lean`). **`matmul_dequantize_int4` is now ported** — the
+first of the three, and the demonstration that the whole family is reachable. The
+other two share its `matmul4_kernel`, so the same blocker is gone for them, but
+their *additional* jit kernels have not been elaborated yet.
 
 ## Not yet imported: blocked on a missing primitive (22)
 
@@ -132,7 +132,7 @@ Fixed by threading the map per statement (`Inference.ptrElemsAfterStmt`) exactly
 as `Env` already was. Checked: the corpus was **not** exposed — of 46 ports with a
 non-real region, 39 rebind a pointer name that is then loaded, and all 39 rebind it
 to the *same* root region, so the flat and threaded lookups agree everywhere and
-`check_ports.sh` stays at 152 ok. `bench/tests/PtrElemDType.lean` pins both
+`check_ports.sh` stays at 153 ok. `bench/tests/PtrElemDType.lean` pins both
 directions and fails without the fix.
 
 An earlier version of this section blamed "the inference environment fixes a name's

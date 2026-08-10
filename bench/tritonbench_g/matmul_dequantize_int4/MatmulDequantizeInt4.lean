@@ -23,6 +23,30 @@ arithmetic, and every extracted nibble is in `[0, 15]`, hence non-negative. The
 unpacked values cross to `ℝ` immediately at `* scales`, so no integer step ever
 needs to go negative.
 
+## Proof map
+
+```
+matmul_dequantize_int4_exec_genuine             the headline
+├─ mdq_body_eq                31 statements by `rfl`
+├─ mdqPreLoopScalars_run      12 statements: pid swizzle + three `tl.cdiv`s
+├─ mdqPreLoopTiles_run        → `mdqInv … 0`
+│  ├─ mdqPreLoopIndex_run     10 statements: offsets, 4 pointer tiles, mask, shifters
+│  └─ mdq_groupPreload_run    the `if NO_GROUPS` pre-load, at group row 0
+├─ mdqLoop_collapse           `forRangeDyn_inv` over `mdqInv`
+│  └─ mdqLoopBody_run         8 statements: `mdqInv i → mdqInv (i+1)`
+│     ├─ mdq_groupBranch_run  the `if not NO_GROUPS` reload, at group row `groupRow`
+│     ├─ mdqBDequantTile_eq   the two dequant statements
+│     └─ mdqAccTile_dot_succ  `accumulator += tl.dot(a, b)`
+└─ mdqPostLoop_run            6 statements: output coords, mask, masked `.ptr` store
+   └─ mdq_store_props         scatter readback
+cAddr_injective                                 discharges the headline's `hInj`
+```
+
+The stored value is `accSpec`, built bottom-up from the kernel's own masked
+accessors (`aElem`, `bWord`/`bNibble`, `scalesElem`, `zerosWord`/`zerosNibble`) over
+the **launch** state's memory. The output region `c_ptr` is never read back into a
+spec, so no part of the trust path is self-referential.
+
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` and the
