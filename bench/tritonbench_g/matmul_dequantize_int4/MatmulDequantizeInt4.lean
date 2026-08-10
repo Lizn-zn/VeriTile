@@ -280,6 +280,154 @@ def cAddr (stride_cm stride_cn BM BN pm pn : Nat)
     (idx : TileIndex [BM, BN]) : Nat :=
   stride_cm * (pm * BM + idx.1.val) + stride_cn * (pn * BN + idx.2.1.val)
 
+/-! ## Compiled body decomposition
+
+The algorithm-lowered statement lists, checked against the macro output by `rfl`
+rather than assumed. Lowerings worth naming because they are not guessable from
+the source text:
+
+* `//` and `%` lower to `Op.floorDiv` / `Op.mod` on `IntegralDType.nat`, **not** to
+  `Op.div` — `Op.div .nat` is what `tl.cdiv` expands to;
+* `min(a, b)` is `Op.where (Op.lt …) a b` (there is no `Op.min`);
+* a pointer expression `R + off` is `Op.ptrAdd Broadcast.scalarL (Op.ptrBase R) off`;
+* **the rank-broadcast load mask** `a_mask : [BM, 1]` used on a `[BM, BK]` load is
+  wrapped by the DSL in `Op.remap … Broadcast.leftIndex`, and the `other=0.0`
+  makes it a `MaskOpt.maskOther` against `Op.broadcast (Op.const 0.0) [BM, BK]`;
+* `nat * real` inserts `Op.natToReal` on the nat side. -/
+
+/-- The compiled prologue: the two packing constants, the swizzled block
+coordinates, the four pointer tiles, the two shift vectors, the `NO_GROUPS`
+pre-load, and the zeroed accumulator. -/
+def mdqPreLoop (a_ptr scales_ptr : RegionName) (b_ptr zeros_ptr : Region .nat)
+    (M N K stride_am stride_ak stride_bk stride_bn
+      stride_scales_n stride_zeros_n : Nat) (NO_GROUPS : Bool)
+    (BM BN BK GM : Nat) : List Stmt :=
+  [ Stmt.assign .nat [] "bits" (Op.constNat 4),
+    Stmt.assign .nat [] "infearure_per_bits" (Op.constNat 8),
+    Stmt.assign .nat [] "pid" (Op.programId 0),
+    Stmt.assign .nat [] "num_pid_m"
+      (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat M) (Op.constNat BM)) (Op.constNat 1))
+        (Op.constNat BM)),
+    Stmt.assign .nat [] "num_pid_n"
+      (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat N) (Op.constNat BN)) (Op.constNat 1))
+        (Op.constNat BN)),
+    Stmt.assign .nat [] "num_pid_k"
+      (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil (Op.constNat K) (Op.constNat BK)) (Op.constNat 1))
+        (Op.constNat BK)),
+    Stmt.assign .nat [] "num_pid_in_group"
+      (Op.mul .nat Broadcast.nil (Op.constNat GM) (Op.ref .nat [] "num_pid_n")),
+    Stmt.assign .nat [] "group_id"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+        (Op.ref .nat [] "num_pid_in_group")),
+    Stmt.assign .nat [] "first_pid_m"
+      (Op.mul .nat Broadcast.nil (Op.ref .nat [] "group_id") (Op.constNat GM)),
+    Stmt.assign .nat [] "group_size_m"
+      (Op.where
+        (Op.lt ComparableDType.nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m")
+            (Op.ref .nat [] "first_pid_m"))
+          (Op.constNat GM))
+        (Op.sub .nat Broadcast.nil (Op.ref .nat [] "num_pid_m")
+          (Op.ref .nat [] "first_pid_m"))
+        (Op.constNat GM)),
+    Stmt.assign .nat [] "pid_m"
+      (Op.add .nat Broadcast.nil (Op.ref .nat [] "first_pid_m")
+        (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+          (Op.ref .nat [] "group_size_m"))),
+    Stmt.assign .nat [] "pid_n"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil
+        (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] "pid")
+          (Op.ref .nat [] "num_pid_in_group"))
+        (Op.ref .nat [] "group_size_m")),
+    Stmt.assign .nat [BM] "offs_am"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_m") (Op.constNat BM))
+        (Op.arange BM)),
+    Stmt.assign .nat [BN] "offs_bn"
+      (Op.add .nat Broadcast.scalarL
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "pid_n") (Op.constNat BN))
+        (Op.arange BN)),
+    Stmt.assign .nat [BK] "offs_k" (Op.arange BK),
+    Stmt.assign .ptr [BM, BK] "a_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase a_ptr)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am"))
+            (Op.constNat stride_am))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BK] "offs_k"))
+            (Op.constNat stride_ak)))),
+    Stmt.assign .bool [BM, 1] "a_mask"
+      (Op.lt ComparableDType.nat Broadcast.scalarR
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_am")) (Op.constNat M)),
+    Stmt.assign .ptr [BK, BN] "b_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase b_ptr)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.floorDiv IntegralDType.nat Broadcast.scalarR
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BK] "offs_k"))
+              (Op.ref .nat [] "infearure_per_bits"))
+            (Op.constNat stride_bk))
+          (Op.mul .nat Broadcast.scalarR
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_bn"))
+            (Op.constNat stride_bn)))),
+    Stmt.assign .ptr [BN] "scales_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase scales_ptr)
+        (Op.mul .nat Broadcast.scalarR (Op.ref .nat [BN] "offs_bn")
+          (Op.constNat stride_scales_n))),
+    Stmt.assign .ptr [BN] "zeros_ptrs"
+      (Op.ptrAdd Broadcast.scalarL (Op.ptrBase zeros_ptr)
+        (Op.mul .nat Broadcast.scalarR
+          (Op.floorDiv IntegralDType.nat Broadcast.scalarR (Op.ref .nat [BN] "offs_bn")
+            (Op.ref .nat [] "infearure_per_bits"))
+          (Op.constNat stride_zeros_n))),
+    Stmt.assign .nat [BK] "shifter"
+      (Op.mul .nat Broadcast.scalarR
+        (Op.mod IntegralDType.nat Broadcast.scalarR (Op.ref .nat [BK] "offs_k")
+          (Op.ref .nat [] "infearure_per_bits"))
+        (Op.ref .nat [] "bits")),
+    Stmt.assign .nat [BN] "zeros_shifter"
+      (Op.mul .nat Broadcast.scalarR
+        (Op.mod IntegralDType.nat Broadcast.scalarR (Op.ref .nat [BN] "offs_bn")
+          (Op.ref .nat [] "infearure_per_bits"))
+        (Op.ref .nat [] "bits")),
+    Stmt.ifThen (Op.constBool NO_GROUPS)
+      [ Stmt.assign .real [BN] "scales"
+          (Op.load .real (MemAccess.ptr (Op.ref .ptr [BN] "scales_ptrs")) MaskOpt.none),
+        Stmt.assign .nat [BN] "zeros"
+          (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BN] "zeros_ptrs")) MaskOpt.none),
+        Stmt.assign .nat [BN] "zeros"
+          (Op.bitAnd Broadcast.scalarR
+            (Op.shiftRight (Broadcast.consSame Broadcast.nil) (Op.ref .nat [BN] "zeros")
+              (Op.ref .nat [BN] "zeros_shifter"))
+            (Op.constNat 15)),
+        Stmt.assign .real [BN] "zeros"
+          (Op.mul .real (Broadcast.consSame Broadcast.nil)
+            (Op.natToReal (Op.ref .nat [BN] "zeros"))
+            (Op.ref .real [BN] "scales")) ],
+    Stmt.assign .real [BM, BN] "accumulator" (Op.full [BM, BN] (Op.const 0)) ]
+
+set_option maxRecDepth 8000 in
+/-- The prologue is the first 24 statements of the lowered body, by `rfl`. -/
+theorem mdq_preLoop_eq (a_ptr c_ptr scales_ptr : RegionName)
+    (b_ptr zeros_ptr : Region .nat)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      groupsize : Nat) (NO_GROUPS : Bool) (BM BN BK GM : Nat) :
+    ((matmul_dequantize_int4_surface a_ptr c_ptr scales_ptr b_ptr zeros_ptr
+        M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+        stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+        groupsize NO_GROUPS BM BN BK GM).toAlgKernel.body.take 24)
+      = mdqPreLoop a_ptr scales_ptr b_ptr zeros_ptr M N K stride_am stride_ak
+          stride_bk stride_bn stride_scales_n stride_zeros_n NO_GROUPS BM BN BK GM := by
+  rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
