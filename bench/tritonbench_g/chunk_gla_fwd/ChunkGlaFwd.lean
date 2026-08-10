@@ -3,13 +3,14 @@ import VeriTile.Triton
 /-!
 # `chunk_gla_fwd` — strict per-kernel correctness
 
-`chunk_gla_fwd.py` holds **five** `@triton.jit` kernels: four that build the
+The upstream file holds **five** `@triton.jit` kernels: four that build the
 intra-chunk attention matrix `A` (`_A_kernel_intra_sub_inter`,
 `_A_kernel_intra_sub_intra`, `_A_kernel_intra_sub_intra_split`,
 `_A_kernel_intra_sub_intra_merge`) and one that consumes it to produce the output.
-**This file covers the output kernel, `chunk_gla_fwd_kernel_o`.** Covering a subset
-of a multi-kernel file is the established shape here — `triton_linear_activation`
-and `kv_cache_filling` each carry two headlines against five `@triton.jit` kernels.
+Covering a subset of a multi-kernel file is the established shape here —
+`triton_linear_activation` and `kv_cache_filling` each carry two headlines against
+five `@triton.jit` kernels. This file covers the output kernel:
+`chunk_gla_fwd.py`'s `chunk_gla_fwd_kernel_o`.
 
 `chunk_gla_fwd_kernel_o` is the gated-linear-attention chunked forward output step.
 One program owns one `(i_v, i_t, i_bh)` block and computes
@@ -28,6 +29,27 @@ It is the gated sibling of the already-ported `chunk_gla_simple`
 **2-D `[T, K]` tensor** loaded per K block rather than a `[T]` vector applied once,
 and `A` is **read from memory** rather than accumulated in registers.
 
+## Proof map
+
+```
+chunk_gla_fwd_o_exec_genuine                    the headline
+├─ cgf_body_eq                14 statements by `rfl`
+├─ cgfPreLoop_run             5 statements: pids, causal mask, zeroed accumulator
+├─ cgfLoop_collapse           `forRangeDyn_inv` over `cgfInv` — full multi-block K
+│  └─ cgfLoopBody_run         9 statements: `cgfInv i → cgfInv (i+1)`
+│     ├─ cgf_qgTile_eq        statements 5+7: the scaled, gated query composition
+│     └─ cgf_ifThen_acc_run   the vacuously-true guard + `b_o += tl.dot(b_qg, b_h)`
+└─ cgfPostLoop_run            8 statements: pointers, loads, causal `tl.where`,
+   │                          the intra-chunk dot, the boundary-checked store
+   ├─ cgf_aWhere_run / cgf_finalAcc_run    tail statements 6 and 7
+   └─ scatter readback under the row-major `hInj`
+```
+
+The stored value is `cgfOutput`, built bottom-up from the kernel's own guarded
+accessors (`qgElem`, `hGuarded`, `aMasked`, `vGuarded`) over the **launch** state's
+memory. The output region `o` is never read back into a spec, so no part of the
+trust path is self-referential.
+
 ## Modeling boundary
 
 Arithmetic is over `ℝ` (not bit-accurate IEEE float); the host launch (the 3-D grid,
@@ -35,6 +57,16 @@ the host-computed `BT`/`BK`/`BV`, and the four `A`-building kernels that fill th
 region) is the *trusted boundary*. Every dimension, stride and the `scale` stays a
 symbolic parameter. The `.to(...)` dtype round-trips erase to the identity at the
 algorithm layer.
+
+## Translation-surface blocker: the four `A`-builder kernels
+
+Translation-surface blocker: the file's other four kernels (the `A`-builders,
+including the file's *first* kernel `chunk_gla_fwd_A_kernel_intra_sub_inter`) each
+begin with bare early exits — `if i_t * BT + i_i * BC >= T: return` and
+`if i_i <= i_j: return` — and `Stmt` has no `return` constructor (the established
+workaround, wrapping the body in the negated guard as in `bgmv_shrink_kernel`, is
+a per-kernel port of its own, one per builder). This file therefore covers the
+output kernel only; the audit's first-kernel text scans do not apply to it.
 
 ## Faithfulness note worth flagging
 

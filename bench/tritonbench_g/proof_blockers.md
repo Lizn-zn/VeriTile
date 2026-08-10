@@ -193,6 +193,14 @@ unless stated:
   int→float promotion of `tl.arange(0, NB_TOKENS) + starting_idx` is the
   explicit `tks`/`tks_f` binding pair. Fully value-verified on the full 2-D
   tile.
+- `chunk_gla_fwd` — the file's four `A`-builder kernels (including its first,
+  `chunk_gla_fwd_A_kernel_intra_sub_inter`) each open with bare early
+  `return`s (`if i_t * BT + i_i * BC >= T: return`, `if i_i <= i_j: return`);
+  `Stmt` has no early exit, and the `bgmv_shrink_kernel` guard-wrap
+  workaround is a per-kernel port of its own, one per builder. The port
+  covers the fifth kernel, `chunk_gla_fwd_kernel_o`, with a full multi-block
+  K-loop headline; the four builders that fill the `A` region are the
+  trusted boundary.
 - `bgmv_shrink_kernel` — the Python early `return` on the signed sentinel
   (`lora_index == -1`) is an `if lora_index != -1 { ... }` guard in the
   faithful surface (DSL has no early exit); the guard-false path is proven

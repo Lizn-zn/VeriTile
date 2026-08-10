@@ -174,6 +174,9 @@ The current documented blocker set is:
   `DIM = 128` → `DIM : Nat` binder; dtype/shape-changing `freqs` rebinds
   renamed; `.to(tl.float32)` spelled `tl.toReal`; explicit int→float
   promotion bindings.
+- `chunk_gla_fwd` — output kernel `chunk_gla_fwd_kernel_o` ported with a
+  full multi-block K-loop headline; the four `A`-builder kernels open with
+  bare early `return`s (no `Stmt` early exit) and are the trusted boundary.
 - `bgmv_shrink_kernel` — `-1` sentinel early return as a guard (write-free
   path proven); `SPLIT_K == 1` store-vs-atomic tail split into two surfaces;
   `tl.max_contiguous` hint erased; unused `xk_stride` dropped.
