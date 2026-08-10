@@ -2489,6 +2489,309 @@ theorem mdqPreLoopTiles_run (s0 : BlockState) (a scales : RegionName)
     exact ⟨(h3keep .real [BN] "scales" (by decide)).trans hs,
       (h3keep .real [BN] "zeros" (by decide)).trans hz⟩
 
+/-! ## The output store
+
+A masked `.ptr` store, so — unlike `chunk_bwd_dqkg`'s block-pointer stores — the
+`c_mask` is the only gate and there is no boundary check to discharge. The lane-to-
+address map has to be injective for the readback to name a unique lane; that is the
+headline's `hInj`, and `cAddr_injective` discharges it from the two conditions a
+row-major `C` satisfies. -/
+
+/-- The `C` pointer tile. -/
+noncomputable def mdqCPtrs (c : RegionName) (stride_cm stride_cn BM BN pm pn : Nat) :
+    Tile .ptr [BM, BN] :=
+  ⟨fun idx => (c, cAddr stride_cm stride_cn BM BN pm pn idx)⟩
+
+/-- `c_mask = (offs_cm[:, None] < M) & (offs_cn[None, :] < N)`. -/
+def mdqCMask (M N BM BN pm pn : Nat) : Tile .bool [BM, BN] :=
+  ⟨fun idx => decide (pm * BM + idx.1.val < M) && decide (pn * BN + idx.2.1.val < N)⟩
+
+/-- The post-store state: one masked scatter over the `[BM, BN]` output tile. -/
+noncomputable def mdqStoreState (c : RegionName)
+    (M N stride_cm stride_cn BM BN pm pn : Nat)
+    (f : TileIndex [BM, BN] → ℝ) (t : BlockState) : BlockState :=
+  (TileShape.allIndices [BM, BN]).foldl
+    (fun acc i => if pm * BM + i.1.val < M ∧ pn * BN + i.2.1.val < N then
+        acc.writeMem c (cAddr stride_cm stride_cn BM BN pm pn i) (f i)
+      else acc) t
+
+/-- `&` on the bool channel. -/
+private theorem mdq_boolAnd_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .bool a) (y : Op .bool b) (t : BlockState)
+    (vx : Tile .bool a) (vy : Tile .bool b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.boolAnd bc x y) t
+      = some (Tile.bop (fun u v : Bool => u && v) bc vx vy) := by
+  simp only [evalOp, hx, hy]
+  rfl
+
+private theorem mdq_cPtrsInit_eval (c : RegionName) (t : BlockState)
+    (stride_cm stride_cn BM BN pm pn : Nat)
+    (hcm : t.regs .nat [BM] "offs_cm" = some (mdqOffsTile (pm * BM) BM))
+    (hcn : t.regs .nat [BN] "offs_cn" = some (mdqOffsTile (pn * BN) BN)) :
+    evalOp (Op.ptrAdd Broadcast.scalarL (Op.ptrBase c)
+        (Op.add .nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat stride_cm)
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm")))
+          (Op.mul .nat Broadcast.scalarL (Op.constNat stride_cn)
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn"))))) t
+      = some (mdqCPtrs c stride_cm stride_cn BM BN pm pn) := by
+  rw [mdq_ptrAddBase_eval _ _ t _ _
+    (mdq_addTile_eval NumericDType.nat _ _ _ t _ _
+      (mdq_mulTile_eval NumericDType.nat Broadcast.scalarL _ _ t
+        (Tile.scalar stride_cm) _ (evalOp_constNat _ _)
+        (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact hcm)))
+      (mdq_mulTile_eval NumericDType.nat Broadcast.scalarL _ _ t
+        (Tile.scalar stride_cn) _ (evalOp_constNat _ _)
+        (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact hcn))))]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqCPtrs, cAddr, mdqOffsTile, Tile.ptrAdd_data, Tile.bop_data,
+    Tile.expandDim_data, TileShape.dropInsertedIndex, Broadcast.leftIndex,
+    Broadcast.rightIndex, NumericDType.add, NumericDType.mul]
+
+private theorem mdq_cMaskInit_eval (t : BlockState) (M N BM BN pm pn : Nat)
+    (hcm : t.regs .nat [BM] "offs_cm" = some (mdqOffsTile (pm * BM) BM))
+    (hcn : t.regs .nat [BN] "offs_cn" = some (mdqOffsTile (pn * BN) BN)) :
+    evalOp (Op.boolAnd (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        ((Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BM] "offs_cm"))
+          (Op.constNat M) : Op .bool [BM, 1]))
+        ((Op.lt ComparableDType.nat Broadcast.scalarR
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BN] "offs_cn"))
+          (Op.constNat N) : Op .bool [1, BN]))) t
+      = some (mdqCMask M N BM BN pm pn) := by
+  rw [mdq_boolAnd_eval _ _ _ t _ _
+    (mdq_ltTile_eval ComparableDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar M)
+      (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact hcm))
+      (evalOp_constNat _ _))
+    (mdq_ltTile_eval ComparableDType.nat Broadcast.scalarR _ _ t _ (Tile.scalar N)
+      (mdq_expandDim_eval _ _ t _ (by rw [evalOp_ref]; exact hcn))
+      (evalOp_constNat _ _))]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp [mdqCMask, mdqOffsTile, Tile.bop_data, Tile.cop_data, Tile.expandDim_data,
+    TileShape.dropInsertedIndex, Broadcast.leftIndex, Broadcast.rightIndex,
+    ComparableDType.lt]
+
+private theorem mdq_store_eq (c : RegionName)
+    (M N stride_cm stride_cn BM BN pm pn : Nat) (t : BlockState)
+    (vt : Tile .real [BM, BN]) (f : TileIndex [BM, BN] → ℝ)
+    (hfv : ∀ i, vt.data i = some (f i))
+    (hcp : t.regs .ptr [BM, BN] "c_ptrs"
+      = some (mdqCPtrs c stride_cm stride_cn BM BN pm pn))
+    (hcmask : t.regs .bool [BM, BN] "c_mask" = some (mdqCMask M N BM BN pm pn))
+    (hv : t.regs .real [BM, BN] "accumulator" = some vt) :
+    stepStmt (Stmt.store .real [BM, BN]
+        (MemAccess.ptr (Op.ref .ptr [BM, BN] "c_ptrs"))
+        (Op.ref .real [BM, BN] "accumulator")
+        (MaskOpt.mask (Op.ref .bool [BM, BN] "c_mask"))) t
+      = some (mdqStoreState c M N stride_cm stride_cn BM BN pm pn f t) := by
+  unfold stepStmt mdqStoreState
+  simp only [evalOp_ref, hv, hcp, hcmask, Option.map_some]
+  refine congrArg some
+    (congrArg (fun F => List.foldl F t (TileShape.allIndices [BM, BN])) ?_)
+  funext acc i
+  obtain ⟨r, cc, u⟩ := i
+  by_cases hb : pm * BM + r.val < M ∧ pn * BN + cc.val < N
+  · simp only [mdqCMask, if_pos hb, mdqCPtrs, BlockState.writeMemTyped_real, hfv]
+    simp [hb.1, hb.2]
+  · simp only [mdqCMask, if_neg hb, mdqCPtrs]
+    rw [if_neg]
+    intro hcon
+    exact hb (by simpa using hcon)
+
+private theorem mdq_store_props (c : RegionName)
+    (M N stride_cm stride_cn BM BN pm pn : Nat) (t : BlockState)
+    (f : TileIndex [BM, BN] → ℝ)
+    (hInj : Function.Injective
+      (fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN pm pn i)) :
+    ∀ i : TileIndex [BM, BN],
+      (pm * BM + i.1.val < M ∧ pn * BN + i.2.1.val < N) →
+      (mdqStoreState c M N stride_cm stride_cn BM BN pm pn f t).readMem c
+          (cAddr stride_cm stride_cn BM BN pm pn i) = f i := by
+  classical
+  intro i hi
+  unfold mdqStoreState
+  have h := BlockState.scatter_readback_prop_masked_nd (region := c) t
+    (fun j : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN pm pn j) f
+    (fun j : TileIndex [BM, BN] => pm * BM + j.1.val < M ∧ pn * BN + j.2.1.val < N)
+    hInj i
+  rw [h, if_pos hi]
+
+/-- `hInj` for a row-major `C`: distinct output lanes get distinct addresses as soon
+as the column stride is positive and one block row fits inside the row stride. -/
+theorem cAddr_injective (stride_cm stride_cn BM BN pm pn : Nat)
+    (hcn : 0 < stride_cn) (hfit : BN * stride_cn ≤ stride_cm) :
+    Function.Injective
+      (fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN pm pn i) := by
+  intro i j hij
+  obtain ⟨r₁, c₁, u₁⟩ := i
+  obtain ⟨r₂, c₂, u₂⟩ := j
+  simp only [cAddr] at hij
+  -- Every product below is opaque to `omega`, so name them first.
+  have hexp : ∀ r c : Nat, stride_cm * (pm * BM + r) + stride_cn * (pn * BN + c)
+      = stride_cm * (pm * BM) + stride_cm * r
+        + (stride_cn * (pn * BN) + stride_cn * c) := by
+    intro r c
+    rw [Nat.mul_add, Nat.mul_add]
+  rw [hexp, hexp] at hij
+  have key : stride_cm * r₁.val + stride_cn * c₁.val
+      = stride_cm * r₂.val + stride_cn * c₂.val := by omega
+  -- A whole block row fits under one row stride, so the row index is forced first.
+  have hrow : ∀ c : Fin BN, stride_cn * c.val < stride_cm := fun c =>
+    lt_of_lt_of_le
+      (by rw [Nat.mul_comm]; exact Nat.mul_lt_mul_of_lt_of_le c.isLt (le_refl _) hcn)
+      hfit
+  have hr : r₁.val = r₂.val := by
+    rcases Nat.lt_trichotomy r₁.val r₂.val with h | h | h
+    · have : stride_cm * r₁.val + stride_cm ≤ stride_cm * r₂.val := by
+        rw [← Nat.mul_succ]
+        exact Nat.mul_le_mul_left _ h
+      have := hrow c₁
+      omega
+    · exact h
+    · have : stride_cm * r₂.val + stride_cm ≤ stride_cm * r₁.val := by
+        rw [← Nat.mul_succ]
+        exact Nat.mul_le_mul_left _ h
+      have := hrow c₂
+      omega
+  have hc : c₁.val = c₂.val := by
+    have : stride_cn * c₁.val = stride_cn * c₂.val := by rw [hr] at key; omega
+    exact Nat.eq_of_mul_eq_mul_left hcn this
+  simp only [Prod.mk.injEq]
+  exact ⟨Fin.ext hr, Fin.ext hc, trivial⟩
+
+/-! ### The tail
+
+Six statements: the dead `c` binding, the two output coordinate vectors, the `C`
+pointer tile, the two-axis mask, and the store — which writes `accumulator`, not
+`c`, exactly as the source does. -/
+
+theorem mdqPostLoop_run (s0 : BlockState) (c a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M N K groupsize stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK GM : Nat) (t : BlockState)
+    (hInj : Function.Injective
+      (fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN
+        (pidM s0 M N BM BN GM) (pidN s0 M N BM BN GM) i))
+    (hinv : mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+      stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+      stride_zeros_n BM BN BK GM (numPidK K BK) t) :
+    ∃ sF, stepStmts (mdqPostLoop c M N stride_cm stride_cn BM BN) t = some sF
+      ∧ ∀ idx : TileIndex [BM, BN],
+          (pidM s0 M N BM BN GM * BM + idx.1.val < M
+            ∧ pidN s0 M N BM BN GM * BN + idx.2.1.val < N) →
+          sF.readMem c (cAddr stride_cm stride_cn BM BN (pidM s0 M N BM BN GM)
+              (pidN s0 M N BM BN GM) idx)
+            = accSpec s0 a scales b zeros NO_GROUPS M K groupsize stride_am stride_ak
+                stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+                stride_zeros_n BM BN BK (pidM s0 M N BM BN GM)
+                (pidN s0 M N BM BN GM) idx.1.val idx.2.1.val := by
+  obtain ⟨-, -, -, -, -, hpm, hpn, -, -, -, -, -, -, -, hacc, -⟩ := hinv
+  unfold mdqPostLoop
+  -- 1. the dead `c = accumulator.to(...)` binding
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ref .real [BM, BN] "accumulator") t = some _ from
+      (evalOp_ref _ _ _ t).trans hacc))]
+  -- 2-3. the output coordinate vectors
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_offs_eval "pid_m" _ BM (pidM s0 M N BM BN GM) BM (by simpa using hpm)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_offs_eval "pid_n" _ BN (pidN s0 M N BM BN GM) BN (by simpa using hpn)))]
+  -- 4-5. the `C` pointer tile and the two-axis mask
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_cPtrsInit_eval c _ stride_cm stride_cn BM BN (pidM s0 M N BM BN GM)
+      (pidN s0 M N BM BN GM) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_cMaskInit_eval _ M N BM BN (pidM s0 M N BM BN GM) (pidN s0 M N BM BN GM)
+      (by simp) (by simp)))]
+  -- 6. the store
+  rw [stepStmts.cons_some
+    (mdq_store_eq c M N stride_cm stride_cn BM BN (pidM s0 M N BM BN GM)
+      (pidN s0 M N BM BN GM) _ _
+      (fun idx => accSpec s0 a scales b zeros NO_GROUPS M K groupsize stride_am
+        stride_ak stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+        stride_zeros_n BM BN BK (pidM s0 M N BM BN GM) (pidN s0 M N BM BN GM)
+        idx.1.val idx.2.1.val)
+      (fun idx => mdqAccTile_full s0 a scales b zeros NO_GROUPS M K groupsize
+        stride_am stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+        stride_zeros_g stride_zeros_n BM BN BK (pidM s0 M N BM BN GM)
+        (pidN s0 M N BM BN GM) idx)
+      (by simp) (by simp) (by simp [hacc]))]
+  rw [stepStmts.nil]
+  exact ⟨_, rfl, mdq_store_props c M N stride_cm stride_cn BM BN _ _ _ _ hInj⟩
+
+/-! ## Main theorem -/
+
+set_option maxHeartbeats 1000000 in
+/-- **Genuine, dimension-general correctness.** For every launch state, the kernel
+runs to completion and every in-range output lane of `C` holds `accSpec`: the sum
+over all `num_pid_k` K steps of `tl.dot` between the row-masked `A` tile and the
+dequantized `B` tile, with `scales` / `zeros` read at that step's group row.
+
+`hInj` says distinct output lanes get distinct `C` addresses — without it the
+readback could not name a lane. `cAddr_injective` discharges it for a row-major
+`C`. The `NO_GROUPS` flag is free: both configurations are covered by the same
+statement, since `groupRow` is what differs and `accSpec` takes it into account. -/
+specification matmul_dequantize_int4_exec_genuine
+    (a_ptr c_ptr scales_ptr : RegionName) (b_ptr zeros_ptr : Region .nat)
+    (M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      groupsize : Nat) (NO_GROUPS : Bool) (BM BN BK GM : Nat) (s : BlockState)
+    (hInj : Function.Injective
+      (fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN
+        (pidM s M N BM BN GM) (pidN s M N BM BN GM) i)) :
+    ∃ sF, exec (matmul_dequantize_int4_surface a_ptr c_ptr scales_ptr b_ptr zeros_ptr
+        M N K stride_am stride_ak stride_bk stride_bn stride_cm stride_cn
+        stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+        groupsize NO_GROUPS BM BN BK GM).toAlgKernel s = some sF
+      ∧ ∀ idx : TileIndex [BM, BN],
+          (pidM s M N BM BN GM * BM + idx.1.val < M
+            ∧ pidN s M N BM BN GM * BN + idx.2.1.val < N) →
+          sF.readMem c_ptr (cAddr stride_cm stride_cn BM BN (pidM s M N BM BN GM)
+              (pidN s M N BM BN GM) idx)
+            = accSpec s a_ptr scales_ptr b_ptr zeros_ptr NO_GROUPS M K groupsize
+                stride_am stride_ak stride_bk stride_bn stride_scales_g
+                stride_scales_n stride_zeros_g stride_zeros_n BM BN BK
+                (pidM s M N BM BN GM) (pidN s M N BM BN GM)
+                idx.1.val idx.2.1.val := by
+  rw [exec, mdq_body_eq]
+  -- prologue: the scalars, then the tiles
+  obtain ⟨t1, hrun1, h1mem, h1pids, h1bits, h1ipb, h1npk, h1pm, h1pn⟩ :=
+    mdqPreLoopScalars_run s M N K BM BN BK GM
+  obtain ⟨t2, hrun2, h2npk, h2inv⟩ :=
+    mdqPreLoopTiles_run s a_ptr scales_ptr b_ptr zeros_ptr NO_GROUPS M N K groupsize
+      stride_am stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+      stride_zeros_g stride_zeros_n BM BN BK GM t1 h1mem h1pids h1bits h1ipb h1pm h1pn
+  simp only [mdqPreLoop, List.append_assoc]
+  rw [stepStmts.append_some hrun1, stepStmts.append_some hrun2]
+  -- the collapsed K loop
+  obtain ⟨t3, hrun3, h3inv⟩ :=
+    mdqLoop_collapse s a_ptr scales_ptr b_ptr zeros_ptr NO_GROUPS M N K groupsize
+      stride_am stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+      stride_zeros_g stride_zeros_n BM BN BK GM t2 (h2npk.trans h1npk) h2inv
+  rw [show [Stmt.forRangeDyn "k" (Op.constNat 0) (Op.ref .nat [] "num_pid_k")
+          (Op.constNat 1)
+          (mdqLoopBody groupsize stride_ak stride_bk stride_scales_g
+            stride_zeros_g NO_GROUPS BM BN BK)]
+        ++ mdqPostLoop c_ptr M N stride_cm stride_cn BM BN
+      = Stmt.forRangeDyn "k" (Op.constNat 0) (Op.ref .nat [] "num_pid_k")
+          (Op.constNat 1)
+          (mdqLoopBody groupsize stride_ak stride_bk stride_scales_g
+            stride_zeros_g NO_GROUPS BM BN BK)
+        :: mdqPostLoop c_ptr M N stride_cm stride_cn BM BN from rfl]
+  rw [stepStmts.cons_some hrun3]
+  -- the tail
+  obtain ⟨sF, hpost, hout⟩ :=
+    mdqPostLoop_run s c_ptr a_ptr scales_ptr b_ptr zeros_ptr NO_GROUPS M N K groupsize
+      stride_am stride_ak stride_bk stride_bn stride_cm stride_cn stride_scales_g
+      stride_scales_n stride_zeros_g stride_zeros_n BM BN BK GM t3 hInj h3inv
+  exact ⟨sF, hpost, hout⟩
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
