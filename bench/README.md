@@ -20,10 +20,10 @@ variant, and proof-status tracked.
 
 ## Current state
 
-**151 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
-holds a faithful `.py` + `.lean` pair, all 151 compile (`bench/check_ports.sh`
-reports `151 ok, 0 fail`), and every completed port carries a standard
-`ComputeCorrect.Realizes` correctness surface. The 33 remaining work
+**152 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
+holds a faithful `.py` + `.lean` pair, all 152 compile (`bench/check_ports.sh`
+reports `152 ok, 0 fail`), and every completed port carries a standard
+`ComputeCorrect.Realizes` correctness surface. The 32 remaining work
 directories are README-only scaffolds, not yet counted as ports. The source of
 truth for these counts and the per-port evidence is
 [`tritonbench_g/completion_audit.md`](./tritonbench_g/completion_audit.md); the
@@ -42,24 +42,24 @@ project.
 ## TritonBench-G v1 anchor
 
 We are aligning the verification benchmark with [TritonBench-G v1][tb] (184
-GitHub-scraped real Triton kernels, ACL 2025 Findings). **151 of the 184 are ported.** The original (2026-05-05) static primitive scan
+GitHub-scraped real Triton kernels, ACL 2025 Findings). **152 of the 184 are ported.** The original (2026-05-05) static primitive scan
 estimated only 141 as within the DSL contract; the levers it named
 (`tl.math.*` / `tl.extra` adapters, the concurrency boundary,
 `tl.num_programs`, the `atomic_add` proof shape) have since landed, so that
 estimate is superseded — treat it as history, not status.
 
-The remaining **33 are scaffolded but not imported**: the per-kernel directory
+The remaining **32 are scaffolded but not imported**: the per-kernel directory
 and README exist, the upstream `.py` does not. Re-measured against the DSL's
 actual surface (95 `tl.*` forms, extracted from `VeriTile/Triton/DSL/**`):
 
 | Verdict | Count |
 |---|---:|
-| Portable now — every `tl.*` form already in the DSL | 17 |
+| Portable now — every `tl.*` form already in the DSL | 16 |
 | Blocked on a missing primitive, or on an ℝ-model limit | 16 |
 
-Ranked unlock levers for the 15: fp8 dtype channel (7), RNG (4),
+Ranked unlock levers for the 16: fp8 dtype channel (7), RNG (4),
 `tl.interleave` (2), `tl.static_assert` (2, a macro no-op), `tl.broadcast_to`
-(1, an alias). See [`tritonbench_coverage.md`](./tritonbench_coverage.md) for
+(1, an alias), IEEE inf/NaN + `libdevice.isfinited` (1). See [`tritonbench_coverage.md`](./tritonbench_coverage.md) for
 the per-kernel table, the method, and what "portable" does and does not claim.
 
 The "OK" verdict is *expressibility*, not *proof feasibility*: many `OK`

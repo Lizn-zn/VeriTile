@@ -130,7 +130,7 @@ VeriTile/
   Triton.lean               总入口 prelude —— `import VeriTile.Triton` 拉入整个
                             子集(Core + Semantics + Memory + KernelLemmas +
                             Correctness + Float + DSL + Math + Launch +
-                            Concurrency)。全部 151 个 bench 端口和 showcase 文件
+                            Concurrency)。全部 152 个 bench 端口和 showcase 文件
                             都只 import 这一个模块。
   Triton/
     Core/                   AST:`Kernel` / `ComputeKernel` 类型和 `ComputeOp`

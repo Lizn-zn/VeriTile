@@ -2,12 +2,14 @@
 
 - Source file: `chunk_bwd_dqkg.py` (upstream `data/TritonBench_G_v1/chunk_bwd_dqkg.py`)
 - Corpus: TritonBench-G v1
-- Size: 179 lines, 1 `@triton.jit` kernel(s)
-- Status: READY — not imported yet, but every `tl.*` form it uses is already in the
-  DSL surface, so the port is a scheduling question, not a capability one.
-  Import the `.py` **with** its `.lean` port in one change:
-  `bench/audit_tritonbench_g.sh` enforces `py_count == lean_count`.
+- Size: 178 lines, 1 `@triton.jit` kernel
+- Status: **PORTED** — `ChunkBwdDqkg.lean`, main theorem
+  `chunk_bwd_dqkg_exec_genuine` (`exec`-level, dimension-general, 0 `sorry`).
 
-This directory is the per-kernel workspace for the TritonBench-G
-full-formalization roadmap. It is currently a placeholder: the upstream
-Python source has **not** been imported.
+`chunk_simple_gla_bwd_kernel_dqkg` is the simple-GLA chunked backward for the
+three gradients `dq`, `dk`, `dg` — the backward partner of the ported
+`chunk_gla_simple` forward.
+
+The value-axis loop is verified in the launcher's own single value-block regime
+`V ≤ BV` (the launcher sets `BV = min(next_power_of_2(V), 64)`), stated as an
+explicit hypothesis; every dimension, stride and the `scale` stay symbolic.

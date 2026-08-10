@@ -141,7 +141,7 @@ VeriTile/
   Triton.lean               Umbrella prelude — `import VeriTile.Triton` pulls
                             the whole subset (Core + Semantics + Memory +
                             KernelLemmas + Correctness + Float + DSL + Math +
-                            Launch + Concurrency). All 151 bench ports and the
+                            Launch + Concurrency). All 152 bench ports and the
                             showcase files import this single module.
   Triton/
     Core/                   AST: the `Kernel` / `ComputeKernel` types and the
