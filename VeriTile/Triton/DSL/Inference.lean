@@ -979,6 +979,17 @@ def collectPtrElems (regionDTypes : RegionDTypes)
     (stmts : List (TSyntax `tritonStmt)) : PtrElems :=
   ptrElemsFromStmts regionDTypes [] stmts
 
+/-- **Program-point update.** The element dtypes in effect *after* `stx`, given
+those in effect before it. `collectPtrElems` gives the whole body's bindings as a
+base (so a name bound later in a loop body still resolves); the expansion driver
+prepends this per statement as it walks, so a load sees the binding in effect at
+*its* program point rather than the body's last one. Without the threading, a
+pointer name rebound across two regions of different element dtypes resolves to
+the later binding everywhere — including before it. -/
+def ptrElemsAfterStmt (regionDTypes : RegionDTypes) (acc : PtrElems)
+    (stx : TSyntax `tritonStmt) : PtrElems :=
+  ptrElemsFromStmt regionDTypes acc stx
+
 /-- Look up the propagated element dtype for a bound pointer name. -/
 def lookupPtrElem (ptrElems : PtrElems) (name : String) : Option DInfo :=
   match List.find? (fun entry : String × DInfo => entry.1 == name) ptrElems with
