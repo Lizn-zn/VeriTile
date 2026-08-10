@@ -1082,6 +1082,106 @@ theorem cbdStopOp_eval (V BV : Nat) (hV : 0 < V) (hVB : V ≤ BV) (s : BlockStat
   simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex,
     NumericDType.div, NumericDType.sub, NumericDType.add, hdiv]
 
+set_option maxHeartbeats 1000000 in
+/-- **Loop-body run.** One pass of the value-axis body at `i_v = 0`: the four
+block pointers, the four loads, and the four accumulations. Memory is untouched,
+and every register the post-loop still needs (`o_i`, `b_g`, `b_g_last`, `b_dg`,
+the ids) is carried through unchanged. -/
+theorem cbdLoopBody_run (v h do_ dh : RegionName) (s t : BlockState)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat)
+    (hmemV : ∀ off, t.readMem v off = s.readMem v off)
+    (hmemH : ∀ off, t.readMem h off = s.readMem h off)
+    (hmemDo : ∀ off, t.readMem do_ off = s.readMem do_ off)
+    (hmemDh : ∀ off, t.readMem dh off = s.readMem dh off)
+    (hik : t.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)))
+    (hit : t.regs .nat [] "i_t" = some (Tile.scalar (s.pids 1)))
+    (hibh : t.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hiv : t.regs .nat [] "i_v" = some (Tile.scalar 0))
+    (hdq0 : t.regs .real [BT, BK] "b_dq" = some (cbdZero [BT, BK]))
+    (hdk0 : t.regs .real [BT, BK] "b_dk" = some (cbdZero [BT, BK]))
+    (hds0 : t.regs .real [BT, BT] "b_ds" = some (cbdZero [BT, BT]))
+    (hdgl0 : t.regs .real [] "b_dg_last" = some (cbdZero [])) :
+    ∃ s1, stepStmts (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t
+          T K V BT BK BV NT) t = some s1
+      ∧ s1.pids = t.pids
+      ∧ s1.numPids = t.numPids
+      ∧ (∀ rg off, s1.readMem rg off = t.readMem rg off)
+      ∧ s1.regs .nat [] "i_k" = t.regs .nat [] "i_k"
+      ∧ s1.regs .nat [] "i_t" = t.regs .nat [] "i_t"
+      ∧ s1.regs .nat [] "i_bh" = t.regs .nat [] "i_bh"
+      ∧ s1.regs .nat [] "n_bh" = t.regs .nat [] "n_bh"
+      ∧ s1.regs .nat [BT] "o_i" = t.regs .nat [BT] "o_i"
+      ∧ s1.regs .real [BT] "b_g" = t.regs .real [BT] "b_g"
+      ∧ s1.regs .real [] "b_g_last" = t.regs .real [] "b_g_last"
+      ∧ s1.regs .real [BT] "b_dg" = t.regs .real [BT] "b_dg"
+      ∧ s1.regs .real [] "b_dg_last"
+          = some (cbdDgLastTile s h dh s_h_h s_h_t K V BK BV NT)
+      ∧ s1.regs .real [BT, BT] "b_ds" = some (cbdDsTile s v do_ s_v_h s_v_t T V BT BV)
+      ∧ s1.regs .real [BT, BK] "b_dq"
+          = some (cbdDqTile s h do_ s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)
+      ∧ s1.regs .real [BT, BK] "b_dk"
+          = some (cbdDkTile s v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT) := by
+  unfold cbdLoopBody
+  -- p_v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_2d v T V s_v_t 1 BT BV _ _ _ t (s.pids 2 * s_v_h) (s.pids 1 * BT) (0 * BV)
+      (cbd_mulRef_eval t "i_bh" (s.pids 2) s_v_h hibh)
+      (cbd_mulRef_eval t "i_t" (s.pids 1) BT hit)
+      (cbd_mulRef_eval t "i_v" 0 BV hiv)))]
+  -- p_h
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_2d h V (NT * K) 1 s_h_t BV BK _ _ _ _ (s.pids 2 * s_h_h) (0 * BV)
+      (s.pids 1 * K + s.pids 0 * BK)
+      (cbd_mulRef_eval _ "i_bh" (s.pids 2) s_h_h (by simp [hibh]))
+      (cbd_mulRef_eval _ "i_v" 0 BV (by simp [hiv]))
+      (cbd_add_eval _ _ _ (s.pids 1 * K) (s.pids 0 * BK)
+        (cbd_mulRef_eval _ "i_t" (s.pids 1) K (by simp [hit]))
+        (cbd_mulRef_eval _ "i_k" (s.pids 0) BK (by simp [hik])))))]
+  -- p_do
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_2d do_ T V s_v_t 1 BT BV _ _ _ _ (s.pids 2 * s_v_h) (s.pids 1 * BT) (0 * BV)
+      (cbd_mulRef_eval _ "i_bh" (s.pids 2) s_v_h (by simp [hibh]))
+      (cbd_mulRef_eval _ "i_t" (s.pids 1) BT (by simp [hit]))
+      (cbd_mulRef_eval _ "i_v" 0 BV (by simp [hiv]))))]
+  -- p_dh
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_mkptr_2d dh V (NT * K) 1 s_h_t BV BK _ _ _ _ (s.pids 2 * s_h_h) (0 * BV)
+      (s.pids 1 * K + s.pids 0 * BK)
+      (cbd_mulRef_eval _ "i_bh" (s.pids 2) s_h_h (by simp [hibh]))
+      (cbd_mulRef_eval _ "i_v" 0 BV (by simp [hiv]))
+      (cbd_add_eval _ _ _ (s.pids 1 * K) (s.pids 0 * BK)
+        (cbd_mulRef_eval _ "i_t" (s.pids 1) K (by simp [hit]))
+        (cbd_mulRef_eval _ "i_k" (s.pids 0) BK (by simp [hik])))))]
+  -- b_v, b_do, b_h, b_dh
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_load_vo_eq s _ v "p_v" s_v_h s_v_t T V BT BV
+      (by intro off; simp [hmemV]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_load_vo_eq s _ do_ "p_do" s_v_h s_v_t T V BT BV
+      (by intro off; simp [hmemDo]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_load_h_eq s _ h "p_h" s_h_h s_h_t K V BK BV NT
+      (by intro off; simp [hmemH]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_load_h_eq s _ dh "p_dh" s_h_h s_h_t K V BK BV NT
+      (by intro off; simp [hmemDh]) (by simp)))]
+  -- the four accumulations
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dgLastAcc_eval s _ h dh s_h_h s_h_t K V BK BV NT
+      (by simp [hdgl0]) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dsAcc_eval s _ v do_ s_v_h s_v_t T V BT BV
+      (by simp [hds0]) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dqAcc_eval s _ h do_ s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT
+      (by simp [hdq0]) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cbd_dkAcc_eval s _ v dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT
+      (by simp [hdk0]) (by simp) (by simp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, by simp, by simp, by intro rg off; simp, ?_, ?_, ?_, ?_, ?_, ?_, ?_,
+    ?_, ?_, ?_, ?_, ?_⟩ <;> simp
+
 /-- **Loop collapse.** In the single value-block regime the `forRangeDyn` reduces
 to one pass of the body with `i_v` pinned to `0`. -/
 theorem cbdLoop_collapse (v h do_ dh : RegionName)
