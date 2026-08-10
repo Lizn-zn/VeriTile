@@ -621,6 +621,26 @@ private theorem cbd_load_1d (R : RegionName) (len stride BT base off : Nat)
   · simp [hh]
   · simp [hh, BlockState.defaultCarrier]
 
+
+/-- `min(a, b)` on `nat` scalars. The DSL lowers `min` to
+`Op.where (Op.lt …) a b` (there is no `Op.min`), so this is the bridge from that
+shape to `Nat.min`. -/
+private theorem cbd_min_eval (t : BlockState) (a b : Op .nat []) (va vb : Nat)
+    (ha : evalOp a t = some (Tile.scalar va))
+    (hb : evalOp b t = some (Tile.scalar vb)) :
+    evalOp (Op.where (Op.lt ComparableDType.nat Broadcast.nil a b) a b) t
+      = some (Tile.scalar (min va vb)) := by
+  rw [evalOp_where, evalOp_lt]
+  simp only [ha, hb, Option.bind_some, Option.bind_eq_bind]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro z
+  simp only [Tile.select, Tile.cop, Tile.scalar, Broadcast.leftIndex,
+    Broadcast.rightIndex, ComparableDType.lt]
+  by_cases hlt : va < vb
+  · simp [hlt, Nat.le_of_lt hlt]
+  · simp [hlt, Nat.not_lt.mp hlt]
+
 /-! ## The single value-block regime
 
 `0 < V` and `V ≤ BV` make `ceil(V/BV) = 1`, so the value-axis loop runs exactly
