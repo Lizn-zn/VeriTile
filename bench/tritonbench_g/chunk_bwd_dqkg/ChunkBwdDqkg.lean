@@ -409,16 +409,136 @@ def cbdPreLoop (g : RegionName) (T BT BK : Nat) : List Stmt :=
     Stmt.assign .real [] "b_dg_last" (Op.full [] (Op.const 0)),
     Stmt.assign .real [BT] "b_dg" (Op.full [BT] (Op.const 0)) ]
 
-/-- **Body prefix (by `rfl`).** The lowered surface begins with the prologue
-followed by the value-axis `forRangeDyn` carrying `cbdLoopBody`. This is the
-check that the hand-compiled statement lists match what the macro emits. -/
-theorem cbd_body_prefix (q k v h g do_ dh dq dk dg : RegionName)
+
+/-- The compiled post-loop tail: the `q`/`k` block pointers and loads, the gate
+decays, the causal-masked score, the two remaining contractions, the per-row `dg`
+reduction with its last-row correction, and the three stores. -/
+def cbdPostLoop (q k dq dk dg : RegionName)
+    (s_k_h s_k_t : Nat) (scale : ℝ) (T K BT BK : Nat) : List Stmt :=
+  [ Stmt.assign .blockPtr [BT, BK] "p_q"
+      (Op.makeBlockPtrDynOffsets q
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_k_h)) [T, K]
+        [BT, BK] [s_k_t, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK)]),
+    Stmt.assign .blockPtr [BT, BK] "p_k"
+      (Op.makeBlockPtrDynOffsets k
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_k_h)) [T, K]
+        [BT, BK] [s_k_t, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK)]),
+    Stmt.assign .real [BT, BK] "b_k"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BT, BK] "p_k") [0, 1]) .none),
+    Stmt.assign .real [BT, BK] "b_q"
+      (Op.load .real (.blockPtr (Op.ref .blockPtr [BT, BK] "p_q") [0, 1]) .none),
+    Stmt.assign .real [] "b_dg_last"
+      (Op.mul .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+        (Op.exp (Op.ref .real [] "b_g_last"))),
+    Stmt.assign .real [BT, BK] "b_dq"
+      (Op.mul .real Broadcast.scalarR
+        (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Op.ref .real [BT, BK] "b_dq")
+          (Op.expandDim ⟨1, by simp⟩ (Op.exp (Op.ref .real [BT] "b_g"))))
+        (Op.const scale)),
+    Stmt.assign .real [BT, BK] "b_dk"
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BT, BK] "b_dk")
+        (Op.expandDim ⟨1, by simp⟩
+          (Op.exp (Op.add .real Broadcast.scalarR
+            (Op.sub .real Broadcast.scalarL (Op.const 0.0) (Op.ref .real [BT] "b_g"))
+            (Op.ref .real [] "b_g_last"))))),
+    Stmt.assign .real [] "b_dg_last"
+      (Op.add .real Broadcast.nil (Op.ref .real [] "b_dg_last")
+        (Op.reduceSum ⟨0, by simp [TileShape.eraseAxis]⟩ Bool.false
+          (Op.reduceSum ⟨1, by simp⟩ Bool.false
+            (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [BT, BK] "b_dk") (Op.ref .real [BT, BK] "b_k"))))),
+    Stmt.assign .real [BT, BT] "b_ds"
+      (Op.where
+        (Op.ge ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BT] "o_i"))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BT] "o_i")))
+        (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Op.mul .real Broadcast.scalarR (Op.ref .real [BT, BT] "b_ds") (Op.const scale))
+          (Op.exp (Op.sub .real (Broadcast.consR (Broadcast.consL Broadcast.nil))
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "b_g"))
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .real [BT] "b_g")))))
+        (Op.broadcast (Op.const 0.0) [BT, BT])),
+    Stmt.assign .real [BT, BK] "b_dq"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BT, BK] "b_dq")
+        (Op.dot (batch := []) (Op.ref .real [BT, BT] "b_ds") (Op.ref .real [BT, BK] "b_k"))),
+    Stmt.assign .real [BT, BK] "b_dk"
+      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BT, BK] "b_dk")
+        (Op.dot (batch := []) (Op.transpose (Op.ref .real [BT, BT] "b_ds"))
+          (Op.ref .real [BT, BK] "b_q"))),
+    Stmt.assign .real [BT] "b_dg"
+      (Op.add .real (Broadcast.consSame Broadcast.nil) (Op.ref .real [BT] "b_dg")
+        (Op.reduceSum ⟨1, by simp⟩ Bool.false
+          (Op.sub .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+            (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [BT, BK] "b_q") (Op.ref .real [BT, BK] "b_dq"))
+            (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+              (Op.ref .real [BT, BK] "b_k") (Op.ref .real [BT, BK] "b_dk"))))),
+    Stmt.assign .real [BT] "b_dg"
+      (Op.where
+        (Op.lt ComparableDType.nat Broadcast.scalarR (Op.ref .nat [BT] "o_i")
+          (Op.sub .nat Broadcast.nil
+            (Op.where
+              (Op.lt ComparableDType.nat Broadcast.nil (Op.constNat BT)
+                (Op.sub .nat Broadcast.nil (Op.constNat T)
+                  (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))))
+              (Op.constNat BT)
+              (Op.sub .nat Broadcast.nil (Op.constNat T)
+                (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT))))
+            (Op.constNat 1)))
+        (Op.ref .real [BT] "b_dg")
+        (Op.add .real Broadcast.scalarR (Op.ref .real [BT] "b_dg")
+          (Op.ref .real [] "b_dg_last"))),
+    Stmt.assign .blockPtr [BT, BK] "p_dq"
+      (Op.makeBlockPtrDynOffsets dq
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_k_h)) [T, K]
+        [BT, BK] [s_k_t, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK)]),
+    Stmt.assign .blockPtr [BT, BK] "p_dk"
+      (Op.makeBlockPtrDynOffsets dk
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_k_h)) [T, K]
+        [BT, BK] [s_k_t, 1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT),
+          Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat BK)]),
+    Stmt.assign .blockPtr [BT] "p_dg"
+      (Op.makeBlockPtrDynOffsets dg
+        (Op.mul .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.ref .nat [] "n_bh"))
+            (Op.ref .nat [] "i_bh"))
+          (Op.constNat T))
+        [T] [BT] [1]
+        [Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat BT)]),
+    Stmt.store .real [BT, BK]
+      (.blockPtr (Op.ref .blockPtr [BT, BK] "p_dq") [0, 1])
+      (Op.ref .real [BT, BK] "b_dq") .none,
+    Stmt.store .real [BT, BK]
+      (.blockPtr (Op.ref .blockPtr [BT, BK] "p_dk") [0, 1])
+      (Op.ref .real [BT, BK] "b_dk") .none,
+    Stmt.store .real [BT]
+      (.blockPtr (Op.ref .blockPtr [BT] "p_dg") [0])
+      (Op.ref .real [BT] "b_dg") .none ]
+
+set_option maxRecDepth 8000 in
+/-- **Full body split (by `rfl`).** The lowered surface is exactly
+`cbdPreLoop ++ [forRangeDyn "i_v" 0 (cbdStopOp V BV) 1 cbdLoopBody] ++ cbdPostLoop`
+— 34 statements, every one checked against the macro output rather than assumed. -/
+theorem cbd_body_eq (q k v h g do_ dh dq dk dg : RegionName)
     (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ) (T K V BT BK BV NT : Nat) :
-    ((chunk_bwd_dqkg_surface q k v h g do_ dh dq dk dg s_k_h s_k_t s_v_h s_v_t
-        s_h_h s_h_t scale T K V BT BK BV NT).toAlgKernel.body).take 15
+    (chunk_bwd_dqkg_surface q k v h g do_ dh dq dk dg s_k_h s_k_t s_v_h s_v_t
+        s_h_h s_h_t scale T K V BT BK BV NT).toAlgKernel.body
       = cbdPreLoop g T BT BK
         ++ [Stmt.forRangeDyn "i_v" (Op.constNat 0) (cbdStopOp V BV) (Op.constNat 1)
-              (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)] := by
+              (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)]
+        ++ cbdPostLoop q k dq dk dg s_k_h s_k_t scale T K BT BK := by
   rfl
 
 end Correct_without_Rounding
