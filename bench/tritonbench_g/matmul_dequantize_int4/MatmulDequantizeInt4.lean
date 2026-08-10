@@ -1422,6 +1422,205 @@ private theorem mdq_dot_eval {M K N : Nat} (x : Op .real [M, K]) (y : Op .real [
   erw [evalOp_dot, hx, hy]
   rfl
 
+/-! ### The K step
+
+One iteration takes `mdqInv` at `i` to `mdqInv` at `i + 1`. The eight statements are
+walked in order; the only branching is the `NO_GROUPS` reload, and
+`mdq_groupBranch_run` has already collapsed both of its paths to one conclusion, so
+statements 4–8 are walked once. -/
+
+theorem mdqLoopBody_run (s0 : BlockState) (a scales : RegionName)
+    (b zeros : Region .nat) (NO_GROUPS : Bool)
+    (M N K groupsize stride_am stride_ak stride_bk stride_bn
+      stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BM BN BK GM i : Nat) (s : BlockState)
+    (hnext : i + 1 ≤ numPidK K BK)
+    (hk : s.regs .nat [] "k" = some (Tile.scalar i))
+    (hinv : mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+      stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+      stride_zeros_n BM BN BK GM i s) :
+    ∃ s', stepStmts (mdqLoopBody groupsize stride_ak stride_bk stride_scales_g
+          stride_zeros_g NO_GROUPS BM BN BK) s = some s'
+      ∧ mdqInv s0 a scales b zeros NO_GROUPS M N K groupsize stride_am stride_ak
+          stride_bk stride_bn stride_scales_g stride_scales_n stride_zeros_g
+          stride_zeros_n BM BN BK GM (i + 1) s' := by
+  obtain ⟨-, hmem, hpids, hbits, hipb, hpm, hpn, hmask, hshift, hzshift,
+    hspt, hzpt, hapt, hbpt, hacc, hpreload⟩ := hinv
+  set pm := pidM s0 M N BM BN GM with hpmDef
+  set pn := pidN s0 M N BM BN GM with hpnDef
+  unfold mdqLoopBody
+  -- 1. `a = tl.load(a_ptrs, mask=a_mask[:, None], other=0.0)`
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_aLoad_eq s0 a s M stride_am stride_ak BM BK pm i hmem hapt hmask))]
+  -- 2. `b = tl.load(b_ptrs)` — the packed weight words
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (mdq_bLoad_eq s0 b _ stride_bk stride_bn BN BK pn i (by simpa using hmem)
+      (by simpa using hbpt)))]
+  -- 3. the `not NO_GROUPS` reload, both paths already on one conclusion
+  obtain ⟨t, hbranch, htmem, htpids, hkeep, hscalesT, hzerosT⟩ :=
+    mdq_groupBranch_run s0 scales zeros
+      ((s.setReg "a" .real [BM, BK] (mdqATile s0 a M stride_am stride_ak BM BK pm i)).setReg
+        "b" .nat [BK, BN] (mdqBRaw s0 b stride_bk stride_bn BN BK pn i))
+      NO_GROUPS groupsize stride_scales_g
+      stride_scales_n stride_zeros_g stride_zeros_n BN BK pn i
+      (by simpa using hmem) (by simpa using hk) (by simpa using hspt)
+      (by simpa using hzpt) (by simpa using hzshift)
+      (fun hf => by simpa using hpreload hf)
+  rw [stepStmts.cons_some hbranch]
+  -- What the branch left untouched, transported all the way back to `s`.
+  have hkeepS : ∀ (dtype : TileDType) (sh : TileShape) (nm : RegName),
+      nm ≠ "g_id" → nm ≠ "ptr" → nm ≠ "scales" → nm ≠ "zeros" →
+      nm ≠ "a" → nm ≠ "b" → t.regs dtype sh nm = s.regs dtype sh nm := by
+    intro dtype sh nm h1 h2 h3 h4 h5 h6
+    rw [hkeep dtype sh nm h1 h2 h3 h4]
+    simp [h5, h6]
+  have htATile : t.regs .real [BM, BK] "a"
+      = some (mdqATile s0 a M stride_am stride_ak BM BK pm i) := by
+    rw [hkeep .real [BM, BK] "a" (by decide) (by decide) (by decide) (by decide)]
+    simp
+  have htBRaw : t.regs .nat [BK, BN] "b"
+      = some (mdqBRaw s0 b stride_bk stride_bn BN BK pn i) := by
+    rw [hkeep .nat [BK, BN] "b" (by decide) (by decide) (by decide) (by decide)]
+    simp
+  have htShift : t.regs .nat [BK] "shifter" = some (mdqShifter BK) := by
+    rw [hkeepS .nat [BK] "shifter" (by decide) (by decide) (by decide) (by decide)
+      (by decide) (by decide)]
+    exact hshift
+  have htIpb : t.regs .nat [] "infearure_per_bits" = some (Tile.scalar 8) := by
+    rw [hkeepS .nat [] "infearure_per_bits" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide)]
+    exact hipb
+  have htAcc : t.regs .real [BM, BN] "accumulator"
+      = some (mdqAccTile s0 a scales b zeros NO_GROUPS M groupsize stride_am
+          stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+          stride_zeros_g stride_zeros_n BM BN BK pm pn i) := by
+    rw [hkeepS .real [BM, BN] "accumulator" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide)]
+    exact hacc
+  have htAPtrs : t.regs .ptr [BM, BK] "a_ptrs"
+      = some (mdqAPtrs a stride_am stride_ak BM BK pm i) := by
+    rw [hkeepS .ptr [BM, BK] "a_ptrs" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide)]
+    exact hapt
+  have htBPtrs : t.regs .ptr [BK, BN] "b_ptrs"
+      = some (mdqBPtrs b stride_bk stride_bn BN BK pn i) := by
+    rw [hkeepS .ptr [BK, BN] "b_ptrs" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide)]
+    exact hbpt
+  -- 4. `b = (b >> shifter[:, None]) & 0xF`
+  have h4 : evalOp (Op.bitAnd Broadcast.scalarR
+        (Op.shiftRight (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (Op.ref .nat [BK, BN] "b")
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BK] "shifter")))
+        (Op.constNat 15)) t
+      = some (mdqBNibbleTile s0 b stride_bk stride_bn BN BK pn i) := by
+    rw [mdqBNibbleTile_eq]
+    exact mdq_bitAnd_eval Broadcast.scalarR _ _ t _ (Tile.scalar 15)
+      (mdq_shiftRight_eval _ _ _ t (mdqBRaw s0 b stride_bk stride_bn BN BK pn i)
+        (Tile.expandDim ⟨1, by simp⟩ (mdqShifter BK))
+        (by rw [evalOp_ref]; exact htBRaw)
+        (mdq_expandDim_eval _ _ t (mdqShifter BK) (by rw [evalOp_ref]; exact htShift)))
+      (evalOp_constNat _ _)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some h4)]
+  -- 5. `b = b.to(tl.float16) * scales[None, :] - zeros[None, :]`
+  have h5 : evalOp (Op.sub .real (Broadcast.consR (Broadcast.consSame Broadcast.nil))
+        (Op.mul .real (Broadcast.consR (Broadcast.consSame Broadcast.nil))
+          (Op.natToReal (Op.ref .nat [BK, BN] "b"))
+          (Op.expandDim ⟨0, by simp⟩ (Op.ref .real [BN] "scales")))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .real [BN] "zeros")))
+        (t.setReg "b" .nat [BK, BN] (mdqBNibbleTile s0 b stride_bk stride_bn BN BK pn i))
+      = some (mdqBDequantTile s0 scales b zeros NO_GROUPS groupsize stride_bk
+          stride_bn stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+          BN BK pn i) := by
+    rw [mdqBDequantTile_eq]
+    exact mdq_subTile_eval NumericDType.real _ _ _ _ _ _
+      (mdq_mulTile_eval NumericDType.real _ _ _ _ _ _
+        (mdq_natToReal_eval _ _ _ (by rw [evalOp_ref]; simp))
+        (mdq_expandDim_eval _ _ _ _ (by rw [evalOp_ref]; simpa using hscalesT)))
+      (mdq_expandDim_eval _ _ _ _ (by rw [evalOp_ref]; simpa using hzerosT))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some h5)]
+  -- 6. `accumulator += tl.dot(a, b)`
+  have h6 : evalOp (Op.add .real
+        (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BM, BN] "accumulator")
+        (Op.dot (batch := []) (Op.ref .real [BM, BK] "a")
+          (Op.ref .real [BK, BN] "b")))
+        (((t.setReg "b" .nat [BK, BN]
+              (mdqBNibbleTile s0 b stride_bk stride_bn BN BK pn i)).setReg
+            "b" .real [BK, BN]
+            (mdqBDequantTile s0 scales b zeros NO_GROUPS groupsize stride_bk
+              stride_bn stride_scales_g stride_scales_n stride_zeros_g
+              stride_zeros_n BN BK pn i)))
+      = some (mdqAccTile s0 a scales b zeros NO_GROUPS M groupsize stride_am
+          stride_ak stride_bk stride_bn stride_scales_g stride_scales_n
+          stride_zeros_g stride_zeros_n BM BN BK pm pn (i + 1)) := by
+    rw [← mdqAccTile_dot_succ]
+    exact mdq_addTile_eval NumericDType.real _ _ _ _ _ _
+      (by rw [evalOp_ref]; simpa using htAcc)
+      (mdq_dot_eval _ _ _ _ _ (by rw [evalOp_ref]; simpa using htATile)
+        (by rw [evalOp_ref]; simp))
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some h6)]
+  -- 7. `a_ptrs += BLOCK_SIZE_K * stride_ak`
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BM, BK] "a_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.constNat BK) (Op.constNat stride_ak))) _
+      = some (mdqAPtrs a stride_am stride_ak BM BK pm (i + 1)) from by
+      rw [← mdqAPtrs_succ]
+      exact mdq_ptrAdd_eval Broadcast.scalarR "a_ptrs" _ _ _
+        (Tile.scalar (BK * stride_ak)) (by simpa using htAPtrs)
+        (mdq_mulScalarNat_eval _ _ _ BK stride_ak (evalOp_constNat _ _)
+          (evalOp_constNat _ _))))]
+  -- 8. `b_ptrs += (BLOCK_SIZE_K // infearure_per_bits) * stride_bk`
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BK, BN] "b_ptrs")
+        (Op.mul .nat Broadcast.nil
+          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat BK)
+            (Op.ref .nat [] "infearure_per_bits"))
+          (Op.constNat stride_bk))) _
+      = some (mdqBPtrs b stride_bk stride_bn BN BK pn (i + 1)) from by
+      rw [← mdqBPtrs_succ]
+      exact mdq_ptrAdd_eval Broadcast.scalarR "b_ptrs" _ _ _
+        (Tile.scalar (BK / 8 * stride_bk)) (by simpa using htBPtrs)
+        (mdq_mulScalarNat_eval _ _ _ (BK / 8) stride_bk
+          (mdq_floorDivScalar_eval _ _ _ BK 8 (evalOp_constNat _ _)
+            (by rw [evalOp_ref]; simpa using htIpb))
+          (evalOp_constNat _ _))))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, hnext, htmem.trans hmem, htpids.trans hpids, ?_, ?_, ?_, ?_, ?_,
+    ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa using hkeepS .nat [] "bits" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) |>.trans hbits
+  · simpa using htIpb
+  · simpa using hkeepS .nat [] "pid_m" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) |>.trans hpm
+  · simpa using hkeepS .nat [] "pid_n" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) |>.trans hpn
+  · simpa using hkeepS .bool [BM, 1] "a_mask" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) |>.trans hmask
+  · simpa using htShift
+  · simpa using hkeepS .nat [BN] "zeros_shifter" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) |>.trans hzshift
+  · simpa using hkeepS .ptr [BN] "scales_ptrs" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) |>.trans hspt
+  · simpa using hkeepS .ptr [BN] "zeros_ptrs" (by decide) (by decide) (by decide)
+      (by decide) (by decide) (by decide) |>.trans hzpt
+  -- `pm` / `pn` are `set`-bound above, so these three need the defining equations
+  -- to line up with the raw `pidM` / `pidN` inside `mdqInv`.
+  · simp [hpmDef]
+  · simp [hpnDef]
+  · simp [hpmDef, hpnDef]
+  · -- Under `NO_GROUPS` the branch left `scales` / `zeros` at row
+    -- `groupRow Bool.true groupsize BK i`, which is `0` — the row the invariant asks
+    -- for, and the row the *next* iteration will read them at.
+    intro hf
+    refine ⟨?_, ?_⟩
+    · rw [show (0 : Nat) = groupRow NO_GROUPS groupsize BK i by
+        rw [hf, groupRow_of_noGroups]]
+      simpa using hscalesT
+    · rw [show (0 : Nat) = groupRow NO_GROUPS groupsize BK i by
+        rw [hf, groupRow_of_noGroups]]
+      simpa using hzerosT
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4
