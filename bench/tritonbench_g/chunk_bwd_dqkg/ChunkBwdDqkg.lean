@@ -641,6 +641,40 @@ private theorem cbd_min_eval (t : BlockState) (a b : Op .nat []) (va vb : Nat)
   · simp [hlt, Nat.le_of_lt hlt]
   · simp [hlt, Nat.not_lt.mp hlt]
 
+
+/-! ## Prologue execution
+
+The loaded tiles are named exactly as the eval recipes emit them (so the step
+chain closes by `rw`); the bridges to the `gElem` / `gLastElem` accessors are
+separate, below. -/
+
+/-- `b_g` as `cbd_load_1d` emits it. -/
+noncomputable def cbdBgTile (s : BlockState) (g : RegionName) (T BT : Nat) :
+    Tile .real [BT] :=
+  ⟨fun idx => if s.pids 1 * BT + idx.1.val < T then
+      some (s.readMem g (s.pids 2 * T + (s.pids 1 * BT + idx.1.val) * 1)) else some 0⟩
+
+/-- `b_g_last` as the region-load recipe emits it, after the `.real`
+`readMemValue` collapses to `readMem`. -/
+noncomputable def cbdBgLastTile (s : BlockState) (g : RegionName) (T BT : Nat) :
+    Tile .real [] :=
+  ⟨fun _ => some (s.readMem g (s.pids 2 * T + (min (s.pids 1 * BT + BT) T - 1)))⟩
+
+/-- The all-zero tile of a given shape, as `Op.full … (Op.const 0)` emits it. -/
+noncomputable def cbdZero (sh : TileShape) : Tile .real sh := ⟨fun _ => some 0⟩
+
+/-- `cbdBgTile` agrees with the `gElem` accessor lane by lane. -/
+theorem cbdBgTile_data (s : BlockState) (g : RegionName) (T BT : Nat)
+    (i : Fin BT) :
+    (cbdBgTile s g T BT).data (i, PUnit.unit) = some (gElem s g T BT i.val) := by
+  simp only [cbdBgTile, gElem, Nat.mul_one, Nat.add_assoc]
+  split <;> rfl
+
+/-- `cbdBgLastTile` agrees with the `gLastElem` accessor. -/
+theorem cbdBgLastTile_data (s : BlockState) (g : RegionName) (T BT : Nat) :
+    (cbdBgLastTile s g T BT).data PUnit.unit = some (gLastElem s g T BT) := by
+  rfl
+
 /-! ## The single value-block regime
 
 `0 < V` and `V ≤ BV` make `ceil(V/BV) = 1`, so the value-axis loop runs exactly
