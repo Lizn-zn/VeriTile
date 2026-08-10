@@ -541,6 +541,46 @@ theorem cbd_body_eq (q k v h g do_ dh dq dk dg : RegionName)
         ++ cbdPostLoop q k dq dk dg s_k_h s_k_t scale T K BT BK := by
   rfl
 
+
+/-! ## The single value-block regime
+
+`0 < V` and `V ≤ BV` make `ceil(V/BV) = 1`, so the value-axis loop runs exactly
+once with `i_v = 0`. This is the launcher's regime — it sets
+`BV = min(next_power_of_2(V), 64)`, so `V ≤ BV` holds whenever `V ≤ 64`. -/
+
+/-- The compiled `tl.cdiv(V, BV)` trip count is `1` when `0 < V ≤ BV`. -/
+theorem cbdStopOp_eval (V BV : Nat) (hV : 0 < V) (hVB : V ≤ BV) (s : BlockState) :
+    evalOp (cbdStopOp V BV) s = some (Tile.scalar 1) := by
+  have hdiv : (V + BV - 1) / BV = 1 := by
+    refine Nat.div_eq_of_lt_le ?_ ?_ <;> omega
+  simp only [cbdStopOp, evalOp_div, evalOp_sub, evalOp_add, evalOp_constNat,
+    Option.bind_some, Option.bind_eq_bind]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro z
+  simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+    NumericDType.div, NumericDType.sub, NumericDType.add, hdiv]
+
+/-- **Loop collapse.** In the single value-block regime the `forRangeDyn` reduces
+to one pass of the body with `i_v` pinned to `0`. -/
+theorem cbdLoop_collapse (v h do_ dh : RegionName)
+    (s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT : Nat)
+    (hV : 0 < V) (hVB : V ≤ BV) (s : BlockState) :
+    stepStmt (Stmt.forRangeDyn "i_v" (Op.constNat 0) (cbdStopOp V BV) (Op.constNat 1)
+        (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)) s
+      = stepStmts (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)
+          (s.setReg "i_v" .nat [] (Tile.scalar 0)) := by
+  rw [stepForRangeAux.forRangeDyn_unfold]
+  simp only [stepStmt, evalOp_constNat, cbdStopOp_eval V BV hV hVB s,
+    Option.bind_eq_bind, Option.bind_some, Tile.scalar_data]
+  rw [stepForRangeAux.step_lt one_ne_zero (by norm_num)]
+  cases hb : stepStmts (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)
+      (s.setReg "i_v" .nat [] (Tile.scalar 0)) with
+  | none => simp [hb]
+  | some s' =>
+      simp only [Option.bind_some]
+      exact stepForRangeAux.step_ge one_ne_zero (by norm_num)
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkBwdDqkg
