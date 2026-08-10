@@ -740,7 +740,7 @@ private theorem cgf_gLoad_eq (s0 : BlockState) (g : RegionName) (t : BlockState)
 
 /-- The `b_h` load lands directly on `cgfHTile`. -/
 private theorem cgf_hLoad_eq (s0 : BlockState) (h : RegionName) (t : BlockState)
-    (s_h_h s_h_t K V BT BK BV kb : Nat)
+    (s_h_h s_h_t K V BK BV kb : Nat)
     (hmem : t.mem = s0.mem)
     (hph : t.regs .blockPtr [BK, BV] "p_h" = some
       ⟨fun _ => BlockPtr.mk h (s0.pids 2 * s_h_h + s0.pids 1 * K * V) [K, V] [BK, BV]
@@ -872,7 +872,7 @@ theorem cgfLoopBody_run (s0 : BlockState) (q g h : RegionName)
           (by rw [evalOp_ref]; simp))))]
   -- 8. `b_h = tl.load(p_h, boundary_check=(0, 1))`
   rw [stepStmts.cons_some (stepStmt_assign_eq_some
-    (cgf_hLoad_eq s0 h _ s_h_h s_h_t K V BT BK BV i
+    (cgf_hLoad_eq s0 h _ s_h_h s_h_t K V BK BV i
       (by simpa [cgf_setReg_mem] using hmem) (by simp)))]
   -- 9. the vacuously-true `if i_k >= 0`, then `b_o += tl.dot(b_qg, b_h)`
   rw [stepStmts.cons_some (cgf_ifThen_acc_run _ i BT BK BV
@@ -931,6 +931,351 @@ theorem cgfLoop_collapse (s0 : BlockState) (q g h : RegionName)
   subst hEq
   exact ⟨sF, hrun, hP⟩
 
+/-! ## The tail
+
+Three block pointers, the `v` and `A` loads, the causal masking of `A`, the second
+`tl.dot`, and the boundary-checked store. -/
+
+/-- `b_v` as its load leaves it. -/
+noncomputable def cgfVTile (s : BlockState) (v : RegionName)
+    (s_v_h s_v_t T V BT BV : Nat) : Tile .real [BT, BV] :=
+  ⟨fun idx => some (vGuarded s v s_v_h s_v_t T V BT BV idx.1.val idx.2.1.val)⟩
+
+/-- `b_A` after the causal `tl.where`. -/
+noncomputable def cgfATile (s : BlockState) (A : RegionName) (T BT : Nat) :
+    Tile .real [BT, BT] :=
+  ⟨fun idx => some (aMasked s A T BT idx.1.val idx.2.1.val)⟩
+
+/-- The `b_v` load. -/
+private theorem cgf_vLoad_eq (s0 : BlockState) (v : RegionName) (t : BlockState)
+    (s_v_h s_v_t T V BT BV : Nat)
+    (hmem : t.mem = s0.mem)
+    (hpv : t.regs .blockPtr [BT, BV] "p_v" = some
+      ⟨fun _ => BlockPtr.mk v (s0.pids 2 * s_v_h) [T, V] [BT, BV] [s_v_t, 1]
+        [s0.pids 1 * BT, s0.pids 0 * BV]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BV] "p_v") [0, 1]) MaskOpt.none) t
+      = some (cgfVTile s0 v s_v_h s_v_t T V BT BV) := by
+  rw [cgf_load_bp_2d v t "p_v" (s0.pids 2 * s_v_h) T V BT BV s_v_t 1
+    (s0.pids 1 * BT) (s0.pids 0 * BV) hpv]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  simp only [cgfVTile, vGuarded, vElem, tIndex, vIndex, BlockState.readMem, hmem]
+  split <;> rfl
+
+/-- The raw `b_A` load. The column check `0 + j < BT` is vacuous (`j : Fin BT`),
+which is why the raw tile below carries only the row guard. -/
+private theorem cgf_aLoad_eq (s0 : BlockState) (A : RegionName) (t : BlockState)
+    (T BT : Nat)
+    (hmem : t.mem = s0.mem)
+    (hpA : t.regs .blockPtr [BT, BT] "p_A" = some
+      ⟨fun _ => BlockPtr.mk A (s0.pids 2 * T * BT) [T, BT] [BT, BT] [BT, 1]
+        [s0.pids 1 * BT, 0]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BT] "p_A") [0, 1]) MaskOpt.none) t
+      = some ⟨fun idx : TileIndex [BT, BT] =>
+          if tIndex s0 BT idx.1.val < T then
+            some (aElem s0 A T BT idx.1.val idx.2.1.val)
+          else some 0⟩ := by
+  rw [cgf_load_bp_2d A t "p_A" (s0.pids 2 * T * BT) T BT BT BT BT 1
+    (s0.pids 1 * BT) 0 hpA]
+  refine congrArg some ?_
+  apply Tile.ext
+  intro idx
+  obtain ⟨i, j, u⟩ := idx
+  simp only [aElem, tIndex, BlockState.readMem, hmem, Nat.zero_add, j.isLt, and_true]
+
+/-- The causal `tl.where` lands on `cgfATile`. -/
+private theorem cgf_aWhere_eq (s0 : BlockState) (A : RegionName) (T BT : Nat) :
+    Tile.select (cgfMsTile BT)
+        (⟨fun idx : TileIndex [BT, BT] =>
+          if tIndex s0 BT idx.1.val < T then
+            some (aElem s0 A T BT idx.1.val idx.2.1.val)
+          else some 0⟩ : Tile .real [BT, BT])
+        (⟨fun _ => some 0.0⟩ : Tile .real [BT, BT])
+      = cgfATile s0 A T BT := by
+  apply Tile.ext
+  intro idx
+  simp only [cgfATile, aMasked, cgfMsTile, Tile.select_data, decide_eq_true_eq]
+  by_cases hji : idx.2.1.val ≤ idx.1.val
+  · simp only [hji, if_pos]
+    split <;> rfl
+  · simp only [hji, if_false]
+    norm_num
+
+/-- The final output tile: the loop's full accumulator plus the intra-chunk dot. -/
+noncomputable def cgfOutTile (s : BlockState) (q v g h A : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV : Nat) : Tile .real [BT, BV] :=
+  ⟨fun idx => some (cgfOutput s q v g h A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t
+      scale T K V BT BK BV idx.1.val idx.2.1.val)⟩
+
+/-- **The intra-chunk accumulation.** `b_o += tl.dot(b_A, b_v)` on top of the full
+inter-chunk sum is exactly `cgfOutTile`. -/
+private theorem cgf_outTile_eq (s0 : BlockState) (q v g h A : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV : Nat) :
+    Tile.bop NumericDType.real.add
+        (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (cgfAccTile s0 q g h s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV
+          (numKB K BK))
+        (Tile.dot [] (cgfATile s0 A T BT) (cgfVTile s0 v s_v_h s_v_t T V BT BV))
+      = cgfOutTile s0 q v g h A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+          T K V BT BK BV := by
+  apply Tile.ext
+  intro idx
+  obtain ⟨r, p, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, cgfAccTile,
+    cgfOutTile, cgfOutput, NumericDType.add, WithBot.realAdd]
+  rw [cgf_dot2d_elem _ _ r p
+    (fun j => aMasked s0 A T BT r.val j.val)
+    (fun j => vGuarded s0 v s_v_h s_v_t T V BT BV j.val p.val)
+    (fun j => rfl) (fun j => rfl)]
+  rfl
+
+/-! ## The store and its readback -/
+
+/-- Post-store state of the boundary-checked output store. -/
+noncomputable def cgfStoreState (o : RegionName) (s_v_h s_v_t T V BT BV : Nat)
+    (s0 : BlockState) (f : TileIndex [BT, BV] → ℝ) (t : BlockState) : BlockState :=
+  (TileShape.allIndices [BT, BV]).foldl
+    (fun acc i =>
+      if tIndex s0 BT i.1.val < T ∧ vIndex s0 BV i.2.1.val < V then
+        acc.writeMem o (outOffset s0 s_v_h s_v_t BT BV i) (f i)
+      else acc) t
+
+private theorem cgf_store_eq (o : RegionName) (s_v_h s_v_t T V BT BV : Nat)
+    (s0 t : BlockState) (vt : Tile .real [BT, BV]) (f : TileIndex [BT, BV] → ℝ)
+    (hfv : ∀ i, vt.data i = some (f i))
+    (hpo : t.regs .blockPtr [BT, BV] "p_o" = some
+      ⟨fun _ => BlockPtr.mk o (s0.pids 2 * s_v_h) [T, V] [BT, BV] [s_v_t, 1]
+        [s0.pids 1 * BT, s0.pids 0 * BV]⟩)
+    (hv : t.regs .real [BT, BV] "b_o" = some vt) :
+    stepStmt (Stmt.store .real [BT, BV]
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BV] "p_o") [0, 1])
+        (Op.ref .real [BT, BV] "b_o") MaskOpt.none) t
+      = some (cgfStoreState o s_v_h s_v_t T V BT BV s0 f t) := by
+  unfold stepStmt cgfStoreState
+  simp only [evalOp_ref, hv, hpo]
+  refine congrArg some
+    (congrArg (fun F => List.foldl F t (TileShape.allIndices [BT, BV])) ?_)
+  funext acc i
+  obtain ⟨r, p, u⟩ := i
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets,
+    BlockPtr.inBounds_2d_offsets, Bool.true_and, outOffset, tIndex, vIndex]
+  by_cases hb : s0.pids 1 * BT + r.val < T ∧ s0.pids 0 * BV + p.val < V
+  · simp only [hb, and_self, decide_true, if_true, BlockState.writeMemTyped_real, hfv]
+    rfl
+  · simp only [hb, decide_false, Bool.false_eq_true, if_false]
+
+/-- **Tail statement 6.** `b_A = tl.where(m_s, b_A, 0.)` on a state whose two
+registers are known lands on `cgfATile`. -/
+private theorem cgf_aWhere_run (s0 : BlockState) (A : RegionName) (T BT : Nat)
+    (t : BlockState)
+    (hms : t.regs .bool [BT, BT] "m_s" = some (cgfMsTile BT))
+    (hba : t.regs .real [BT, BT] "b_A" = some
+      ⟨fun idx : TileIndex [BT, BT] =>
+        if tIndex s0 BT idx.1.val < T then
+          some (aElem s0 A T BT idx.1.val idx.2.1.val)
+        else some 0⟩) :
+    stepStmt (Stmt.assign .real [BT, BT] "b_A"
+        (Op.where (Op.ref .bool [BT, BT] "m_s") (Op.ref .real [BT, BT] "b_A")
+          (Op.broadcast (Op.const 0.0) [BT, BT]))) t
+      = some (t.setReg "b_A" .real [BT, BT] (cgfATile s0 A T BT)) := by
+  refine stepStmt_assign_eq_some ?_
+  rw [← cgf_aWhere_eq s0 A T BT]
+  exact cgf_where_eval _ _ _ _ (cgfMsTile BT)
+    ((⟨fun idx : TileIndex [BT, BT] =>
+      if tIndex s0 BT idx.1.val < T then
+        some (aElem s0 A T BT idx.1.val idx.2.1.val)
+      else some 0⟩ : Tile .real [BT, BT]))
+    ((⟨fun _ => some 0.0⟩ : Tile .real [BT, BT]))
+    (by rw [evalOp_ref]; exact hms)
+    (by rw [evalOp_ref]; exact hba)
+    (show evalOp ((Op.const 0.0).broadcast [BT, BT]) t
+        = some (⟨fun _ => some 0.0⟩ : Tile .real [BT, BT]) from
+      cgf_broadcast_eval (Op.const 0.0) [BT, BT] t (Tile.scalar (some 0.0))
+        (evalOp_const 0.0 t))
+
+/-- **Tail statement 7.** `b_o += tl.dot(b_A, b_v)` with all three registers known
+lands on `cgfOutTile`. -/
+private theorem cgf_finalAcc_run (s0 : BlockState) (q v g h A : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV : Nat) (t : BlockState)
+    (hbo : t.regs .real [BT, BV] "b_o" = some
+      (cgfAccTile s0 q g h s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV (numKB K BK)))
+    (hba : t.regs .real [BT, BT] "b_A" = some (cgfATile s0 A T BT))
+    (hbv : t.regs .real [BT, BV] "b_v" = some (cgfVTile s0 v s_v_h s_v_t T V BT BV)) :
+    stepStmt (Stmt.assign .real [BT, BV] "b_o"
+        (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+          (Op.ref .real [BT, BV] "b_o")
+          (Op.dot (batch := []) (Op.ref .real [BT, BT] "b_A")
+            (Op.ref .real [BT, BV] "b_v")))) t
+      = some (t.setReg "b_o" .real [BT, BV]
+          (cgfOutTile s0 q v g h A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+            T K V BT BK BV)) := by
+  refine stepStmt_assign_eq_some ?_
+  rw [← cgf_outTile_eq s0 q v g h A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+    T K V BT BK BV]
+  exact cgf_addTile_eval _ _ _ _
+    (cgfAccTile s0 q g h s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV (numKB K BK))
+    (Tile.dot [] (cgfATile s0 A T BT) (cgfVTile s0 v s_v_h s_v_t T V BT BV))
+    (by rw [evalOp_ref]; exact hbo)
+    (cgf_dot_eval _ _ _ (cgfATile s0 A T BT) (cgfVTile s0 v s_v_h s_v_t T V BT BV)
+      (by rw [evalOp_ref]; exact hba) (by rw [evalOp_ref]; exact hbv))
+
+/-! ## The tail walk and the main theorem -/
+
+theorem cgfPostLoop_run (s0 : BlockState) (q v g h o A : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat) (scale : ℝ)
+    (T K V BT BK BV : Nat) (t : BlockState)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BT, BV] => outOffset s0 s_v_h s_v_t BT BV idx))
+    (hinv : cgfInv s0 q g h s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV
+      (numKB K BK) t) :
+    ∃ sF, stepStmts (cgfPostLoop v o A s_v_h s_v_t T V BT BV) t = some sF
+      ∧ ∀ idx : TileIndex [BT, BV],
+          (tIndex s0 BT idx.1.val < T ∧ vIndex s0 BV idx.2.1.val < V) →
+          sF.readMem o (outOffset s0 s_v_h s_v_t BT BV idx)
+            = cgfOutput s0 q v g h A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+                T K V BT BK BV idx.1.val idx.2.1.val := by
+  obtain ⟨-, hmem, hpids, hiv, hit, hibh, hms, hbo⟩ := hinv
+  unfold cgfPostLoop
+  -- 1-3. the three block pointers
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cgf_makeBlockPtr_2d_eval v t _ _ _ [T, V] [BT, BV] [s_v_t, 1]
+      (s0.pids 2 * s_v_h) (s0.pids 1 * BT) (s0.pids 0 * BV)
+      (cgf_mulConst_eval t "i_bh" (s0.pids 2) s_v_h hibh)
+      (cgf_mulConst_eval t "i_t" (s0.pids 1) BT hit)
+      (cgf_mulConst_eval t "i_v" (s0.pids 0) BV hiv)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cgf_makeBlockPtr_2d_eval o _ _ _ _ [T, V] [BT, BV] [s_v_t, 1]
+      (s0.pids 2 * s_v_h) (s0.pids 1 * BT) (s0.pids 0 * BV)
+      (cgf_mulConst_eval _ "i_bh" (s0.pids 2) s_v_h (by simpa using hibh))
+      (cgf_mulConst_eval _ "i_t" (s0.pids 1) BT (by simpa using hit))
+      (cgf_mulConst_eval _ "i_v" (s0.pids 0) BV (by simpa using hiv))))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cgf_makeBlockPtr_2d_eval A _ _ _ _ [T, BT] [BT, BT] [BT, 1]
+      (s0.pids 2 * T * BT) (s0.pids 1 * BT) 0
+      (cgf_aBase_eval _ T BT (s0.pids 2) (by simpa using hibh))
+      (cgf_mulConst_eval _ "i_t" (s0.pids 1) BT (by simpa using hit))
+      (evalOp_constNat 0 _)))]
+  -- 4. `b_v = tl.load(p_v, boundary_check=(0, 1))`
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cgf_vLoad_eq s0 v _ s_v_h s_v_t T V BT BV
+      (by simpa [cgf_setReg_mem] using hmem) (by simp)))]
+  -- 5. `b_A = tl.load(p_A, boundary_check=(0, 1))`
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (cgf_aLoad_eq s0 A _ T BT (by simpa [cgf_setReg_mem] using hmem) (by simp)))]
+  -- 6. `b_A = tl.where(m_s, b_A, 0.)`
+  rw [stepStmts.cons_some (cgf_aWhere_run s0 A T BT _ (by simpa using hms) (by simp))]
+  -- 7. `b_o += tl.dot(b_A, b_v)`
+  rw [stepStmts.cons_some (cgf_finalAcc_run s0 q v g h A s_k_h s_k_t s_v_h s_v_t
+    s_h_h s_h_t scale T K V BT BK BV _ (by simpa using hbo) (by simp) (by simp))]
+  -- 8. the store
+  rw [stepStmts.cons_some
+    (cgf_store_eq o s_v_h s_v_t T V BT BV s0 _
+      (cgfOutTile s0 q v g h A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+        T K V BT BK BV)
+      (fun idx => cgfOutput s0 q v g h A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+        T K V BT BK BV idx.1.val idx.2.1.val)
+      (fun idx => rfl) (by simp) (by simp))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_⟩
+  intro idx hactive
+  unfold cgfStoreState
+  exact BlockState.scatter_readback_prop_masked_nd_of_true _ _ _ _ idx
+    (by simpa [tIndex, vIndex] using hactive)
+    (fun kk _ heq => hInj heq)
+
+/-- The prologue: three program ids, the causal mask, and the zeroed accumulator,
+as named facts on an opaque state (a `by simp` against a metavariable state cannot
+be postponed, so the headline consumes this instead of inline rewrites). -/
+theorem cgfPreLoop_run (s : BlockState) (BT BV : Nat) :
+    ∃ t, stepStmts (cgfPreLoop BT BV) s = some t
+      ∧ t.mem = s.mem
+      ∧ t.pids = s.pids
+      ∧ t.regs .nat [] "i_v" = some (Tile.scalar (s.pids 0))
+      ∧ t.regs .nat [] "i_t" = some (Tile.scalar (s.pids 1))
+      ∧ t.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ t.regs .bool [BT, BT] "m_s" = some (cgfMsTile BT)
+      ∧ t.regs .real [BT, BV] "b_o" = some (⟨fun _ => some 0⟩ : Tile .real [BT, BV]) := by
+  unfold cgfPreLoop
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 2 _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (cgf_ms_eval _ BT))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.full [BT, BV] (Op.const 0)) _
+        = some (⟨fun _ => some 0⟩ : Tile .real [BT, BV]) from by
+      rw [evalOp_full, evalOp_const]
+      rfl))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩ <;> simp [cgf_setReg_mem]
+
+/-! ## Main theorem -/
+
+set_option maxHeartbeats 1000000 in
+/-- **Genuine, dimension-general correctness** of `chunk_gla_fwd_kernel_o`. For
+every launch state, the kernel runs to completion and every in-window output lane
+holds `cgfOutput`: the inter-chunk sum over **all** `cdiv(K, BK)` K blocks of the
+scaled, gated query against the chunk state, plus the causally-masked intra-chunk
+`A · V` term.
+
+`hInj` says distinct output lanes get distinct `o` addresses — the standard
+row-major side condition, exactly as in the ported sibling `chunk_gla_simple`.
+Unlike that sibling, there is **no** `K = BK` hypothesis: the K loop is verified in
+full multi-block generality. -/
+specification chunk_gla_fwd_o_exec_genuine
+    (q v g h o A : RegionName)
+    (s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t : Nat)
+    (scale : ℝ) (T K V BT BK BV : Nat) (s : BlockState)
+    (hInj : Function.Injective
+      (fun idx : TileIndex [BT, BV] => outOffset s s_v_h s_v_t BT BV idx)) :
+    ∃ sF, exec (chunk_gla_fwd_o_surface q v g h o A s_k_h s_k_t s_v_h s_v_t
+        s_h_h s_h_t scale T K V BT BK BV).toAlgKernel s = some sF
+      ∧ ∀ idx : TileIndex [BT, BV],
+          (tIndex s BT idx.1.val < T ∧ vIndex s BV idx.2.1.val < V) →
+          sF.readMem o (outOffset s s_v_h s_v_t BT BV idx)
+            = cgfOutput s q v g h A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+                T K V BT BK BV idx.1.val idx.2.1.val := by
+  rw [exec, cgf_body_eq, List.append_assoc]
+  -- prologue
+  obtain ⟨t0, hpre, h0mem, h0pids, h0iv, h0it, h0ibh, h0ms, h0bo⟩ :=
+    cgfPreLoop_run s BT BV
+  rw [stepStmts.append_some hpre]
+  rw [show [Stmt.forRangeDyn "i_k" (Op.constNat 0)
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil (Op.constNat K) (Op.constNat BK))
+            (Op.constNat 1))
+          (Op.constNat BK))
+        (Op.constNat 1)
+        (cgfLoopBody g h q s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV)]
+      ++ cgfPostLoop v o A s_v_h s_v_t T V BT BV
+    = Stmt.forRangeDyn "i_k" (Op.constNat 0)
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil (Op.constNat K) (Op.constNat BK))
+            (Op.constNat 1))
+          (Op.constNat BK))
+        (Op.constNat 1)
+        (cgfLoopBody g h q s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV)
+      :: cgfPostLoop v o A s_v_h s_v_t T V BT BV from rfl]
+  -- the collapsed K loop
+  obtain ⟨t1, hloop, hinv1⟩ :=
+    cgfLoop_collapse s q g h s_k_h s_k_t s_h_h s_h_t scale T K V BT BK BV t0
+      ⟨Nat.zero_le _, h0mem, h0pids, h0iv, h0it, h0ibh, h0ms,
+        by rw [h0bo, cgfAccTile_zero]⟩
+  rw [stepStmts.cons_some hloop]
+  -- the tail
+  obtain ⟨sF, hpost, hout⟩ :=
+    cgfPostLoop_run s q v g h o A s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
+      T K V BT BK BV t1 hInj hinv1
+  exact ⟨sF, hpost, hout⟩
+
 end Correct_without_Rounding
+
 
 end VeriTile.Bench.TritonBenchG.ChunkGlaFwd
