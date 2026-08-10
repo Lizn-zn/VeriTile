@@ -428,6 +428,39 @@ theorem mdq_preLoop_eq (a_ptr c_ptr scales_ptr : RegionName)
           stride_bk stride_bn stride_scales_n stride_zeros_n NO_GROUPS BM BN BK GM := by
   rfl
 
+/-- The seven statements the `if not NO_GROUPS` branch runs: the group row, then a
+reload of `scales` and of the packed `zeros` word, the nibble extraction, and the
+scaling `zeros = zeros * scales`. Named separately because the step proof has to
+reason about the branch on its own — under `NO_GROUPS` it is skipped entirely and
+the prologue's pre-load at row `0` is what the body uses. -/
+def mdqGroupReload (groupsize stride_scales_g stride_zeros_g BN BK : Nat) :
+    List Stmt :=
+  [ Stmt.assign .nat [] "g_id"
+      (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "k")
+        (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat groupsize)
+          (Op.constNat BK))),
+    Stmt.assign .ptr [BN] "ptr"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN] "scales_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "g_id")
+          (Op.constNat stride_scales_g))),
+    Stmt.assign .real [BN] "scales"
+      (Op.load .real (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none),
+    Stmt.assign .ptr [BN] "ptr"
+      (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN] "zeros_ptrs")
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "g_id")
+          (Op.constNat stride_zeros_g))),
+    Stmt.assign .nat [BN] "zeros"
+      (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none),
+    Stmt.assign .nat [BN] "zeros"
+      (Op.bitAnd Broadcast.scalarR
+        (Op.shiftRight (Broadcast.consSame Broadcast.nil) (Op.ref .nat [BN] "zeros")
+          (Op.ref .nat [BN] "zeros_shifter"))
+        (Op.constNat 15)),
+    Stmt.assign .real [BN] "zeros"
+      (Op.mul .real (Broadcast.consSame Broadcast.nil)
+        (Op.natToReal (Op.ref .nat [BN] "zeros"))
+        (Op.ref .real [BN] "scales")) ]
+
 /-- The compiled K-loop body: the two loads, the `not NO_GROUPS` per-group reload,
 the unpack / scale / shift of `b`, the `tl.dot` accumulation, and the two pointer
 advances. -/
@@ -443,31 +476,7 @@ def mdqLoopBody
     Stmt.assign .nat [BK, BN] "b"
       (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BK, BN] "b_ptrs")) MaskOpt.none),
     Stmt.ifThen (Op.boolNot (Op.constBool NO_GROUPS))
-      [ Stmt.assign .nat [] "g_id"
-          (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.ref .nat [] "k")
-            (Op.floorDiv IntegralDType.nat Broadcast.nil (Op.constNat groupsize)
-              (Op.constNat BK))),
-        Stmt.assign .ptr [BN] "ptr"
-          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN] "scales_ptrs")
-            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "g_id")
-              (Op.constNat stride_scales_g))),
-        Stmt.assign .real [BN] "scales"
-          (Op.load .real (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none),
-        Stmt.assign .ptr [BN] "ptr"
-          (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [BN] "zeros_ptrs")
-            (Op.mul .nat Broadcast.nil (Op.ref .nat [] "g_id")
-              (Op.constNat stride_zeros_g))),
-        Stmt.assign .nat [BN] "zeros"
-          (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none),
-        Stmt.assign .nat [BN] "zeros"
-          (Op.bitAnd Broadcast.scalarR
-            (Op.shiftRight (Broadcast.consSame Broadcast.nil) (Op.ref .nat [BN] "zeros")
-              (Op.ref .nat [BN] "zeros_shifter"))
-            (Op.constNat 15)),
-        Stmt.assign .real [BN] "zeros"
-          (Op.mul .real (Broadcast.consSame Broadcast.nil)
-            (Op.natToReal (Op.ref .nat [BN] "zeros"))
-            (Op.ref .real [BN] "scales")) ],
+      (mdqGroupReload groupsize stride_scales_g stride_zeros_g BN BK),
     Stmt.assign .nat [BK, BN] "b"
       (Op.bitAnd Broadcast.scalarR
         (Op.shiftRight (Broadcast.consSame (Broadcast.consR Broadcast.nil))
@@ -840,6 +849,12 @@ noncomputable def mdqZerosPtrs (zeros : Region .nat) (stride_zeros_n BN pn : Nat
     Tile .ptr [BN] :=
   ⟨fun idx => (Region.cast zeros, mdqZerosAddr stride_zeros_n BN pn idx)⟩
 
+/-- The packed zero-point words as the load delivers them, before the nibble is
+extracted — eight zero-points per word, so lanes `8c … 8c+7` share one. -/
+noncomputable def mdqZerosRaw (s : BlockState) (zeros : Region .nat)
+    (stride_zeros_g stride_zeros_n BN pn g : Nat) : Tile .nat [BN] :=
+  ⟨fun idx => zerosWord s zeros stride_zeros_g stride_zeros_n BN pn g idx.1.val⟩
+
 /-- `scales` as either branch leaves it, at group row `g`. -/
 noncomputable def mdqScalesTile (s : BlockState) (scales : RegionName)
     (stride_scales_g stride_scales_n BN pn g : Nat) : Tile .real [BN] :=
@@ -1029,13 +1044,12 @@ private theorem mdq_zerosLoad_eq (s0 : BlockState) (zeros : Region .nat)
           (mdqZerosPtrs zeros stride_zeros_n BN pn)
           (Tile.scalar (g * stride_zeros_g)))) :
     evalOp (Op.load .nat (MemAccess.ptr (Op.ref .ptr [BN] "ptr")) MaskOpt.none) t
-      = some (⟨fun idx => zerosWord s0 zeros stride_zeros_g stride_zeros_n BN pn g
-          idx.1.val⟩ : Tile .nat [BN]) := by
+      = some (mdqZerosRaw s0 zeros stride_zeros_g stride_zeros_n BN pn g) := by
   rw [mdq_load_ptr_none "ptr" t _ hp]
   refine congrArg some ?_
   apply Tile.ext
   intro idx
-  simp only [zerosWord, mdqZerosPtrs_offset, BlockState.readMemValue,
+  simp only [mdqZerosRaw, zerosWord, mdqZerosPtrs_offset, BlockState.readMemValue,
     BlockState.readMemTyped, hmem]
 
 /-- `//` on `nat` scalars — there is no `evalOp_floorDiv` in the library. -/
@@ -1081,17 +1095,191 @@ private theorem mdqZerosTile_eq (s0 : BlockState) (scales : RegionName)
           (Tile.natToReal
             (Tile.bop (· &&& ·) Broadcast.scalarR
               (Tile.bop (· >>> ·) (Broadcast.consSame Broadcast.nil)
-                (⟨fun idx => zerosWord s0 zeros stride_zeros_g stride_zeros_n BN pn g
-                    idx.1.val⟩ : Tile .nat [BN])
+                (mdqZerosRaw s0 zeros stride_zeros_g stride_zeros_n BN pn g)
                 (mdqZerosShifter BN pn))
               (Tile.scalar 15)))
           (mdqScalesTile s0 scales stride_scales_g stride_scales_n BN pn g) := by
   apply Tile.ext
   intro idx
-  simp only [mdqZerosTile, zeroScaled, zerosNibble, mdqScalesTile, mdqZerosShifter,
-    Tile.bop_data, Tile.natToReal, Tile.scalar, Broadcast.leftIndex,
+  simp only [mdqZerosTile, zeroScaled, zerosNibble, mdqScalesTile, mdqZerosRaw,
+    mdqZerosShifter, Tile.bop_data, Tile.natToReal, Tile.scalar, Broadcast.leftIndex,
     Broadcast.rightIndex, NumericDType.mul, WithBot.realMul]
   rfl
+
+/-- `//` on two `nat` **scalars**, in the shape the group row is computed in. -/
+private theorem mdq_floorDivScalar_eval (x y : Op .nat []) (t : BlockState)
+    (u v : Nat) (hx : evalOp x t = some (Tile.scalar u))
+    (hy : evalOp y t = some (Tile.scalar v)) :
+    evalOp (Op.floorDiv IntegralDType.nat Broadcast.nil x y) t
+      = some (Tile.scalar (u / v)) := by
+  rw [mdq_floorDiv_eval Broadcast.nil x y t _ _ hx hy]
+  rfl
+
+/-- `*` on two tiles, given both operand values — the library's `evalOp_mul` is
+stated as a `do` block, which is not a `rw` target once the operands are known. -/
+private theorem mdq_mulTile_eval {dtype : TileDType} (h : NumericDType dtype)
+    {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op dtype a) (y : Op dtype b) (t : BlockState)
+    (vx : Tile dtype a) (vy : Tile dtype b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.mul h bc x y) t = some (Tile.bop h.mul bc vx vy) := by
+  rw [evalOp_mul, hx, hy]
+  rfl
+
+/-- `Stmt.ifThen`'s step equation — `stepStmt` is defined by well-founded
+recursion, so the definitional unfolding has to be named. -/
+private theorem mdq_ifThen_step (cond : Op .bool []) (body : List Stmt)
+    (t : BlockState) :
+    stepStmt (Stmt.ifThen cond body) t
+      = (evalOp cond t).bind
+          (fun c => if c.data PUnit.unit then stepStmts body t else some t) := by
+  unfold stepStmt
+  cases evalOp cond t <;> rfl
+
+/-- The branch guard `not NO_GROUPS` is a closed scalar. -/
+private theorem mdq_notFlag_eval (flag : Bool) (t : BlockState) :
+    evalOp (Op.boolNot (Op.constBool flag)) t = some (Tile.scalar (!flag)) := by
+  simp only [evalOp]
+  rfl
+
+/-! ### The `NO_GROUPS` branch
+
+The one place where the two configurations of this kernel genuinely diverge, and
+the crux of the step proof. Both paths are made to land on the *same* statement —
+`scales` and `zeros` hold the tiles for group row `groupRow NO_GROUPS groupsize BK
+i` — so everything downstream is written once:
+
+* `NO_GROUPS = true`: the branch is skipped, the state is untouched, and the
+  registers still hold the prologue's row-`0` pre-load, which `groupRow_of_noGroups`
+  identifies with the row asked for.
+* `NO_GROUPS = false`: the seven statements re-establish both registers at row
+  `i / (groupsize / BK)`, which `groupRow_of_groups` identifies with the same.
+
+The register-preservation clause is stated as a side condition on *names* rather
+than as a list of the individual registers the rest of the body needs — the branch
+writes only `g_id`, `ptr`, `scales`, `zeros`, and nothing else has to be enumerated. -/
+
+private theorem mdq_groupBranch_run (s0 : BlockState) (scales : RegionName)
+    (zeros : Region .nat) (t : BlockState) (NO_GROUPS : Bool)
+    (groupsize stride_scales_g stride_scales_n stride_zeros_g stride_zeros_n
+      BN BK pn i : Nat)
+    (hmem : t.mem = s0.mem)
+    (hk : t.regs .nat [] "k" = some (Tile.scalar i))
+    (hsp : t.regs .ptr [BN] "scales_ptrs"
+      = some (mdqScalesPtrs scales stride_scales_n BN pn))
+    (hzp : t.regs .ptr [BN] "zeros_ptrs"
+      = some (mdqZerosPtrs zeros stride_zeros_n BN pn))
+    (hzs : t.regs .nat [BN] "zeros_shifter" = some (mdqZerosShifter BN pn))
+    (hpre : NO_GROUPS = Bool.true →
+      t.regs .real [BN] "scales"
+          = some (mdqScalesTile s0 scales stride_scales_g stride_scales_n BN pn 0)
+        ∧ t.regs .real [BN] "zeros"
+          = some (mdqZerosTile s0 scales zeros stride_scales_g stride_scales_n
+              stride_zeros_g stride_zeros_n BN pn 0)) :
+    ∃ t', stepStmt (Stmt.ifThen (Op.boolNot (Op.constBool NO_GROUPS))
+          (mdqGroupReload groupsize stride_scales_g stride_zeros_g BN BK)) t
+        = some t'
+      ∧ t'.mem = t.mem
+      ∧ t'.pids = t.pids
+      ∧ (∀ (dtype : TileDType) (sh : TileShape) (nm : RegName),
+          nm ≠ "g_id" → nm ≠ "ptr" → nm ≠ "scales" → nm ≠ "zeros" →
+          t'.regs dtype sh nm = t.regs dtype sh nm)
+      ∧ t'.regs .real [BN] "scales"
+          = some (mdqScalesTile s0 scales stride_scales_g stride_scales_n BN pn
+              (groupRow NO_GROUPS groupsize BK i))
+      ∧ t'.regs .real [BN] "zeros"
+          = some (mdqZerosTile s0 scales zeros stride_scales_g stride_scales_n
+              stride_zeros_g stride_zeros_n BN pn
+              (groupRow NO_GROUPS groupsize BK i)) := by
+  -- The DSL claims `true` / `false` as expression tokens, so the two
+  -- configurations are separated by `by_cases` on the flag rather than by named
+  -- `cases` alternatives.
+  by_cases hng : NO_GROUPS = Bool.true
+  · -- `NO_GROUPS`: the guard is `false`, the state is untouched, and the
+    -- prologue's row-`0` pre-load is exactly what is being asked for.
+    subst hng
+    obtain ⟨hs, hz⟩ := hpre rfl
+    refine ⟨t, ?_, rfl, rfl, fun _ _ _ _ _ _ _ => rfl, ?_, ?_⟩
+    · rw [mdq_ifThen_step, mdq_notFlag_eval]
+      rfl
+    · rw [groupRow_of_noGroups]; exact hs
+    · rw [groupRow_of_noGroups]; exact hz
+  · -- Otherwise the guard is `true`: walk the seven statements.
+    have hflag : NO_GROUPS = Bool.false := by simpa using hng
+    subst hflag
+    have hstep : stepStmt (Stmt.ifThen (Op.boolNot (Op.constBool Bool.false))
+          (mdqGroupReload groupsize stride_scales_g stride_zeros_g BN BK)) t
+        = stepStmts (mdqGroupReload groupsize stride_scales_g stride_zeros_g BN BK)
+            t := by
+      rw [mdq_ifThen_step, mdq_notFlag_eval]
+      rfl
+    rw [hstep, groupRow_of_groups]
+    unfold mdqGroupReload
+    -- 1. `g_id = k // (groupsize // BLOCK_SIZE_K)`
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (mdq_floorDivScalar_eval _ _ t i (groupsize / BK)
+        (by rw [evalOp_ref]; exact hk)
+        (mdq_floorDivScalar_eval _ _ t groupsize BK (evalOp_constNat _ _)
+          (evalOp_constNat _ _))))]
+    -- 2. `ptr = scales_ptrs + g_id * stride_scales_g`
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (mdq_ptrAdd_eval Broadcast.scalarR "scales_ptrs" _
+        (mdqScalesPtrs scales stride_scales_n BN pn) _
+        (Tile.scalar (i / (groupsize / BK) * stride_scales_g))
+        (by simpa using hsp)
+        (mdq_mulRef_eval _ "g_id" (i / (groupsize / BK)) stride_scales_g (by simp))))]
+    -- 3. `scales = tl.load(ptr)`
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (mdq_scalesLoad_eq s0 scales _ stride_scales_g stride_scales_n BN pn
+        (i / (groupsize / BK)) (by simpa using hmem) (by simp)))]
+    -- 4. `ptr = zeros_ptrs + g_id * stride_zeros_g`
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (mdq_ptrAdd_eval Broadcast.scalarR "zeros_ptrs" _
+        (mdqZerosPtrs zeros stride_zeros_n BN pn) _
+        (Tile.scalar (i / (groupsize / BK) * stride_zeros_g))
+        (by simpa using hzp)
+        (mdq_mulRef_eval _ "g_id" (i / (groupsize / BK)) stride_zeros_g (by simp))))]
+    -- 5. `zeros = tl.load(ptr)` — the packed word
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (mdq_zerosLoad_eq s0 zeros _ stride_zeros_g stride_zeros_n BN pn
+        (i / (groupsize / BK)) (by simpa using hmem) (by simp)))]
+    -- 6. `zeros = (zeros >> zeros_shifter) & 0xF`.  The intermediate tiles are
+    -- given explicitly: `rw` cannot leave them as metavariables here, since the
+    -- register value is what the next statement reads back.
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (mdq_bitAnd_eval Broadcast.scalarR _ _ _
+        (Tile.bop (· >>> ·) (Broadcast.consSame Broadcast.nil)
+          (mdqZerosRaw s0 zeros stride_zeros_g stride_zeros_n BN pn
+            (i / (groupsize / BK)))
+          (mdqZerosShifter BN pn))
+        (Tile.scalar 15)
+        (mdq_shiftRight_eval (Broadcast.consSame Broadcast.nil) _ _ _
+          (mdqZerosRaw s0 zeros stride_zeros_g stride_zeros_n BN pn
+            (i / (groupsize / BK)))
+          (mdqZerosShifter BN pn) (by rw [evalOp_ref]; simp)
+          (by rw [evalOp_ref]; simpa using hzs))
+        (evalOp_constNat _ _)))]
+    -- 7. `zeros = zeros.to(tl.float16) * scales`
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (mdq_mulTile_eval NumericDType.real (Broadcast.consSame Broadcast.nil) _ _ _
+        (Tile.natToReal
+          (Tile.bop (· &&& ·) Broadcast.scalarR
+            (Tile.bop (· >>> ·) (Broadcast.consSame Broadcast.nil)
+              (mdqZerosRaw s0 zeros stride_zeros_g stride_zeros_n BN pn
+                (i / (groupsize / BK)))
+              (mdqZerosShifter BN pn))
+            (Tile.scalar 15)))
+        (mdqScalesTile s0 scales stride_scales_g stride_scales_n BN pn
+          (i / (groupsize / BK)))
+        (mdq_natToReal_eval _ _ _ (by rw [evalOp_ref]; simp))
+        (by rw [evalOp_ref]; simp)))]
+    rw [stepStmts.nil]
+    refine ⟨_, rfl, rfl, rfl, ?_, ?_, ?_⟩
+    · intro dtype sh nm h1 h2 h3 h4
+      simp [h1, h2, h3, h4]
+    · simp
+    · rw [mdqZerosTile_eq]
+      simp
 
 end Correct_without_Rounding
 
