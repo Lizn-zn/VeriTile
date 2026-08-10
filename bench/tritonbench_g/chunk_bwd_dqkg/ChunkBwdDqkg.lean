@@ -542,6 +542,85 @@ theorem cbd_body_eq (q k v h g do_ dh dq dk dg : RegionName)
   rfl
 
 
+
+/-! ## Per-statement eval recipes
+
+Private copies, since bench ports never import each other. Each is the shape the
+compiled statement list emits, so the step-through can `rw` straight through. -/
+
+/-- `name * c` on a `nat` scalar register. -/
+private theorem cbd_mulRef_eval (t : BlockState) (nm : RegName) (val c : Nat)
+    (hr : t.regs .nat [] nm = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] nm) (Op.constNat c)) t
+      = some (Tile.scalar (val * c)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hr, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- `nameA * nameB` on two `nat` scalar registers (the `dg` row base). -/
+private theorem cbd_mulRefRef_eval (t : BlockState) (a b : RegName) (va vb : Nat)
+    (ha : t.regs .nat [] a = some (Tile.scalar va))
+    (hb : t.regs .nat [] b = some (Tile.scalar vb)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] a) (Op.ref .nat [] b)) t
+      = some (Tile.scalar (va * vb)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, ha, hb, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- 1-D `tl.make_block_ptr` with a computed base and a computed offset. -/
+private theorem cbd_mkptr_1d (R : RegionName) (len stride BT : Nat)
+    (baseOp offOp : Op .nat []) (t : BlockState) (base off : Nat)
+    (hbase : evalOp baseOp t = some (Tile.scalar base))
+    (hoff : evalOp offOp t = some (Tile.scalar off)) :
+    evalOp (Op.makeBlockPtrDynOffsets R baseOp [len] [BT] [stride] [offOp]) t
+      = some (⟨fun _ : TileIndex [BT] =>
+          { region := R, baseOffset := base, parentShape := [len],
+            blockShape := [BT], strides := [stride], offsets := [off] }⟩
+          : Tile .blockPtr [BT]) := by
+  rw [makeBlockPtr2_eval]
+  simp only [hbase, hoff, List.mapM_cons, List.mapM_nil, Option.bind_some,
+    Option.pure_def, Option.bind_eq_bind, Tile.scalar_data]
+
+/-- 2-D `tl.make_block_ptr` with a computed base and two computed offsets. -/
+private theorem cbd_mkptr_2d (R : RegionName) (d0 d1 st0 st1 B0 B1 : Nat)
+    (baseOp o0 o1 : Op .nat []) (t : BlockState) (base f0 f1 : Nat)
+    (hbase : evalOp baseOp t = some (Tile.scalar base))
+    (h0 : evalOp o0 t = some (Tile.scalar f0))
+    (h1 : evalOp o1 t = some (Tile.scalar f1)) :
+    evalOp (Op.makeBlockPtrDynOffsets R baseOp [d0, d1] [B0, B1] [st0, st1] [o0, o1]) t
+      = some (⟨fun _ : TileIndex [B0, B1] =>
+          { region := R, baseOffset := base, parentShape := [d0, d1],
+            blockShape := [B0, B1], strides := [st0, st1], offsets := [f0, f1] }⟩
+          : Tile .blockPtr [B0, B1]) := by
+  rw [makeBlockPtr2_eval]
+  simp only [hbase, h0, h1, List.mapM_cons, List.mapM_nil, Option.bind_some,
+    Option.pure_def, Option.bind_eq_bind, Tile.scalar_data]
+
+/-- Boundary-checked 1-D block-pointer load: in-region lanes read
+`base + (off + i)*stride`, the rest read `0`. -/
+private theorem cbd_load_1d (R : RegionName) (len stride BT base off : Nat)
+    (bpName : RegName) (t : BlockState)
+    (hbp : t.regs .blockPtr [BT] bpName = some (⟨fun _ : TileIndex [BT] =>
+        { region := R, baseOffset := base, parentShape := [len],
+          blockShape := [BT], strides := [stride], offsets := [off] }⟩ :
+        Tile .blockPtr [BT])) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT] bpName) [0]) MaskOpt.none) t
+      = some (⟨fun idx : TileIndex [BT] =>
+          if off + idx.1.val < len then
+            some (t.readMem R (base + (off + idx.1.val) * stride))
+          else some 0⟩ : Tile .real [BT]) := by
+  simp only [evalOp, evalOp_ref, hbp]
+  refine congrArg some ?_
+  congr 1
+  funext idx
+  obtain ⟨i1, u⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.inBounds_1d, BlockPtr.address_1d,
+    BlockState.readMemValue_real, decide_eq_true_eq]
+  by_cases hh : off + i1.val < len
+  · simp [hh]
+  · simp [hh, BlockState.defaultCarrier]
+
 /-! ## The single value-block regime
 
 `0 < V` and `V ≤ BV` make `ceil(V/BV) = 1`, so the value-axis loop runs exactly
@@ -558,7 +637,7 @@ theorem cbdStopOp_eval (V BV : Nat) (hV : 0 < V) (hVB : V ≤ BV) (s : BlockStat
   refine congrArg some ?_
   apply Tile.ext
   intro z
-  simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex, Broadcast.rightIndex,
+  simp only [Tile.bop_data, Tile.scalar, Broadcast.leftIndex,
     NumericDType.div, NumericDType.sub, NumericDType.add, hdiv]
 
 /-- **Loop collapse.** In the single value-block regime the `forRangeDyn` reduces
@@ -571,12 +650,12 @@ theorem cbdLoop_collapse (v h do_ dh : RegionName)
       = stepStmts (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)
           (s.setReg "i_v" .nat [] (Tile.scalar 0)) := by
   rw [stepForRangeAux.forRangeDyn_unfold]
-  simp only [stepStmt, evalOp_constNat, cbdStopOp_eval V BV hV hVB s,
-    Option.bind_eq_bind, Option.bind_some, Tile.scalar_data]
+  simp only [evalOp_constNat, cbdStopOp_eval V BV hV hVB s,
+    Option.bind_some, Tile.scalar_data]
   rw [stepForRangeAux.step_lt one_ne_zero (by norm_num)]
   cases hb : stepStmts (cbdLoopBody v h do_ dh s_v_h s_v_t s_h_h s_h_t T K V BT BK BV NT)
       (s.setReg "i_v" .nat [] (Tile.scalar 0)) with
-  | none => simp [hb]
+  | none => simp
   | some s' =>
       simp only [Option.bind_some]
       exact stepForRangeAux.step_ge one_ne_zero (by norm_num)
