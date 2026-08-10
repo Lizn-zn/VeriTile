@@ -54,14 +54,18 @@ actual surface (95 `tl.*` forms, extracted from `VeriTile/Triton/DSL/**`):
 
 | Verdict | Count |
 |---|---:|
-| Portable now — every form it uses already in the DSL | 9 |
-| Blocked on a missing primitive, or on an ℝ-model limit | 22 |
+| Portable now — every form it uses already in the DSL | 2 |
+| Blocked on a missing primitive, or on an ℝ-model limit | 29 |
 
-Ranked unlock levers for the 22: fp8 dtype channel (7), RNG (4), a `while`
+Ranked unlock levers for the 29: fp8 dtype channel (7), a **descending `for`
+range** (5), RNG (4), signed fixed-width integer arithmetic (3), a `while`
 statement in `Stmt` (3), `tl.interleave` (2), an integer-channel `tl.dot` (2),
 `tl.static_assert` (2, a macro no-op), `tl.broadcast_to` (1, an alias), IEEE
-inf/NaN + `libdevice.isfinited` (1), signed fixed-width integer arithmetic (1). See [`tritonbench_coverage.md`](./tritonbench_coverage.md) for
-the per-kernel table, the method, and what "portable" does and does not claim.
+inf/NaN + `libdevice.isfinited` (1). See
+[`tritonbench_coverage.md`](./tritonbench_coverage.md) for the per-kernel table,
+the method, and what "portable" does and does not claim — including the
+2026-08-10 recount that took `Portable now` from 9 to 2, because the verdict had
+been formed from one jit kernel per file rather than from all of them.
 
 The "OK" verdict is *expressibility*, not *proof feasibility*: many `OK`
 kernels (FA-1 backward, RWKV6, Mamba SSM, chunked GLA) still need fresh proof
