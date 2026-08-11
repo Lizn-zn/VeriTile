@@ -22,6 +22,23 @@ bwd_dh: dh[·,·,t] = D_t,  D_NT = 0,         D_{t-1} = D_t + (scale·q_t) · do
 The store-then-accumulate order matters and is carried by the spec: chunk `t`
 receives the state *before* chunk `t`'s own contribution.
 
+## Proof map
+
+```
+cla_fwd_h_surface / cla_bwd_dh_surface   faithful DSL transcriptions
+├─ cla_fwd_body_eq / cla_bwd_body_eq     statement-list splits (rfl)
+├─ claHState / claDhState                closed-form per-chunk specs
+├─ claStore_step_eq / _props             ONE generic [BK,BV] state-block store
+│                                        (serves the h, ht, and dh stores)
+├─ claHOffset_chunk_disjoint             distinct chunks own disjoint K·V blocks
+├─ claFwdBody_step / claBwdBody_step     one chunk: store carry, load, dot
+├─ claFwdLoop_run / claBwdLoop_run       `forRange_inv` with store-history clause
+├─ claInitBranch_run / claFinalBranch_run  the two constexpr gates (fwd)
+├─ ★ cla_fwd_h_exec_genuine              h[·,·,t] = pre-chunk state, ∀ t < NT;
+│                                        ht = final state under STORE_FINAL_STATE
+└─ ★ cla_bwd_dh_exec_genuine             dh[·,·,t] = strictly-later-chunks sum
+```
+
 ## The descending loop, spelled ascending
 
 `bwd_kernel_dh` iterates `for i_t in range(NT - 1, -1, -1)`. The DSL's `forRange`

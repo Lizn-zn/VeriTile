@@ -177,6 +177,12 @@ The current documented blocker set is:
 - `chunk_gla_fwd` — output kernel `chunk_gla_fwd_kernel_o` ported with a
   full multi-block K-loop headline; the four `A`-builder kernels open with
   bare early `return`s (no `Stmt` early exit) and are the trusted boundary.
+- `chunk_linear_attn` — the state-recurrence pair (`fwd_kernel_h`, the file's
+  first kernel, + `bwd_kernel_dh`) ported; `fwd_kernel_o`/`bwd_kernel_dqkv`
+  are the trusted boundary. `bwd_kernel_dh`'s descending
+  `range(NT - 1, -1, -1)` spelled as the ascending `for j in range(0, NT)`
+  with `i_t = NT - 1 - j` as the body's first statement (the
+  `triton_linear_activation` respelling); `do` → `do_`.
 - `bgmv_shrink_kernel` — `-1` sentinel early return as a guard (write-free
   path proven); `SPLIT_K == 1` store-vs-atomic tail split into two surfaces;
   `tl.max_contiguous` hint erased; unused `xk_stride` dropped.
