@@ -1399,6 +1399,231 @@ private theorem crh_fwd_advance_eval (s sin : BlockState) (k v h0 : RegionName)
     (fun c => rfl) (fun c => rfl)]
   rfl
 
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **One forward chunk.** Stores the carried state at chunk `t`'s block of
+`h`, runs the ragged-boundary gate, then advances by the decayed recurrence. -/
+theorem crhFwdBody_step (s sin : BlockState) (k v h h0 : RegionName) (UIS : Bool)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d s_h_h s_h_t : Nat)
+    (H T K V BT BK BV NT : Nat) (t : Nat)
+    (hHk : h ≠ k) (hHv : h ≠ v) (hσ : BV ≤ s_h_t)
+    (hmemK : ∀ off, sin.readMem k off = s.readMem k off)
+    (hmemV : ∀ off, sin.readMem v off = s.readMem v off)
+    (hik : sin.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)))
+    (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hit : sin.regs .nat [] "i_t" = some (Tile.scalar t))
+    (hoi : sin.regs .nat [BT] "o_i" = some (crhOiTile BT))
+    (hbb : sin.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H))))
+    (hdb : sin.regs .real [] "d_b" = some (Tile.scalar (some (crhDbBwd s H BT))))
+    (hdi : sin.regs .real [BT] "d_i" = some (crhDiStdTile s H BT))
+    (hbh : sin.regs .real [BK, BV] "b_h" = some (crhHTile s k v h0 UIS
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d H T K V BT BK BV NT t)) :
+    ∃ s', stepStmts (crhFwdBody k v h s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        s_h_h s_h_t T K V BT BK BV NT) sin = some s'
+      ∧ s'.pids = sin.pids
+      ∧ s'.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0))
+      ∧ s'.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+      ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ s'.regs .nat [BT] "o_i" = some (crhOiTile BT)
+      ∧ s'.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H)))
+      ∧ s'.regs .real [] "d_b" = some (Tile.scalar (some (crhDb s H T BT NT t)))
+      ∧ s'.regs .real [BT] "d_i" = some (crhDiFullTile s H T BT NT t)
+      ∧ s'.regs .real [BK, BV] "b_h" = some (crhHTile s k v h0 UIS
+          s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d H T K V BT BK BV NT (t + 1))
+      ∧ (∀ rg off, rg ≠ h → s'.readMem rg off = sin.readMem rg off)
+      ∧ (∀ idx : TileIndex [BK, BV], crhActive s K V BK BV idx →
+          s'.readMem h (crhHOffset s s_h_h s_h_t K V BK BV t idx)
+            = crhState s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                H T K V BT BK BV NT t idx.1.val idx.2.1.val)
+      ∧ (∀ off, (∀ idx : TileIndex [BK, BV], crhActive s K V BK BV idx →
+            off ≠ crhHOffset s s_h_h s_h_t K V BK BV t idx) →
+          s'.readMem h off = sin.readMem h off) := by
+  unfold crhFwdBody
+  -- p_k
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_makeBlockPtr_2d_eval k sin _ _ _ [K, T] [BK, BT] [s_qk_d, s_qk_t]
+      (s.pids 2 * s_qk_h) (s.pids 0 * BK) (t * BT)
+      (crh_mulConst_eval sin "i_bh" (s.pids 2) s_qk_h hibh)
+      (crh_mulConst_eval sin "i_k" (s.pids 0) BK hik)
+      (crh_mulConst_eval sin "i_t" t BT hit)))]
+  -- p_v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_makeBlockPtr_2d_eval v _ _ _ _ [T, V] [BT, BV] [s_vo_t, s_vo_d]
+      (s.pids 2 * s_vo_h) (t * BT) (s.pids 1 * BV)
+      (crh_mulConst_eval _ "i_bh" (s.pids 2) s_vo_h (by simpa using hibh))
+      (crh_mulConst_eval _ "i_t" t BT (by simpa using hit))
+      (crh_mulConst_eval _ "i_v" (s.pids 1) BV (by simpa using hiv))))]
+  -- p_h
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_makeBlockPtr_2d_eval h _ _ _ _ [K, V] [BK, BV] [s_h_t, 1]
+      (s.pids 2 * s_h_h + t * K * V) (s.pids 0 * BK) (s.pids 1 * BV)
+      (crh_hBase_eval _ s_h_h K V (s.pids 2) t (by simpa using hibh)
+        (by simpa using hit))
+      (crh_mulConst_eval _ "i_k" (s.pids 0) BK (by simpa using hik))
+      (crh_mulConst_eval _ "i_v" (s.pids 1) BV (by simpa using hiv))))]
+  -- the state store into h's chunk-t block
+  rw [stepStmts.cons_some (crhStore_step_eq _ h "b_h" "p_h"
+    (s.pids 2 * s_h_h + t * K * V) s_h_t (s.pids 0 * BK) (s.pids 1 * BV) K V BK BV
+    (fun e p => crhState s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+      H T K V BT BK BV NT t e p)
+    (crhHTile s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+      H T K V BT BK BV NT t)
+    (fun e p => rfl)
+    (by simpa using hbh)
+    (by simp))]
+  obtain ⟨hSpids, hSregs, hSact, hSoth, hSoff⟩ :=
+    crhStore_step_props
+      (((sin.setReg "p_k" .blockPtr [BK, BT]
+          (⟨fun _ => BlockPtr.mk k (s.pids 2 * s_qk_h) [K, T] [BK, BT]
+            [s_qk_d, s_qk_t] [s.pids 0 * BK, t * BT]⟩ : Tile .blockPtr [BK, BT])).setReg
+        "p_v" .blockPtr [BT, BV]
+          (⟨fun _ => BlockPtr.mk v (s.pids 2 * s_vo_h) [T, V] [BT, BV]
+            [s_vo_t, s_vo_d] [t * BT, s.pids 1 * BV]⟩ : Tile .blockPtr [BT, BV])).setReg
+        "p_h" .blockPtr [BK, BV]
+          (⟨fun _ => BlockPtr.mk h (s.pids 2 * s_h_h + t * K * V) [K, V] [BK, BV]
+            [s_h_t, 1] [s.pids 0 * BK, s.pids 1 * BV]⟩ : Tile .blockPtr [BK, BV]))
+      h (s.pids 2 * s_h_h + t * K * V) s_h_t (s.pids 0 * BK) (s.pids 1 * BV) K V BK BV
+      (fun e p => crhState s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        H T K V BT BK BV NT t e p)
+      (crhStoreAddr_injective (s.pids 2 * s_h_h + t * K * V) s_h_t
+        (s.pids 0 * BK) (s.pids 1 * BV) BK BV hσ)
+  set sSt := crhStoreState
+      (((sin.setReg "p_k" .blockPtr [BK, BT]
+          (⟨fun _ => BlockPtr.mk k (s.pids 2 * s_qk_h) [K, T] [BK, BT]
+            [s_qk_d, s_qk_t] [s.pids 0 * BK, t * BT]⟩ : Tile .blockPtr [BK, BT])).setReg
+        "p_v" .blockPtr [BT, BV]
+          (⟨fun _ => BlockPtr.mk v (s.pids 2 * s_vo_h) [T, V] [BT, BV]
+            [s_vo_t, s_vo_d] [t * BT, s.pids 1 * BV]⟩ : Tile .blockPtr [BT, BV])).setReg
+        "p_h" .blockPtr [BK, BV]
+          (⟨fun _ => BlockPtr.mk h (s.pids 2 * s_h_h + t * K * V) [K, V] [BK, BV]
+            [s_h_t, 1] [s.pids 0 * BK, s.pids 1 * BV]⟩ : Tile .blockPtr [BK, BV]))
+      h (s.pids 2 * s_h_h + t * K * V) s_h_t (s.pids 0 * BK) (s.pids 1 * BV) K V BK BV
+      (fun e p => crhState s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        H T K V BT BK BV NT t e p) with hsSt
+  -- b_k load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_kLoad_eq s sSt k "p_k" s_qk_h s_qk_t s_qk_d T K BT BK t
+      (fun off => by
+        rw [hSoth k off (Ne.symm hHk)]
+        simpa using hmemK off)
+      (by rw [hSregs]; simp)))]
+  -- b_v load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_vLoad_eq s _ v "p_v" s_vo_h s_vo_t s_vo_d T V BT BV t
+      (fun off => by
+        rw [BlockState.setReg_readMem, hSoth v off (Ne.symm hHv)]
+        simpa using hmemV off)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+        simp)))]
+  -- the ragged-boundary gate
+  obtain ⟨sG, hgstep, hgpids, hgmem, hgregs, hgdb, hgdi⟩ :=
+    crhBoundaryGate_run s
+      ((sSt.setReg "b_k" .real [BK, BT]
+          (crhBkTile s k s_qk_h s_qk_t s_qk_d T K BT BK t)).setReg
+        "b_v" .real [BT, BV] (crhBvTile s v s_vo_h s_vo_t s_vo_d T V BT BV t))
+      H T BT NT t
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+        simpa using hit)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+        simpa using hoi)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+        simpa using hbb)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+        simpa using hdb)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+        simpa using hdi)
+  rw [stepStmts.cons_some hgstep]
+  -- b_h advance
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_fwd_advance_eval s sG k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+      s_vo_d H T K V BT BK BV NT t hgdb hgdi
+      (by
+        rw [hgregs "b_h" (by decide) (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+        simpa using hbh)
+      (by
+        rw [hgregs "b_k" (by decide) (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_same])
+      (by
+        rw [hgregs "b_v" (by decide) (by decide), BlockState.setReg_same])))]
+  rw [stepStmts.nil]
+  have hgmem' : ∀ rg off, sG.readMem rg off = sSt.readMem rg off := by
+    intro rg off
+    rw [hgmem rg off, BlockState.setReg_readMem, BlockState.setReg_readMem]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · -- pids
+    rw [BlockState.setReg_pids, hgpids, BlockState.setReg_pids,
+      BlockState.setReg_pids, hSpids, BlockState.setReg_pids,
+      BlockState.setReg_pids, BlockState.setReg_pids]
+  · -- i_k
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hgregs "i_k" (by decide) (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+    simpa using hik
+  · -- i_v
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hgregs "i_v" (by decide) (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+    simpa using hiv
+  · -- i_bh
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hgregs "i_bh" (by decide) (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+    simpa using hibh
+  · -- o_i
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hgregs "o_i" (by decide) (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+    simpa using hoi
+  · -- b_b
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      hgregs "b_b" (by decide) (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide), hSregs]
+    simpa using hbb
+  · -- d_b
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hgdb
+  · -- d_i
+    rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hgdi
+  · -- b_h
+    rw [BlockState.setReg_same]
+  · -- other regions unchanged
+    intro rg off hrg
+    rw [BlockState.setReg_readMem, hgmem' rg off, hSoth rg off hrg]
+    simp
+  · -- chunk-t active readback
+    intro idx hidx
+    obtain ⟨h1, h2⟩ := hidx
+    rw [BlockState.setReg_readMem, hgmem' h _, crhHOffset_eq_storeAddr]
+    exact hSact idx ⟨h1, h2⟩
+  · -- h off the active block unchanged
+    intro off hoff
+    rw [BlockState.setReg_readMem, hgmem' h off,
+      hSoff off (fun idx hidx => by
+        rw [← crhHOffset_eq_storeAddr]
+        exact hoff idx hidx)]
+    simp
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkRetention
