@@ -20,10 +20,10 @@ variant, and proof-status tracked.
 
 ## Current state
 
-**153 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
-holds a faithful `.py` + `.lean` pair, all 153 compile (`bench/check_ports.sh`
-reports `153 ok, 0 fail`), and every completed port carries a standard
-`ComputeCorrect.Realizes` correctness surface. The 31 remaining work
+**154 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
+holds a faithful `.py` + `.lean` pair, all 154 compile (`bench/check_ports.sh`
+reports `154 ok, 0 fail`), and every completed port carries a standard
+`ComputeCorrect.Realizes` correctness surface. The 30 remaining work
 directories are README-only scaffolds, not yet counted as ports. The source of
 truth for these counts and the per-port evidence is
 [`tritonbench_g/completion_audit.md`](./tritonbench_g/completion_audit.md); the
@@ -42,19 +42,19 @@ project.
 ## TritonBench-G v1 anchor
 
 We are aligning the verification benchmark with [TritonBench-G v1][tb] (184
-GitHub-scraped real Triton kernels, ACL 2025 Findings). **153 of the 184 are ported.** The original (2026-05-05) static primitive scan
+GitHub-scraped real Triton kernels, ACL 2025 Findings). **154 of the 184 are ported.** The original (2026-05-05) static primitive scan
 estimated only 141 as within the DSL contract; the levers it named
 (`tl.math.*` / `tl.extra` adapters, the concurrency boundary,
 `tl.num_programs`, the `atomic_add` proof shape) have since landed, so that
 estimate is superseded — treat it as history, not status.
 
-The remaining **31 are scaffolded but not imported**: the per-kernel directory
+The remaining **30 are scaffolded but not imported**: the per-kernel directory
 and README exist, the upstream `.py` does not. Re-measured against the DSL's
 actual surface (95 `tl.*` forms, extracted from `VeriTile/Triton/DSL/**`):
 
 | Verdict | Count |
 |---|---:|
-| Portable now — every form it uses already in the DSL | 2 |
+| Portable now — every form it uses already in the DSL | 1 |
 | Blocked on a missing primitive, or on an ℝ-model limit | 29 |
 
 Ranked unlock levers for the 29: fp8 dtype channel (7), a **descending `for`

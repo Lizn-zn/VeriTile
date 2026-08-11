@@ -6,9 +6,9 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **153** |
-| Not yet imported | 31 |
-| — of those, expressible with today's DSL surface | 2 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **154** |
+| Not yet imported | 30 |
+| — of those, expressible with today's DSL surface | 1 |
 | — of those, blocked on a missing primitive or an ℝ-model limit | 29 |
 
 ## What "expressible" means here, and what it does not
@@ -51,7 +51,7 @@ correctness depends on inter-program interleaving (spin locks, cooperative
 reductions) elaborate fine — the host launch is the trusted boundary — but their
 *specification* has to be chosen with that boundary in mind.
 
-## Not yet imported: portable now (2)
+## Not yet imported: portable now (1)
 
 Every form these use — including the non-`tl.` ones — is already in the DSL
 surface, and **every** `@triton.jit` kernel in the file has been checked, not just
@@ -63,11 +63,13 @@ then forgotten.
 | Kernel | `.py` lines | `@triton.jit` kernels |
 |---|---:|---:|
 | `bmm_optimized` | 232 | 1 |
-| `chunk_gla_fwd` | 368 | 5 |
 
-Neither is small. `bmm_optimized` has a 70-line body behind **10 `constexpr`
-branches** (16 configurations) — the most expensive shape in
-`bench/MAIN_THEOREM_CONVENTIONS.md`. `chunk_gla_fwd` is five kernels.
+It is not small, and it is not one port-shaped unit either: its 10 `constexpr`
+branches specialize **whether each `tl.load` carries a mask** (`mask_a = None` vs
+`mask_a = mask_m[:, None]`), and `MaskOpt` is part of `Stmt`, not a value — so the
+specialization cannot be an `ifThen` and has to happen at transcription time,
+2³ × 2 = 16 surfaces. (`chunk_gla_fwd`, formerly listed here, is ported — its
+output kernel, with the four `A`-builders as the trusted boundary.)
 
 ### Correction: this count was 9, and 7 of those were wrong
 
@@ -162,7 +164,7 @@ Fixed by threading the map per statement (`Inference.ptrElemsAfterStmt`) exactly
 as `Env` already was. Checked: the corpus was **not** exposed — of 46 ports with a
 non-real region, 39 rebind a pointer name that is then loaded, and all 39 rebind it
 to the *same* root region, so the flat and threaded lookups agree everywhere and
-`check_ports.sh` stays at 153 ok. `bench/tests/PtrElemDType.lean` pins both
+`check_ports.sh` stays at 154 ok. `bench/tests/PtrElemDType.lean` pins both
 directions and fails without the fix.
 
 An earlier version of this section blamed "the inference environment fixes a name's

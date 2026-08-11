@@ -58,6 +58,7 @@ bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_re
 bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_cum_slice_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_state_stores_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_state_stores_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/chunk_gla_fwd/ChunkGlaFwd.lean	chunk_gla_fwd_o_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
