@@ -53,6 +53,23 @@ these casts.
    `scale` — never read) are omitted from the surface binders (the
    `fused_recurrent_retention` precedent).
 
+## Proof map
+
+```
+crh_fwd_h_surface / crh_bwd_dh_surface   faithful DSL transcriptions
+├─ crh_fwd_body_eq / crh_bwd_body_eq     statement-list splits (rfl)
+├─ crhState (RECURSIVE) / crhDhOut       per-chunk decayed spec / scrambled sum
+├─ crhPreDecay_run                       shared pids + decay prologue walk
+├─ crhBoundaryGate_run                   ragged gate → crhDb t / crhDiFullTile t
+├─ crhStore_step_eq / _props             offset-parameterized [BR,BS] block store
+├─ crhFwdBody_step / crhBwdBody_step     one chunk (store+gate+advance / loads)
+├─ crhFwdLoop_run / crhBwdLoop_run       `forRange_inv`; fwd carries the
+│                                        conditional register clause c < NT
+├─ ★ crh_fwd_h_exec_genuine              h[·,·,t] = decayed pre-chunk state,
+│                                        ∀ t < NT; ht flush under the gate
+└─ ★ crh_bwd_dh_exec_genuine             dh block = d_b · Σ (do ⊙ d_i)·v
+```
+
 ## The descending loop, spelled ascending
 
 `bwd_kernel_dh` iterates `for i_t in range(NT - 1, -1, -1)`; the surface

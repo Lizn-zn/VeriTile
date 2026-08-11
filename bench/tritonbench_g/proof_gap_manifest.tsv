@@ -63,6 +63,8 @@ bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_output
 bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_linear_attn/ChunkLinearAttn.lean	cla_fwd_h_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_linear_attn/ChunkLinearAttn.lean	cla_bwd_dh_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/chunk_retention/ChunkRetention.lean	crh_fwd_h_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/chunk_retention/ChunkRetention.lean	crh_bwd_dh_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/context_attn_bloom/ContextAttnBloom.lean	context_attn_bloom_surface_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
