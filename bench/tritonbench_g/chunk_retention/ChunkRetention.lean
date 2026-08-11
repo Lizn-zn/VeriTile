@@ -1178,6 +1178,227 @@ theorem crhDhAcc_succ (s : BlockState) (v do_ : RegionName)
     Finset.sum_ite_eq' Finset.univ (⟨NT - 1 - c, by omega⟩ : Fin NT)
       (fun u => B u.val), if_pos (Finset.mem_univ _)]
 
+/-! ## The shared walk pieces -/
+
+private theorem crh_mulTile_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .real a) (y : Op .real b) (t : BlockState)
+    (vx : Tile .real a) (vy : Tile .real b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.mul .real bc x y) t
+      = some (Tile.bop NumericDType.real.mul bc vx vy) := by
+  rw [evalOp_mul, hx, hy]
+  rfl
+
+set_option maxHeartbeats 1000000 in
+/-- **The shared prologue**: the three program ids and the decay prologue
+(`i_h`, `b_b`, `o_i`, the standard `d_b`). -/
+private theorem crhPreDecay_run (s : BlockState) (H BT : Nat) :
+    ∃ sP, (∀ rest : List Stmt, stepStmts
+        ([ Stmt.assign .nat [] "i_k" (Op.programId 0),
+           Stmt.assign .nat [] "i_v" (Op.programId 1),
+           Stmt.assign .nat [] "i_bh" (Op.programId 2) ]
+          ++ crhDecayPrologue H BT ++ rest) s = stepStmts rest sP)
+      ∧ sP.pids = s.pids
+      ∧ sP.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0))
+      ∧ sP.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+      ∧ sP.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ sP.regs .nat [BT] "o_i" = some (crhOiTile BT)
+      ∧ sP.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H)))
+      ∧ sP.regs .real [] "d_b" = some (Tile.scalar (some (crhDbBwd s H BT)))
+      ∧ (∀ rg off, sP.readMem rg off = s.readMem rg off) := by
+  refine ⟨((((((s.setReg "i_k" .nat [] (Tile.scalar (s.pids 0))).setReg
+        "i_v" .nat [] (Tile.scalar (s.pids 1))).setReg
+        "i_bh" .nat [] (Tile.scalar (s.pids 2))).setReg
+        "i_h" .nat [] (Tile.scalar (s.pids 2 % H))).setReg
+        "b_b" .real [] (Tile.scalar (some (crhBeta s H)))).setReg
+        "o_i" .nat [BT] (crhOiTile BT)).setReg
+        "d_b" .real [] (Tile.scalar (some (crhDbBwd s H BT))),
+    fun rest => ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, fun rg off => ?_⟩
+  · rw [show ([ Stmt.assign .nat [] "i_k" (Op.programId 0),
+          Stmt.assign .nat [] "i_v" (Op.programId 1),
+          Stmt.assign .nat [] "i_bh" (Op.programId 2) ]
+          ++ crhDecayPrologue H BT ++ rest)
+        = Stmt.assign .nat [] "i_k" (Op.programId 0)
+          :: Stmt.assign .nat [] "i_v" (Op.programId 1)
+          :: Stmt.assign .nat [] "i_bh" (Op.programId 2)
+          :: (crhDecayPrologue H BT ++ rest) from rfl]
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 0 s)),
+      stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 1 _)),
+      stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_programId 2 _))]
+    show stepStmts
+      (Stmt.assign .nat [] "i_h" _ :: Stmt.assign .real [] "b_b" _
+        :: Stmt.assign .nat [BT] "o_i" _ :: Stmt.assign .real [] "d_b" _ :: rest) _
+      = _
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+      (crh_mod_eval _ "i_bh" (s.pids 2) H (by simp))),
+      stepStmts.cons_some (stepStmt_assign_eq_some
+        (crh_bb_eval s _ H (by simp))),
+      stepStmts.cons_some (stepStmt_assign_eq_some
+        (show evalOp (Op.arange BT) _ = some (crhOiTile BT) from by
+          rw [evalOp_arange]
+          rfl)),
+      stepStmts.cons_some (stepStmt_assign_eq_some
+        (crh_db_eval s _ H BT (by simp)))]
+    rfl
+  · rw [BlockState.setReg_pids, BlockState.setReg_pids, BlockState.setReg_pids,
+      BlockState.setReg_pids, BlockState.setReg_pids, BlockState.setReg_pids,
+      BlockState.setReg_pids]
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  · rw [BlockState.setReg_same]
+  · rw [BlockState.setReg_readMem, BlockState.setReg_readMem,
+      BlockState.setReg_readMem, BlockState.setReg_readMem,
+      BlockState.setReg_readMem, BlockState.setReg_readMem,
+      BlockState.setReg_readMem]
+
+/-- **The ragged-boundary gate.** Whatever the branch decides, the registers
+land on the chunk-`i` decay values `crhDb i` / `crhDiFullTile i`. -/
+private theorem crhBoundaryGate_run (s tS : BlockState) (H T BT NT i : Nat)
+    (hit : tS.regs .nat [] "i_t" = some (Tile.scalar i))
+    (hoi : tS.regs .nat [BT] "o_i" = some (crhOiTile BT))
+    (hbb : tS.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H))))
+    (hdb : tS.regs .real [] "d_b" = some (Tile.scalar (some (crhDbBwd s H BT))))
+    (hdi : tS.regs .real [BT] "d_i" = some (crhDiStdTile s H BT)) :
+    ∃ s', stepStmt (Stmt.ifThen
+        (Op.boolAnd Broadcast.nil
+          (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "i_t")
+            (Op.sub .nat Broadcast.nil (Op.constNat NT) (Op.constNat 1)))
+          (Op.ne ComparableDType.nat Broadcast.nil
+            (Op.mod IntegralDType.nat Broadcast.nil (Op.constNat T) (Op.constNat BT))
+            (Op.constNat 0)))
+        (crhBoundaryBranch T BT)) tS = some s'
+      ∧ s'.pids = tS.pids
+      ∧ (∀ rg off, s'.readMem rg off = tS.readMem rg off)
+      ∧ (∀ {dt : TileDType} {sh : TileShape} (nm : RegName),
+          nm ≠ "d_b" → nm ≠ "d_i" → s'.regs dt sh nm = tS.regs dt sh nm)
+      ∧ s'.regs .real [] "d_b" = some (Tile.scalar (some (crhDb s H T BT NT i)))
+      ∧ s'.regs .real [BT] "d_i" = some (crhDiFullTile s H T BT NT i) := by
+  rw [crh_ifThen_step, crh_cond_eval tS T BT NT i hit,
+    show ((some (Tile.scalar (decide (i = NT - 1) && decide (T % BT ≠ 0))
+        : Tile .bool [])).bind
+        (fun c => if c.data PUnit.unit then stepStmts (crhBoundaryBranch T BT) tS
+          else some tS)
+      = (if (decide (i = NT - 1) && decide (T % BT ≠ 0)) = Bool.true then
+          stepStmts (crhBoundaryBranch T BT) tS else some tS)) from rfl]
+  by_cases hb : i = NT - 1 ∧ T % BT ≠ 0
+  · rw [if_pos (by simp [hb.1, hb.2])]
+    unfold crhBoundaryBranch
+    rw [stepStmts.cons_some (stepStmt_assign_eq_some
+        (crh_dbBoundary_eval s tS H T BT hbb)),
+      stepStmts.cons_some (stepStmt_assign_eq_some
+        (crh_diBoundary_eval s _ H T BT (by simpa using hoi) (by simpa using hbb))),
+      stepStmts.nil]
+    refine ⟨_, rfl, by simp, fun rg off => by simp, ?_, ?_, ?_⟩
+    · intro dt sh nm hnm1 hnm2
+      rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hnm2,
+        BlockState.setReg_ne_name _ _ _ _ _ _ _ _ hnm1]
+    · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+        BlockState.setReg_same, crhDb_boundary s H T BT NT i hb]
+    · rw [BlockState.setReg_same, crhDiFull_boundary s H T BT NT i hb]
+  · rw [if_neg (by
+      simp only [Bool.and_eq_true, decide_eq_true_eq]
+      exact hb)]
+    refine ⟨tS, rfl, rfl, fun _ _ => rfl, ?_, ?_, ?_⟩
+    · intro dt sh nm _ _
+      rfl
+    · rw [hdb, crhDb_std s H T BT NT i hb]
+    · rw [hdi, crhDiFull_std s H T BT NT i hb]
+
+/-- The carried forward state tile at chunk `t`. -/
+noncomputable def crhHTile (s : BlockState) (k v h0 : RegionName) (UIS : Bool)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (H T K V BT BK BV NT : Nat) (t : Nat) : Tile .real [BK, BV] :=
+  ⟨fun idx => some (crhState s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+    s_vo_d H T K V BT BK BV NT t idx.1.val idx.2.1.val)⟩
+
+/-- The decayed recurrence statement advances the state tile by one chunk —
+definitionally, since `crhState` is recursive. -/
+private theorem crh_fwd_advance_eval (s sin : BlockState) (k v h0 : RegionName)
+    (UIS : Bool) (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (H T K V BT BK BV NT : Nat) (t : Nat)
+    (hdb : sin.regs .real [] "d_b"
+      = some (Tile.scalar (some (crhDb s H T BT NT t))))
+    (hdi : sin.regs .real [BT] "d_i" = some (crhDiFullTile s H T BT NT t))
+    (hbh : sin.regs .real [BK, BV] "b_h" = some (crhHTile s k v h0 UIS
+      s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d H T K V BT BK BV NT t))
+    (hbk : sin.regs .real [BK, BT] "b_k"
+      = some (crhBkTile s k s_qk_h s_qk_t s_qk_d T K BT BK t))
+    (hbv : sin.regs .real [BT, BV] "b_v"
+      = some (crhBvTile s v s_vo_h s_vo_t s_vo_d T V BT BV t)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.mul .real Broadcast.scalarL (Op.ref .real [] "d_b")
+          (Op.ref .real [BK, BV] "b_h"))
+        (Op.dot (batch := []) (Op.ref .real [BK, BT] "b_k")
+          (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (Op.ref .real [BT, BV] "b_v")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "d_i"))))) sin
+      = some (crhHTile s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          H T K V BT BK BV NT (t + 1)) := by
+  have hxe : evalOp (Op.mul .real Broadcast.scalarL (Op.ref .real [] "d_b")
+      (Op.ref .real [BK, BV] "b_h")) sin
+      = some (Tile.bop NumericDType.real.mul Broadcast.scalarL
+        (Tile.scalar (some (crhDb s H T BT NT t)))
+        (crhHTile s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          H T K V BT BK BV NT t)) :=
+    crh_mulTile_eval Broadcast.scalarL _ _ sin _ _
+      (by rw [evalOp_ref]; exact hdb) (by rw [evalOp_ref]; exact hbh)
+  have hwv : evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      (Op.ref .real [BT, BV] "b_v")
+      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "d_i"))) sin
+      = some (Tile.bop NumericDType.real.mul
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (crhBvTile s v s_vo_h s_vo_t s_vo_d T V BT BV t)
+        (Tile.expandDim ⟨1, by simp⟩ (crhDiFullTile s H T BT NT t))) :=
+    crh_mulTile_eval (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      _ _ sin _ _
+      (by rw [evalOp_ref]; exact hbv)
+      (by
+        erw [evalOp_expandDim]
+        simp only [evalOp_ref, hdi, Option.bind_eq_bind, Option.bind_some]
+        rfl)
+  have hye : evalOp (Op.dot (batch := []) (Op.ref .real [BK, BT] "b_k")
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BT, BV] "b_v")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "d_i")))) sin
+      = some (Tile.dot [] (crhBkTile s k s_qk_h s_qk_t s_qk_d T K BT BK t)
+        (Tile.bop NumericDType.real.mul
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (crhBvTile s v s_vo_h s_vo_t s_vo_d T V BT BV t)
+          (Tile.expandDim ⟨1, by simp⟩ (crhDiFullTile s H T BT NT t)))) :=
+    crh_dot_eval _ _ sin _ _ (by rw [evalOp_ref]; exact hbk) hwv
+  erw [crh_addTile_eval (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    _ _ sin _ _ hxe hye]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨e, p, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex, crhHTile]
+  rw [crh_dot2d_elem _ _ e p
+    (fun c => crhKGuarded s k s_qk_h s_qk_t s_qk_d T K BT BK t c.val e.val)
+    (fun c => crhVGuarded s v s_vo_h s_vo_t s_vo_d T V BT BV t c.val p.val
+      * crhDi s H T BT NT t c.val)
+    (fun c => rfl) (fun c => rfl)]
+  rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkRetention
