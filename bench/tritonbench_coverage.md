@@ -6,10 +6,10 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **154** |
-| Not yet imported | 30 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **155** |
+| Not yet imported | 29 |
 | — of those, expressible with today's DSL surface | 1 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 29 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 28 |
 
 ## What "expressible" means here, and what it does not
 
@@ -102,7 +102,7 @@ accepted set; the only Python-level operators on tiles are `&` on bool masks
 `tl.sum(b, 1)` positional axis is accepted verbatim (`syntax num :
 tritonReduceKwarg`).
 
-## Not yet imported: blocked on a missing primitive (29)
+## Not yet imported: blocked on a missing primitive (28)
 
 | Kernel | `.py` lines | missing `tl.*` |
 |---|---:|---|
@@ -125,7 +125,6 @@ tritonReduceKwarg`).
 | `int4_matmul` | 252 | signed integer arithmetic: after unpacking, `int_b - int_bzp` ranges over `[-15, 15]` **before** it crosses to `ℝ`, and the `.nat` channel truncates at `0`. |
 | `matmul_dequant_int4` | 302 | same signed-nibble subtraction, in its `dequantize_kernel`: `((int32_b >> s) & 0xF) - ((zp_b >> t) & 0xF)`. Its `matmul4_kernel` is fine — that one is what `matmul_dequantize_int4` ports. |
 | `matmul_dequantize` | 357 | same `dequantize_kernel` (byte-identical), plus a plain `matmul_kernel` that is fine |
-| `chunk_linear_attn` | 308 | `for i_t in range(NT - 1, -1, -1)` inside `chunk_linear_attn_bwd_kernel_dh` — descending loop, and `stepForRangeAux`'s step is a `Nat` advancing while `cur < stop` |
 | `chunk_retention` | 451 | descending `range(NT - 1, -1, -1)` inside `chunk_retention_bwd_kernel_dh` |
 | `chunk_retention_ops` | 363 | descending `range(NT - 1, -1, -1)` inside `chunk_retention_bwd_kernel_dh` |
 | `parallel_attention` | 480 | descending `range(hi, lo, -BTS)` inside `_parallel_rebased_bwd_dkv` |
@@ -187,18 +186,23 @@ that fails.
 | `while` statement in `Stmt` (+ a termination story) | 3 | `layer_norm_triton`, `spinning_lock_reduction`, `streamk_matmul` |
 | integer-channel `tl.dot` (int8×int8 → int32 accumulate) | 2 | `int8_dequant_matmul`, `int8_matmul_quantization` |
 | signed fixed-width integer arithmetic | 3 | `int4_matmul`, `matmul_dequant_int4`, `matmul_dequantize` |
-| descending `for` range (a signed step, or a `Stmt` that counts down) | 5 | `chunk_linear_attn`, `chunk_retention`, `chunk_retention_ops`, `parallel_attention`, `parallel_retention_attention` |
+| descending `for` range (a signed step, or a `Stmt` that counts down) | 4 | `chunk_retention`, `chunk_retention_ops`, `parallel_attention`, `parallel_retention_attention` |
 
-The column sums to 30, not 29: `uniform_sampling` needs both RNG and
+The column sums to 29, not 28: `uniform_sampling` needs both RNG and
 `tl.static_assert`, so it appears under two levers. Every other kernel appears
 once.
 
-The **descending-range** lever is new (2026-08-10) and is the second largest after
-fp8. It is cheaper than it looks: the five kernels all count down over chunk
-indices, so a `Stmt` constructor that counts down — or a `forRange` whose induction
-variable is `stop - 1 - i` — would do, with no new dtype channel and no new
-arithmetic. What it does need is its own invariant principle, the counting-down
-mirror of `forRangeDyn_inv`.
+The **descending-range** lever's first consumer has landed: `chunk_linear_attn`'s
+`bwd_kernel_dh` (2026-08-11) spells `for i_t in range(NT-1, -1, -1)` as the
+ascending `for j in range(0, NT)` with `i_t = NT - 1 - j` as the body's first
+statement — the identical iteration sequence, observable in the surface, with
+**zero library change** (plain `forRange_inv` drives the ascending counter). No
+counting-down `Stmt` constructor or mirror invariant principle was needed after
+all; the four remaining kernels count down over chunk indices the same way and
+should take the same respelling. (`parallel_attention` and
+`parallel_retention_attention` step by `-BTS` rather than `-1`, so their change
+of variable is `hi - j·BTS` with a `cdiv` trip count — same shape, one extra
+multiplication.)
 
 Two of these are cheap: `tl.static_assert` erases at the algorithm layer (it
 constrains `constexpr`s at Triton compile time, so the lowered kernel is
