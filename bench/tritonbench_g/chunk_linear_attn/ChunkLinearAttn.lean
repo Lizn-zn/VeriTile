@@ -406,6 +406,507 @@ def claActive (s : BlockState) (K V BK BV : Nat)
     (idx : TileIndex [BK, BV]) : Prop :=
   s.pids 0 * BK + idx.1.val < K ∧ s.pids 1 * BV + idx.2.1.val < V
 
+/-! ## Eval recipes
+
+Local copies (bench files never import each other), plus the two lowerings this
+pair adds: the `.real → .real` `castFloat` identity and the descending-index
+arithmetic `NT - 1 - j`. -/
+
+private theorem cla_makeBlockPtr_2d_eval (rg : RegionName) (s : BlockState)
+    (baseOp : Op .nat []) (rowOffOp colOffOp : Op .nat [])
+    (parentShape blockShape strides : List Nat)
+    (base rowOff colOff : Nat)
+    (hbase : evalOp baseOp s = some (Tile.scalar base))
+    (hrow : evalOp rowOffOp s = some (Tile.scalar rowOff))
+    (hcol : evalOp colOffOp s = some (Tile.scalar colOff)) :
+    evalOp (Op.makeBlockPtrDynOffsets rg baseOp parentShape blockShape strides
+        [rowOffOp, colOffOp]) s
+      = some (⟨fun _ => BlockPtr.mk rg base parentShape blockShape strides
+          [rowOff, colOff]⟩ : Tile .blockPtr blockShape) := by
+  simp only [evalOp, hbase, hrow, hcol, List.mapM, List.mapM.loop, bind, Option.bind,
+    Tile.scalar, List.reverse_cons, List.reverse_nil, List.nil_append,
+    List.cons_append]
+
+/-- No-mask 2D block-pointer load through a bound register: lane `(i,j)` reads the
+genuine memory cell when in-bounds, else `0`. -/
+private theorem cla_load_bp_2d (rg : RegionName) (s : BlockState) (name : RegName)
+    (base rows cols BR BS strideT strideS rowOff colOff : Nat)
+    (hreg : s.regs .blockPtr [BR, BS] name = some
+      ⟨fun _ => BlockPtr.mk rg base [rows, cols] [BR, BS] [strideT, strideS]
+        [rowOff, colOff]⟩) :
+    evalOp (Op.load .real
+      (MemAccess.blockPtr (Op.ref .blockPtr [BR, BS] name) [0, 1]) MaskOpt.none) s
+    = some ⟨fun idx : TileIndex [BR, BS] =>
+        if (rowOff + idx.1.val < rows ∧ colOff + idx.2.1.val < cols) then
+          some (s.readMem rg (base + (rowOff + idx.1.val) * strideT
+            + (colOff + idx.2.1.val) * strideS))
+        else some 0⟩ := by
+  simp only [evalOp, evalOp_ref, hreg, bind, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, j, rest⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets,
+    BlockPtr.inBounds_2d_offsets, BlockState.readMemValue_real]
+  by_cases h : rowOff + i.val < rows ∧ colOff + j.val < cols
+  · simp only [h, and_self, decide_true, if_true]
+  · simp only [h, decide_false, if_false, BlockState.defaultCarrier]
+    rfl
+
+/-- Scalar `name * c`. -/
+private theorem cla_mulConst_eval (s : BlockState) (name : RegName) (val c : Nat)
+    (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat c)) s
+      = some (Tile.scalar (val * c)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hr, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- Scalar `(name * cB) * cC` — the `h0` / `ht` base `i_bh * K * V`. -/
+private theorem cla_mulMulConst_eval (s : BlockState) (name : RegName)
+    (val cB cC : Nat) (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat cB))
+        (Op.constNat cC)) s
+      = some (Tile.scalar (val * cB * cC)) := by
+  rw [evalOp_mul, cla_mulConst_eval s name val cB hr]
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- The `p_h` / `p_dh` base: `i_bh * s_h_h + i_t * K * V`. -/
+private theorem cla_hBase_eval (s : BlockState) (s_h_h K V : Nat) (ibh it : Nat)
+    (hibh : s.regs .nat [] "i_bh" = some (Tile.scalar ibh))
+    (hit : s.regs .nat [] "i_t" = some (Tile.scalar it)) :
+    evalOp (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_h_h))
+        (Op.mul .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat K))
+          (Op.constNat V))) s
+      = some (Tile.scalar (ibh * s_h_h + it * K * V)) := by
+  rw [evalOp_add, cla_mulConst_eval s "i_bh" ibh s_h_h hibh, evalOp_mul,
+    cla_mulConst_eval s "i_t" it K hit]
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- The descending change of variable: `i_t = NT - 1 - j` on `nat` scalars. -/
+private theorem cla_itIdx_eval (t : BlockState) (NT c : Nat)
+    (hj : t.regs .nat [] "j" = some (Tile.scalar c)) :
+    evalOp (Op.sub .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil (Op.constNat NT) (Op.constNat 1))
+        (Op.ref .nat [] "j")) t
+      = some (Tile.scalar (NT - 1 - c)) := by
+  have hx : evalOp (Op.sub .nat Broadcast.nil (Op.constNat NT) (Op.constNat 1)) t
+      = some (Tile.scalar (NT - 1)) := by
+    rw [evalOp_sub]
+    simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+    rfl
+  rw [evalOp_sub, hx]
+  simp only [evalOp_ref, hj, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- The assignment-position `.to(tl.float32)` on an already-`.real` operand: a
+genuine `Op.castFloat .real .real` node whose semantics is the identity. -/
+private theorem cla_castFloat_eval {sh : TileShape} (x : Op .real sh)
+    (t : BlockState) (vx : Tile .real sh) (hx : evalOp x t = some vx) :
+    evalOp (Op.castFloat FloatDType.real FloatDType.real x) t = some vx := by
+  rw [evalOp_castFloat,
+    show @evalOp FloatDType.real.toTileDType sh x t = some vx from hx]
+  rfl
+
+/-- `tl.zeros([BK, BV], dtype=tl.float32)`. -/
+private theorem cla_zeros_eval (BK BV : Nat) (t : BlockState) :
+    evalOp (Op.full [BK, BV] (Op.const 0)) t
+      = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BK, BV]) := by
+  simp [evalOp_full, evalOp_const]
+
+/-- `tl.dot` at rank 2, `erw`-only shapes. -/
+private theorem cla_dot_eval {M K N : Nat} (x : Op .real [M, K]) (y : Op .real [K, N])
+    (t : BlockState) (vx : Tile .real [M, K]) (vy : Tile .real [K, N])
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.dot (batch := []) x y) t = some (Tile.dot [] vx vy) := by
+  erw [evalOp_dot, hx, hy]
+  rfl
+
+/-- A `WithBot ℝ` sum of `some`s is `some` of the real sum. -/
+private theorem cla_withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) := by
+  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ))
+    = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
+  exact (WithBot.coe_sum Finset.univ g).symm
+
+/-- 2D dot element collapse for all-`some` operands. -/
+private theorem cla_dot2d_elem {M K N : Nat} (a : Tile .real [M, K])
+    (b : Tile .real [K, N]) (m : Fin M) (n : Fin N) (fa fb : Fin K → ℝ)
+    (ha : ∀ e : Fin K, a.data (m, e, PUnit.unit) = some (fa e))
+    (hb : ∀ e : Fin K, b.data (e, n, PUnit.unit) = some (fb e)) :
+    (Tile.dot [] a b).data (m, n, PUnit.unit)
+      = some (Finset.univ.sum fun e : Fin K => fa e * fb e) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (a.data (m, e, PUnit.unit))
+          (b.data (e, n, PUnit.unit))))
+      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (fa e * fb e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [ha e, hb e]; rfl)]
+  exact cla_withBot_sum_some _
+
+/-- `Stmt.ifThen`'s step equation (well-founded recursion, so named). -/
+private theorem cla_ifThen_step (cond : Op .bool []) (body : List Stmt)
+    (t : BlockState) :
+    stepStmt (Stmt.ifThen cond body) t
+      = (evalOp cond t).bind
+          (fun c => if c.data PUnit.unit then stepStmts body t else some t) := by
+  unfold stepStmt
+  cases evalOp cond t <;> rfl
+
+/-- `setReg` leaves memory alone, at function level. -/
+private theorem cla_setReg_mem {dtype : TileDType} {sh : TileShape}
+    (s : BlockState) (nm : RegName) (v : Tile dtype sh) :
+    (s.setReg nm dtype sh v).mem = s.mem := rfl
+
+/-! ## Value tiles and load bridges
+
+The four loads (`k`/`v` forward; `q`/`do` backward reuse the same two bridges —
+`q` shares `k`'s layout and `do` shares `v`'s, with only the region name and
+launch strides substituted). -/
+
+/-- The loaded `b_k` tile of chunk `t`: cell `(e, c)` holds the guarded `k` lane. -/
+noncomputable def claBkTile (s : BlockState) (k : RegionName)
+    (s_qk_h s_qk_t s_qk_d T K BT BK : Nat) (t : Nat) : Tile .real [BK, BT] :=
+  ⟨fun idx => some (kGuarded s k s_qk_h s_qk_t s_qk_d T K BT BK t
+    idx.2.1.val idx.1.val)⟩
+
+/-- The loaded `b_v` tile of chunk `t`: cell `(c, p)` holds the guarded `v` lane. -/
+noncomputable def claBvTile (s : BlockState) (v : RegionName)
+    (s_vo_h s_vo_t s_vo_d T V BT BV : Nat) (t : Nat) : Tile .real [BT, BV] :=
+  ⟨fun idx => some (vGuarded s v s_vo_h s_vo_t s_vo_d T V BT BV t
+    idx.1.val idx.2.1.val)⟩
+
+/-- `b_k` (or `b_q`) load lands on `claBkTile` (memory matched to launch `s`). -/
+private theorem cla_kLoad_eq (s sin : BlockState) (k : RegionName) (name : RegName)
+    (s_qk_h s_qk_t s_qk_d T K BT BK : Nat) (t : Nat)
+    (hmem : ∀ off, sin.readMem k off = s.readMem k off)
+    (hpk : sin.regs .blockPtr [BK, BT] name = some
+      ⟨fun _ => BlockPtr.mk k (s.pids 2 * s_qk_h) [K, T] [BK, BT] [s_qk_d, s_qk_t]
+        [s.pids 0 * BK, t * BT]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BK, BT] name) [0, 1]) MaskOpt.none) sin
+      = some (claBkTile s k s_qk_h s_qk_t s_qk_d T K BT BK t) := by
+  rw [cla_load_bp_2d k sin name (s.pids 2 * s_qk_h) K T BK BT s_qk_d s_qk_t
+    (s.pids 0 * BK) (t * BT) hpk]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨e, c, u⟩ := idx
+  simp only [claBkTile, kGuarded, kElem, hmem]
+  by_cases hb : s.pids 0 * BK + e.val < K ∧ t * BT + c.val < T
+  · rw [if_pos hb, if_pos hb]
+  · rw [if_neg hb, if_neg hb]
+
+/-- `b_v` (or `b_do`) load lands on `claBvTile`. -/
+private theorem cla_vLoad_eq (s sin : BlockState) (v : RegionName) (name : RegName)
+    (s_vo_h s_vo_t s_vo_d T V BT BV : Nat) (t : Nat)
+    (hmem : ∀ off, sin.readMem v off = s.readMem v off)
+    (hpv : sin.regs .blockPtr [BT, BV] name = some
+      ⟨fun _ => BlockPtr.mk v (s.pids 2 * s_vo_h) [T, V] [BT, BV] [s_vo_t, s_vo_d]
+        [t * BT, s.pids 1 * BV]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BV] name) [0, 1]) MaskOpt.none) sin
+      = some (claBvTile s v s_vo_h s_vo_t s_vo_d T V BT BV t) := by
+  rw [cla_load_bp_2d v sin name (s.pids 2 * s_vo_h) T V BT BV s_vo_t s_vo_d
+    (t * BT) (s.pids 1 * BV) hpv]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨c, p, u⟩ := idx
+  simp only [claBvTile, vGuarded, vElem, hmem]
+  by_cases hb : t * BT + c.val < T ∧ s.pids 1 * BV + p.val < V
+  · rw [if_pos hb, if_pos hb]
+  · rw [if_neg hb, if_neg hb]
+
+/-- The seeded `b_h` tile: cell `(e, p)` holds the guarded `h0` lane. -/
+noncomputable def claH0Tile (s : BlockState) (h0 : RegionName)
+    (K V BK BV : Nat) : Tile .real [BK, BV] :=
+  ⟨fun idx => some (h0Guarded s h0 K V BK BV idx.1.val idx.2.1.val)⟩
+
+/-- The `h0` load lands on `claH0Tile`. -/
+private theorem cla_h0Load_eq (s sin : BlockState) (h0 : RegionName)
+    (K V BK BV : Nat)
+    (hmem : ∀ off, sin.readMem h0 off = s.readMem h0 off)
+    (hph0 : sin.regs .blockPtr [BK, BV] "p_h0" = some
+      ⟨fun _ => BlockPtr.mk h0 (s.pids 2 * K * V) [K, V] [BK, BV] [V, 1]
+        [s.pids 0 * BK, s.pids 1 * BV]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BK, BV] "p_h0") [0, 1]) MaskOpt.none) sin
+      = some (claH0Tile s h0 K V BK BV) := by
+  rw [cla_load_bp_2d h0 sin "p_h0" (s.pids 2 * K * V) K V BK BV V 1
+    (s.pids 0 * BK) (s.pids 1 * BV) hph0]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨e, p, u⟩ := idx
+  simp only [claH0Tile, h0Guarded, h0Elem, hmem]
+  by_cases hb : s.pids 0 * BK + e.val < K ∧ s.pids 1 * BV + p.val < V
+  · rw [if_pos hb, if_pos hb]
+  · rw [if_neg hb, if_neg hb]
+
+/-! ## The generic state-block store
+
+All three stores (`h[·,·,t]` per chunk, `ht` once, `dh[·,·,t]` per chunk) are the
+same shape: a `[BK, BV]` block of a `(K, V)` parent at strides `(σ, 1)` and
+offsets `(i_k·BK, i_v·BV)`, differing only in base and stride, so one lemma pair
+serves all three. -/
+
+/-- The state-block store address at lane `(e, p)`: `base + row·σ + col`. -/
+def claStoreAddr (s : BlockState) (base σ BK BV : Nat)
+    (idx : TileIndex [BK, BV]) : Nat :=
+  base + (s.pids 0 * BK + idx.1.val) * σ + (s.pids 1 * BV + idx.2.1.val) * 1
+
+theorem claHOffset_eq_storeAddr (s : BlockState) (s_h_h s_h_t K V BK BV t : Nat)
+    (idx : TileIndex [BK, BV]) :
+    claHOffset s s_h_h s_h_t K V BK BV t idx
+      = claStoreAddr s (s.pids 2 * s_h_h + t * K * V) s_h_t BK BV idx := rfl
+
+theorem claHtOffset_eq_storeAddr (s : BlockState) (K V BK BV : Nat)
+    (idx : TileIndex [BK, BV]) :
+    claHtOffset s K V BK BV idx
+      = claStoreAddr s (s.pids 2 * K * V) V BK BV idx := rfl
+
+/-- The explicit post-store state: the masked lane-by-lane scatter of cell fn `f`
+over input state `sin` (value and mask built from launch `s`). -/
+noncomputable def claStoreState (s sin : BlockState) (rg : RegionName)
+    (base σ K V BK BV : Nat) (f : Nat → Nat → ℝ) : BlockState :=
+  (TileShape.allIndices [BK, BV]).foldl
+    (fun acc i => if (s.pids 0 * BK + i.1.val < K ∧ s.pids 1 * BV + i.2.1.val < V)
+        then acc.writeMem rg (claStoreAddr s base σ BK BV i)
+          (f i.1.val i.2.1.val) else acc) sin
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **State-block store step (eq).** Stepping the block-ptr store of tile `bT`
+(cell fn `f`) through pointer register `pname` yields `claStoreState`. -/
+theorem claStore_step_eq (s sin : BlockState) (rg : RegionName)
+    (bname pname : RegName) (base σ K V BK BV : Nat)
+    (f : Nat → Nat → ℝ) (bT : Tile .real [BK, BV])
+    (hbf : ∀ e p, bT.data (e, p, PUnit.unit) = some (f e.val p.val))
+    (hb : sin.regs .real [BK, BV] bname = some bT)
+    (hp : sin.regs .blockPtr [BK, BV] pname = some
+      ⟨fun _ => BlockPtr.mk rg base [K, V] [BK, BV] [σ, 1]
+        [s.pids 0 * BK, s.pids 1 * BV]⟩) :
+    stepStmt (Stmt.store .real [BK, BV]
+        (MemAccess.blockPtr (Op.ref .blockPtr [BK, BV] pname) [0, 1])
+        (Op.ref .real [BK, BV] bname) MaskOpt.none) sin
+      = some (claStoreState s sin rg base σ K V BK BV f) := by
+  unfold stepStmt claStoreState
+  simp only [evalOp_ref, hb, hp]
+  refine congrArg some
+    (congrArg (fun g => List.foldl g sin (TileShape.allIndices [BK, BV])) ?_)
+  funext acc i
+  obtain ⟨e, p, u⟩ := i
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets,
+    BlockPtr.inBounds_2d_offsets, Bool.true_and, claStoreAddr]
+  by_cases hbnd : s.pids 0 * BK + e.val < K ∧ s.pids 1 * BV + p.val < V
+  · simp only [hbnd, BlockState.writeMemTyped_real, hbf, Nat.mul_one]
+    rfl
+  · simp only [hbnd, decide_false, Bool.false_eq_true, if_false]
+
+/-- If two `Q`-blocks with in-block offsets `A, B < Q` collide, the block indices
+agree. -/
+private theorem cla_block_index_inj {Q j c A B : Nat} (hA : A < Q) (hB : B < Q)
+    (heq : j * Q + A = c * Q + B) : j = c := by
+  have hQ : 0 < Q := Nat.lt_of_le_of_lt (Nat.zero_le A) hA
+  have hj : (j * Q + A) / Q = j := by
+    rw [Nat.mul_comm, Nat.mul_add_div hQ, Nat.div_eq_of_lt hA, Nat.add_zero]
+  have hc : (c * Q + B) / Q = c := by
+    rw [Nat.mul_comm, Nat.mul_add_div hQ, Nat.div_eq_of_lt hB, Nat.add_zero]
+  rw [← hj, heq, hc]
+
+/-- The store addresses of one block are pairwise distinct once a whole `BV` row
+segment fits under the row stride. -/
+theorem claStoreAddr_injective (s : BlockState) (base σ BK BV : Nat)
+    (hBVσ : BV ≤ σ) :
+    Function.Injective (claStoreAddr s base σ BK BV) := by
+  rintro ⟨e, p, u⟩ ⟨e', p', u'⟩ heq
+  simp only [claStoreAddr] at heq
+  have hp := p.isLt
+  have hp' := p'.isLt
+  have h2 : (s.pids 0 * BK + e.val) * σ + p.val
+      = (s.pids 0 * BK + e'.val) * σ + p'.val := by omega
+  have hlt : p.val < σ := by omega
+  have hlt' : p'.val < σ := by omega
+  have hjj : s.pids 0 * BK + e.val = s.pids 0 * BK + e'.val :=
+    cla_block_index_inj hlt hlt' h2
+  have he : e = e' := Fin.ext (by omega)
+  have hpv : p = p' := Fin.ext (by
+    have hσ : (s.pids 0 * BK + e.val) * σ = (s.pids 0 * BK + e'.val) * σ := by
+      rw [hjj]
+    omega)
+  subst he
+  subst hpv
+  rfl
+
+set_option maxHeartbeats 4000000 in
+/-- **State-block store readback.** `claStoreState` writes `f` at every active
+lane, leaves other regions alone, and leaves same-region offsets alone when they
+avoid every *active*-lane address (mask-restricted, so no pid pinning needed). -/
+theorem claStore_step_props (s sin : BlockState) (rg : RegionName)
+    (base σ K V BK BV : Nat) (f : Nat → Nat → ℝ)
+    (hInj : Function.Injective (claStoreAddr s base σ BK BV)) :
+    (claStoreState s sin rg base σ K V BK BV f).pids = sin.pids
+      ∧ (claStoreState s sin rg base σ K V BK BV f).regs = sin.regs
+      ∧ (∀ idx : TileIndex [BK, BV], claActive s K V BK BV idx →
+          (claStoreState s sin rg base σ K V BK BV f).readMem rg
+              (claStoreAddr s base σ BK BV idx)
+            = f idx.1.val idx.2.1.val)
+      ∧ (∀ rg' off, rg' ≠ rg →
+          (claStoreState s sin rg base σ K V BK BV f).readMem rg' off
+            = sin.readMem rg' off)
+      ∧ (∀ off, (∀ idx : TileIndex [BK, BV], claActive s K V BK BV idx →
+            off ≠ claStoreAddr s base σ BK BV idx) →
+          (claStoreState s sin rg base σ K V BK BV f).readMem rg off
+            = sin.readMem rg off) := by
+  classical
+  unfold claStoreState
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · rw [BlockState.foldl_writeMem_prop_masked_pids]
+  · funext dtype shape name
+    rw [BlockState.foldl_writeMem_prop_masked_regs]
+  · intro idx hidx
+    obtain ⟨h1, h2⟩ := hidx
+    have h := BlockState.scatter_readback_prop_masked_nd (region := rg) sin
+      (claStoreAddr s base σ BK BV) (fun i => f i.1.val i.2.1.val)
+      (fun i => s.pids 0 * BK + i.1.val < K ∧ s.pids 1 * BV + i.2.1.val < V)
+      hInj idx
+    rw [h, if_pos ⟨h1, h2⟩]
+  · intro rg' off hrg
+    exact BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+      rg (claStoreAddr s base σ BK BV) (fun i => f i.1.val i.2.1.val)
+      (fun i => s.pids 0 * BK + i.1.val < K ∧ s.pids 1 * BV + i.2.1.val < V)
+      _ sin rg' off hrg
+  · intro off hoff
+    exact BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+      rg (claStoreAddr s base σ BK BV) (fun i => f i.1.val i.2.1.val)
+      (fun i => s.pids 0 * BK + i.1.val < K ∧ s.pids 1 * BV + i.2.1.val < V)
+      _ sin off (fun i _ hPi => hoff i hPi)
+
+/-! ### Cross-chunk block disjointness -/
+
+/-- Distinct chunks write disjoint `K*V` blocks of `h` / `dh`: active lanes of
+chunk `j` never collide with active lanes of chunk `c ≠ j`. The block-fit
+hypothesis `(K-1)·s_h_t + V ≤ K·V` is an equality under the launcher's
+contiguous `s_h_t = V`. -/
+theorem claHOffset_chunk_disjoint (s : BlockState)
+    (s_h_h s_h_t K V BK BV : Nat) (hFit : (K - 1) * s_h_t + V ≤ K * V)
+    (j c : Nat) (hjc : j ≠ c) (idxj idxc : TileIndex [BK, BV])
+    (hja : claActive s K V BK BV idxj) (hca : claActive s K V BK BV idxc) :
+    claHOffset s s_h_h s_h_t K V BK BV j idxj
+      ≠ claHOffset s s_h_h s_h_t K V BK BV c idxc := by
+  obtain ⟨ej, pj, _⟩ := idxj
+  obtain ⟨ec, pc, _⟩ := idxc
+  obtain ⟨hjK, hjV⟩ := hja
+  obtain ⟨hcK, hcV⟩ := hca
+  simp only [claHOffset]
+  intro heq
+  apply hjc
+  have hbound : ∀ R C : Nat, R < K → C < V → R * s_h_t + C < K * V := by
+    intro R C hR hC
+    have h1 : R * s_h_t ≤ (K - 1) * s_h_t := Nat.mul_le_mul_right s_h_t (by omega)
+    omega
+  have hjm : j * (K * V) = j * K * V := by rw [Nat.mul_assoc]
+  have hcm : c * (K * V) = c * K * V := by rw [Nat.mul_assoc]
+  have heq2 : j * (K * V) + ((s.pids 0 * BK + ej.val) * s_h_t + (s.pids 1 * BV + pj.val))
+      = c * (K * V) + ((s.pids 0 * BK + ec.val) * s_h_t + (s.pids 1 * BV + pc.val)) := by
+    omega
+  exact cla_block_index_inj
+    (by have := hbound _ _ hjK hjV; omega)
+    (by have := hbound _ _ hcK hcV; omega)
+    heq2
+
+/-! ## Spec-layer recurrences -/
+
+theorem claHState_zero (s : BlockState) (k v h0 : RegionName) (UIS : Bool)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (T K V BT BK BV : Nat) (e p : Nat) :
+    claHState s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BK BV 0 e p
+      = (if UIS then h0Guarded s h0 K V BK BV e p else 0) := by
+  simp [claHState]
+
+theorem claHState_succ (s : BlockState) (k v h0 : RegionName) (UIS : Bool)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (T K V BT BK BV : Nat) (t e p : Nat) :
+    claHState s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        T K V BT BK BV (t + 1) e p
+      = claHState s k v h0 UIS s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          T K V BT BK BV t e p
+        + claContrib s k v s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            T K V BT BK BV t e p := by
+  simp [claHState, Fin.sum_univ_castSucc, add_assoc]
+
+/-- The backward running state after `c` descending iterations: every chunk from
+`NT - c` up. Stored (before advancing) at chunk `NT - 1 - c`. -/
+noncomputable def claDhCarry (s : BlockState) (q do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) (c e p : Nat) : ℝ :=
+  ∑ u : Fin NT, if NT - c ≤ u.val then
+    claBContrib s q do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+      T K V BT BK BV u.val e p
+  else 0
+
+theorem claDhCarry_zero (s : BlockState) (q do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) (e p : Nat) :
+    claDhCarry s q do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+        T K V BT BK BV NT 0 e p = 0 := by
+  refine Finset.sum_eq_zero fun u _ => ?_
+  rw [if_neg]
+  have := u.isLt
+  omega
+
+theorem claDhCarry_succ (s : BlockState) (q do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) (c e p : Nat) (hc : c < NT) :
+    claDhCarry s q do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+        T K V BT BK BV NT (c + 1) e p
+      = claDhCarry s q do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+          T K V BT BK BV NT c e p
+        + claBContrib s q do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+            T K V BT BK BV (NT - 1 - c) e p := by
+  classical
+  unfold claDhCarry
+  set B : Nat → ℝ := fun uv =>
+    claBContrib s q do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+      T K V BT BK BV uv e p with hB
+  have hpt : ∀ u : Fin NT,
+      (if NT - (c + 1) ≤ u.val then B u.val else 0)
+        = (if NT - c ≤ u.val then B u.val else 0)
+          + (if u = (⟨NT - 1 - c, by omega⟩ : Fin NT) then B u.val else 0) := by
+    intro u
+    by_cases h1 : NT - c ≤ u.val
+    · rw [if_pos (by omega), if_pos h1, if_neg (by
+        intro hu
+        have : u.val = NT - 1 - c := by rw [hu]
+        omega), add_zero]
+    · by_cases h2 : u = (⟨NT - 1 - c, by omega⟩ : Fin NT)
+      · have hval : u.val = NT - 1 - c := by rw [h2]
+        rw [if_pos (by omega), if_neg h1, if_pos h2, zero_add]
+      · have hval : u.val ≠ NT - 1 - c := by
+          intro hv
+          exact h2 (Fin.ext hv)
+        rw [if_neg (by omega), if_neg h1, if_neg h2, add_zero]
+  rw [Finset.sum_congr rfl (fun u _ => hpt u), Finset.sum_add_distrib,
+    Finset.sum_ite_eq' Finset.univ (⟨NT - 1 - c, by omega⟩ : Fin NT)
+      (fun u => B u.val), if_pos (Finset.mem_univ _)]
+
+/-- What the backward kernel stores at chunk `NT - 1 - c` is exactly the spec's
+`claDhState` there: the strictly-later chunks. -/
+theorem claDhState_eq_carry (s : BlockState) (q do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BT BK BV NT : Nat) (c e p : Nat) (hc : c < NT) :
+    claDhState s q do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+        T K V BT BK BV NT (NT - 1 - c) e p
+      = claDhCarry s q do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+          T K V BT BK BV NT c e p := by
+  unfold claDhState claDhCarry
+  exact Finset.sum_congr rfl fun u _ => if_congr (by omega) rfl rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkLinearAttn
