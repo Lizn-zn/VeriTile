@@ -860,6 +860,324 @@ private theorem crh_setReg_mem {dtype : TileDType} {sh : TileShape}
     (s : BlockState) (nm : RegName) (v : Tile dtype sh) :
     (s.setReg nm dtype sh v).mem = s.mem := rfl
 
+/-! ## The generic state-block store (offset-parameterized)
+
+Serves four stores: `h[·,·,t]` per chunk and `ht` (offsets `(i_k·BK, i_v·BV)`),
+and `dh` once (offsets `(i_v·BT, i_t·BT)` with the post-loop `i_t = 0`). -/
+
+/-- The store address at lane `(e, p)`: `base + (rowOff+e)·σ + (colOff+p)`. -/
+def crhStoreAddr (base σ rowOff colOff : Nat) (BR BS : Nat)
+    (idx : TileIndex [BR, BS]) : Nat :=
+  base + (rowOff + idx.1.val) * σ + (colOff + idx.2.1.val) * 1
+
+theorem crhHOffset_eq_storeAddr (s : BlockState) (s_h_h s_h_t K V BK BV t : Nat)
+    (idx : TileIndex [BK, BV]) :
+    crhHOffset s s_h_h s_h_t K V BK BV t idx
+      = crhStoreAddr (s.pids 2 * s_h_h + t * K * V) s_h_t
+          (s.pids 0 * BK) (s.pids 1 * BV) BK BV idx := rfl
+
+theorem crhHtOffset_eq_storeAddr (s : BlockState) (K V BK BV : Nat)
+    (idx : TileIndex [BK, BV]) :
+    crhHtOffset s K V BK BV idx
+      = crhStoreAddr (s.pids 2 * K * V) V
+          (s.pids 0 * BK) (s.pids 1 * BV) BK BV idx := rfl
+
+theorem crhDhOffset_eq_storeAddr (s : BlockState) (s_h_h s_h_t K V BT : Nat)
+    (idx : TileIndex [BT, BT]) :
+    crhDhOffset s s_h_h s_h_t K V BT idx
+      = crhStoreAddr (s.pids 2 * s_h_h + s.pids 0 * K * V) s_h_t
+          (s.pids 1 * BT) (0 * BT) BT BT idx := rfl
+
+/-- The explicit post-store state: the masked lane-by-lane scatter of cell fn
+`f` over input state `sin`. -/
+noncomputable def crhStoreState (sin : BlockState) (rg : RegionName)
+    (base σ rowOff colOff K V BR BS : Nat) (f : Nat → Nat → ℝ) : BlockState :=
+  (TileShape.allIndices [BR, BS]).foldl
+    (fun acc i => if (rowOff + i.1.val < K ∧ colOff + i.2.1.val < V)
+        then acc.writeMem rg (crhStoreAddr base σ rowOff colOff BR BS i)
+          (f i.1.val i.2.1.val) else acc) sin
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **State-block store step (eq).** -/
+theorem crhStore_step_eq (sin : BlockState) (rg : RegionName)
+    (bname pname : RegName) (base σ rowOff colOff K V BR BS : Nat)
+    (f : Nat → Nat → ℝ) (bT : Tile .real [BR, BS])
+    (hbf : ∀ e p, bT.data (e, p, PUnit.unit) = some (f e.val p.val))
+    (hb : sin.regs .real [BR, BS] bname = some bT)
+    (hp : sin.regs .blockPtr [BR, BS] pname = some
+      ⟨fun _ => BlockPtr.mk rg base [K, V] [BR, BS] [σ, 1]
+        [rowOff, colOff]⟩) :
+    stepStmt (Stmt.store .real [BR, BS]
+        (MemAccess.blockPtr (Op.ref .blockPtr [BR, BS] pname) [0, 1])
+        (Op.ref .real [BR, BS] bname) MaskOpt.none) sin
+      = some (crhStoreState sin rg base σ rowOff colOff K V BR BS f) := by
+  unfold stepStmt crhStoreState
+  simp only [evalOp_ref, hb, hp]
+  refine congrArg some
+    (congrArg (fun g => List.foldl g sin (TileShape.allIndices [BR, BS])) ?_)
+  funext acc i
+  obtain ⟨e, p, u⟩ := i
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets,
+    BlockPtr.inBounds_2d_offsets, Bool.true_and, crhStoreAddr]
+  by_cases hbnd : rowOff + e.val < K ∧ colOff + p.val < V
+  · simp only [hbnd, BlockState.writeMemTyped_real, hbf, Nat.mul_one]
+    rfl
+  · simp only [hbnd, decide_false, Bool.false_eq_true, if_false]
+
+/-- If two `Q`-blocks with in-block offsets `A, B < Q` collide, the block
+indices agree. -/
+private theorem crh_block_index_inj {Q j c A B : Nat} (hA : A < Q) (hB : B < Q)
+    (heq : j * Q + A = c * Q + B) : j = c := by
+  have hQ : 0 < Q := Nat.lt_of_le_of_lt (Nat.zero_le A) hA
+  have hj : (j * Q + A) / Q = j := by
+    rw [Nat.mul_comm, Nat.mul_add_div hQ, Nat.div_eq_of_lt hA, Nat.add_zero]
+  have hc : (c * Q + B) / Q = c := by
+    rw [Nat.mul_comm, Nat.mul_add_div hQ, Nat.div_eq_of_lt hB, Nat.add_zero]
+  rw [← hj, heq, hc]
+
+/-- One block's store lanes are pairwise distinct once a `BS` row segment fits
+under the row stride. -/
+theorem crhStoreAddr_injective (base σ rowOff colOff BR BS : Nat)
+    (hBSσ : BS ≤ σ) :
+    Function.Injective (crhStoreAddr base σ rowOff colOff BR BS) := by
+  rintro ⟨e, p, u⟩ ⟨e', p', u'⟩ heq
+  simp only [crhStoreAddr] at heq
+  have hp := p.isLt
+  have hp' := p'.isLt
+  have h2 : (rowOff + e.val) * σ + p.val = (rowOff + e'.val) * σ + p'.val := by
+    omega
+  have hlt : p.val < σ := by omega
+  have hlt' : p'.val < σ := by omega
+  have hjj : rowOff + e.val = rowOff + e'.val :=
+    crh_block_index_inj hlt hlt' h2
+  have he : e = e' := Fin.ext (by omega)
+  have hpv : p = p' := Fin.ext (by
+    have hσ : (rowOff + e.val) * σ = (rowOff + e'.val) * σ := by rw [hjj]
+    omega)
+  subst he
+  subst hpv
+  rfl
+
+set_option maxHeartbeats 4000000 in
+/-- **State-block store readback** (mask-restricted same-region frame). -/
+theorem crhStore_step_props (sin : BlockState) (rg : RegionName)
+    (base σ rowOff colOff K V BR BS : Nat) (f : Nat → Nat → ℝ)
+    (hInj : Function.Injective (crhStoreAddr base σ rowOff colOff BR BS)) :
+    (crhStoreState sin rg base σ rowOff colOff K V BR BS f).pids = sin.pids
+      ∧ (crhStoreState sin rg base σ rowOff colOff K V BR BS f).regs = sin.regs
+      ∧ (∀ idx : TileIndex [BR, BS],
+          (rowOff + idx.1.val < K ∧ colOff + idx.2.1.val < V) →
+          (crhStoreState sin rg base σ rowOff colOff K V BR BS f).readMem rg
+              (crhStoreAddr base σ rowOff colOff BR BS idx)
+            = f idx.1.val idx.2.1.val)
+      ∧ (∀ rg' off, rg' ≠ rg →
+          (crhStoreState sin rg base σ rowOff colOff K V BR BS f).readMem rg' off
+            = sin.readMem rg' off)
+      ∧ (∀ off, (∀ idx : TileIndex [BR, BS],
+            (rowOff + idx.1.val < K ∧ colOff + idx.2.1.val < V) →
+            off ≠ crhStoreAddr base σ rowOff colOff BR BS idx) →
+          (crhStoreState sin rg base σ rowOff colOff K V BR BS f).readMem rg off
+            = sin.readMem rg off) := by
+  classical
+  unfold crhStoreState
+  refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  · rw [BlockState.foldl_writeMem_prop_masked_pids]
+  · funext dtype shape name
+    rw [BlockState.foldl_writeMem_prop_masked_regs]
+  · intro idx hidx
+    obtain ⟨h1, h2⟩ := hidx
+    have h := BlockState.scatter_readback_prop_masked_nd (region := rg) sin
+      (crhStoreAddr base σ rowOff colOff BR BS) (fun i => f i.1.val i.2.1.val)
+      (fun i => rowOff + i.1.val < K ∧ colOff + i.2.1.val < V)
+      hInj idx
+    rw [h, if_pos ⟨h1, h2⟩]
+  · intro rg' off hrg
+    exact BlockState.foldl_writeMem_const_region_prop_masked_readMem_other
+      rg (crhStoreAddr base σ rowOff colOff BR BS) (fun i => f i.1.val i.2.1.val)
+      (fun i => rowOff + i.1.val < K ∧ colOff + i.2.1.val < V)
+      _ sin rg' off hrg
+  · intro off hoff
+    exact BlockState.foldl_writeMem_same_region_disjoint_offsets_readMem
+      rg (crhStoreAddr base σ rowOff colOff BR BS) (fun i => f i.1.val i.2.1.val)
+      (fun i => rowOff + i.1.val < K ∧ colOff + i.2.1.val < V)
+      _ sin off (fun i _ hPi => hoff i hPi)
+
+/-- Distinct chunks write disjoint `K·V` blocks of `h`: active lanes of chunk
+`j` never collide with active lanes of chunk `c ≠ j`. -/
+theorem crhHOffset_chunk_disjoint (s : BlockState)
+    (s_h_h s_h_t K V BK BV : Nat) (hFit : (K - 1) * s_h_t + V ≤ K * V)
+    (j c : Nat) (hjc : j ≠ c) (idxj idxc : TileIndex [BK, BV])
+    (hja : crhActive s K V BK BV idxj) (hca : crhActive s K V BK BV idxc) :
+    crhHOffset s s_h_h s_h_t K V BK BV j idxj
+      ≠ crhHOffset s s_h_h s_h_t K V BK BV c idxc := by
+  obtain ⟨ej, pj, _⟩ := idxj
+  obtain ⟨ec, pc, _⟩ := idxc
+  obtain ⟨hjK, hjV⟩ := hja
+  obtain ⟨hcK, hcV⟩ := hca
+  simp only [crhHOffset]
+  intro heq
+  apply hjc
+  have hbound : ∀ R C : Nat, R < K → C < V → R * s_h_t + C < K * V := by
+    intro R C hR hC
+    have h1 : R * s_h_t ≤ (K - 1) * s_h_t := Nat.mul_le_mul_right s_h_t (by omega)
+    omega
+  have hjm : j * (K * V) = j * K * V := by rw [Nat.mul_assoc]
+  have hcm : c * (K * V) = c * K * V := by rw [Nat.mul_assoc]
+  have heq2 : j * (K * V) + ((s.pids 0 * BK + ej.val) * s_h_t + (s.pids 1 * BV + pj.val))
+      = c * (K * V) + ((s.pids 0 * BK + ec.val) * s_h_t + (s.pids 1 * BV + pc.val)) := by
+    omega
+  exact crh_block_index_inj
+    (hbound _ _ hjK hjV) (hbound _ _ hcK hcV) heq2
+
+/-! ## Value tiles, load bridges, and spec recurrences -/
+
+/-- The loaded `b_k` tile of chunk `t`: cell `(e, c)`. -/
+noncomputable def crhBkTile (s : BlockState) (k : RegionName)
+    (s_qk_h s_qk_t s_qk_d T K BT BK : Nat) (t : Nat) : Tile .real [BK, BT] :=
+  ⟨fun idx => some (crhKGuarded s k s_qk_h s_qk_t s_qk_d T K BT BK t
+    idx.2.1.val idx.1.val)⟩
+
+/-- The loaded `b_v` / `b_o` tile of chunk `t`: cell `(c, p)`. -/
+noncomputable def crhBvTile (s : BlockState) (v : RegionName)
+    (s_vo_h s_vo_t s_vo_d T V BT BV : Nat) (t : Nat) : Tile .real [BT, BV] :=
+  ⟨fun idx => some (crhVGuarded s v s_vo_h s_vo_t s_vo_d T V BT BV t
+    idx.1.val idx.2.1.val)⟩
+
+/-- The seeded `b_h` tile: cell `(e, p)`. -/
+noncomputable def crhH0Tile (s : BlockState) (h0 : RegionName)
+    (K V BK BV : Nat) : Tile .real [BK, BV] :=
+  ⟨fun idx => some (crhH0Guarded s h0 K V BK BV idx.1.val idx.2.1.val)⟩
+
+private theorem crh_kLoad_eq (s sin : BlockState) (k : RegionName) (name : RegName)
+    (s_qk_h s_qk_t s_qk_d T K BT BK : Nat) (t : Nat)
+    (hmem : ∀ off, sin.readMem k off = s.readMem k off)
+    (hpk : sin.regs .blockPtr [BK, BT] name = some
+      ⟨fun _ => BlockPtr.mk k (s.pids 2 * s_qk_h) [K, T] [BK, BT] [s_qk_d, s_qk_t]
+        [s.pids 0 * BK, t * BT]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BK, BT] name) [0, 1]) MaskOpt.none) sin
+      = some (crhBkTile s k s_qk_h s_qk_t s_qk_d T K BT BK t) := by
+  rw [crh_load_bp_2d k sin name (s.pids 2 * s_qk_h) K T BK BT s_qk_d s_qk_t
+    (s.pids 0 * BK) (t * BT) hpk]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨e, c, u⟩ := idx
+  simp only [crhBkTile, crhKGuarded, crhKElem, hmem]
+  by_cases hb : s.pids 0 * BK + e.val < K ∧ t * BT + c.val < T
+  · rw [if_pos hb, if_pos hb]
+  · rw [if_neg hb, if_neg hb]
+
+private theorem crh_vLoad_eq (s sin : BlockState) (v : RegionName) (name : RegName)
+    (s_vo_h s_vo_t s_vo_d T V BT BV : Nat) (t : Nat)
+    (hmem : ∀ off, sin.readMem v off = s.readMem v off)
+    (hpv : sin.regs .blockPtr [BT, BV] name = some
+      ⟨fun _ => BlockPtr.mk v (s.pids 2 * s_vo_h) [T, V] [BT, BV] [s_vo_t, s_vo_d]
+        [t * BT, s.pids 1 * BV]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BT, BV] name) [0, 1]) MaskOpt.none) sin
+      = some (crhBvTile s v s_vo_h s_vo_t s_vo_d T V BT BV t) := by
+  rw [crh_load_bp_2d v sin name (s.pids 2 * s_vo_h) T V BT BV s_vo_t s_vo_d
+    (t * BT) (s.pids 1 * BV) hpv]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨c, p, u⟩ := idx
+  simp only [crhBvTile, crhVGuarded, crhVElem, hmem]
+  by_cases hb : t * BT + c.val < T ∧ s.pids 1 * BV + p.val < V
+  · rw [if_pos hb, if_pos hb]
+  · rw [if_neg hb, if_neg hb]
+
+private theorem crh_h0Load_eq (s sin : BlockState) (h0 : RegionName)
+    (K V BK BV : Nat)
+    (hmem : ∀ off, sin.readMem h0 off = s.readMem h0 off)
+    (hph0 : sin.regs .blockPtr [BK, BV] "p_h0" = some
+      ⟨fun _ => BlockPtr.mk h0 (s.pids 2 * K * V) [K, V] [BK, BV] [V, 1]
+        [s.pids 0 * BK, s.pids 1 * BV]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BK, BV] "p_h0") [0, 1]) MaskOpt.none) sin
+      = some (crhH0Tile s h0 K V BK BV) := by
+  rw [crh_load_bp_2d h0 sin "p_h0" (s.pids 2 * K * V) K V BK BV V 1
+    (s.pids 0 * BK) (s.pids 1 * BV) hph0]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨e, p, u⟩ := idx
+  simp only [crhH0Tile, crhH0Guarded, crhH0Elem, hmem]
+  by_cases hb : s.pids 0 * BK + e.val < K ∧ s.pids 1 * BV + p.val < V
+  · rw [if_pos hb, if_pos hb]
+  · rw [if_neg hb, if_neg hb]
+
+/-- The post-gate `d_i` tile at chunk `t`: lane `c` holds `crhDi t c`. -/
+noncomputable def crhDiFullTile (s : BlockState) (H T BT NT t : Nat) :
+    Tile .real [BT] :=
+  ⟨fun idx => some (crhDi s H T BT NT t idx.1.val)⟩
+
+/-- Off the ragged last chunk the decay factor is the standard one. -/
+theorem crhDb_std (s : BlockState) (H T BT NT t : Nat)
+    (h : ¬(t = NT - 1 ∧ T % BT ≠ 0)) :
+    crhDb s H T BT NT t = crhDbBwd s H BT := by
+  unfold crhDb crhDbBwd crhLen
+  rw [if_neg h]
+
+/-- Off the ragged last chunk the weight tile is the standard one. -/
+theorem crhDiFull_std (s : BlockState) (H T BT NT t : Nat)
+    (h : ¬(t = NT - 1 ∧ T % BT ≠ 0)) :
+    crhDiFullTile s H T BT NT t = crhDiStdTile s H BT := by
+  refine Tile.ext fun idx => ?_
+  simp only [crhDiFullTile, crhDiStdTile, crhDi, crhLen, if_neg h]
+
+/-- On the ragged last chunk they are the boundary values. -/
+theorem crhDb_boundary (s : BlockState) (H T BT NT t : Nat)
+    (h : t = NT - 1 ∧ T % BT ≠ 0) :
+    crhDb s H T BT NT t
+      = Real.exp (((T % BT : Nat) : ℝ) * crhBeta s H * Real.log 2) := by
+  unfold crhDb crhLen
+  rw [if_pos h]
+
+theorem crhDiFull_boundary (s : BlockState) (H T BT NT t : Nat)
+    (h : t = NT - 1 ∧ T % BT ≠ 0) :
+    crhDiFullTile s H T BT NT t = crhDiBoundaryTile s H T BT := by
+  refine Tile.ext fun idx => ?_
+  simp only [crhDiFullTile, crhDiBoundaryTile, crhDi, crhLen, if_pos h]
+
+theorem crhDhAcc_zero (s : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (H T V BT NT : Nat) (x y : Nat) :
+    crhDhAcc s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT 0 x y = 0 := by
+  refine Finset.sum_eq_zero fun u _ => ?_
+  rw [if_neg]
+  have := u.isLt
+  omega
+
+theorem crhDhAcc_succ (s : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (H T V BT NT : Nat) (c x y : Nat)
+    (hc : c < NT) :
+    crhDhAcc s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT (c + 1) x y
+      = crhDhAcc s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT c x y
+        + crhBContrib s v do_ s_vo_h s_vo_t s_vo_d H T V BT (NT - 1 - c) x y := by
+  classical
+  unfold crhDhAcc
+  set B : Nat → ℝ := fun uv =>
+    crhBContrib s v do_ s_vo_h s_vo_t s_vo_d H T V BT uv x y with hB
+  have hpt : ∀ u : Fin NT,
+      (if NT - (c + 1) ≤ u.val then B u.val else 0)
+        = (if NT - c ≤ u.val then B u.val else 0)
+          + (if u = (⟨NT - 1 - c, by omega⟩ : Fin NT) then B u.val else 0) := by
+    intro u
+    by_cases h1 : NT - c ≤ u.val
+    · rw [if_pos (by omega), if_pos h1, if_neg (by
+        intro hu
+        have : u.val = NT - 1 - c := by rw [hu]
+        omega), add_zero]
+    · by_cases h2 : u = (⟨NT - 1 - c, by omega⟩ : Fin NT)
+      · have hval : u.val = NT - 1 - c := by rw [h2]
+        rw [if_pos (by omega), if_neg h1, if_pos h2, zero_add]
+      · have hval : u.val ≠ NT - 1 - c := by
+          intro hv
+          exact h2 (Fin.ext hv)
+        rw [if_neg (by omega), if_neg h1, if_neg h2, add_zero]
+  rw [Finset.sum_congr rfl (fun u _ => hpt u), Finset.sum_add_distrib,
+    Finset.sum_ite_eq' Finset.univ (⟨NT - 1 - c, by omega⟩ : Fin NT)
+      (fun u => B u.val), if_pos (Finset.mem_univ _)]
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkRetention
