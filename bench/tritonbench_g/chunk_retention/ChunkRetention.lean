@@ -1926,6 +1926,234 @@ specification crh_fwd_h_exec_genuine
   rw [hFoth h _ (Ne.symm hHtH)]
   exact hLhist t idx htNT hidx
 
+/-! ## The backward walk -/
+
+/-- The backward accumulator tile after `c` descending iterations. -/
+noncomputable def crhDhAccTile (s : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (H T V BT NT : Nat) (c : Nat) :
+    Tile .real [BT, BT] :=
+  ⟨fun idx => some (crhDhAcc s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT c
+    idx.1.val idx.2.1.val)⟩
+
+/-- The backward accumulation advances the indicator carry by one chunk. -/
+private theorem crh_bwd_advance_eval (s sin : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (H T V BT NT : Nat) (c : Nat) (hc : c < NT)
+    (hbdh : sin.regs .real [BT, BT] "b_dh" = some (crhDhAccTile s v do_
+      s_vo_h s_vo_t s_vo_d H T V BT NT c))
+    (hbo : sin.regs .real [BT, BT] "b_o"
+      = some (crhBvTile s do_ s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c)))
+    (hbv : sin.regs .real [BT, BT] "b_v"
+      = some (crhBvTile s v s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c)))
+    (hdi : sin.regs .real [BT] "d_i" = some (crhDiBwdTile s H BT)) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BT, BT] "b_dh")
+        (Op.dot (batch := [])
+          (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+            (Op.ref .real [BT, BT] "b_o")
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "d_i")))
+          (Op.ref .real [BT, BT] "b_v"))) sin
+      = some (crhDhAccTile s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT (c + 1)) := by
+  have hwo : evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      (Op.ref .real [BT, BT] "b_o")
+      (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "d_i"))) sin
+      = some (Tile.bop NumericDType.real.mul
+        (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (crhBvTile s do_ s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c))
+        (Tile.expandDim ⟨1, by simp⟩ (crhDiBwdTile s H BT))) :=
+    crh_mulTile_eval (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+      _ _ sin _ _
+      (by rw [evalOp_ref]; exact hbo)
+      (by
+        erw [evalOp_expandDim]
+        simp only [evalOp_ref, hdi, Option.bind_eq_bind, Option.bind_some]
+        rfl)
+  have hye : evalOp (Op.dot (batch := [])
+      (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BT, BT] "b_o")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BT] "d_i")))
+      (Op.ref .real [BT, BT] "b_v")) sin
+      = some (Tile.dot []
+        (Tile.bop NumericDType.real.mul
+          (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+          (crhBvTile s do_ s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c))
+          (Tile.expandDim ⟨1, by simp⟩ (crhDiBwdTile s H BT)))
+        (crhBvTile s v s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c))) :=
+    crh_dot_eval _ _ sin _ _ hwo (by rw [evalOp_ref]; exact hbv)
+  erw [crh_addTile_eval (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    _ _ sin _ _ (by rw [evalOp_ref]; exact hbdh) hye]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨x, y, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+    crhDhAccTile, NumericDType.add, WithBot.realAdd]
+  rw [crh_dot2d_elem _ _ x y
+    (fun r => crhVGuarded s do_ s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c)
+      x.val r.val * crhDiBwd s H x.val)
+    (fun r => crhVGuarded s v s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c)
+      r.val y.val)
+    (fun r => rfl) (fun r => rfl)]
+  rw [show ∀ a b : ℝ, Option.map₂ (· + ·) (some a : WithBot ℝ) (some b) = some (a + b)
+    from fun _ _ => rfl]
+  refine congrArg some ?_
+  rw [crhDhAcc_succ s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT c x.val y.val hc]
+  rfl
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **One backward chunk** (ascending counter `c`, descending chunk `NT-1-c`):
+three pointer makes, three loads (the `dh` one dead), and the weighted
+accumulation. No store — memory is untouched. -/
+theorem crhBwdBody_step (s sin : BlockState) (v do_ dh : RegionName)
+    (s_vo_h s_vo_t s_vo_d s_h_h s_h_t : Nat)
+    (H T K V BT NT : Nat) (c : Nat) (hc : c < NT)
+    (hmemDo : ∀ off, sin.readMem do_ off = s.readMem do_ off)
+    (hmemV : ∀ off, sin.readMem v off = s.readMem v off)
+    (hik : sin.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)))
+    (hiv : sin.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
+    (hibh : sin.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hj : sin.regs .nat [] "j" = some (Tile.scalar c))
+    (hdi : sin.regs .real [BT] "d_i" = some (crhDiBwdTile s H BT))
+    (hbdh : sin.regs .real [BT, BT] "b_dh" = some (crhDhAccTile s v do_
+      s_vo_h s_vo_t s_vo_d H T V BT NT c)) :
+    ∃ s', stepStmts (crhBwdBody v do_ dh s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+        T K V BT NT) sin = some s'
+      ∧ s'.pids = sin.pids
+      ∧ (∀ rg off, s'.readMem rg off = sin.readMem rg off)
+      ∧ s'.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0))
+      ∧ s'.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+      ∧ s'.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ s'.regs .nat [] "i_t" = some (Tile.scalar (NT - 1 - c))
+      ∧ s'.regs .real [BT] "d_i" = some (crhDiBwdTile s H BT)
+      ∧ s'.regs .real [] "d_b" = sin.regs .real [] "d_b"
+      ∧ s'.regs .real [BT, BT] "b_dh" = some (crhDhAccTile s v do_
+          s_vo_h s_vo_t s_vo_d H T V BT NT (c + 1)) := by
+  unfold crhBwdBody
+  -- i_t = NT - 1 - j
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (crh_itIdx_eval sin NT c hj))]
+  -- p_o
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_makeBlockPtr_2d_eval do_ _ _ _ _ [T, V] [BT, BT] [s_vo_t, s_vo_d]
+      (s.pids 2 * s_vo_h) ((NT - 1 - c) * BT) (s.pids 1 * BT)
+      (crh_mulConst_eval _ "i_bh" (s.pids 2) s_vo_h (by simpa using hibh))
+      (crh_mulConst_eval _ "i_t" (NT - 1 - c) BT (by simp))
+      (crh_mulConst_eval _ "i_v" (s.pids 1) BT (by simpa using hiv))))]
+  -- p_v
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_makeBlockPtr_2d_eval v _ _ _ _ [T, V] [BT, BT] [s_vo_t, s_vo_d]
+      (s.pids 2 * s_vo_h) ((NT - 1 - c) * BT) (s.pids 1 * BT)
+      (crh_mulConst_eval _ "i_bh" (s.pids 2) s_vo_h (by simpa using hibh))
+      (crh_mulConst_eval _ "i_t" (NT - 1 - c) BT (by simp))
+      (crh_mulConst_eval _ "i_v" (s.pids 1) BT (by simpa using hiv))))]
+  -- p_h (the dead dh pointer)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_makeBlockPtr_2d_eval dh _ _ _ _ [K, V] [BT, BT] [s_h_t, 1]
+      (s.pids 2 * s_h_h + (NT - 1 - c) * K * V) (s.pids 0 * BT) (s.pids 1 * BT)
+      (crh_hBase_eval _ s_h_h K V (s.pids 2) (NT - 1 - c) (by simpa using hibh)
+        (by simp))
+      (crh_mulConst_eval _ "i_k" (s.pids 0) BT (by simpa using hik))
+      (crh_mulConst_eval _ "i_v" (s.pids 1) BT (by simpa using hiv))))]
+  -- b_o load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_vLoad_eq s _ do_ "p_o" s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c)
+      (fun off => by
+        simp only [BlockState.setReg_readMem]
+        exact hmemDo off)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_same])))]
+  -- b_v load
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_vLoad_eq s _ v "p_v" s_vo_h s_vo_t s_vo_d T V BT BT (NT - 1 - c)
+      (fun off => by
+        simp only [BlockState.setReg_readMem]
+        exact hmemV off)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_same])))]
+  -- b_h dead load (the raw guarded tile)
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_load_bp_2d dh _ "p_h" (s.pids 2 * s_h_h + (NT - 1 - c) * K * V) K V
+      BT BT s_h_t 1 (s.pids 0 * BT) (s.pids 1 * BT)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_same])))]
+  -- the accumulation
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_bwd_advance_eval s _ v do_ s_vo_h s_vo_t s_vo_d H T V BT NT c hc
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+        simpa using hbdh)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_same])
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_same])
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+        simpa using hdi)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp only [BlockState.setReg_pids]
+  · intro rg off
+    simp only [BlockState.setReg_readMem]
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hik
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hiv
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hibh
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_same]
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+    exact hdi
+  · rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+      BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
+  · rw [BlockState.setReg_same]
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkRetention
