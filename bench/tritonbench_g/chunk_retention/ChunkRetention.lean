@@ -2154,6 +2154,200 @@ theorem crhBwdBody_step (s sin : BlockState) (v do_ dh : RegionName)
       BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide)]
   · rw [BlockState.setReg_same]
 
+set_option maxHeartbeats 4000000 in
+/-- **The collapsed backward loop.** Memory is untouched; the accumulator ends
+at `crhDhAcc NT` and the loop register `i_t` ends at `0`. -/
+theorem crhBwdLoop_run (s sPre : BlockState) (v do_ dh : RegionName)
+    (s_vo_h s_vo_t s_vo_d s_h_h s_h_t : Nat) (H T K V BT NT : Nat)
+    (hpids : sPre.pids = s.pids)
+    (hik : sPre.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0)))
+    (hiv : sPre.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1)))
+    (hibh : sPre.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2)))
+    (hit : sPre.regs .nat [] "i_t" = some (Tile.scalar 0))
+    (hdb : sPre.regs .real [] "d_b" = some (Tile.scalar (some (crhDbBwd s H BT))))
+    (hdi : sPre.regs .real [BT] "d_i" = some (crhDiBwdTile s H BT))
+    (hbdh : sPre.regs .real [BT, BT] "b_dh" = some (crhDhAccTile s v do_
+      s_vo_h s_vo_t s_vo_d H T V BT NT 0))
+    (hmem : ∀ rg off, sPre.readMem rg off = s.readMem rg off) :
+    ∃ sL, stepStmt (Stmt.forRange "j" 0 NT 1
+        (crhBwdBody v do_ dh s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT NT)) sPre
+        = some sL
+      ∧ sL.pids = s.pids
+      ∧ sL.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0))
+      ∧ sL.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+      ∧ sL.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ sL.regs .nat [] "i_t" = some (Tile.scalar 0)
+      ∧ sL.regs .real [] "d_b" = some (Tile.scalar (some (crhDbBwd s H BT)))
+      ∧ sL.regs .real [BT, BT] "b_dh" = some (crhDhAccTile s v do_
+          s_vo_h s_vo_t s_vo_d H T V BT NT NT)
+      ∧ (∀ rg off, sL.readMem rg off = s.readMem rg off) := by
+  have hres := forRange_inv (idx := "j") (start := 0) (stop := NT) (step := 1)
+    (body := crhBwdBody v do_ dh s_vo_h s_vo_t s_vo_d s_h_h s_h_t T K V BT NT)
+    (P := fun c tS =>
+      c ≤ NT
+      ∧ tS.pids = s.pids
+      ∧ tS.regs .nat [] "i_k" = some (Tile.scalar (s.pids 0))
+      ∧ tS.regs .nat [] "i_v" = some (Tile.scalar (s.pids 1))
+      ∧ tS.regs .nat [] "i_bh" = some (Tile.scalar (s.pids 2))
+      ∧ tS.regs .nat [] "i_t"
+          = some (Tile.scalar (if c = 0 then 0 else NT - c))
+      ∧ tS.regs .real [] "d_b" = some (Tile.scalar (some (crhDbBwd s H BT)))
+      ∧ tS.regs .real [BT] "d_i" = some (crhDiBwdTile s H BT)
+      ∧ tS.regs .real [BT, BT] "b_dh" = some (crhDhAccTile s v do_
+          s_vo_h s_vo_t s_vo_d H T V BT NT c)
+      ∧ (∀ rg off, tS.readMem rg off = s.readMem rg off))
+    (s_init := sPre) (by decide)
+    ⟨Nat.zero_le _, hpids, hik, hiv, hibh, by simpa using hit, hdb, hdi, hbdh,
+      fun rg off => hmem rg off⟩
+    (by
+      intro i tS hi hP
+      obtain ⟨hle, hPpids, hPik, hPiv, hPibh, hPit, hPdb, hPdi, hPbdh,
+        hPmem⟩ := hP
+      obtain ⟨s', hstep, hspids, hsmem, hsik, hsiv, hsibh, hsit, hsdi, hsdb,
+        hsbdh⟩ :=
+        crhBwdBody_step s (tS.setReg "j" .nat [] (Tile.scalar i)) v do_ dh
+          s_vo_h s_vo_t s_vo_d s_h_h s_h_t H T K V BT NT i hi
+          (fun off => by
+            rw [BlockState.setReg_readMem]
+            exact hPmem do_ off)
+          (fun off => by
+            rw [BlockState.setReg_readMem]
+            exact hPmem v off)
+          (by simpa using hPik)
+          (by simpa using hPiv)
+          (by simpa using hPibh)
+          (by simp)
+          (by simpa using hPdi)
+          (by simpa using hPbdh)
+      refine ⟨s', hstep, by omega,
+        by rw [hspids, BlockState.setReg_pids]; exact hPpids,
+        hsik, hsiv, hsibh, ?_, ?_, hsdi, hsbdh, ?_⟩
+      · rw [hsit]
+        refine congrArg some (congrArg Tile.scalar ?_)
+        rw [if_neg (Nat.succ_ne_zero i)]
+        show NT - 1 - i = NT - (i + 1)
+        omega
+      · rw [hsdb]
+        simpa using hPdb
+      · intro rg off
+        rw [hsmem rg off, BlockState.setReg_readMem]
+        exact hPmem rg off)
+  obtain ⟨final, sL, hstep, hfin, hle, hLpids, hLik, hLiv, hLibh, hLit, hLdb,
+    _, hLbdh, hLmem⟩ := hres
+  have hfinal : final = NT := Nat.le_antisymm hle hfin
+  rw [hfinal] at hLit hLbdh
+  refine ⟨sL, hstep, hLpids, hLik, hLiv, hLibh, ?_, hLdb, hLbdh, hLmem⟩
+  rw [hLit]
+  refine congrArg some (congrArg Tile.scalar ?_)
+  show (if NT = 0 then 0 else NT - NT) = 0
+  by_cases h0 : NT = 0
+  · rw [if_pos h0]
+  · rw [if_neg h0]
+    omega
+
+/-- The scaled output tile: cell `(x, y)` is `crhDhOut`. -/
+noncomputable def crhDhOutTile (s : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (H T V BT NT : Nat) : Tile .real [BT, BT] :=
+  ⟨fun idx => some (crhDhOut s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT
+    idx.1.val idx.2.1.val)⟩
+
+set_option maxHeartbeats 1000000 in
+/-- **Genuine correctness** of `chunk_retention_bwd_kernel_dh`, exactly as the
+upstream kernel computes (see the preamble's faithfulness notes: the square
+shape is forced by its `tl.dot`, the contraction is the scrambled one, the
+final store reuses the post-loop `i_t = 0`, and the `dh` loads are dead).
+Every active lane of the single `dh` store block reads back
+`crhDhOut = d_b · Σ_{all chunks} (do ⊙ d_i)·v`. -/
+specification crh_bwd_dh_exec_genuine
+    (v do_ dh : RegionName)
+    (s_vo_h s_vo_t s_vo_d s_h_h s_h_t : Nat)
+    (H T K V BT NT : Nat) (s : BlockState)
+    (hσ : BT ≤ s_h_t) :
+    ∃ sF, exec (crh_bwd_dh_surface v do_ dh s_vo_h s_vo_t s_vo_d s_h_h s_h_t
+        H T K V BT NT).toAlgKernel s = some sF
+      ∧ ∀ idx : TileIndex [BT, BT], crhDhActive s K V BT idx →
+          sF.readMem dh (crhDhOffset s s_h_h s_h_t K V BT idx)
+            = crhDhOut s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT
+                idx.1.val idx.2.1.val := by
+  obtain ⟨sP, hpre, hPpids, hPik, hPiv, hPibh, hPoi, hPbb, hPdb, hPmem⟩ :=
+    crhPreDecay_run s H BT
+  rw [exec, crh_bwd_body_eq, hpre]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_diBwd_eval s sP H BT hPoi hPbb))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (crh_zeros_eval BT BT _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_constNat 0 _))]
+  obtain ⟨sL, hloop, hLpids, hLik, hLiv, hLibh, hLit, hLdb, hLbdh, hLmem⟩ :=
+    crhBwdLoop_run s
+      (((sP.setReg "d_i" .real [BT] (crhDiBwdTile s H BT)).setReg
+          "b_dh" .real [BT, BT] (⟨fun _ => some 0⟩ : Tile .real [BT, BT])).setReg
+        "i_t" .nat [] (Tile.scalar 0))
+      v do_ dh s_vo_h s_vo_t s_vo_d s_h_h s_h_t H T K V BT NT
+      (by simp [hPpids])
+      (by simpa using hPik)
+      (by simpa using hPiv)
+      (by simpa using hPibh)
+      (by simp)
+      (by simpa using hPdb)
+      (by simp)
+      (by
+        rw [BlockState.setReg_ne_name _ _ _ _ _ _ _ _ (by decide),
+          BlockState.setReg_same]
+        refine congrArg some (Tile.ext fun idx => ?_)
+        simp [crhDhAccTile, crhDhAcc_zero])
+      (fun rg off => by simpa using hPmem rg off)
+  rw [stepStmts.cons_some hloop]
+  -- b_dh *= d_b
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (show evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [BT, BT] "b_dh")
+        (Op.ref .real [] "d_b")) sL
+      = some (crhDhOutTile s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT) from by
+      rw [crh_mulTile_eval Broadcast.scalarR _ _ sL
+        (crhDhAccTile s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT NT)
+        (Tile.scalar (some (crhDbBwd s H BT)))
+        (by rw [evalOp_ref]; exact hLbdh)
+        (by rw [evalOp_ref]; exact hLdb)]
+      refine congrArg some (Tile.ext fun idx => ?_)
+      obtain ⟨x, y, u⟩ := idx
+      simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex,
+        crhDhAccTile, crhDhOutTile, crhDhOut]
+      rfl))]
+  -- p_dh
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (crh_makeBlockPtr_2d_eval dh _ _ _ _ [K, V] [BT, BT] [s_h_t, 1]
+      (s.pids 2 * s_h_h + s.pids 0 * K * V) (s.pids 1 * BT) (0 * BT)
+      (crh_dhBase_eval _ s_h_h K V (s.pids 2) (s.pids 0)
+        (by simpa using hLibh) (by simpa using hLik))
+      (crh_mulConst_eval _ "i_v" (s.pids 1) BT (by simpa using hLiv))
+      (crh_mulConst_eval _ "i_t" 0 BT (by simpa using hLit))))]
+  -- the single store
+  rw [stepStmts.cons_some (crhStore_step_eq _ dh "b_dh" "p_dh"
+    (s.pids 2 * s_h_h + s.pids 0 * K * V) s_h_t (s.pids 1 * BT) (0 * BT) K V BT BT
+    (fun x y => crhDhOut s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT x y)
+    (crhDhOutTile s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT)
+    (fun x y => rfl)
+    (by simp)
+    (by rw [BlockState.setReg_same]))]
+  rw [stepStmts.nil]
+  obtain ⟨hFpids, hFregs, hFact, hFoth, hFoff⟩ :=
+    crhStore_step_props
+      (((sL.setReg "b_dh" .real [BT, BT]
+          (crhDhOutTile s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT)).setReg
+        "p_dh" .blockPtr [BT, BT]
+          (⟨fun _ => BlockPtr.mk dh (s.pids 2 * s_h_h + s.pids 0 * K * V)
+            [K, V] [BT, BT] [s_h_t, 1] [s.pids 1 * BT, 0 * BT]⟩ :
+              Tile .blockPtr [BT, BT])))
+      dh (s.pids 2 * s_h_h + s.pids 0 * K * V) s_h_t (s.pids 1 * BT) (0 * BT)
+      K V BT BT
+      (fun x y => crhDhOut s v do_ s_vo_h s_vo_t s_vo_d H T V BT NT x y)
+      (crhStoreAddr_injective (s.pids 2 * s_h_h + s.pids 0 * K * V) s_h_t
+        (s.pids 1 * BT) (0 * BT) BT BT hσ)
+  refine ⟨_, rfl, ?_⟩
+  intro idx hidx
+  obtain ⟨h1, h2⟩ := hidx
+  rw [crhDhOffset_eq_storeAddr]
+  exact hFact idx ⟨h1, h2⟩
+
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkRetention
