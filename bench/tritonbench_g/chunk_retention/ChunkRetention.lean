@@ -7,8 +7,10 @@ The upstream file holds **four** `@triton.jit` kernels: the state-recurrence
 forward `chunk_retention_fwd_kernel_h` (the file's first kernel), the output
 forward `fwd_kernel_o`, the state-recurrence backward `bwd_kernel_dh`, and the
 fused gradient backward `bwd_kernel_dqkv`. This file covers the two
-**state-recurrence** kernels — the retention (decayed) siblings of the ported
-`chunk_linear_attn` pair:
+**state-recurrence** kernels — `chunk_retention.py`'s
+`chunk_retention_fwd_kernel_h` (the file's first kernel) and its descending
+mirror `chunk_retention_bwd_kernel_dh` — the retention (decayed) siblings of
+the ported `chunk_linear_attn` pair:
 
 ```
 fwd_h:  h[·,·,t] = H_t,  H_0 = (h0 or 0),
