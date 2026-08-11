@@ -571,6 +571,295 @@ def crhDhActive (s : BlockState) (K V BT : Nat)
     (idx : TileIndex [BT, BT]) : Prop :=
   s.pids 1 * BT + idx.1.val < K ∧ 0 * BT + idx.2.1.val < V
 
+/-! ## Eval recipes (local copies + the decay family) -/
+
+private theorem crh_makeBlockPtr_2d_eval (rg : RegionName) (s : BlockState)
+    (baseOp : Op .nat []) (rowOffOp colOffOp : Op .nat [])
+    (parentShape blockShape strides : List Nat)
+    (base rowOff colOff : Nat)
+    (hbase : evalOp baseOp s = some (Tile.scalar base))
+    (hrow : evalOp rowOffOp s = some (Tile.scalar rowOff))
+    (hcol : evalOp colOffOp s = some (Tile.scalar colOff)) :
+    evalOp (Op.makeBlockPtrDynOffsets rg baseOp parentShape blockShape strides
+        [rowOffOp, colOffOp]) s
+      = some (⟨fun _ => BlockPtr.mk rg base parentShape blockShape strides
+          [rowOff, colOff]⟩ : Tile .blockPtr blockShape) := by
+  simp only [evalOp, hbase, hrow, hcol, List.mapM, List.mapM.loop, bind, Option.bind,
+    Tile.scalar, List.reverse_cons, List.reverse_nil, List.nil_append,
+    List.cons_append]
+
+private theorem crh_load_bp_2d (rg : RegionName) (s : BlockState) (name : RegName)
+    (base rows cols BR BS strideT strideS rowOff colOff : Nat)
+    (hreg : s.regs .blockPtr [BR, BS] name = some
+      ⟨fun _ => BlockPtr.mk rg base [rows, cols] [BR, BS] [strideT, strideS]
+        [rowOff, colOff]⟩) :
+    evalOp (Op.load .real
+      (MemAccess.blockPtr (Op.ref .blockPtr [BR, BS] name) [0, 1]) MaskOpt.none) s
+    = some ⟨fun idx : TileIndex [BR, BS] =>
+        if (rowOff + idx.1.val < rows ∧ colOff + idx.2.1.val < cols) then
+          some (s.readMem rg (base + (rowOff + idx.1.val) * strideT
+            + (colOff + idx.2.1.val) * strideS))
+        else some 0⟩ := by
+  simp only [evalOp, evalOp_ref, hreg, bind, Option.bind]
+  refine congrArg some ?_
+  ext idx
+  obtain ⟨i, j, rest⟩ := idx
+  simp only [TileShape.indexToList, BlockPtr.address_2d_offsets,
+    BlockPtr.inBounds_2d_offsets, BlockState.readMemValue_real]
+  by_cases h : rowOff + i.val < rows ∧ colOff + j.val < cols
+  · simp only [h, and_self, decide_true, if_true]
+  · simp only [h, decide_false, if_false, BlockState.defaultCarrier]
+    rfl
+
+private theorem crh_mulConst_eval (s : BlockState) (name : RegName) (val c : Nat)
+    (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat c)) s
+      = some (Tile.scalar (val * c)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_ref, evalOp_constNat, hr, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+private theorem crh_mulMulConst_eval (s : BlockState) (name : RegName)
+    (val cB cC : Nat) (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mul .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] name) (Op.constNat cB))
+        (Op.constNat cC)) s
+      = some (Tile.scalar (val * cB * cC)) := by
+  rw [evalOp_mul, crh_mulConst_eval s name val cB hr]
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+private theorem crh_hBase_eval (s : BlockState) (s_h_h K V : Nat) (ibh it : Nat)
+    (hibh : s.regs .nat [] "i_bh" = some (Tile.scalar ibh))
+    (hit : s.regs .nat [] "i_t" = some (Tile.scalar it)) :
+    evalOp (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_h_h))
+        (Op.mul .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_t") (Op.constNat K))
+          (Op.constNat V))) s
+      = some (Tile.scalar (ibh * s_h_h + it * K * V)) := by
+  rw [evalOp_add, crh_mulConst_eval s "i_bh" ibh s_h_h hibh, evalOp_mul,
+    crh_mulConst_eval s "i_t" it K hit]
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- The `dh` single-store base `i_bh * s_h_h + i_k * K * V`. -/
+private theorem crh_dhBase_eval (s : BlockState) (s_h_h K V : Nat) (ibh ik : Nat)
+    (hibh : s.regs .nat [] "i_bh" = some (Tile.scalar ibh))
+    (hik : s.regs .nat [] "i_k" = some (Tile.scalar ik)) :
+    evalOp (Op.add .nat Broadcast.nil
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_bh") (Op.constNat s_h_h))
+        (Op.mul .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil (Op.ref .nat [] "i_k") (Op.constNat K))
+          (Op.constNat V))) s
+      = some (Tile.scalar (ibh * s_h_h + ik * K * V)) := by
+  rw [evalOp_add, crh_mulConst_eval s "i_bh" ibh s_h_h hibh, evalOp_mul,
+    crh_mulConst_eval s "i_k" ik K hik]
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+private theorem crh_itIdx_eval (t : BlockState) (NT c : Nat)
+    (hj : t.regs .nat [] "j" = some (Tile.scalar c)) :
+    evalOp (Op.sub .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil (Op.constNat NT) (Op.constNat 1))
+        (Op.ref .nat [] "j")) t
+      = some (Tile.scalar (NT - 1 - c)) := by
+  have hx : evalOp (Op.sub .nat Broadcast.nil (Op.constNat NT) (Op.constNat 1)) t
+      = some (Tile.scalar (NT - 1)) := by
+    rw [evalOp_sub]
+    simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+    rfl
+  rw [evalOp_sub, hx]
+  simp only [evalOp_ref, hj, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+private theorem crh_castFloat_eval {sh : TileShape} (x : Op .real sh)
+    (t : BlockState) (vx : Tile .real sh) (hx : evalOp x t = some vx) :
+    @evalOp TileDType.real sh (Op.castFloat FloatDType.real FloatDType.real x) t
+      = some vx := by
+  show @evalOp FloatDType.real.toTileDType sh
+    (Op.castFloat FloatDType.real FloatDType.real x) t = some vx
+  rw [evalOp_castFloat,
+    show @evalOp FloatDType.real.toTileDType sh x t = some vx from hx]
+  rfl
+
+private theorem crh_zeros_eval (BR BS : Nat) (t : BlockState) :
+    evalOp (Op.full [BR, BS] (Op.const 0)) t
+      = some (⟨fun _ => some (0 : ℝ)⟩ : Tile .real [BR, BS]) := by
+  simp [evalOp_full, evalOp_const]
+
+private theorem crh_dot_eval {M K N : Nat} (x : Op .real [M, K]) (y : Op .real [K, N])
+    (t : BlockState) (vx : Tile .real [M, K]) (vy : Tile .real [K, N])
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.dot (batch := []) x y) t = some (Tile.dot [] vx vy) := by
+  erw [evalOp_dot, hx, hy]
+  rfl
+
+private theorem crh_withBot_sum_some {N : Nat} (g : Fin N → ℝ) :
+    @Finset.sum (Fin N) (WithBot ℝ) _ Finset.univ (fun k => (some (g k) : WithBot ℝ))
+      = some (Finset.univ.sum g) := by
+  show (Finset.univ.sum fun k => ((g k : ℝ) : WithBot ℝ))
+    = ((Finset.univ.sum g : ℝ) : WithBot ℝ)
+  exact (WithBot.coe_sum Finset.univ g).symm
+
+private theorem crh_dot2d_elem {M K N : Nat} (a : Tile .real [M, K])
+    (b : Tile .real [K, N]) (m : Fin M) (n : Fin N) (fa fb : Fin K → ℝ)
+    (ha : ∀ e : Fin K, a.data (m, e, PUnit.unit) = some (fa e))
+    (hb : ∀ e : Fin K, b.data (e, n, PUnit.unit) = some (fb e)) :
+    (Tile.dot [] a b).data (m, n, PUnit.unit)
+      = some (Finset.univ.sum fun e : Fin K => fa e * fb e) := by
+  rw [Tile.dot_nil_data]
+  rw [show (@Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+        (fun e => Option.map₂ (· * ·) (a.data (m, e, PUnit.unit))
+          (b.data (e, n, PUnit.unit))))
+      = @Finset.sum (Fin K) (WithBot ℝ) _ Finset.univ
+          (fun e => (some (fa e * fb e) : WithBot ℝ))
+      from Finset.sum_congr rfl (fun e _ => by rw [ha e, hb e]; rfl)]
+  exact crh_withBot_sum_some _
+
+private theorem crh_ifThen_step (cond : Op .bool []) (body : List Stmt)
+    (t : BlockState) :
+    stepStmt (Stmt.ifThen cond body) t
+      = (evalOp cond t).bind
+          (fun c => if c.data PUnit.unit then stepStmts body t else some t) := by
+  unfold stepStmt
+  cases evalOp cond t <;> rfl
+
+private theorem crh_ifThen_false_noop (body : List Stmt) (X : BlockState) :
+    stepStmt (Stmt.ifThen (Op.constBool Bool.false) body) X = some X := by
+  simp [stepStmt, evalOp]
+
+private theorem crh_ifThen_true_run (body : List Stmt) (X : BlockState) :
+    stepStmt (Stmt.ifThen (Op.constBool Bool.true) body) X = stepStmts body X := by
+  simp [stepStmt, evalOp]
+
+private theorem crh_addTile_eval {a b out : TileShape} (bc : Broadcast a b out)
+    (x : Op .real a) (y : Op .real b) (t : BlockState)
+    (vx : Tile .real a) (vy : Tile .real b)
+    (hx : evalOp x t = some vx) (hy : evalOp y t = some vy) :
+    evalOp (Op.add .real bc x y) t
+      = some (Tile.bop NumericDType.real.add bc vx vy) := by
+  rw [evalOp_add, hx, hy]
+  rfl
+
+/-- Scalar `name % H`. -/
+private theorem crh_mod_eval (s : BlockState) (name : RegName) (val H : Nat)
+    (hr : s.regs .nat [] name = some (Tile.scalar val)) :
+    evalOp (Op.mod IntegralDType.nat Broadcast.nil (Op.ref .nat [] name)
+        (Op.constNat H)) s
+      = some (Tile.scalar (val % H)) := by
+  simp only [evalOp, evalOp_ref, hr, evalOp_constNat, bind, Option.bind]
+  rfl
+
+/-- The decay exponent statement lands on `crhBeta`. -/
+private theorem crh_bb_eval (s t : BlockState) (H : Nat)
+    (hih : t.regs .nat [] "i_h" = some (Tile.scalar (s.pids 2 % H))) :
+    evalOp (Op.log2 (Op.sub .real Broadcast.nil (Op.const 1.0)
+        (Op.exp2 (Op.sub .real Broadcast.nil
+          (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 5.0))
+          (Op.mul .real Broadcast.nil (Op.natToReal (Op.ref .nat [] "i_h"))
+            (Op.const 1.0)))))) t
+      = some (Tile.scalar (some (crhBeta s H))) := by
+  simp only [evalOp, evalOp_ref, hih, bind, Option.bind]
+  rfl
+
+/-- The standard (`BT`-length) `d_b` statement lands on `crhDbBwd`. -/
+private theorem crh_db_eval (s t : BlockState) (H BT : Nat)
+    (hbb : t.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H)))) :
+    evalOp (Op.exp2 (Op.mul .real Broadcast.nil (Op.natToReal (Op.constNat BT))
+        (Op.ref .real [] "b_b"))) t
+      = some (Tile.scalar (some (crhDbBwd s H BT))) := by
+  simp only [evalOp, evalOp_ref, hbb, bind, Option.bind]
+  rfl
+
+/-- The boundary `d_b` statement lands on `crhDb` at the ragged length. -/
+private theorem crh_dbBoundary_eval (s t : BlockState) (H T BT : Nat)
+    (hbb : t.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H)))) :
+    evalOp (Op.exp2 (Op.mul .real Broadcast.nil
+        (Op.natToReal (Op.mod IntegralDType.nat Broadcast.nil (Op.constNat T)
+          (Op.constNat BT)))
+        (Op.ref .real [] "b_b"))) t
+      = some (Tile.scalar (some (Real.exp (((T % BT : Nat) : ℝ) * crhBeta s H
+          * Real.log 2)))) := by
+  simp only [evalOp, evalOp_ref, hbb, bind, Option.bind]
+  rfl
+
+/-- The `o_i` arange tile. -/
+def crhOiTile (BT : Nat) : Tile .nat [BT] :=
+  Tile.vec fun i : Fin BT => (i.val : Nat)
+
+/-- The forward standard `d_i` tile: lane `c` holds `2^((BT - c - 1)·b_b)`. -/
+noncomputable def crhDiStdTile (s : BlockState) (H BT : Nat) : Tile .real [BT] :=
+  ⟨fun idx => some (Real.exp (((BT - idx.1.val - 1 : Nat) : ℝ) * crhBeta s H
+    * Real.log 2))⟩
+
+/-- The forward standard `d_i` statement lands on `crhDiStdTile`. -/
+private theorem crh_diStd_eval (s t : BlockState) (H BT : Nat)
+    (hoi : t.regs .nat [BT] "o_i" = some (crhOiTile BT))
+    (hbb : t.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H)))) :
+    evalOp (Op.exp2 (Op.mul .real Broadcast.scalarR
+        (Op.natToReal (Op.sub .nat Broadcast.scalarR
+          (Op.sub .nat Broadcast.scalarL (Op.constNat BT) (Op.ref .nat [BT] "o_i"))
+          (Op.constNat 1)))
+        (Op.ref .real [] "b_b"))) t
+      = some (crhDiStdTile s H BT) := by
+  simp only [evalOp, evalOp_ref, hoi, hbb, bind, Option.bind]
+  rfl
+
+/-- The boundary `d_i` tile: lane `c` holds `2^((T%BT - c - 1)·b_b)` (nat-sub). -/
+noncomputable def crhDiBoundaryTile (s : BlockState) (H T BT : Nat) :
+    Tile .real [BT] :=
+  ⟨fun idx => some (Real.exp (((T % BT - idx.1.val - 1 : Nat) : ℝ) * crhBeta s H
+    * Real.log 2))⟩
+
+/-- The boundary `d_i` statement lands on `crhDiBoundaryTile`. -/
+private theorem crh_diBoundary_eval (s t : BlockState) (H T BT : Nat)
+    (hoi : t.regs .nat [BT] "o_i" = some (crhOiTile BT))
+    (hbb : t.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H)))) :
+    evalOp (Op.exp2 (Op.mul .real Broadcast.scalarR
+        (Op.natToReal (Op.sub .nat Broadcast.scalarR
+          (Op.sub .nat Broadcast.scalarL
+            (Op.mod IntegralDType.nat Broadcast.nil (Op.constNat T) (Op.constNat BT))
+            (Op.ref .nat [BT] "o_i"))
+          (Op.constNat 1)))
+        (Op.ref .real [] "b_b"))) t
+      = some (crhDiBoundaryTile s H T BT) := by
+  simp only [evalOp, evalOp_ref, hoi, hbb, bind, Option.bind]
+  rfl
+
+/-- The backward `d_i` tile: lane `c` holds `2^((c + 1)·b_b)`. -/
+noncomputable def crhDiBwdTile (s : BlockState) (H BT : Nat) : Tile .real [BT] :=
+  ⟨fun idx => some (crhDiBwd s H idx.1.val)⟩
+
+/-- The backward `d_i` statement lands on `crhDiBwdTile`. -/
+private theorem crh_diBwd_eval (s t : BlockState) (H BT : Nat)
+    (hoi : t.regs .nat [BT] "o_i" = some (crhOiTile BT))
+    (hbb : t.regs .real [] "b_b" = some (Tile.scalar (some (crhBeta s H)))) :
+    evalOp (Op.exp2 (Op.mul .real Broadcast.scalarR
+        (Op.natToReal (Op.add .nat Broadcast.scalarR (Op.ref .nat [BT] "o_i")
+          (Op.constNat 1)))
+        (Op.ref .real [] "b_b"))) t
+      = some (crhDiBwdTile s H BT) := by
+  simp only [evalOp, evalOp_ref, hoi, hbb, bind, Option.bind]
+  rfl
+
+/-- The ragged-boundary gate condition evaluates to the decidable conjunction. -/
+private theorem crh_cond_eval (t : BlockState) (T BT NT i : Nat)
+    (hit : t.regs .nat [] "i_t" = some (Tile.scalar i)) :
+    evalOp (Op.boolAnd Broadcast.nil
+        (Op.eq ComparableDType.nat Broadcast.nil (Op.ref .nat [] "i_t")
+          (Op.sub .nat Broadcast.nil (Op.constNat NT) (Op.constNat 1)))
+        (Op.ne ComparableDType.nat Broadcast.nil
+          (Op.mod IntegralDType.nat Broadcast.nil (Op.constNat T) (Op.constNat BT))
+          (Op.constNat 0))) t
+      = some (Tile.scalar (decide (i = NT - 1) && decide (T % BT ≠ 0))) := by
+  simp only [evalOp, evalOp_ref, hit, bind, Option.bind]
+  rfl
+
+private theorem crh_setReg_mem {dtype : TileDType} {sh : TileShape}
+    (s : BlockState) (nm : RegName) (v : Tile dtype sh) :
+    (s.setReg nm dtype sh v).mem = s.mem := rfl
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ChunkRetention
