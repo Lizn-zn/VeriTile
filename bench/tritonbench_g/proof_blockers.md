@@ -124,6 +124,21 @@ unless stated:
 - `attention_fwd_triton3` — the `_attn_fwd_inner` helper JIT is inlined into
   the single streaming loop (its loads/`tl.where`/`tl.advance` appear in the
   Lean surface but not in the Python `_attn_fwd` body).
+- `parallel_attention` — the DSL has no cross-`@triton.jit` function-call
+  surface, so the backward dk/dv helper `_parallel_rebased_bwd_dkv` is
+  ported as a standalone kernel over universally-quantified scalar arguments
+  `i_bh, i_c, i_k, i_v, i_h` (the values the shell
+  `parallel_rebased_bwd_kernel` would pass), with its trailing bare `return`
+  dropped and its descending
+  `for i in range(cdiv(T,BTS)·BTS − BTS, (i_c+1)·BTL − BTS, −BTS)` respelled
+  as the ascending change of variable
+  `for j in range(0, cdiv(cdiv(T,BTS)·BTS − (i_c+1)·BTL, BTS))` with
+  body-first `i = cdiv(T,BTS)·BTS − BTS − j·BTS` (the `±BTS` in Python's
+  `start − stop` cancels exactly in ℤ; ℕ-truncated subtraction reproduces
+  Python's empty range, so the trip counts agree for all parameters). The
+  port covers `parallel_rebased_fwd_kernel` (the file's first kernel) and
+  the dk/dv helper; the backward shell and `_parallel_rebased_bwd_dq` are
+  the trusted boundary.
 - `sgmv_expand_slice` — proven path is `EVEN_K` loads with
   `ADD_INPUTS = false`, `CAST_TYPE = false`; those constexpr parameters and
   branches are dropped; the `pid → (pid_m, pid_n)` CTA linearization is
