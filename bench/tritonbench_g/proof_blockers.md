@@ -193,6 +193,11 @@ unless stated:
   int→float promotion of `tl.arange(0, NB_TOKENS) + starting_idx` is the
   explicit `tks`/`tks_f` binding pair. Fully value-verified on the full 2-D
   tile.
+- `chunk_retention_ops` — same decay-prologue `tl.toReal(...)` promotion
+  casts as its `chunk_retention` twin (the two `fwd_kernel_h` bodies are
+  statement-identical); the port covers the state-recurrence pair
+  (`fwd_kernel_h`, the file's first kernel, and the dimension-general
+  `bwd_kernel_dh`); `fwd_kernel_o`/`bwd_kernel_dqkv` are the trusted boundary.
 - `chunk_retention` — the decay prologue's implicit int→float promotions
   (`i_h * 1.0`, `BT * b_b`, `(BT - o_i - 1) * b_b`, `(o_i + 1) * b_b`) have
   no implicit-coercion analogue in the shape/dtype-typed DSL and are spelled

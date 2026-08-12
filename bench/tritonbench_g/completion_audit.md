@@ -174,6 +174,13 @@ The current documented blocker set is:
   `DIM = 128` → `DIM : Nat` binder; dtype/shape-changing `freqs` rebinds
   renamed; `.to(tl.float32)` spelled `tl.toReal`; explicit int→float
   promotion bindings.
+- `chunk_retention_ops` — the state-recurrence pair ported; `fwd_kernel_h`
+  is statement-identical to `chunk_retention`'s (with `initial_state`/
+  `final_state` spelled `h0`/`ht`); its `bwd_kernel_dh` is the clean
+  dimension-general store-history sibling (in-loop stores, fixed decay).
+  Same `tl.toReal(...)` promotion casts (marker registered in
+  `proof_blockers.md`); tuple assignments split; descending loop as the
+  ascending change of variable; `do` → `do_`.
 - `chunk_retention` — the state-recurrence pair (`fwd_kernel_h`, the file's
   first kernel, + `bwd_kernel_dh`) ported; `fwd_kernel_o`/`bwd_kernel_dqkv`
   are the trusted boundary. The decay prologue's implicit int→float
