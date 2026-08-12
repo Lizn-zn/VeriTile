@@ -2536,6 +2536,2276 @@ specification pra_fwd_o_exec_genuine
     hσ hInvF
   exact ⟨sF, hSt, hRead⟩
 
+
+/-! ## Closed-form specification (backward dk/dv)
+
+The helper's scalar arguments `i_bh, i_c, i_k, i_v, i_h` are plain
+universally-quantified binders (the surface splices them as constants), so
+the backward closed forms are parameterized by them directly — no `s.pids`
+projections. Every load is boundary-checked, so the guarded value functions
+bake the `T × K` / `T × V` windows in and the closed forms hold for
+arbitrary ragged tails. -/
+
+/-- The top of the streamed key range: `cdiv(T, BTS)·BTS`. -/
+def prbNB (T BTS : Nat) : Nat := (T + BTS - 1) / BTS * BTS
+
+/-- The respelled descending trip count (see the preamble). -/
+def prbTrip (T BTS i_c BTL : Nat) : Nat :=
+  ((T + BTS - 1) / BTS * BTS - (i_c + 1) * BTL + BTS - 1) / BTS
+
+/-- The per-head decay exponent `b_b = log2(1 − 2^(−5 − i_h))` on the spliced
+`i_h` constant, exactly as the walk computes it. -/
+noncomputable def prbBeta (i_h : Nat) : ℝ :=
+  Real.log ((1.0 : ℝ) - Real.exp ((((0.0 : ℝ) - 5.0) - ((i_h : Nat) : ℝ) * 1.0)
+      * Real.log 2)) / Real.log 2
+
+/-- The guarded `b_k` lane `(r, e)` of the fixed chunk block. -/
+noncomputable def prbKGuarded (s : BlockState) (k : RegionName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_c i_k : Nat) (T K BTL BK : Nat)
+    (r e : Nat) : ℝ :=
+  if i_c * BTL + r < T ∧ i_k * BK + e < K then
+    s.readMem k (i_bh * s_qk_h + (i_c * BTL + r) * s_qk_t
+      + (i_k * BK + e) * s_qk_d)
+  else 0
+
+/-- The guarded `b_v` lane `(r, p)` of the fixed chunk block. -/
+noncomputable def prbVGuarded (s : BlockState) (v : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_c i_v : Nat) (T V BTL BV : Nat)
+    (r p : Nat) : ℝ :=
+  if i_c * BTL + r < T ∧ i_v * BV + p < V then
+    s.readMem v (i_bh * s_vo_h + (i_c * BTL + r) * s_vo_t
+      + (i_v * BV + p) * s_vo_d)
+  else 0
+
+/-- The guarded transposed `q` lane `(e, t)` at absolute key `t` (the `(K, T)`
+parent read with strides `(s_qk_d, s_qk_t)`). -/
+noncomputable def prbQGuarded (s : BlockState) (q : RegionName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_k : Nat) (T K BK : Nat)
+    (e t : Nat) : ℝ :=
+  if i_k * BK + e < K ∧ t < T then
+    s.readMem q (i_bh * s_qk_h + (i_k * BK + e) * s_qk_d + t * s_qk_t)
+  else 0
+
+/-- The guarded transposed `do` lane `(p, t)` at absolute key `t`. -/
+noncomputable def prbDoGuarded (s : BlockState) (do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_v : Nat) (T V BV : Nat)
+    (p t : Nat) : ℝ :=
+  if i_v * BV + p < V ∧ t < T then
+    s.readMem do_ (i_bh * s_vo_h + (i_v * BV + p) * s_vo_d + t * s_vo_t)
+  else 0
+
+/-- The (unscaled) backward score core at `(row r, key t)`: `k[r] · qᵀ[t]`
+over the `BK` head window. -/
+noncomputable def prbSVal (s : BlockState) (q k : RegionName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_c i_k : Nat) (T K BTL BK : Nat)
+    (r t : Nat) : ℝ :=
+  ∑ e : Fin BK,
+    prbKGuarded s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK r e.val
+      * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e.val t
+
+/-- The (unscaled) backward dscore core at `(row r, key t)`: `v[r] · doᵀ[t]`
+over the `BV` value window. -/
+noncomputable def prbDsVal (s : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_c i_v : Nat) (T V BTL BV : Nat)
+    (r t : Nat) : ℝ :=
+  ∑ p : Fin BV,
+    prbVGuarded s v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV r p.val
+      * prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV p.val t
+
+/-- The `b_dk` accumulator over keys `[lo, hi)` with the causal keep
+`i_c·BTL + r ≤ t` and the row-anchored retention weight
+`2^((t − (i_c·BTL+r))·b_b) · scale`. -/
+noncomputable def prbDkPart (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (lo hi : Nat) (r e : Nat) : ℝ :=
+  ∑ t ∈ Finset.Ico lo hi,
+    if i_c * BTL + r ≤ t then
+      praW (prbBeta i_h) (t - (i_c * BTL + r)) * scale
+        * prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV r t
+        * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e t
+    else 0
+
+/-- The `b_dv` accumulator over keys `[lo, hi)` with the causal keep and the
+row-anchored retention weight. -/
+noncomputable def prbDvPart (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (lo hi : Nat) (r p : Nat) : ℝ :=
+  ∑ t ∈ Finset.Ico lo hi,
+    if i_c * BTL + r ≤ t then
+      praW (prbBeta i_h) (t - (i_c * BTL + r)) * scale
+        * prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK r t
+        * prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV p t
+    else 0
+
+/-- **The stored `dk` lane** — the retention key-gradient closed form. Over
+the full key sweep (up to the larger of the streamed top `cdiv(T,BTS)·BTS`
+and the diagonal end `(i_c+1)·BTL`; loads beyond `T` read as zero, so the
+tail summands vanish), every causally kept key `t ≥ i_c·BTL + r` contributes
+its decayed, scaled dscore times the transposed-`q` lane:
+`Σ_t 2^((t − (i_c·BTL+r))·b_b) · scale · (v[r]·doᵀ[t]) · q[e, t]`. -/
+noncomputable def prbDkOut (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (r e : Nat) : ℝ :=
+  ∑ t ∈ Finset.range (max (prbNB T BTS) ((i_c + 1) * BTL)),
+    if i_c * BTL + r ≤ t then
+      praW (prbBeta i_h) (t - (i_c * BTL + r)) * scale
+        * prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV r t
+        * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e t
+    else 0
+
+/-- **The stored `dv` lane** — the retention value-gradient closed form:
+`Σ_t 2^((t − (i_c·BTL+r))·b_b) · scale · (k[r]·qᵀ[t]) · do[p, t]` over the
+same causally kept key sweep. -/
+noncomputable def prbDvOut (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (r p : Nat) : ℝ :=
+  ∑ t ∈ Finset.range (max (prbNB T BTS) ((i_c + 1) * BTL)),
+    if i_c * BTL + r ≤ t then
+      praW (prbBeta i_h) (t - (i_c * BTL + r)) * scale
+        * prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK r t
+        * prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV p t
+    else 0
+
+/-- The streamed `b_dk` accumulator **anchored at `A`**: keys `[A, prbNB)`
+with the anchor-relative decay `2^((t − A)·b_b)` — the per-iteration
+`b_dk *= d_b` shifts the anchor down by `BTS`; the row factor
+`2^((BTL−r)·b_b) · scale` is applied only after the loop. -/
+noncomputable def prbDkDesc (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (A : Nat) (r e : Nat) : ℝ :=
+  ∑ t ∈ Finset.Ico A (prbNB T BTS),
+    praW (prbBeta i_h) (t - A)
+      * (prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV r t
+        * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e t)
+
+/-- The streamed `b_dv` accumulator anchored at `A` (the row factor
+`2^((BTL−r)·b_b)` rides separately, inside the loop via `b_kd`). -/
+noncomputable def prbDvDesc (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (A : Nat) (r p : Nat) : ℝ :=
+  ∑ t ∈ Finset.Ico A (prbNB T BTS),
+    praW (prbBeta i_h) (t - A)
+      * (prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK r t
+        * prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV p t)
+
+/-! ## Backward block-sum, decay-step, and trip-count arithmetic -/
+
+/-- Bottom-extension of an `Ico` sum by one `BTS` block. -/
+private theorem prb_sum_Ico_add_block_bot (lo hi BTS : Nat) (h : lo + BTS ≤ hi)
+    (f : Nat → ℝ) :
+    ∑ t ∈ Finset.Ico lo hi, f t
+      = (∑ c : Fin BTS, f (lo + c.val)) + ∑ t ∈ Finset.Ico (lo + BTS) hi, f t := by
+  rw [← Finset.sum_Ico_consecutive _ (Nat.le_add_right lo BTS) h]
+  congr 1
+  rw [Finset.sum_Ico_eq_sum_range]
+  simp only [Nat.add_sub_cancel_left]
+  rw [Fin.sum_univ_eq_sum_range (fun c => f (lo + c))]
+
+/-- Under the host's `BTL % BTS = 0`, the respelled trip count covers the
+streamed range exactly: `prbTrip · BTS = prbNB − (i_c+1)·BTL`. -/
+private theorem prb_trip_mul (T BTS i_c BTL : Nat) (hBTS : BTL % BTS = 0)
+    (hBTSpos : 0 < BTS) :
+    prbTrip T BTS i_c BTL * BTS = prbNB T BTS - (i_c + 1) * BTL := by
+  obtain ⟨m, hm⟩ : BTS ∣ prbNB T BTS - (i_c + 1) * BTL :=
+    Nat.dvd_sub (dvd_mul_left BTS ((T + BTS - 1) / BTS))
+      (Dvd.dvd.mul_left (Nat.dvd_of_mod_eq_zero hBTS) (i_c + 1))
+  have htrip : prbTrip T BTS i_c BTL = m := by
+    show ((T + BTS - 1) / BTS * BTS - (i_c + 1) * BTL + BTS - 1) / BTS = m
+    have hm' : (T + BTS - 1) / BTS * BTS - (i_c + 1) * BTL = BTS * m := hm
+    rw [hm']
+    have h1 : BTS * m + BTS - 1 = BTS * m + (BTS - 1) := by omega
+    rw [h1, Nat.mul_add_div hBTSpos, Nat.div_eq_of_lt (by omega), Nat.add_zero]
+  rw [htrip, hm, Nat.mul_comm]
+
+/-- **The anchored decay step, generically**: decaying the `A = i + BTS`
+anchored accumulator by `2^(BTS·b_b)` (walk order) and adding the fresh
+bottom block's `2^(c·b_b)`-weighted contributions re-anchors it at `i`. -/
+private theorem prbDescCore_step (β : ℝ) (N i BTS : Nat) (F : Nat → ℝ)
+    (hstep : i + BTS ≤ N) :
+    (∑ t ∈ Finset.Ico (i + BTS) N, praW β (t - (i + BTS)) * F t)
+        * Real.exp (β * ((BTS : Nat) : ℝ) * Real.log 2)
+      + ∑ c : Fin BTS, praW β c.val * F (i + c.val)
+      = ∑ t ∈ Finset.Ico i N, praW β (t - i) * F t := by
+  have hblock : (∑ t ∈ Finset.Ico i N, praW β (t - i) * F t)
+      = (∑ c : Fin BTS, praW β c.val * F (i + c.val))
+        + ∑ t ∈ Finset.Ico (i + BTS) N, praW β (t - i) * F t := by
+    rw [prb_sum_Ico_add_block_bot i N BTS hstep]
+    congr 1
+    refine Finset.sum_congr rfl fun c _ => ?_
+    show praW β (i + c.val - i) * F (i + c.val) = praW β c.val * F (i + c.val)
+    rw [Nat.add_sub_cancel_left]
+  have htail : (∑ t ∈ Finset.Ico (i + BTS) N, praW β (t - i) * F t)
+      = (∑ t ∈ Finset.Ico (i + BTS) N, praW β (t - (i + BTS)) * F t)
+          * Real.exp (β * ((BTS : Nat) : ℝ) * Real.log 2) := by
+    rw [praW_comm, Finset.sum_mul]
+    refine Finset.sum_congr rfl fun t ht => ?_
+    have h1 : i + BTS ≤ t := (Finset.mem_Ico.mp ht).1
+    rw [show t - i = (t - (i + BTS)) + BTS from by omega, praW_add]
+    ring
+  rw [hblock, htail]
+  ring
+
+/-- The walk-shaped `b_dk` desc step: the decayed anchored accumulator plus
+the fresh `(2^(c·b_b)·ds)·qᵀ` block is the accumulator re-anchored at `i`. -/
+private theorem prbDkDesc_step (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (i : Nat) (hstep : i + BTS ≤ prbNB T BTS) (r e : Nat) :
+    prbDkDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV (i + BTS) r e
+        * Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2)
+      + ∑ c : Fin BTS,
+          (praW (prbBeta i_h) c.val
+              * prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+                  r (i + c.val))
+            * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e (i + c.val)
+      = prbDkDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV i r e := by
+  have hcore : prbDkDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV (i + BTS) r e
+        * Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2)
+      + ∑ c : Fin BTS, praW (prbBeta i_h) c.val
+          * (prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+              r (i + c.val)
+            * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e (i + c.val))
+      = prbDkDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV i r e :=
+    prbDescCore_step (prbBeta i_h) (prbNB T BTS) i BTS
+      (fun t => prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV r t
+        * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e t) hstep
+  rw [← hcore]
+  congr 1
+  refine Finset.sum_congr rfl fun c _ => ?_
+  ring
+
+/-- The walk-shaped `b_dv` desc step: the constant row factor `2^((BTL−r)·b_b)`
+(inside `b_kd`, hence inside every `b_s` lane) factors out of the recurrence. -/
+private theorem prbDvDesc_step (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (i : Nat) (hstep : i + BTS ≤ prbNB T BTS) (r p : Nat) :
+    (praW (prbBeta i_h) (BTL - r)
+          * prbDvDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV (i + BTS) r p)
+        * Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2)
+      + ∑ c : Fin BTS,
+          (praW (prbBeta i_h) (BTL - r)
+              * prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+                  r (i + c.val))
+            * (prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+                  p (i + c.val)
+              * praW (prbBeta i_h) c.val)
+      = praW (prbBeta i_h) (BTL - r)
+          * prbDvDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV i r p := by
+  have hcore : prbDvDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV (i + BTS) r p
+        * Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2)
+      + ∑ c : Fin BTS, praW (prbBeta i_h) c.val
+          * (prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+              r (i + c.val)
+            * prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+                p (i + c.val))
+      = prbDvDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV i r p :=
+    prbDescCore_step (prbBeta i_h) (prbNB T BTS) i BTS
+      (fun t => prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK r t
+        * prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV p t) hstep
+  rw [← hcore, mul_add]
+  congr 1
+  · ring
+  · rw [Finset.mul_sum]
+    refine Finset.sum_congr rfl fun c _ => ?_
+    ring
+
+/-- **Desc-exit rescale bridge (`b_dk`)**: applying the post-loop row factor
+`2^((BTL−r)·b_b) · scale` to the anchored accumulator at the loop's final
+anchor `prbNB − prbTrip·BTS` yields the keep-indicator partial sum — for
+`t ≥ (i_c+1)·BTL` the causal keep is identically true and the exponents fold
+by `(BTL−r) + (t − (i_c+1)·BTL) = t − (i_c·BTL+r)`. -/
+private theorem prbDkDesc_scale_bridge (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS) (r e : Nat) (hr : r < BTL) :
+    prbDkDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) r e
+        * (praW (prbBeta i_h) (BTL - r) * scale)
+      = prbDkPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS) r e := by
+  have hTripMul := prb_trip_mul T BTS i_c BTL hBTS hBTSpos
+  have hexp : (i_c + 1) * BTL = i_c * BTL + BTL := by ring
+  unfold prbDkDesc prbDkPart
+  rw [Finset.sum_mul]
+  refine Finset.sum_congr rfl fun t ht => ?_
+  obtain ⟨hlo, hhi⟩ := Finset.mem_Ico.mp ht
+  rcases le_or_gt ((i_c + 1) * BTL) (prbNB T BTS) with hle | hgt
+  · have hA : prbNB T BTS - prbTrip T BTS i_c BTL * BTS = (i_c + 1) * BTL := by
+      omega
+    rw [hA] at hlo
+    have hkeep : i_c * BTL + r ≤ t := by omega
+    rw [if_pos hkeep, hA,
+      show t - (i_c * BTL + r) = (BTL - r) + (t - (i_c + 1) * BTL) from by omega,
+      praW_add]
+    ring
+  · have htrip0 : prbTrip T BTS i_c BTL * BTS = 0 := by omega
+    rw [htrip0, Nat.sub_zero] at hlo
+    exact absurd hhi (by omega)
+
+/-- **Desc-exit rescale bridge (`b_dv`)**: same fold with the row factor
+already outside the accumulator and the flat `· scale` applied by the walk. -/
+private theorem prbDvDesc_scale_bridge (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS) (r p : Nat) (hr : r < BTL) :
+    (praW (prbBeta i_h) (BTL - r)
+          * prbDvDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+              (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) r p) * scale
+      = prbDvPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS) r p := by
+  have hTripMul := prb_trip_mul T BTS i_c BTL hBTS hBTSpos
+  have hexp : (i_c + 1) * BTL = i_c * BTL + BTL := by ring
+  unfold prbDvDesc prbDvPart
+  rw [Finset.mul_sum, Finset.sum_mul]
+  refine Finset.sum_congr rfl fun t ht => ?_
+  obtain ⟨hlo, hhi⟩ := Finset.mem_Ico.mp ht
+  rcases le_or_gt ((i_c + 1) * BTL) (prbNB T BTS) with hle | hgt
+  · have hA : prbNB T BTS - prbTrip T BTS i_c BTL * BTS = (i_c + 1) * BTL := by
+      omega
+    rw [hA] at hlo
+    have hkeep : i_c * BTL + r ≤ t := by omega
+    rw [if_pos hkeep, hA,
+      show t - (i_c * BTL + r) = (BTL - r) + (t - (i_c + 1) * BTL) from by omega,
+      praW_add]
+    ring
+  · have htrip0 : prbTrip T BTS i_c BTL * BTS = 0 := by omega
+    rw [htrip0, Nat.sub_zero] at hlo
+    exact absurd hhi (by omega)
+
+/-- Diag-loop `b_dk` spec step: the decay-masked kernel summands extend the
+diagonal partial sum at the top, past the fixed desc-exit term `D`; on kept
+lanes the intra-block exponent `(c + off) − r` is the row-anchored
+`t − (i_c·BTL + r)`. -/
+private theorem prbDkDiag_step' (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (i : Nat) (D : ℝ) (r e : Nat) (hlo : i_c * BTL ≤ i) :
+    (prbDkPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV (i_c * BTL) i r e + D)
+      + ∑ c : Fin BTS,
+          (prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+              r (i + c.val)
+            * ((if r ≤ c.val + (i - i_c * BTL) then
+                  praW (prbBeta i_h) ((c.val + (i - i_c * BTL)) - r)
+                else 0) * scale))
+            * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e (i + c.val)
+      = prbDkPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV (i_c * BTL) (i + BTS)
+          r e + D := by
+  rw [add_right_comm]
+  congr 1
+  unfold prbDkPart
+  rw [pra_sum_Ico_add_block (i_c * BTL) i BTS hlo]
+  congr 1
+  refine Finset.sum_congr rfl fun c _ => ?_
+  have hcond : (r ≤ c.val + (i - i_c * BTL)) ↔ (i_c * BTL + r ≤ i + c.val) := by
+    omega
+  by_cases h : i_c * BTL + r ≤ i + c.val
+  · rw [if_pos (hcond.mpr h), if_pos h,
+      show (c.val + (i - i_c * BTL)) - r = (i + c.val) - (i_c * BTL + r) from by
+        omega]
+    ring
+  · rw [if_neg (fun hc => h (hcond.mp hc)), if_neg h]
+    ring
+
+/-- Diag-loop `b_dv` spec step. -/
+private theorem prbDvDiag_step' (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (i : Nat) (D : ℝ) (r p : Nat) (hlo : i_c * BTL ≤ i) :
+    (prbDvPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV (i_c * BTL) i r p + D)
+      + ∑ c : Fin BTS,
+          (prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+              r (i + c.val)
+            * ((if r ≤ c.val + (i - i_c * BTL) then
+                  praW (prbBeta i_h) ((c.val + (i - i_c * BTL)) - r)
+                else 0) * scale))
+            * prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+                p (i + c.val)
+      = prbDvPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV (i_c * BTL) (i + BTS)
+          r p + D := by
+  rw [add_right_comm]
+  congr 1
+  unfold prbDvPart
+  rw [pra_sum_Ico_add_block (i_c * BTL) i BTS hlo]
+  congr 1
+  refine Finset.sum_congr rfl fun c _ => ?_
+  have hcond : (r ≤ c.val + (i - i_c * BTL)) ↔ (i_c * BTL + r ≤ i + c.val) := by
+    omega
+  by_cases h : i_c * BTL + r ≤ i + c.val
+  · rw [if_pos (hcond.mpr h), if_pos h,
+      show (c.val + (i - i_c * BTL)) - r = (i + c.val) - (i_c * BTL + r) from by
+        omega]
+    ring
+  · rw [if_neg (fun hc => h (hcond.mp hc)), if_neg h]
+    ring
+
+/-- Fold the two-part exit sum (diag part + rescaled desc part) into
+`prbDkOut`. -/
+private theorem prbDkOut_split (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS) (r e : Nat) :
+    prbDkPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (i_c * BTL) ((i_c + 1) * BTL) r e
+      + prbDkPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS) r e
+      = prbDkOut s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV r e := by
+  have hTripMul := prb_trip_mul T BTS i_c BTL hBTS hBTSpos
+  have hexp : (i_c + 1) * BTL = i_c * BTL + BTL := by ring
+  have hout : prbDkOut s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV r e
+      = prbDkPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (i_c * BTL) (max (prbNB T BTS) ((i_c + 1) * BTL)) r e := by
+    unfold prbDkOut prbDkPart
+    rw [Finset.range_eq_Ico,
+      ← Finset.sum_Ico_consecutive _ (Nat.zero_le (i_c * BTL))
+        (le_trans (by omega) (le_max_right (prbNB T BTS) ((i_c + 1) * BTL)))]
+    have hzero : (∑ t ∈ Finset.Ico 0 (i_c * BTL),
+        if i_c * BTL + r ≤ t then
+          praW (prbBeta i_h) (t - (i_c * BTL + r)) * scale
+            * prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV r t
+            * prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK e t
+        else 0) = 0 :=
+      Finset.sum_eq_zero fun t ht => if_neg (by
+        have h2 := (Finset.mem_Ico.mp ht).2
+        omega)
+    rw [hzero, zero_add]
+  rw [hout]
+  rcases le_or_gt ((i_c + 1) * BTL) (prbNB T BTS) with hle | hgt
+  · have hA : prbNB T BTS - prbTrip T BTS i_c BTL * BTS = (i_c + 1) * BTL := by
+      omega
+    rw [hA, Nat.max_eq_left hle]
+    unfold prbDkPart
+    exact Finset.sum_Ico_consecutive _ (by omega) hle
+  · have htrip0 : prbTrip T BTS i_c BTL * BTS = 0 := by omega
+    rw [htrip0, Nat.sub_zero, Nat.max_eq_right (Nat.le_of_lt hgt)]
+    unfold prbDkPart
+    rw [Finset.Ico_self, Finset.sum_empty, add_zero]
+
+/-- Fold the two-part exit sum into `prbDvOut`. -/
+private theorem prbDvOut_split (s : BlockState) (q k v do_ : RegionName)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat)
+    (i_bh i_c i_k i_v i_h : Nat) (scale : ℝ) (T K V BTL BTS BK BV : Nat)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS) (r p : Nat) :
+    prbDvPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (i_c * BTL) ((i_c + 1) * BTL) r p
+      + prbDvPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS) r p
+      = prbDvOut s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV r p := by
+  have hTripMul := prb_trip_mul T BTS i_c BTL hBTS hBTSpos
+  have hexp : (i_c + 1) * BTL = i_c * BTL + BTL := by ring
+  have hout : prbDvOut s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV r p
+      = prbDvPart s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (i_c * BTL) (max (prbNB T BTS) ((i_c + 1) * BTL)) r p := by
+    unfold prbDvOut prbDvPart
+    rw [Finset.range_eq_Ico,
+      ← Finset.sum_Ico_consecutive _ (Nat.zero_le (i_c * BTL))
+        (le_trans (by omega) (le_max_right (prbNB T BTS) ((i_c + 1) * BTL)))]
+    have hzero : (∑ t ∈ Finset.Ico 0 (i_c * BTL),
+        if i_c * BTL + r ≤ t then
+          praW (prbBeta i_h) (t - (i_c * BTL + r)) * scale
+            * prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK r t
+            * prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV p t
+        else 0) = 0 :=
+      Finset.sum_eq_zero fun t ht => if_neg (by
+        have h2 := (Finset.mem_Ico.mp ht).2
+        omega)
+    rw [hzero, zero_add]
+  rw [hout]
+  rcases le_or_gt ((i_c + 1) * BTL) (prbNB T BTS) with hle | hgt
+  · have hA : prbNB T BTS - prbTrip T BTS i_c BTL * BTS = (i_c + 1) * BTL := by
+      omega
+    rw [hA, Nat.max_eq_left hle]
+    unfold prbDvPart
+    exact Finset.sum_Ico_consecutive _ (by omega) hle
+  · have htrip0 : prbTrip T BTS i_c BTL * BTS = 0 := by omega
+    rw [htrip0, Nat.sub_zero, Nat.max_eq_right (Nat.le_of_lt hgt)]
+    unfold prbDvPart
+    rw [Finset.Ico_self, Finset.sum_empty, add_zero]
+
+/-! ## Backward value tiles and load bridges -/
+
+/-- The fixed loaded `b_k` chunk tile. -/
+noncomputable def prbKTile (s : BlockState) (k : RegionName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_c i_k : Nat) (T K BTL BK : Nat) :
+    Tile .real [BTL, BK] :=
+  ⟨fun idx => some (prbKGuarded s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+    idx.1.val idx.2.1.val)⟩
+
+/-- The fixed loaded `b_v` chunk tile. -/
+noncomputable def prbVTile (s : BlockState) (v : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_c i_v : Nat) (T V BTL BV : Nat) :
+    Tile .real [BTL, BV] :=
+  ⟨fun idx => some (prbVGuarded s v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+    idx.1.val idx.2.1.val)⟩
+
+/-- The loaded transposed `b_q` block at key-column offset `i`. -/
+noncomputable def prbQTile (s : BlockState) (q : RegionName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_k : Nat) (T K BK BTS : Nat) (i : Nat) :
+    Tile .real [BK, BTS] :=
+  ⟨fun idx => some (prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK
+    idx.1.val (i + idx.2.1.val))⟩
+
+/-- The loaded transposed `b_do` block at key-column offset `i`. -/
+noncomputable def prbDoTile (s : BlockState) (do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_v : Nat) (T V BV BTS : Nat) (i : Nat) :
+    Tile .real [BV, BTS] :=
+  ⟨fun idx => some (prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+    idx.1.val (i + idx.2.1.val))⟩
+
+/-- Scalar `constNat * constNat` products (the spliced backward offsets). -/
+private theorem prb_constMul_eval (s : BlockState) (a b : Nat) :
+    evalOp (Op.mul .nat Broadcast.nil (Op.constNat a) (Op.constNat b)) s
+      = some (Tile.scalar (a * b)) := by
+  rw [evalOp_mul]
+  simp only [evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  rfl
+
+/-- Loading `p_k` at offsets `[i_c·BTL, i_k·BK]` lands on `prbKTile`. -/
+private theorem prb_kLoad_eq (s sin : BlockState) (k : RegionName) (name : RegName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_c i_k T K BTL BK : Nat)
+    (hmem : sin.mem = s.mem)
+    (hreg : sin.regs .blockPtr [BTL, BK] name = some
+      ⟨fun _ => BlockPtr.mk k (i_bh * s_qk_h) [T, K] [BTL, BK]
+        [s_qk_t, s_qk_d] [i_c * BTL, i_k * BK]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BK] name) [0, 1])
+        MaskOpt.none) sin
+      = some (prbKTile s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK) := by
+  rw [pra_load_bp_2d k sin name (i_bh * s_qk_h) T K BTL BK s_qk_t s_qk_d
+    (i_c * BTL) (i_k * BK) hreg]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, e, u⟩ := idx
+  simp only [prbKTile, prbKGuarded]
+  by_cases h : i_c * BTL + r.val < T ∧ i_k * BK + e.val < K
+  · rw [if_pos h, if_pos h, pra_readMem_congr sin s hmem]
+  · rw [if_neg h, if_neg h]
+
+/-- Loading `p_v` at offsets `[i_c·BTL, i_v·BV]` lands on `prbVTile`. -/
+private theorem prb_vLoad_eq (s sin : BlockState) (v : RegionName) (name : RegName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_c i_v T V BTL BV : Nat)
+    (hmem : sin.mem = s.mem)
+    (hreg : sin.regs .blockPtr [BTL, BV] name = some
+      ⟨fun _ => BlockPtr.mk v (i_bh * s_vo_h) [T, V] [BTL, BV]
+        [s_vo_t, s_vo_d] [i_c * BTL, i_v * BV]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BV] name) [0, 1])
+        MaskOpt.none) sin
+      = some (prbVTile s v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV) := by
+  rw [pra_load_bp_2d v sin name (i_bh * s_vo_h) T V BTL BV s_vo_t s_vo_d
+    (i_c * BTL) (i_v * BV) hreg]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, p, u⟩ := idx
+  simp only [prbVTile, prbVGuarded]
+  by_cases h : i_c * BTL + r.val < T ∧ i_v * BV + p.val < V
+  · rw [if_pos h, if_pos h, pra_readMem_congr sin s hmem]
+  · rw [if_neg h, if_neg h]
+
+/-- Loading `p_q` at offsets `[i_k·BK, i]` (the `(K, T)` parent) lands on
+`prbQTile … i`. -/
+private theorem prb_qLoad_eq (s sin : BlockState) (q : RegionName) (name : RegName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_k T K BK BTS : Nat) (i : Nat)
+    (hmem : sin.mem = s.mem)
+    (hreg : sin.regs .blockPtr [BK, BTS] name = some
+      ⟨fun _ => BlockPtr.mk q (i_bh * s_qk_h) [K, T] [BK, BTS]
+        [s_qk_d, s_qk_t] [i_k * BK, i]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BK, BTS] name) [0, 1])
+        MaskOpt.none) sin
+      = some (prbQTile s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK BTS i) := by
+  rw [pra_load_bp_2d q sin name (i_bh * s_qk_h) K T BK BTS s_qk_d s_qk_t
+    (i_k * BK) i hreg]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨e, c, u⟩ := idx
+  simp only [prbQTile, prbQGuarded]
+  by_cases h : i_k * BK + e.val < K ∧ i + c.val < T
+  · rw [if_pos h, if_pos h, pra_readMem_congr sin s hmem]
+  · rw [if_neg h, if_neg h]
+
+/-- Loading `p_do` at offsets `[i_v·BV, i]` (the `(V, T)` parent) lands on
+`prbDoTile … i`. -/
+private theorem prb_doLoad_eq (s sin : BlockState) (do_ : RegionName)
+    (name : RegName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_v T V BV BTS : Nat) (i : Nat)
+    (hmem : sin.mem = s.mem)
+    (hreg : sin.regs .blockPtr [BV, BTS] name = some
+      ⟨fun _ => BlockPtr.mk do_ (i_bh * s_vo_h) [V, T] [BV, BTS]
+        [s_vo_d, s_vo_t] [i_v * BV, i]⟩) :
+    evalOp (Op.load .real
+        (MemAccess.blockPtr (Op.ref .blockPtr [BV, BTS] name) [0, 1])
+        MaskOpt.none) sin
+      = some (prbDoTile s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV BTS i) := by
+  rw [pra_load_bp_2d do_ sin name (i_bh * s_vo_h) V T BV BTS s_vo_d s_vo_t
+    (i_v * BV) i hreg]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨p, c, u⟩ := idx
+  simp only [prbDoTile, prbDoGuarded]
+  by_cases h : i_v * BV + p.val < V ∧ i + c.val < T
+  · rw [if_pos h, if_pos h, pra_readMem_congr sin s hmem]
+  · rw [if_neg h, if_neg h]
+
+/-! ## Backward per-statement eval recipes -/
+
+/-- The decay exponent statement lands on `prbBeta` (backward spelling, on
+the spliced `i_h` constant). -/
+private theorem prb_bb_eval (t : BlockState) (i_h : Nat) :
+    evalOp (Op.log2 (Op.sub .real Broadcast.nil (Op.const 1.0)
+        (Op.exp2 (Op.sub .real Broadcast.nil
+          (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 5.0))
+          (Op.mul .real Broadcast.nil (Op.natToReal (Op.constNat i_h))
+            (Op.const 1.0)))))) t
+      = some (Tile.scalar (some (prbBeta i_h))) := by
+  simp only [evalOp, bind, Option.bind]
+  rfl
+
+/-- The `d_b = tl.math.exp2(b_b * BTS)` register (walk-order product;
+`= praW β BTS` by `praW_comm`). -/
+private theorem prb_db_eval (t : BlockState) (β : ℝ) (BTS : Nat)
+    (hbb : t.regs .real [] "b_b" = some (Tile.scalar (some β))) :
+    evalOp (Op.exp2 (Op.mul .real Broadcast.nil (Op.ref .real [] "b_b")
+        (Op.natToReal (Op.constNat BTS)))) t
+      = some (Tile.scalar (some (Real.exp (β * ((BTS : Nat) : ℝ)
+          * Real.log 2)))) := by
+  simp only [evalOp, evalOp_ref, hbb, bind, Option.bind]
+  rfl
+
+/-- The backward `d_h` tile (inline `tl.arange`): lane `r` holds
+`2^((BTL − r)·b_b)`. -/
+private theorem prb_dh_eval (t : BlockState) (β : ℝ) (BTL : Nat)
+    (hbb : t.regs .real [] "b_b" = some (Tile.scalar (some β))) :
+    evalOp (Op.exp2 (Op.mul .real Broadcast.scalarR
+        (Op.natToReal (Op.sub .nat Broadcast.scalarL (Op.constNat BTL)
+          (Op.arange BTL)))
+        (Op.ref .real [] "b_b"))) t
+      = some (⟨fun idx => some (praW β (BTL - idx.1.val))⟩ : Tile .real [BTL]) := by
+  simp only [evalOp, evalOp_ref, hbb, bind, Option.bind]
+  rfl
+
+/-- The backward `d_q` tile (inline `tl.arange`): lane `c` holds `2^(c·b_b)`. -/
+private theorem prb_dq_eval (t : BlockState) (β : ℝ) (BTS : Nat)
+    (hbb : t.regs .real [] "b_b" = some (Tile.scalar (some β))) :
+    evalOp (Op.exp2 (Op.mul .real Broadcast.scalarR (Op.natToReal (Op.arange BTS))
+        (Op.ref .real [] "b_b"))) t
+      = some (⟨fun idx => some (praW β idx.1.val)⟩ : Tile .real [BTS]) := by
+  simp only [evalOp, evalOp_ref, hbb, bind, Option.bind]
+  rfl
+
+/-- `b_kd = b_k * d_h[:, None]`: the row-decayed key tile. -/
+private theorem prb_kd_eval (sin : BlockState) (BTL BK : Nat)
+    (g : Nat → Nat → ℝ) (w : Nat → ℝ)
+    (hk : sin.regs .real [BTL, BK] "b_k"
+      = some ⟨fun idx => some (g idx.1.val idx.2.1.val)⟩)
+    (hdh : sin.regs .real [BTL] "d_h" = some ⟨fun idx => some (w idx.1.val)⟩) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BTL, BK] "b_k")
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h"))) sin
+      = some ⟨fun idx : TileIndex [BTL, BK] =>
+          some (g idx.1.val idx.2.1.val * w idx.1.val)⟩ := by
+  erw [pra_mulTile_eval (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+    _ _ sin _ _ (by rw [evalOp_ref]; exact hk)
+    (evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hdh)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, e, u⟩ := idx
+  rfl
+
+/-- The respelled block index
+`i = tl.cdiv(T, BTS)·BTS − BTS − j·BTS` from the `j` register. -/
+private theorem prb_iAssign_eval (sin : BlockState) (T BTS j : Nat)
+    (hj : sin.regs .nat [] "j" = some (Tile.scalar j)) :
+    evalOp (Op.sub .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.mul .nat Broadcast.nil
+            (Op.div .nat Broadcast.nil
+              (Op.sub .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil (Op.constNat T) (Op.constNat BTS))
+                (Op.constNat 1))
+              (Op.constNat BTS))
+            (Op.constNat BTS))
+          (Op.constNat BTS))
+        (Op.mul .nat Broadcast.nil (Op.ref .nat [] "j") (Op.constNat BTS))) sin
+      = some (Tile.scalar (prbNB T BTS - BTS - j * BTS)) := by
+  simp only [evalOp, evalOp_ref, hj, evalOp_constNat, bind, Option.bind]
+  rfl
+
+/-- The respelled descending trip count (the loop's stop expression). -/
+private theorem prb_trip_eval (s : BlockState) (T BTS i_c BTL : Nat) :
+    evalOp (Op.div .nat Broadcast.nil
+        (Op.sub .nat Broadcast.nil
+          (Op.add .nat Broadcast.nil
+            (Op.sub .nat Broadcast.nil
+              (Op.mul .nat Broadcast.nil
+                (Op.div .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.add .nat Broadcast.nil (Op.constNat T) (Op.constNat BTS))
+                    (Op.constNat 1))
+                  (Op.constNat BTS))
+                (Op.constNat BTS))
+              (Op.constNat ((i_c + 1) * BTL)))
+            (Op.constNat BTS))
+          (Op.constNat 1))
+        (Op.constNat BTS)) s
+      = some (Tile.scalar (prbTrip T BTS i_c BTL)) := by
+  simp only [evalOp, evalOp_constNat, bind, Option.bind]
+  rfl
+
+/-- `b_do = b_do * d_q[None, :]`: the `d_q`-rescaled loaded `dO` block. -/
+private theorem prb_doScale_eval (sin : BlockState) (BV BTS : Nat)
+    (g : Nat → Nat → ℝ) (w : Nat → ℝ)
+    (hdo : sin.regs .real [BV, BTS] "b_do"
+      = some ⟨fun idx => some (g idx.1.val idx.2.1.val)⟩)
+    (hdq : sin.regs .real [BTS] "d_q" = some ⟨fun idx => some (w idx.1.val)⟩) :
+    evalOp (Op.mul .real (Broadcast.consR (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BV, BTS] "b_do")
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .real [BTS] "d_q"))) sin
+      = some ⟨fun idx : TileIndex [BV, BTS] =>
+          some (g idx.1.val idx.2.1.val * w idx.2.1.val)⟩ := by
+  erw [pra_mulTile_eval (Broadcast.consR (Broadcast.consSame Broadcast.nil))
+    _ _ sin _ _ (by rw [evalOp_ref]; exact hdo)
+    (evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hdq)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨p, c, u⟩ := idx
+  rfl
+
+/-- `X *= d_b`: the per-iteration accumulator decay (both `b_dv` and `b_dk`). -/
+private theorem prb_accDecay_eval (sin : BlockState) (name : RegName)
+    (M N : Nat) (g : Nat → Nat → ℝ) (D : ℝ)
+    (hx : sin.regs .real [M, N] name
+      = some ⟨fun idx => some (g idx.1.val idx.2.1.val)⟩)
+    (hd : sin.regs .real [] "d_b" = some (Tile.scalar (some D))) :
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [M, N] name)
+        (Op.ref .real [] "d_b")) sin
+      = some ⟨fun idx : TileIndex [M, N] =>
+          some (g idx.1.val idx.2.1.val * D)⟩ := by
+  rw [pra_mulTile_eval Broadcast.scalarR _ _ sin _ _
+    (by rw [evalOp_ref]; exact hx) (by rw [evalOp_ref]; exact hd)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨a, b, u⟩ := idx
+  rfl
+
+/-- The desc-loop `b_s = tl.dot(b_kd, b_q)`: the row factor `2^((BTL−r)·b_b)`
+inside `b_kd` factors out of the `BK` contraction. -/
+private theorem prb_sDesc_eval (s sin : BlockState) (q k : RegionName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_c i_k i_h : Nat)
+    (T K BTL BK BTS : Nat) (i : Nat)
+    (hkd : sin.regs .real [BTL, BK] "b_kd"
+      = some ⟨fun idx => some (prbKGuarded s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k
+          T K BTL BK idx.1.val idx.2.1.val
+        * praW (prbBeta i_h) (BTL - idx.1.val))⟩)
+    (hq : sin.regs .real [BK, BTS] "b_q"
+      = some (prbQTile s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK BTS i)) :
+    evalOp (Op.dot (batch := []) (Op.ref .real [BTL, BK] "b_kd")
+        (Op.ref .real [BK, BTS] "b_q")) sin
+      = some ⟨fun idx : TileIndex [BTL, BTS] =>
+          some (praW (prbBeta i_h) (BTL - idx.1.val)
+            * prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+                idx.1.val (i + idx.2.1.val))⟩ := by
+  rw [pra_dot_eval _ _ sin _ _ (by rw [evalOp_ref]; exact hkd)
+    (by rw [evalOp_ref]; exact hq)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, c, u⟩ := idx
+  rw [pra_dot2d_elem _ _ r c
+    (fun e => prbKGuarded s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+        r.val e.val * praW (prbBeta i_h) (BTL - r.val))
+    (fun e => prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK
+        e.val (i + c.val))
+    (fun e => rfl) (fun e => rfl)]
+  refine congrArg some ?_
+  unfold prbSVal
+  rw [Finset.mul_sum]
+  exact Finset.sum_congr rfl fun e _ => by ring
+
+/-- The desc-loop `b_ds = tl.dot(b_v, b_do)` on the `d_q`-rescaled `b_do`:
+the column factor `2^(c·b_b)` factors out of the `BV` contraction. -/
+private theorem prb_dsDesc_eval (s sin : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_c i_v i_h : Nat)
+    (T V BTL BV BTS : Nat) (i : Nat)
+    (hv : sin.regs .real [BTL, BV] "b_v"
+      = some (prbVTile s v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV))
+    (hdo : sin.regs .real [BV, BTS] "b_do"
+      = some ⟨fun idx => some (prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v
+          T V BV idx.1.val (i + idx.2.1.val)
+        * praW (prbBeta i_h) idx.2.1.val)⟩) :
+    evalOp (Op.dot (batch := []) (Op.ref .real [BTL, BV] "b_v")
+        (Op.ref .real [BV, BTS] "b_do")) sin
+      = some ⟨fun idx : TileIndex [BTL, BTS] =>
+          some (praW (prbBeta i_h) idx.2.1.val
+            * prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+                idx.1.val (i + idx.2.1.val))⟩ := by
+  rw [pra_dot_eval _ _ sin _ _ (by rw [evalOp_ref]; exact hv)
+    (by rw [evalOp_ref]; exact hdo)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, c, u⟩ := idx
+  rw [pra_dot2d_elem _ _ r c
+    (fun p => prbVGuarded s v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+        r.val p.val)
+    (fun p => prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+        p.val (i + c.val) * praW (prbBeta i_h) c.val)
+    (fun p => rfl) (fun p => rfl)]
+  refine congrArg some ?_
+  unfold prbDsVal
+  rw [Finset.mul_sum]
+  exact Finset.sum_congr rfl fun p _ => by ring
+
+/-- `b_dv += tl.dot(b_s, tl.trans(b_do))` on all-`some` tiles. -/
+private theorem prb_dvAdd_eval (sin : BlockState) (BTL BTS BV : Nat)
+    (g f w : Nat → Nat → ℝ)
+    (hdv : sin.regs .real [BTL, BV] "b_dv"
+      = some ⟨fun idx => some (g idx.1.val idx.2.1.val)⟩)
+    (hs : sin.regs .real [BTL, BTS] "b_s"
+      = some ⟨fun idx => some (f idx.1.val idx.2.1.val)⟩)
+    (hdo : sin.regs .real [BV, BTS] "b_do"
+      = some ⟨fun idx => some (w idx.1.val idx.2.1.val)⟩) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BTL, BV] "b_dv")
+        (Op.dot (batch := []) (Op.ref .real [BTL, BTS] "b_s")
+          (Op.transpose (batch := []) (Op.ref .real [BV, BTS] "b_do")))) sin
+      = some ⟨fun idx : TileIndex [BTL, BV] =>
+          some (g idx.1.val idx.2.1.val
+            + ∑ c : Fin BTS, f idx.1.val c.val * w idx.2.1.val c.val)⟩ := by
+  have htr : evalOp (Op.transpose (batch := []) (Op.ref .real [BV, BTS] "b_do")) sin
+      = some (Tile.transpose []
+          (⟨fun idx => some (w idx.1.val idx.2.1.val)⟩ : Tile .real [BV, BTS])) := by
+    erw [evalOp_transpose, evalOp_ref, hdo]
+    rfl
+  have hdot := pra_dot_eval (Op.ref .real [BTL, BTS] "b_s")
+    (Op.transpose (batch := []) (Op.ref .real [BV, BTS] "b_do")) sin _ _
+    (by rw [evalOp_ref]; exact hs) htr
+  erw [pra_addTile_eval (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    _ _ sin _ _ (by rw [evalOp_ref]; exact hdv) hdot]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, p, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [pra_dot2d_elem _ _ r p (fun c => f r.val c.val) (fun c => w p.val c.val)
+    (fun c => rfl) (fun c => rfl)]
+  rfl
+
+/-- `b_dk += tl.dot(b_ds, tl.trans(b_q))` on all-`some` tiles. -/
+private theorem prb_dkAdd_eval (sin : BlockState) (BTL BTS BK : Nat)
+    (g f qF : Nat → Nat → ℝ)
+    (hdk : sin.regs .real [BTL, BK] "b_dk"
+      = some ⟨fun idx => some (g idx.1.val idx.2.1.val)⟩)
+    (hds : sin.regs .real [BTL, BTS] "b_ds"
+      = some ⟨fun idx => some (f idx.1.val idx.2.1.val)⟩)
+    (hq : sin.regs .real [BK, BTS] "b_q"
+      = some ⟨fun idx => some (qF idx.1.val idx.2.1.val)⟩) :
+    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.ref .real [BTL, BK] "b_dk")
+        (Op.dot (batch := []) (Op.ref .real [BTL, BTS] "b_ds")
+          (Op.transpose (batch := []) (Op.ref .real [BK, BTS] "b_q")))) sin
+      = some ⟨fun idx : TileIndex [BTL, BK] =>
+          some (g idx.1.val idx.2.1.val
+            + ∑ c : Fin BTS, f idx.1.val c.val * qF idx.2.1.val c.val)⟩ := by
+  have htr : evalOp (Op.transpose (batch := []) (Op.ref .real [BK, BTS] "b_q")) sin
+      = some (Tile.transpose []
+          (⟨fun idx => some (qF idx.1.val idx.2.1.val)⟩ : Tile .real [BK, BTS])) := by
+    erw [evalOp_transpose, evalOp_ref, hq]
+    rfl
+  have hdot := pra_dot_eval (Op.ref .real [BTL, BTS] "b_ds")
+    (Op.transpose (batch := []) (Op.ref .real [BK, BTS] "b_q")) sin _ _
+    (by rw [evalOp_ref]; exact hds) htr
+  erw [pra_addTile_eval (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    _ _ sin _ _ (by rw [evalOp_ref]; exact hdk) hdot]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, e, u⟩ := idx
+  simp only [Tile.bop_data, Broadcast.leftIndex, Broadcast.rightIndex]
+  erw [pra_dot2d_elem _ _ r e (fun c => f r.val c.val) (fun c => qF e.val c.val)
+    (fun c => rfl) (fun c => rfl)]
+  rfl
+
+/-- `b_dk *= d_h[:, None] * scale`: the post-loop row rescale. -/
+private theorem prb_dkScale_eval (sin : BlockState) (BTL BK : Nat) (scale : ℝ)
+    (g : Nat → Nat → ℝ) (w : Nat → ℝ)
+    (hdk : sin.regs .real [BTL, BK] "b_dk"
+      = some ⟨fun idx => some (g idx.1.val idx.2.1.val)⟩)
+    (hdh : sin.regs .real [BTL] "d_h" = some ⟨fun idx => some (w idx.1.val)⟩) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+        (Op.ref .real [BTL, BK] "b_dk")
+        (Op.mul .real Broadcast.scalarR
+          (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h"))
+          (Op.const scale))) sin
+      = some ⟨fun idx : TileIndex [BTL, BK] =>
+          some (g idx.1.val idx.2.1.val * (w idx.1.val * scale))⟩ := by
+  have hexp : evalOp (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h")) sin
+      = some (Tile.expandDim ⟨1, by simp⟩
+          (⟨fun idx => some (w idx.1.val)⟩ : Tile .real [BTL])) := by
+    erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hdh]
+  have hmul := pra_mulTile_eval Broadcast.scalarR _ (Op.const scale) sin _ _
+    hexp (evalOp_const scale sin)
+  erw [pra_mulTile_eval (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+    _ _ sin _ _ (by rw [evalOp_ref]; exact hdk) hmul]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, e, u⟩ := idx
+  rfl
+
+/-- `b_dv *= scale`: the post-loop flat rescale. -/
+private theorem prb_dvScale_eval (sin : BlockState) (BTL BV : Nat) (scale : ℝ)
+    (g : Nat → Nat → ℝ)
+    (hdv : sin.regs .real [BTL, BV] "b_dv"
+      = some ⟨fun idx => some (g idx.1.val idx.2.1.val)⟩) :
+    evalOp (Op.mul .real Broadcast.scalarR (Op.ref .real [BTL, BV] "b_dv")
+        (Op.const scale)) sin
+      = some ⟨fun idx : TileIndex [BTL, BV] =>
+          some (g idx.1.val idx.2.1.val * scale)⟩ := by
+  rw [pra_mulTile_eval Broadcast.scalarR _ _ sin _ _
+    (by rw [evalOp_ref]; exact hdv) (evalOp_const scale sin)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, p, u⟩ := idx
+  rfl
+
+private theorem prb_evalOp_le_def {dtype : TileDType} {a b shape : TileShape}
+    (h : ComparableDType dtype) (bc : Broadcast a b shape)
+    (x : Op dtype a) (y : Op dtype b) (s : BlockState) :
+    evalOp (.le h bc x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.cop h.le bc vx vy)) := by
+  simp [evalOp]
+
+/-- The `o_k[:, None] <= o_q[None, :]` mask at diagonal offset `off` (row `r`
+kept iff `r ≤ c + off`). -/
+def prbMaskTile (BTL BTS off : Nat) : Tile .bool [BTL, BTS] :=
+  ⟨fun idx => decide (idx.1.val ≤ idx.2.1.val + off)⟩
+
+private theorem prb_msLe_eval (sin : BlockState) (BTL BTS off : Nat)
+    (hok : sin.regs .nat [BTL] "o_k" = some (Tile.vec fun r => r.val))
+    (hoq : sin.regs .nat [BTS] "o_q" = some (Tile.vec fun r => r.val + off)) :
+    evalOp (Op.le ComparableDType.nat (Broadcast.consR (Broadcast.consL Broadcast.nil))
+        (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BTL] "o_k"))
+        (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BTS] "o_q"))) sin
+      = some (prbMaskTile BTL BTS off) := by
+  rw [prb_evalOp_le_def]
+  erw [evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hok,
+    evalOp_expandDim_ref_of_regs _ _ _ _ _ _ hoq]
+  simp only [Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, c, u⟩ := idx
+  show decide (r.val ≤ c.val + off) = decide (r.val ≤ c.val + off)
+  rfl
+
+/-- `d_s = tl.where(m_s, exp2((o_q − o_k)·b_b), 0) * scale`: the scaled
+causal decay tile at diagonal offset `off` (with the respelled subtraction
+and the identity `b_b.to(tl.float32)` cast; kept lanes hold
+`2^(((c+off) − r)·b_b)·scale`, masked-off lanes the hard `0·scale`). -/
+private theorem prb_dsDiag_eval (sin : BlockState) (β : ℝ) (BTL BTS off : Nat)
+    (scale : ℝ)
+    (hm : sin.regs .bool [BTL, BTS] "m_s" = some (prbMaskTile BTL BTS off))
+    (hoq : sin.regs .nat [BTS] "o_q" = some (Tile.vec fun r => r.val + off))
+    (hok : sin.regs .nat [BTL] "o_k" = some (Tile.vec fun r => r.val))
+    (hbb : sin.regs .real [] "b_b" = some (Tile.scalar (some β))) :
+    evalOp (Op.mul .real Broadcast.scalarR
+        (Op.where (Op.ref .bool [BTL, BTS] "m_s")
+          (Op.exp2 (Op.mul .real Broadcast.scalarR
+            (Op.natToReal (Op.sub .nat (Broadcast.consL (Broadcast.consR Broadcast.nil))
+              (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BTS] "o_q"))
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BTL] "o_k"))))
+            (Op.castFloat FloatDType.real FloatDType.real (Op.ref .real [] "b_b"))))
+          (Op.broadcast (Op.const 0.0) [BTL, BTS]))
+        (Op.const scale)) sin
+      = some ⟨fun idx : TileIndex [BTL, BTS] =>
+          some ((if idx.1.val ≤ idx.2.1.val + off
+            then praW β ((idx.2.1.val + off) - idx.1.val)
+            else 0) * scale)⟩ := by
+  have hwhere : evalOp (Op.where (Op.ref .bool [BTL, BTS] "m_s")
+        (Op.exp2 (Op.mul .real Broadcast.scalarR
+          (Op.natToReal (Op.sub .nat (Broadcast.consL (Broadcast.consR Broadcast.nil))
+            (Op.expandDim ⟨0, by simp⟩ (Op.ref .nat [BTS] "o_q"))
+            (Op.expandDim ⟨1, by simp⟩ (Op.ref .nat [BTL] "o_k"))))
+          (Op.castFloat FloatDType.real FloatDType.real (Op.ref .real [] "b_b"))))
+        (Op.broadcast (Op.const 0.0) [BTL, BTS])) sin
+      = some ⟨fun idx : TileIndex [BTL, BTS] =>
+          some (if idx.1.val ≤ idx.2.1.val + off
+            then praW β ((idx.2.1.val + off) - idx.1.val)
+            else 0)⟩ := by
+    have hbb' : sin.regs FloatDType.real.toTileDType [] "b_b"
+        = some (Tile.scalar (some β)) := hbb
+    rw [evalOp_where]
+    simp only [evalOp.eq_def, evalOp_ref, evalOp_const, hm, hoq, hok, hbb, hbb',
+      Option.bind, Option.map, Option.bind_eq_bind, Option.bind_some]
+    refine congrArg some (Tile.ext fun idx => ?_)
+    obtain ⟨r, c, u⟩ := idx
+    rw [Tile.select_data]
+    simp only [prbMaskTile]
+    by_cases h : r.val ≤ c.val + off
+    · rw [if_pos (by simpa using h), if_pos h]
+      rfl
+    · rw [if_neg (by simpa using h), if_neg h]
+      norm_num
+  rw [pra_mulTile_eval Broadcast.scalarR _ _ sin _ _ hwhere
+    (evalOp_const scale sin)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, c, u⟩ := idx
+  rfl
+
+/-- The diag-loop `tl.dot(b_k, b_q)` lands lanewise on `prbSVal · (i + c)`. -/
+private theorem prb_sDot_eval (s sin : BlockState) (q k : RegionName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_c i_k : Nat)
+    (T K BTL BK BTS : Nat) (i : Nat)
+    (hk : sin.regs .real [BTL, BK] "b_k"
+      = some (prbKTile s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK))
+    (hq : sin.regs .real [BK, BTS] "b_q"
+      = some (prbQTile s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK BTS i)) :
+    evalOp (Op.dot (batch := []) (Op.ref .real [BTL, BK] "b_k")
+        (Op.ref .real [BK, BTS] "b_q")) sin
+      = some ⟨fun idx : TileIndex [BTL, BTS] =>
+          some (prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+            idx.1.val (i + idx.2.1.val))⟩ := by
+  rw [pra_dot_eval _ _ sin _ _ (by rw [evalOp_ref]; exact hk)
+    (by rw [evalOp_ref]; exact hq)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, c, u⟩ := idx
+  rw [pra_dot2d_elem _ _ r c
+    (fun e => prbKGuarded s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+        r.val e.val)
+    (fun e => prbQGuarded s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK
+        e.val (i + c.val))
+    (fun e => rfl) (fun e => rfl)]
+  rfl
+
+/-- The diag-loop `b_s = tl.dot(b_k, b_q) * d_s` on an all-`some` decay tile. -/
+private theorem prb_sDiag_eval (s sin : BlockState) (q k : RegionName)
+    (s_qk_h s_qk_t s_qk_d : Nat) (i_bh i_c i_k : Nat)
+    (T K BTL BK BTS : Nat) (i : Nat) (fd : Nat → Nat → ℝ)
+    (hk : sin.regs .real [BTL, BK] "b_k"
+      = some (prbKTile s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK))
+    (hq : sin.regs .real [BK, BTS] "b_q"
+      = some (prbQTile s q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK BTS i))
+    (hd : sin.regs .real [BTL, BTS] "d_s"
+      = some ⟨fun idx => some (fd idx.1.val idx.2.1.val)⟩) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.dot (batch := []) (Op.ref .real [BTL, BK] "b_k")
+          (Op.ref .real [BK, BTS] "b_q"))
+        (Op.ref .real [BTL, BTS] "d_s")) sin
+      = some ⟨fun idx : TileIndex [BTL, BTS] =>
+          some (prbSVal s q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+              idx.1.val (i + idx.2.1.val)
+            * fd idx.1.val idx.2.1.val)⟩ := by
+  erw [pra_mulTile_eval (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    _ _ sin _ _
+    (prb_sDot_eval s sin q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK BTS
+      i hk hq)
+    (by rw [evalOp_ref]; exact hd)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, c, u⟩ := idx
+  rfl
+
+/-- The diag-loop `tl.dot(b_v, b_do)` (unscaled `b_do`) lands lanewise on
+`prbDsVal · (i + c)`. -/
+private theorem prb_dsDot_eval (s sin : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_c i_v : Nat)
+    (T V BTL BV BTS : Nat) (i : Nat)
+    (hv : sin.regs .real [BTL, BV] "b_v"
+      = some (prbVTile s v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV))
+    (hdo : sin.regs .real [BV, BTS] "b_do"
+      = some (prbDoTile s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV BTS i)) :
+    evalOp (Op.dot (batch := []) (Op.ref .real [BTL, BV] "b_v")
+        (Op.ref .real [BV, BTS] "b_do")) sin
+      = some ⟨fun idx : TileIndex [BTL, BTS] =>
+          some (prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+            idx.1.val (i + idx.2.1.val))⟩ := by
+  rw [pra_dot_eval _ _ sin _ _ (by rw [evalOp_ref]; exact hv)
+    (by rw [evalOp_ref]; exact hdo)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, c, u⟩ := idx
+  rw [pra_dot2d_elem _ _ r c
+    (fun p => prbVGuarded s v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+        r.val p.val)
+    (fun p => prbDoGuarded s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+        p.val (i + c.val))
+    (fun p => rfl) (fun p => rfl)]
+  rfl
+
+/-- The diag-loop `b_ds = tl.dot(b_v, b_do) * d_s`. -/
+private theorem prb_dsDiagMul_eval (s sin : BlockState) (v do_ : RegionName)
+    (s_vo_h s_vo_t s_vo_d : Nat) (i_bh i_c i_v : Nat)
+    (T V BTL BV BTS : Nat) (i : Nat) (fd : Nat → Nat → ℝ)
+    (hv : sin.regs .real [BTL, BV] "b_v"
+      = some (prbVTile s v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV))
+    (hdo : sin.regs .real [BV, BTS] "b_do"
+      = some (prbDoTile s do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV BTS i))
+    (hd : sin.regs .real [BTL, BTS] "d_s"
+      = some ⟨fun idx => some (fd idx.1.val idx.2.1.val)⟩) :
+    evalOp (Op.mul .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+        (Op.dot (batch := []) (Op.ref .real [BTL, BV] "b_v")
+          (Op.ref .real [BV, BTS] "b_do"))
+        (Op.ref .real [BTL, BTS] "d_s")) sin
+      = some ⟨fun idx : TileIndex [BTL, BTS] =>
+          some (prbDsVal s v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+              idx.1.val (i + idx.2.1.val)
+            * fd idx.1.val idx.2.1.val)⟩ := by
+  erw [pra_mulTile_eval (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
+    _ _ sin _ _
+    (prb_dsDot_eval s sin v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+      BTS i hv hdo)
+    (by rw [evalOp_ref]; exact hd)]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, c, u⟩ := idx
+  rfl
+
+/-- `o_q += BTS` shifts the diag arange window. -/
+private theorem prb_oqAdd_eval (sin : BlockState) (BTS off : Nat)
+    (hoq : sin.regs .nat [BTS] "o_q" = some (Tile.vec fun r => r.val + off)) :
+    evalOp (Op.add .nat Broadcast.scalarR (Op.ref .nat [BTS] "o_q")
+        (Op.constNat BTS)) sin
+      = some (Tile.vec fun r : Fin BTS => r.val + (off + BTS)) := by
+  rw [evalOp_add]
+  simp only [evalOp_ref, hoq, evalOp_constNat, Option.bind_eq_bind, Option.bind_some]
+  refine congrArg some (Tile.ext fun idx => ?_)
+  obtain ⟨r, u⟩ := idx
+  show r.val + off + BTS = r.val + (off + BTS)
+  omega
+
+
+/-! ## The backward streamed (descending, respelled ascending) loop -/
+
+/-- The backward streamed-loop invariant at counter `j`: the accumulators
+hold the top `j` blocks `[prbNB − j·BTS, prbNB)` of the key sweep, anchored
+at `prbNB − j·BTS`, plus the loop-invariant decay registers. -/
+def prbInvD (s0 : BlockState) (q k v do_ : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BTL BTS BK BV : Nat) (j : Nat) (s : BlockState) : Prop :=
+  s.mem = s0.mem ∧
+  j ≤ prbTrip T BTS i_c BTL ∧
+  s.regs .real [] "b_b" = some (Tile.scalar (some (prbBeta i_h))) ∧
+  s.regs .real [] "d_b"
+    = some (Tile.scalar (some (Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ)
+        * Real.log 2)))) ∧
+  s.regs .real [BTL] "d_h"
+    = some (⟨fun idx => some (praW (prbBeta i_h) (BTL - idx.1.val))⟩
+        : Tile .real [BTL]) ∧
+  s.regs .real [BTS] "d_q"
+    = some (⟨fun idx => some (praW (prbBeta i_h) idx.1.val)⟩
+        : Tile .real [BTS]) ∧
+  s.regs .real [BTL, BK] "b_k"
+    = some (prbKTile s0 k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK) ∧
+  s.regs .real [BTL, BV] "b_v"
+    = some (prbVTile s0 v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV) ∧
+  s.regs .real [BTL, BK] "b_kd"
+    = some ⟨fun idx => some (prbKGuarded s0 k s_qk_h s_qk_t s_qk_d i_bh i_c i_k
+        T K BTL BK idx.1.val idx.2.1.val
+      * praW (prbBeta i_h) (BTL - idx.1.val))⟩ ∧
+  s.regs .real [BTL, BK] "b_dk"
+    = some ⟨fun idx => some (prbDkDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+        s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (prbNB T BTS - j * BTS) idx.1.val idx.2.1.val)⟩ ∧
+  s.regs .real [BTL, BV] "b_dv"
+    = some ⟨fun idx => some (praW (prbBeta i_h) (BTL - idx.1.val)
+        * prbDvDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - j * BTS) idx.1.val idx.2.1.val)⟩
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **The backward prologue** (statements 1–11): the decay registers
+`b_b`/`d_b`/`d_h`/`d_q`, the fixed chunk pointers and loads, the zero
+accumulators, and the row-decayed `b_kd` establish `prbInvD` at `0`. -/
+theorem prbBwdPrologue_run (s : BlockState) (q k v do_ : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BTL BTS BK BV : Nat) :
+    ∃ sP, stepStmts
+        [ Stmt.assign .real [] "b_b"
+            (Op.log2 (Op.sub .real Broadcast.nil (Op.const 1.0)
+              (Op.exp2 (Op.sub .real Broadcast.nil
+                (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 5.0))
+                (Op.mul .real Broadcast.nil (Op.natToReal (Op.constNat i_h))
+                  (Op.const 1.0)))))),
+          Stmt.assign .real [] "d_b"
+            (Op.exp2 (Op.mul .real Broadcast.nil (Op.ref .real [] "b_b")
+              (Op.natToReal (Op.constNat BTS)))),
+          Stmt.assign .blockPtr [BTL, BK] "p_k"
+            (Op.makeBlockPtrDynOffsets k
+              (Op.mul .nat Broadcast.nil (Op.constNat i_bh) (Op.constNat s_qk_h))
+              [T, K] [BTL, BK] [s_qk_t, s_qk_d]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_k) (Op.constNat BK)]),
+          Stmt.assign .blockPtr [BTL, BV] "p_v"
+            (Op.makeBlockPtrDynOffsets v
+              (Op.mul .nat Broadcast.nil (Op.constNat i_bh) (Op.constNat s_vo_h))
+              [T, V] [BTL, BV] [s_vo_t, s_vo_d]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_v) (Op.constNat BV)]),
+          Stmt.assign .real [BTL, BK] "b_k"
+            (Op.load .real
+              (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BK] "p_k") [0, 1])
+              MaskOpt.none),
+          Stmt.assign .real [BTL, BV] "b_v"
+            (Op.load .real
+              (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BV] "p_v") [0, 1])
+              MaskOpt.none),
+          Stmt.assign .real [BTL, BK] "b_dk" (Op.full [BTL, BK] (Op.const 0)),
+          Stmt.assign .real [BTL, BV] "b_dv" (Op.full [BTL, BV] (Op.const 0)),
+          Stmt.assign .real [BTL] "d_h"
+            (Op.exp2 (Op.mul .real Broadcast.scalarR
+              (Op.natToReal (Op.sub .nat Broadcast.scalarL (Op.constNat BTL)
+                (Op.arange BTL)))
+              (Op.ref .real [] "b_b"))),
+          Stmt.assign .real [BTL, BK] "b_kd"
+            (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [BTL, BK] "b_k")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h"))),
+          Stmt.assign .real [BTS] "d_q"
+            (Op.exp2 (Op.mul .real Broadcast.scalarR (Op.natToReal (Op.arange BTS))
+              (Op.ref .real [] "b_b"))) ] s = some sP
+      ∧ prbInvD s q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d s_vo_h
+          s_vo_t s_vo_d scale T K V BTL BTS BK BV 0 sP := by
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (prb_bb_eval s i_h))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_db_eval _ (prbBeta i_h) BTS (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (pra_makeBlockPtr_2d_eval k _ _ _ _ [T, K] [BTL, BK] [s_qk_t, s_qk_d]
+      (i_bh * s_qk_h) (i_c * BTL) (i_k * BK)
+      (prb_constMul_eval _ i_bh s_qk_h)
+      (prb_constMul_eval _ i_c BTL)
+      (prb_constMul_eval _ i_k BK)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (pra_makeBlockPtr_2d_eval v _ _ _ _ [T, V] [BTL, BV] [s_vo_t, s_vo_d]
+      (i_bh * s_vo_h) (i_c * BTL) (i_v * BV)
+      (prb_constMul_eval _ i_bh s_vo_h)
+      (prb_constMul_eval _ i_c BTL)
+      (prb_constMul_eval _ i_v BV)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_kLoad_eq s _ k "p_k" s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+      (by rfl) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_vLoad_eq s _ v "p_v" s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+      (by rfl) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (pra_zeros_eval [BTL, BK] _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (pra_zeros_eval [BTL, BV] _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dh_eval _ (prbBeta i_h) BTL (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_kd_eval _ BTL BK
+      (fun r e => prbKGuarded s k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+        r e)
+      (fun r => praW (prbBeta i_h) (BTL - r))
+      (by simp [prbKTile]) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dq_eval _ (prbBeta i_h) BTS (by simp)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, rfl, Nat.zero_le _, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · simp
+  · rw [show (⟨fun idx => some (prbDkDesc s q k v do_ s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - 0 * BTS) idx.1.val idx.2.1.val)⟩ : Tile .real [BTL, BK])
+        = ⟨fun _ => some (0 : ℝ)⟩
+      from Tile.ext fun idx => by simp [prbDkDesc]]
+    simp
+  · rw [show (⟨fun idx => some (praW (prbBeta i_h) (BTL - idx.1.val)
+          * prbDvDesc s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+              (prbNB T BTS - 0 * BTS) idx.1.val idx.2.1.val)⟩
+          : Tile .real [BTL, BV])
+        = ⟨fun _ => some (0 : ℝ)⟩
+      from Tile.ext fun idx => by simp [prbDvDesc]]
+    simp
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **One streamed (above-diagonal) block** of the backward loop: decay both
+accumulators by `d_b` and add the fresh bottom block's contributions. -/
+theorem prbBwdDesc_step (s0 sin : BlockState) (q k v do_ : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BTL BTS BK BV : Nat) (j : Nat)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS)
+    (hlt : j < prbTrip T BTS i_c BTL)
+    (hInv : prbInvD s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d
+      s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV j sin) :
+    ∃ s', stepStmts (praBwdDescBody q do_ i_bh i_k i_v s_qk_h s_qk_t s_qk_d
+        s_vo_h s_vo_t s_vo_d T K V BTL BTS BK BV)
+        (sin.setReg "j" .nat [] (Tile.scalar j)) = some s'
+      ∧ prbInvD s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d s_vo_h
+          s_vo_t s_vo_d scale T K V BTL BTS BK BV (j + 1) s' := by
+  obtain ⟨hmem, hjle, hbb, hdb, hdh, hdq, hbk, hbv, hbkd, hbdk, hbdv⟩ := hInv
+  have hTripMul := prb_trip_mul T BTS i_c BTL hBTS hBTSpos
+  have hj1 : (j + 1) * BTS ≤ prbTrip T BTS i_c BTL * BTS :=
+    Nat.mul_le_mul_right BTS hlt
+  have hexp1 : (j + 1) * BTS = j * BTS + BTS := by ring
+  have hstep : prbNB T BTS - BTS - j * BTS + BTS ≤ prbNB T BTS := by omega
+  have hiadd : prbNB T BTS - BTS - j * BTS + BTS = prbNB T BTS - j * BTS := by
+    omega
+  have hlonew : prbNB T BTS - (j + 1) * BTS = prbNB T BTS - BTS - j * BTS := by
+    omega
+  unfold praBwdDescBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_iAssign_eval _ T BTS j (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (pra_makeBlockPtr_2d_eval q _ _ _ _ [K, T] [BK, BTS] [s_qk_d, s_qk_t]
+      (i_bh * s_qk_h) (i_k * BK) (prbNB T BTS - BTS - j * BTS)
+      (prb_constMul_eval _ i_bh s_qk_h)
+      (prb_constMul_eval _ i_k BK)
+      (by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (pra_makeBlockPtr_2d_eval do_ _ _ _ _ [V, T] [BV, BTS] [s_vo_d, s_vo_t]
+      (i_bh * s_vo_h) (i_v * BV) (prbNB T BTS - BTS - j * BTS)
+      (prb_constMul_eval _ i_bh s_vo_h)
+      (prb_constMul_eval _ i_v BV)
+      (by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_qLoad_eq s0 _ q "p_q" s_qk_h s_qk_t s_qk_d i_bh i_k T K BK BTS
+      (prbNB T BTS - BTS - j * BTS) (by simpa using hmem) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_doLoad_eq s0 _ do_ "p_do" s_vo_h s_vo_t s_vo_d i_bh i_v T V BV BTS
+      (prbNB T BTS - BTS - j * BTS) (by simpa using hmem) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_doScale_eval _ BV BTS
+      (fun p c => prbDoGuarded s0 do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+        p (prbNB T BTS - BTS - j * BTS + c))
+      (fun c => praW (prbBeta i_h) c)
+      (by simp [prbDoTile]) (by simpa using hdq)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_accDecay_eval _ "b_dv" BTL BV
+      (fun r p => praW (prbBeta i_h) (BTL - r)
+        * prbDvDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - j * BTS) r p)
+      (Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2))
+      (by simpa using hbdv) (by simpa using hdb)))]
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_sDesc_eval s0 _ q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k i_h T K BTL BK
+      BTS (prbNB T BTS - BTS - j * BTS) (by simpa using hbkd) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dvAdd_eval _ BTL BTS BV
+      (fun r p => (praW (prbBeta i_h) (BTL - r)
+          * prbDvDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+              (prbNB T BTS - j * BTS) r p)
+        * Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2))
+      (fun r c => praW (prbBeta i_h) (BTL - r)
+        * prbSVal s0 q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+            r (prbNB T BTS - BTS - j * BTS + c))
+      (fun p c => prbDoGuarded s0 do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+          p (prbNB T BTS - BTS - j * BTS + c)
+        * praW (prbBeta i_h) c)
+      (by simp) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_accDecay_eval _ "b_dk" BTL BK
+      (fun r e => prbDkDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+        s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (prbNB T BTS - j * BTS) r e)
+      (Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2))
+      (by simpa using hbdk) (by simpa using hdb)))]
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dsDesc_eval s0 _ v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v i_h
+      T V BTL BV BTS (prbNB T BTS - BTS - j * BTS)
+      (by simpa using hbv) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dkAdd_eval _ BTL BTS BK
+      (fun r e => prbDkDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+          s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - j * BTS) r e
+        * Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2))
+      (fun r c => praW (prbBeta i_h) c
+        * prbDsVal s0 v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+            r (prbNB T BTS - BTS - j * BTS + c))
+      (fun e c => prbQGuarded s0 q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK
+        e (prbNB T BTS - BTS - j * BTS + c))
+      (by simp) (by simp) (by simp [prbQTile])))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa using hmem
+  · omega
+  · simpa using hbb
+  · simpa using hdb
+  · simpa using hdh
+  · simpa using hdq
+  · simpa using hbk
+  · simpa using hbv
+  · simpa using hbkd
+  · rw [show (⟨fun idx => some (prbDkDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - (j + 1) * BTS) idx.1.val idx.2.1.val)⟩
+          : Tile .real [BTL, BK])
+        = ⟨fun idx => some (prbDkDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+            s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - j * BTS) idx.1.val idx.2.1.val
+            * Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2)
+          + ∑ c : Fin BTS,
+              (praW (prbBeta i_h) c.val
+                  * prbDsVal s0 v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v
+                      T V BTL BV idx.1.val
+                      (prbNB T BTS - BTS - j * BTS + c.val))
+                * prbQGuarded s0 q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK
+                    idx.2.1.val (prbNB T BTS - BTS - j * BTS + c.val))⟩
+      from Tile.ext fun idx => congrArg some (by
+        rw [hlonew, ← hiadd]
+        exact (prbDkDesc_step s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+          s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - BTS - j * BTS) hstep idx.1.val idx.2.1.val).symm)]
+    simp
+  · rw [show (⟨fun idx => some (praW (prbBeta i_h) (BTL - idx.1.val)
+          * prbDvDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+              (prbNB T BTS - (j + 1) * BTS) idx.1.val idx.2.1.val)⟩
+          : Tile .real [BTL, BV])
+        = ⟨fun idx => some ((praW (prbBeta i_h) (BTL - idx.1.val)
+            * prbDvDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+                (prbNB T BTS - j * BTS) idx.1.val idx.2.1.val)
+            * Real.exp (prbBeta i_h * ((BTS : Nat) : ℝ) * Real.log 2)
+          + ∑ c : Fin BTS,
+              (praW (prbBeta i_h) (BTL - idx.1.val)
+                  * prbSVal s0 q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+                      idx.1.val (prbNB T BTS - BTS - j * BTS + c.val))
+                * (prbDoGuarded s0 do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+                      idx.2.1.val (prbNB T BTS - BTS - j * BTS + c.val)
+                  * praW (prbBeta i_h) c.val))⟩
+      from Tile.ext fun idx => congrArg some (by
+        rw [hlonew, ← hiadd]
+        exact (prbDvDesc_step s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+          s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - BTS - j * BTS) hstep idx.1.val idx.2.1.val).symm)]
+    simp
+
+set_option maxHeartbeats 4000000 in
+/-- **The full streamed loop**: the respelled descending loop consumes all
+`prbTrip` above-diagonal blocks. -/
+theorem prbBwdDesc_run (s0 sPre : BlockState) (q k v do_ : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BTL BTS BK BV : Nat)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS)
+    (hInv : prbInvD s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d
+      s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV 0 sPre) :
+    ∃ sL, stepStmt (Stmt.forRangeDyn "j" (Op.constNat 0)
+        (Op.div .nat Broadcast.nil
+          (Op.sub .nat Broadcast.nil
+            (Op.add .nat Broadcast.nil
+              (Op.sub .nat Broadcast.nil
+                (Op.mul .nat Broadcast.nil
+                  (Op.div .nat Broadcast.nil
+                    (Op.sub .nat Broadcast.nil
+                      (Op.add .nat Broadcast.nil (Op.constNat T)
+                        (Op.constNat BTS))
+                      (Op.constNat 1))
+                    (Op.constNat BTS))
+                  (Op.constNat BTS))
+                (Op.constNat ((i_c + 1) * BTL)))
+              (Op.constNat BTS))
+            (Op.constNat 1))
+          (Op.constNat BTS))
+        (Op.constNat 1)
+        (praBwdDescBody q do_ i_bh i_k i_v s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+          s_vo_d T K V BTL BTS BK BV)) sPre = some sL
+      ∧ prbInvD s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d s_vo_h
+          s_vo_t s_vo_d scale T K V BTL BTS BK BV (prbTrip T BTS i_c BTL) sL := by
+  obtain ⟨final, sL, hrun, hge, hP⟩ :=
+    forRangeDyn_inv (idx := "j")
+      (P := fun j s => prbInvD s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t
+        s_qk_d s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV j s)
+      (evalOp_constNat 0 sPre)
+      (prb_trip_eval sPre T BTS i_c BTL)
+      (evalOp_constNat 1 sPre)
+      one_ne_zero
+      hInv
+      (fun j s hj hPj =>
+        prbBwdDesc_step s0 s q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t
+          s_qk_d s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV j hBTS hBTSpos
+          hj hPj)
+  have hfin : final = prbTrip T BTS i_c BTL := le_antisymm hP.2.1 hge
+  exact ⟨sL, hrun, hfin ▸ hP⟩
+
+
+/-! ## The backward diagonal loop -/
+
+/-- The backward diagonal-loop invariant at counter `i` (absolute key offset
+within the diagonal chunk): the accumulators hold the diagonal partial sums
+past the fixed rescaled desc-exit terms. -/
+def prbInvG (s0 : BlockState) (q k v do_ : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BTL BTS BK BV : Nat) (i : Nat) (s : BlockState) : Prop :=
+  s.mem = s0.mem ∧
+  i_c * BTL ≤ i ∧ BTS ∣ (i - i_c * BTL) ∧ i ≤ (i_c + 1) * BTL ∧
+  s.regs .real [] "b_b" = some (Tile.scalar (some (prbBeta i_h))) ∧
+  s.regs .real [BTL, BK] "b_k"
+    = some (prbKTile s0 k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK) ∧
+  s.regs .real [BTL, BV] "b_v"
+    = some (prbVTile s0 v s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV) ∧
+  s.regs .nat [BTS] "o_q"
+    = some (Tile.vec fun r => r.val + (i - i_c * BTL)) ∧
+  s.regs .nat [BTL] "o_k" = some (Tile.vec fun r => r.val) ∧
+  s.regs .real [BTL, BK] "b_dk"
+    = some ⟨fun idx => some (prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+        s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (i_c * BTL) i idx.1.val idx.2.1.val
+      + prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+          idx.1.val idx.2.1.val)⟩ ∧
+  s.regs .real [BTL, BV] "b_dv"
+    = some ⟨fun idx => some (prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+        s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (i_c * BTL) i idx.1.val idx.2.1.val
+      + prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+          idx.1.val idx.2.1.val)⟩
+
+set_option maxHeartbeats 4000000 in
+set_option maxRecDepth 8000 in
+/-- **The mid-section**: the two post-loop rescales (`b_dk *= d_h[:,None] *
+scale`, `b_dv *= scale`), the barrier no-op, and the `o_q`/`o_k` aranges
+carry the desc-exit invariant into the diagonal invariant at `i = i_c·BTL`
+(the rescale bridges fold the anchored accumulators into the keep-indicator
+partial sums). -/
+theorem prbBwdMid_run (s0 sL1 : BlockState) (q k v do_ : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BTL BTS BK BV : Nat)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS)
+    (hInv : prbInvD s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d
+      s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV
+      (prbTrip T BTS i_c BTL) sL1) :
+    ∃ sM, stepStmts
+        [ Stmt.assign .real [BTL, BK] "b_dk"
+            (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [BTL, BK] "b_dk")
+              (Op.mul .real Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h"))
+                (Op.const scale))),
+          Stmt.assign .real [BTL, BV] "b_dv"
+            (Op.mul .real Broadcast.scalarR (Op.ref .real [BTL, BV] "b_dv")
+              (Op.const scale)),
+          Stmt.ifThen (Op.constBool Bool.false) [],
+          Stmt.assign .nat [BTS] "o_q" (Op.arange BTS),
+          Stmt.assign .nat [BTL] "o_k" (Op.arange BTL) ] sL1 = some sM
+      ∧ prbInvG s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d s_vo_h
+          s_vo_t s_vo_d scale T K V BTL BTS BK BV (i_c * BTL) sM := by
+  obtain ⟨hmem, hjle, hbb, hdb, hdh, hdq, hbk, hbv, hbkd, hbdk, hbdv⟩ := hInv
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dkScale_eval _ BTL BK scale
+      (fun r e => prbDkDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+        s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) r e)
+      (fun r => praW (prbBeta i_h) (BTL - r))
+      (by simpa using hbdk) (by simpa using hdh)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dvScale_eval _ BTL BV scale
+      (fun r p => praW (prbBeta i_h) (BTL - r)
+        * prbDvDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) r p)
+      (by simpa using hbdv)))]
+  rw [stepStmts.cons_some (pra_ifThen_false_noop [] _)]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_arange BTS _))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some (evalOp_arange BTL _))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, le_rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa using hmem
+  · simp
+  · have hexp : (i_c + 1) * BTL = i_c * BTL + BTL := by ring
+    omega
+  · simpa using hbb
+  · simpa using hbk
+  · simpa using hbv
+  · rw [show ((Tile.vec fun r : Fin BTS =>
+          r.val + (i_c * BTL - i_c * BTL)) : Tile .nat [BTS])
+        = ((Tile.vec fun r : Fin BTS => r.val) : Tile .nat [BTS])
+      from Tile.ext fun r => by
+        show r.1.val + (i_c * BTL - i_c * BTL) = r.1.val
+        omega]
+    simp
+  · simp
+  · rw [show (⟨fun idx => some (prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (i_c * BTL) (i_c * BTL) idx.1.val idx.2.1.val
+        + prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+            idx.1.val idx.2.1.val)⟩ : Tile .real [BTL, BK])
+        = ⟨fun idx => some (prbDkDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+            s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) idx.1.val idx.2.1.val
+          * (praW (prbBeta i_h) (BTL - idx.1.val) * scale))⟩
+      from Tile.ext fun idx => congrArg some (by
+        rw [show prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+            s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (i_c * BTL) (i_c * BTL) idx.1.val idx.2.1.val = 0 from by
+          simp [prbDkPart], zero_add]
+        exact (prbDkDesc_scale_bridge s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+          s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV hBTS
+          hBTSpos idx.1.val idx.2.1.val idx.1.isLt).symm)]
+    simp
+  · rw [show (⟨fun idx => some (prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (i_c * BTL) (i_c * BTL) idx.1.val idx.2.1.val
+        + prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+            idx.1.val idx.2.1.val)⟩ : Tile .real [BTL, BV])
+        = ⟨fun idx => some ((praW (prbBeta i_h) (BTL - idx.1.val)
+            * prbDvDesc s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+                (prbNB T BTS - prbTrip T BTS i_c BTL * BTS)
+                idx.1.val idx.2.1.val) * scale)⟩
+      from Tile.ext fun idx => congrArg some (by
+        rw [show prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+            s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (i_c * BTL) (i_c * BTL) idx.1.val idx.2.1.val = 0 from by
+          simp [prbDvPart], zero_add]
+        exact (prbDvDesc_scale_bridge s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+          s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV hBTS
+          hBTSpos idx.1.val idx.2.1.val idx.1.isLt).symm)]
+    simp
+
+set_option maxHeartbeats 64000000 in
+set_option maxRecDepth 8000 in
+/-- **One diagonal (causally masked, decay-weighted) block** of the backward
+loop. -/
+theorem prbBwdDiag_step (s0 sin : BlockState) (q k v do_ : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BTL BTS BK BV : Nat) (i : Nat)
+    (hBTS : BTL % BTS = 0)
+    (hlt : i < (i_c + 1) * BTL)
+    (hInv : prbInvG s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d
+      s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV i sin) :
+    ∃ s', stepStmts (praBwdDiagBody q do_ i_bh i_k i_v s_qk_h s_qk_t s_qk_d
+        s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV)
+        (sin.setReg "i" .nat [] (Tile.scalar i)) = some s'
+      ∧ prbInvG s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d s_vo_h
+          s_vo_t s_vo_d scale T K V BTL BTS BK BV (i + BTS) s' := by
+  obtain ⟨hmem, hlo, hdvd, hle, hbb, hbk, hbv, hoq, hok, hbdk, hbdv⟩ := hInv
+  unfold praBwdDiagBody
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (pra_makeBlockPtr_2d_eval q _ _ _ _ [K, T] [BK, BTS] [s_qk_d, s_qk_t]
+      (i_bh * s_qk_h) (i_k * BK) i
+      (prb_constMul_eval _ i_bh s_qk_h)
+      (prb_constMul_eval _ i_k BK)
+      (by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (pra_makeBlockPtr_2d_eval do_ _ _ _ _ [V, T] [BV, BTS] [s_vo_d, s_vo_t]
+      (i_bh * s_vo_h) (i_v * BV) i
+      (prb_constMul_eval _ i_bh s_vo_h)
+      (prb_constMul_eval _ i_v BV)
+      (by rw [evalOp_ref]; simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_qLoad_eq s0 _ q "p_q" s_qk_h s_qk_t s_qk_d i_bh i_k T K BK BTS i
+      (by simpa using hmem) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_doLoad_eq s0 _ do_ "p_do" s_vo_h s_vo_t s_vo_d i_bh i_v T V BV BTS i
+      (by simpa using hmem) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_msLe_eval _ BTL BTS (i - i_c * BTL)
+      (by simpa using hok) (by simpa using hoq)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dsDiag_eval _ (prbBeta i_h) BTL BTS (i - i_c * BTL) scale
+      (by simp) (by simpa using hoq) (by simpa using hok)
+      (by simpa using hbb)))]
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_sDiag_eval s0 _ q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK BTS i
+      (fun r c => (if r ≤ c + (i - i_c * BTL) then
+          praW (prbBeta i_h) ((c + (i - i_c * BTL)) - r) else 0) * scale)
+      (by simpa using hbk) (by simp) (by simp)))]
+  erw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dsDiagMul_eval s0 _ v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v
+      T V BTL BV BTS i
+      (fun r c => (if r ≤ c + (i - i_c * BTL) then
+          praW (prbBeta i_h) ((c + (i - i_c * BTL)) - r) else 0) * scale)
+      (by simpa using hbv) (by simp) (by simp)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dkAdd_eval _ BTL BTS BK
+      (fun r e => prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+          s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (i_c * BTL) i r e
+        + prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS) r e)
+      (fun r c => prbDsVal s0 v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL
+          BV r (i + c)
+        * ((if r ≤ c + (i - i_c * BTL) then
+            praW (prbBeta i_h) ((c + (i - i_c * BTL)) - r) else 0) * scale))
+      (fun e c => prbQGuarded s0 q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK
+        e (i + c))
+      (by simpa using hbdk) (by simp) (by simp [prbQTile])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_dvAdd_eval _ BTL BTS BV
+      (fun r p => prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+          s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (i_c * BTL) i r p
+        + prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS) r p)
+      (fun r c => prbSVal s0 q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+          r (i + c)
+        * ((if r ≤ c + (i - i_c * BTL) then
+            praW (prbBeta i_h) ((c + (i - i_c * BTL)) - r) else 0) * scale))
+      (fun p c => prbDoGuarded s0 do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+        p (i + c))
+      (by simpa using hbdv) (by simp) (by simp [prbDoTile])))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (prb_oqAdd_eval _ BTS (i - i_c * BTL) (by simpa using hoq)))]
+  rw [stepStmts.nil]
+  refine ⟨_, rfl, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_, ?_⟩
+  · simpa using hmem
+  · omega
+  · have h1 : i + BTS - i_c * BTL = (i - i_c * BTL) + BTS := by omega
+    rw [h1]
+    exact Dvd.dvd.add hdvd dvd_rfl
+  · have hexp : (i_c + 1) * BTL = i_c * BTL + BTL := by ring
+    have hBTLd : BTS ∣ BTL := Nat.dvd_of_mod_eq_zero hBTS
+    have h2 : i - i_c * BTL < BTL := by omega
+    have h3 : (i - i_c * BTL) + BTS ≤ BTL := pra_dvd_step_le hdvd hBTLd h2
+    omega
+  · simpa using hbb
+  · simpa using hbk
+  · simpa using hbv
+  · rw [show ((Tile.vec fun r : Fin BTS => r.val + (i + BTS - i_c * BTL))
+          : Tile .nat [BTS])
+        = ((Tile.vec fun r : Fin BTS => r.val + ((i - i_c * BTL) + BTS))
+          : Tile .nat [BTS])
+      from Tile.ext fun r => by
+        show r.1.val + (i + BTS - i_c * BTL) = r.1.val + ((i - i_c * BTL) + BTS)
+        omega]
+    simp
+  · simpa using hok
+  · rw [show (⟨fun idx => some (prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (i_c * BTL) (i + BTS) idx.1.val idx.2.1.val
+        + prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+            idx.1.val idx.2.1.val)⟩ : Tile .real [BTL, BK])
+        = ⟨fun idx => some ((prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+            s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (i_c * BTL) i idx.1.val idx.2.1.val
+          + prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+              (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+              idx.1.val idx.2.1.val)
+          + ∑ c : Fin BTS,
+              (prbDsVal s0 v do_ s_vo_h s_vo_t s_vo_d i_bh i_c i_v T V BTL BV
+                  idx.1.val (i + c.val)
+                * ((if idx.1.val ≤ c.val + (i - i_c * BTL) then
+                      praW (prbBeta i_h) ((c.val + (i - i_c * BTL)) - idx.1.val)
+                    else 0) * scale))
+                * prbQGuarded s0 q s_qk_h s_qk_t s_qk_d i_bh i_k T K BK
+                    idx.2.1.val (i + c.val))⟩
+      from Tile.ext fun idx => congrArg some
+        (prbDkDiag_step' s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV i
+          (prbDkPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+            idx.1.val idx.2.1.val)
+          idx.1.val idx.2.1.val hlo).symm]
+    simp
+  · rw [show (⟨fun idx => some (prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d
+          s_vo_h s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+          (i_c * BTL) (i + BTS) idx.1.val idx.2.1.val
+        + prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+            idx.1.val idx.2.1.val)⟩ : Tile .real [BTL, BV])
+        = ⟨fun idx => some ((prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h
+            s_vo_t s_vo_d i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (i_c * BTL) i idx.1.val idx.2.1.val
+          + prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+              i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+              (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+              idx.1.val idx.2.1.val)
+          + ∑ c : Fin BTS,
+              (prbSVal s0 q k s_qk_h s_qk_t s_qk_d i_bh i_c i_k T K BTL BK
+                  idx.1.val (i + c.val)
+                * ((if idx.1.val ≤ c.val + (i - i_c * BTL) then
+                      praW (prbBeta i_h) ((c.val + (i - i_c * BTL)) - idx.1.val)
+                    else 0) * scale))
+                * prbDoGuarded s0 do_ s_vo_h s_vo_t s_vo_d i_bh i_v T V BV
+                    idx.2.1.val (i + c.val))⟩
+      from Tile.ext fun idx => congrArg some
+        (prbDvDiag_step' s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+          i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV i
+          (prbDvPart s0 q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+            i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+            (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+            idx.1.val idx.2.1.val)
+          idx.1.val idx.2.1.val hlo).symm]
+    simp
+
+set_option maxHeartbeats 4000000 in
+/-- **The full diagonal loop.** -/
+theorem prbBwdDiag_run (s0 sPre : BlockState) (q k v do_ : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (T K V BTL BTS BK BV : Nat)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS)
+    (hInv : prbInvG s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d
+      s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV (i_c * BTL) sPre) :
+    ∃ sL, stepStmt (Stmt.forRangeDyn "i"
+        (Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL))
+        (Op.constNat ((i_c + 1) * BTL)) (Op.constNat BTS)
+        (praBwdDiagBody q do_ i_bh i_k i_v s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t
+          s_vo_d scale T K V BTL BTS BK BV)) sPre = some sL
+      ∧ prbInvG s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_qk_d s_vo_h
+          s_vo_t s_vo_d scale T K V BTL BTS BK BV ((i_c + 1) * BTL) sL := by
+  obtain ⟨final, sL, hrun, hge, hP⟩ :=
+    forRangeDyn_inv (idx := "i")
+      (P := fun i s => prbInvG s0 q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t
+        s_qk_d s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV i s)
+      (prb_constMul_eval sPre i_c BTL)
+      (evalOp_constNat ((i_c + 1) * BTL) sPre)
+      (evalOp_constNat BTS sPre)
+      hBTSpos.ne'
+      hInv
+      (fun i s hi hPi =>
+        prbBwdDiag_step s0 s q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t
+          s_qk_d s_vo_h s_vo_t s_vo_d scale T K V BTL BTS BK BV i hBTS hi hPi)
+  have hfin : final = (i_c + 1) * BTL := le_antisymm hP.2.2.2.1 hge
+  exact ⟨sL, hrun, hfin ▸ hP⟩
+
+
+/-! ## Backward stores and ★ main theorem -/
+
+/-- The `dk` store address at lane `(r, e)`. -/
+def prbDkOffset (i_bh i_c i_k i_v B H s_qk_h s_qk_t s_qk_d BTL BK : Nat)
+    (idx : TileIndex [BTL, BK]) : Nat :=
+  (i_bh + B * H * i_v) * s_qk_h + (i_c * BTL + idx.1.val) * s_qk_t
+    + (i_k * BK + idx.2.1.val) * s_qk_d
+
+/-- A `dk` store lane is *active* when it maps inside the `T × K` window. -/
+def prbDkActive (i_c i_k T K BTL BK : Nat) (idx : TileIndex [BTL, BK]) : Prop :=
+  i_c * BTL + idx.1.val < T ∧ i_k * BK + idx.2.1.val < K
+
+/-- The `dv` store address at lane `(r, p)`. -/
+def prbDvOffset (i_bh i_c i_k i_v B H s_vo_h s_vo_t s_vo_d BTL BV : Nat)
+    (idx : TileIndex [BTL, BV]) : Nat :=
+  (i_bh + B * H * i_k) * s_vo_h + (i_c * BTL + idx.1.val) * s_vo_t
+    + (i_v * BV + idx.2.1.val) * s_vo_d
+
+/-- A `dv` store lane is *active* when it maps inside the `T × V` window. -/
+def prbDvActive (i_c i_v T V BTL BV : Nat) (idx : TileIndex [BTL, BV]) : Prop :=
+  i_c * BTL + idx.1.val < T ∧ i_v * BV + idx.2.1.val < V
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **The backward epilogue**: `p_dk`/`p_dv` makes and the two block stores,
+from the diag-exit invariant, with both readbacks folded to the full-sweep
+closed forms. -/
+theorem prbBwdStores_run (s sL2 : BlockState) (q k v do_ dk dv : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat) (s_qk_h s_qk_t s_vo_h s_vo_t : Nat) (scale : ℝ)
+    (B H T K V BTL BTS BK BV : Nat)
+    (hDkDv : dk ≠ dv) (hσk : BK ≤ s_qk_t) (hσv : BV ≤ s_vo_t)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS)
+    (hInvF : prbInvG s q k v do_ i_bh i_c i_k i_v i_h s_qk_h s_qk_t 1 s_vo_h
+      s_vo_t 1 scale T K V BTL BTS BK BV ((i_c + 1) * BTL) sL2) :
+    ∃ sF, stepStmts
+        [ Stmt.assign .blockPtr [BTL, BK] "p_dk"
+            (Op.makeBlockPtrDynOffsets dk
+              (Op.constNat ((i_bh + B * H * i_v) * s_qk_h))
+              [T, K] [BTL, BK] [s_qk_t, 1]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_k) (Op.constNat BK)]),
+          Stmt.assign .blockPtr [BTL, BV] "p_dv"
+            (Op.makeBlockPtrDynOffsets dv
+              (Op.constNat ((i_bh + B * H * i_k) * s_vo_h))
+              [T, V] [BTL, BV] [s_vo_t, 1]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_v) (Op.constNat BV)]),
+          Stmt.store .real [BTL, BK]
+            (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BK] "p_dk") [0, 1])
+            (Op.ref .real [BTL, BK] "b_dk") MaskOpt.none,
+          Stmt.store .real [BTL, BV]
+            (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BV] "p_dv") [0, 1])
+            (Op.ref .real [BTL, BV] "b_dv") MaskOpt.none ] sL2 = some sF
+      ∧ (∀ idx : TileIndex [BTL, BK], prbDkActive i_c i_k T K BTL BK idx →
+          sF.readMem dk
+              (prbDkOffset i_bh i_c i_k i_v B H s_qk_h s_qk_t 1 BTL BK idx)
+            = prbDkOut s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c i_k
+                i_v i_h scale T K V BTL BTS BK BV idx.1.val idx.2.1.val)
+      ∧ (∀ idx : TileIndex [BTL, BV], prbDvActive i_c i_v T V BTL BV idx →
+          sF.readMem dv
+              (prbDvOffset i_bh i_c i_k i_v B H s_vo_h s_vo_t 1 BTL BV idx)
+            = prbDvOut s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c i_k
+                i_v i_h scale T K V BTL BTS BK BV idx.1.val idx.2.1.val) := by
+  obtain ⟨hFmem, hFlo, hFdvd, hFle, hFbb, hFbk, hFbv, hFoq, hFok, hFbdk,
+    hFbdv⟩ := hInvF
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (pra_makeBlockPtr_2d_eval dk _ _ _ _ [T, K] [BTL, BK] [s_qk_t, 1]
+      ((i_bh + B * H * i_v) * s_qk_h) (i_c * BTL) (i_k * BK)
+      (evalOp_constNat _ _)
+      (prb_constMul_eval _ i_c BTL)
+      (prb_constMul_eval _ i_k BK)))]
+  rw [stepStmts.cons_some (stepStmt_assign_eq_some
+    (pra_makeBlockPtr_2d_eval dv _ _ _ _ [T, V] [BTL, BV] [s_vo_t, 1]
+      ((i_bh + B * H * i_k) * s_vo_h) (i_c * BTL) (i_v * BV)
+      (evalOp_constNat _ _)
+      (prb_constMul_eval _ i_c BTL)
+      (prb_constMul_eval _ i_v BV)))]
+  rw [stepStmts.cons_some (praStore_step_eq _ dk "b_dk" "p_dk"
+    ((i_bh + B * H * i_v) * s_qk_h) s_qk_t (i_c * BTL) (i_k * BK) T K BTL BK
+    (fun r e => prbDkOut s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c
+      i_k i_v i_h scale T K V BTL BTS BK BV r e)
+    ⟨fun idx => some (prbDkPart s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (i_c * BTL) ((i_c + 1) * BTL) idx.1.val idx.2.1.val
+      + prbDkPart s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c i_k i_v
+          i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+          idx.1.val idx.2.1.val)⟩
+    (fun r e => congrArg some
+      (prbDkOut_split s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c i_k
+        i_v i_h scale T K V BTL BTS BK BV hBTS hBTSpos r.val e.val))
+    (by simpa using hFbdk)
+    (by simp))]
+  obtain ⟨hKpids, hKregs, hKread, hKother, hKuntouched⟩ := praStore_step_props
+    ((sL2.setReg "p_dk" .blockPtr [BTL, BK]
+        ⟨fun _ => BlockPtr.mk dk ((i_bh + B * H * i_v) * s_qk_h) [T, K]
+          [BTL, BK] [s_qk_t, 1] [i_c * BTL, i_k * BK]⟩).setReg
+      "p_dv" .blockPtr [BTL, BV]
+        ⟨fun _ => BlockPtr.mk dv ((i_bh + B * H * i_k) * s_vo_h) [T, V]
+          [BTL, BV] [s_vo_t, 1] [i_c * BTL, i_v * BV]⟩)
+    dk ((i_bh + B * H * i_v) * s_qk_h) s_qk_t (i_c * BTL) (i_k * BK) T K BTL BK
+    (fun r e => prbDkOut s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c
+      i_k i_v i_h scale T K V BTL BTS BK BV r e)
+    (praStoreAddr_injective _ _ _ _ BTL BK hσk)
+  rw [stepStmts.cons_some (praStore_step_eq _ dv "b_dv" "p_dv"
+    ((i_bh + B * H * i_k) * s_vo_h) s_vo_t (i_c * BTL) (i_v * BV) T V BTL BV
+    (fun r p => prbDvOut s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c
+      i_k i_v i_h scale T K V BTL BTS BK BV r p)
+    ⟨fun idx => some (prbDvPart s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1
+        i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+        (i_c * BTL) ((i_c + 1) * BTL) idx.1.val idx.2.1.val
+      + prbDvPart s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c i_k i_v
+          i_h scale T K V BTL BTS BK BV
+          (prbNB T BTS - prbTrip T BTS i_c BTL * BTS) (prbNB T BTS)
+          idx.1.val idx.2.1.val)⟩
+    (fun r p => congrArg some
+      (prbDvOut_split s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c i_k
+        i_v i_h scale T K V BTL BTS BK BV hBTS hBTSpos r.val p.val))
+    (by rw [hKregs]; simpa using hFbdv)
+    (by rw [hKregs]; simp))]
+  rw [stepStmts.nil]
+  obtain ⟨hVpids, hVregs, hVread, hVother, hVuntouched⟩ := praStore_step_props
+    (praStoreState
+      ((sL2.setReg "p_dk" .blockPtr [BTL, BK]
+          ⟨fun _ => BlockPtr.mk dk ((i_bh + B * H * i_v) * s_qk_h) [T, K]
+            [BTL, BK] [s_qk_t, 1] [i_c * BTL, i_k * BK]⟩).setReg
+        "p_dv" .blockPtr [BTL, BV]
+          ⟨fun _ => BlockPtr.mk dv ((i_bh + B * H * i_k) * s_vo_h) [T, V]
+            [BTL, BV] [s_vo_t, 1] [i_c * BTL, i_v * BV]⟩)
+      dk ((i_bh + B * H * i_v) * s_qk_h) s_qk_t (i_c * BTL) (i_k * BK) T K
+      BTL BK
+      (fun r e => prbDkOut s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c
+        i_k i_v i_h scale T K V BTL BTS BK BV r e))
+    dv ((i_bh + B * H * i_k) * s_vo_h) s_vo_t (i_c * BTL) (i_v * BV) T V BTL BV
+    (fun r p => prbDvOut s q k v do_ s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 i_bh i_c
+      i_k i_v i_h scale T K V BTL BTS BK BV r p)
+    (praStoreAddr_injective _ _ _ _ BTL BV hσv)
+  refine ⟨_, rfl, ?_, ?_⟩
+  · intro idx hact
+    rw [hVother dk _ hDkDv]
+    exact hKread idx hact
+  · intro idx hact
+    exact hVread idx hact
+
+/-! ## ★ Backward main theorem -/
+
+set_option maxHeartbeats 8000000 in
+set_option maxRecDepth 8000 in
+/-- **★ Backward dk/dv main theorem: the `dk` and `dv` stores are the genuine
+retention-gradient closed forms.**
+
+For every scalar-argument tuple `(i_bh, i_c, i_k, i_v, i_h)` the shell would
+pass (universally quantified binders), executing the full backward dk/dv
+surface succeeds, the `dk` block store holds
+`Σ_{t ≥ i_c·BTL + r} 2^((t − (i_c·BTL+r))·b_b) · scale · ds(r,t) · qᵀ[e,t]`
+and the `dv` block store holds
+`Σ_{t ≥ i_c·BTL + r} 2^((t − (i_c·BTL+r))·b_b) · scale · s(r,t) · doᵀ[p,t]`
+at every in-window lane — the causally kept key sweep from the diagonal row
+to the streamed top `cdiv(T,BTS)·BTS` (loads beyond `T` read as zero, so
+ragged tails are exact), with the per-head decay
+`b_b = log2(1 − 2^(−5 − i_h))`, `s(r,t) = k[r]·qᵀ[t]` the raw retention
+score, and `ds(r,t) = v[r]·doᵀ[t]` the raw output-gradient contraction.
+
+Side conditions: `dk ≠ dv` (distinct output buffers), the host's contiguous
+last-dim strides `s_qk_d = 1` / `s_vo_d = 1` with `BK ≤ s_qk_t` /
+`BV ≤ s_vo_t` (store-lane injectivity), and the host's own
+`assert BTL % BTS == 0`. -/
+specification pra_bwd_dkv_exec_genuine
+    (s : BlockState) (q k v do_ dk dv : RegionName)
+    (i_bh i_c i_k i_v i_h : Nat)
+    (s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d : Nat) (scale : ℝ)
+    (B H T K V BTL BTS BK BV : Nat)
+    (hDkDv : dk ≠ dv) (hSkd : s_qk_d = 1) (hSvd : s_vo_d = 1)
+    (hσk : BK ≤ s_qk_t) (hσv : BV ≤ s_vo_t)
+    (hBTS : BTL % BTS = 0) (hBTSpos : 0 < BTS) :
+    ∃ sF, exec (pra_bwd_dkv_surface q k v do_ dk dv i_bh i_c i_k i_v i_h
+        s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
+        B H T K V BTL BTS BK BV).toAlgKernel s = some sF
+      ∧ (∀ idx : TileIndex [BTL, BK], prbDkActive i_c i_k T K BTL BK idx →
+          sF.readMem dk
+              (prbDkOffset i_bh i_c i_k i_v B H s_qk_h s_qk_t s_qk_d BTL BK idx)
+            = prbDkOut s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+                idx.1.val idx.2.1.val)
+      ∧ (∀ idx : TileIndex [BTL, BV], prbDvActive i_c i_v T V BTL BV idx →
+          sF.readMem dv
+              (prbDvOffset i_bh i_c i_k i_v B H s_vo_h s_vo_t s_vo_d BTL BV idx)
+            = prbDvOut s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
+                i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
+                idx.1.val idx.2.1.val) := by
+  subst hSkd
+  subst hSvd
+  obtain ⟨sP, hPro, hInvP⟩ := prbBwdPrologue_run s q k v do_ i_bh i_c i_k i_v
+    i_h s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 scale T K V BTL BTS BK BV
+  obtain ⟨sL1, hL1, hInvDF⟩ := prbBwdDesc_run s sP q k v do_ i_bh i_c i_k i_v
+    i_h s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 scale T K V BTL BTS BK BV hBTS hBTSpos
+    hInvP
+  obtain ⟨sM, hMid, hInvG0⟩ := prbBwdMid_run s sL1 q k v do_ i_bh i_c i_k i_v
+    i_h s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 scale T K V BTL BTS BK BV hBTS hBTSpos
+    hInvDF
+  obtain ⟨sL2, hL2, hInvGF⟩ := prbBwdDiag_run s sM q k v do_ i_bh i_c i_k i_v
+    i_h s_qk_h s_qk_t 1 s_vo_h s_vo_t 1 scale T K V BTL BTS BK BV hBTS hBTSpos
+    hInvG0
+  rw [exec, pra_bwd_body_eq]
+  rw [show ([ Stmt.assign .real [] "b_b"
+            (Op.log2 (Op.sub .real Broadcast.nil (Op.const 1.0)
+              (Op.exp2 (Op.sub .real Broadcast.nil
+                (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 5.0))
+                (Op.mul .real Broadcast.nil (Op.natToReal (Op.constNat i_h))
+                  (Op.const 1.0)))))),
+          Stmt.assign .real [] "d_b"
+            (Op.exp2 (Op.mul .real Broadcast.nil (Op.ref .real [] "b_b")
+              (Op.natToReal (Op.constNat BTS)))),
+          Stmt.assign .blockPtr [BTL, BK] "p_k"
+            (Op.makeBlockPtrDynOffsets k
+              (Op.mul .nat Broadcast.nil (Op.constNat i_bh) (Op.constNat s_qk_h))
+              [T, K] [BTL, BK] [s_qk_t, 1]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_k) (Op.constNat BK)]),
+          Stmt.assign .blockPtr [BTL, BV] "p_v"
+            (Op.makeBlockPtrDynOffsets v
+              (Op.mul .nat Broadcast.nil (Op.constNat i_bh) (Op.constNat s_vo_h))
+              [T, V] [BTL, BV] [s_vo_t, 1]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_v) (Op.constNat BV)]),
+          Stmt.assign .real [BTL, BK] "b_k"
+            (Op.load .real
+              (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BK] "p_k") [0, 1])
+              MaskOpt.none),
+          Stmt.assign .real [BTL, BV] "b_v"
+            (Op.load .real
+              (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BV] "p_v") [0, 1])
+              MaskOpt.none),
+          Stmt.assign .real [BTL, BK] "b_dk" (Op.full [BTL, BK] (Op.const 0)),
+          Stmt.assign .real [BTL, BV] "b_dv" (Op.full [BTL, BV] (Op.const 0)),
+          Stmt.assign .real [BTL] "d_h"
+            (Op.exp2 (Op.mul .real Broadcast.scalarR
+              (Op.natToReal (Op.sub .nat Broadcast.scalarL (Op.constNat BTL)
+                (Op.arange BTL)))
+              (Op.ref .real [] "b_b"))),
+          Stmt.assign .real [BTL, BK] "b_kd"
+            (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [BTL, BK] "b_k")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h"))),
+          Stmt.assign .real [BTS] "d_q"
+            (Op.exp2 (Op.mul .real Broadcast.scalarR (Op.natToReal (Op.arange BTS))
+              (Op.ref .real [] "b_b"))),
+          Stmt.forRangeDyn "j" (Op.constNat 0)
+            (Op.div .nat Broadcast.nil
+              (Op.sub .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil
+                      (Op.div .nat Broadcast.nil
+                        (Op.sub .nat Broadcast.nil
+                          (Op.add .nat Broadcast.nil (Op.constNat T) (Op.constNat BTS))
+                          (Op.constNat 1))
+                        (Op.constNat BTS))
+                      (Op.constNat BTS))
+                    (Op.constNat ((i_c + 1) * BTL)))
+                  (Op.constNat BTS))
+                (Op.constNat 1))
+              (Op.constNat BTS))
+            (Op.constNat 1)
+            (praBwdDescBody q do_ i_bh i_k i_v s_qk_h s_qk_t 1
+              s_vo_h s_vo_t 1 T K V BTL BTS BK BV),
+          Stmt.assign .real [BTL, BK] "b_dk"
+            (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [BTL, BK] "b_dk")
+              (Op.mul .real Broadcast.scalarR
+                (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h"))
+                (Op.const scale))),
+          Stmt.assign .real [BTL, BV] "b_dv"
+            (Op.mul .real Broadcast.scalarR (Op.ref .real [BTL, BV] "b_dv")
+              (Op.const scale)),
+          Stmt.ifThen (Op.constBool Bool.false) [],
+          Stmt.assign .nat [BTS] "o_q" (Op.arange BTS),
+          Stmt.assign .nat [BTL] "o_k" (Op.arange BTL),
+          Stmt.forRangeDyn "i"
+            (Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL))
+            (Op.constNat ((i_c + 1) * BTL)) (Op.constNat BTS)
+            (praBwdDiagBody q do_ i_bh i_k i_v s_qk_h s_qk_t 1
+              s_vo_h s_vo_t 1 scale T K V BTL BTS BK BV),
+          Stmt.assign .blockPtr [BTL, BK] "p_dk"
+            (Op.makeBlockPtrDynOffsets dk
+              (Op.constNat ((i_bh + B * H * i_v) * s_qk_h))
+              [T, K] [BTL, BK] [s_qk_t, 1]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_k) (Op.constNat BK)]),
+          Stmt.assign .blockPtr [BTL, BV] "p_dv"
+            (Op.makeBlockPtrDynOffsets dv
+              (Op.constNat ((i_bh + B * H * i_k) * s_vo_h))
+              [T, V] [BTL, BV] [s_vo_t, 1]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_v) (Op.constNat BV)]),
+          Stmt.store .real [BTL, BK]
+            (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BK] "p_dk") [0, 1])
+            (Op.ref .real [BTL, BK] "b_dk") MaskOpt.none,
+          Stmt.store .real [BTL, BV]
+            (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BV] "p_dv") [0, 1])
+            (Op.ref .real [BTL, BV] "b_dv") MaskOpt.none ] : List Stmt)
+      = [ Stmt.assign .real [] "b_b"
+            (Op.log2 (Op.sub .real Broadcast.nil (Op.const 1.0)
+              (Op.exp2 (Op.sub .real Broadcast.nil
+                (Op.sub .real Broadcast.nil (Op.const 0.0) (Op.const 5.0))
+                (Op.mul .real Broadcast.nil (Op.natToReal (Op.constNat i_h))
+                  (Op.const 1.0)))))),
+          Stmt.assign .real [] "d_b"
+            (Op.exp2 (Op.mul .real Broadcast.nil (Op.ref .real [] "b_b")
+              (Op.natToReal (Op.constNat BTS)))),
+          Stmt.assign .blockPtr [BTL, BK] "p_k"
+            (Op.makeBlockPtrDynOffsets k
+              (Op.mul .nat Broadcast.nil (Op.constNat i_bh) (Op.constNat s_qk_h))
+              [T, K] [BTL, BK] [s_qk_t, 1]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_k) (Op.constNat BK)]),
+          Stmt.assign .blockPtr [BTL, BV] "p_v"
+            (Op.makeBlockPtrDynOffsets v
+              (Op.mul .nat Broadcast.nil (Op.constNat i_bh) (Op.constNat s_vo_h))
+              [T, V] [BTL, BV] [s_vo_t, 1]
+              [Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL),
+                Op.mul .nat Broadcast.nil (Op.constNat i_v) (Op.constNat BV)]),
+          Stmt.assign .real [BTL, BK] "b_k"
+            (Op.load .real
+              (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BK] "p_k") [0, 1])
+              MaskOpt.none),
+          Stmt.assign .real [BTL, BV] "b_v"
+            (Op.load .real
+              (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BV] "p_v") [0, 1])
+              MaskOpt.none),
+          Stmt.assign .real [BTL, BK] "b_dk" (Op.full [BTL, BK] (Op.const 0)),
+          Stmt.assign .real [BTL, BV] "b_dv" (Op.full [BTL, BV] (Op.const 0)),
+          Stmt.assign .real [BTL] "d_h"
+            (Op.exp2 (Op.mul .real Broadcast.scalarR
+              (Op.natToReal (Op.sub .nat Broadcast.scalarL (Op.constNat BTL)
+                (Op.arange BTL)))
+              (Op.ref .real [] "b_b"))),
+          Stmt.assign .real [BTL, BK] "b_kd"
+            (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+              (Op.ref .real [BTL, BK] "b_k")
+              (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h"))),
+          Stmt.assign .real [BTS] "d_q"
+            (Op.exp2 (Op.mul .real Broadcast.scalarR (Op.natToReal (Op.arange BTS))
+              (Op.ref .real [] "b_b"))) ]
+        ++ (Stmt.forRangeDyn "j" (Op.constNat 0)
+            (Op.div .nat Broadcast.nil
+              (Op.sub .nat Broadcast.nil
+                (Op.add .nat Broadcast.nil
+                  (Op.sub .nat Broadcast.nil
+                    (Op.mul .nat Broadcast.nil
+                      (Op.div .nat Broadcast.nil
+                        (Op.sub .nat Broadcast.nil
+                          (Op.add .nat Broadcast.nil (Op.constNat T)
+                            (Op.constNat BTS))
+                          (Op.constNat 1))
+                        (Op.constNat BTS))
+                      (Op.constNat BTS))
+                    (Op.constNat ((i_c + 1) * BTL)))
+                  (Op.constNat BTS))
+                (Op.constNat 1))
+              (Op.constNat BTS))
+            (Op.constNat 1)
+            (praBwdDescBody q do_ i_bh i_k i_v s_qk_h s_qk_t 1
+              s_vo_h s_vo_t 1 T K V BTL BTS BK BV)
+          :: ([ Stmt.assign .real [BTL, BK] "b_dk"
+                (Op.mul .real (Broadcast.consSame (Broadcast.consR Broadcast.nil))
+                  (Op.ref .real [BTL, BK] "b_dk")
+                  (Op.mul .real Broadcast.scalarR
+                    (Op.expandDim ⟨1, by simp⟩ (Op.ref .real [BTL] "d_h"))
+                    (Op.const scale))),
+              Stmt.assign .real [BTL, BV] "b_dv"
+                (Op.mul .real Broadcast.scalarR (Op.ref .real [BTL, BV] "b_dv")
+                  (Op.const scale)),
+              Stmt.ifThen (Op.constBool Bool.false) [],
+              Stmt.assign .nat [BTS] "o_q" (Op.arange BTS),
+              Stmt.assign .nat [BTL] "o_k" (Op.arange BTL) ]
+            ++ (Stmt.forRangeDyn "i"
+                (Op.mul .nat Broadcast.nil (Op.constNat i_c) (Op.constNat BTL))
+                (Op.constNat ((i_c + 1) * BTL)) (Op.constNat BTS)
+                (praBwdDiagBody q do_ i_bh i_k i_v s_qk_h s_qk_t 1
+                  s_vo_h s_vo_t 1 scale T K V BTL BTS BK BV)
+              :: [ Stmt.assign .blockPtr [BTL, BK] "p_dk"
+                    (Op.makeBlockPtrDynOffsets dk
+                      (Op.constNat ((i_bh + B * H * i_v) * s_qk_h))
+                      [T, K] [BTL, BK] [s_qk_t, 1]
+                      [Op.mul .nat Broadcast.nil (Op.constNat i_c)
+                          (Op.constNat BTL),
+                        Op.mul .nat Broadcast.nil (Op.constNat i_k)
+                          (Op.constNat BK)]),
+                  Stmt.assign .blockPtr [BTL, BV] "p_dv"
+                    (Op.makeBlockPtrDynOffsets dv
+                      (Op.constNat ((i_bh + B * H * i_k) * s_vo_h))
+                      [T, V] [BTL, BV] [s_vo_t, 1]
+                      [Op.mul .nat Broadcast.nil (Op.constNat i_c)
+                          (Op.constNat BTL),
+                        Op.mul .nat Broadcast.nil (Op.constNat i_v)
+                          (Op.constNat BV)]),
+                  Stmt.store .real [BTL, BK]
+                    (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BK] "p_dk")
+                      [0, 1])
+                    (Op.ref .real [BTL, BK] "b_dk") MaskOpt.none,
+                  Stmt.store .real [BTL, BV]
+                    (MemAccess.blockPtr (Op.ref .blockPtr [BTL, BV] "p_dv")
+                      [0, 1])
+                    (Op.ref .real [BTL, BV] "b_dv") MaskOpt.none ])))
+      from rfl]
+  rw [stepStmts.append_some hPro, stepStmts.cons_some hL1,
+    stepStmts.append_some hMid, stepStmts.cons_some hL2]
+  obtain ⟨sF, hSt, hR1, hR2⟩ := prbBwdStores_run s sL2 q k v do_ dk dv
+    i_bh i_c i_k i_v i_h s_qk_h s_qk_t s_vo_h s_vo_t scale
+    B H T K V BTL BTS BK BV hDkDv hσk hσv hBTS hBTSpos hInvGF
+  exact ⟨sF, hSt, hR1, hR2⟩
+
 end Correct_without_Rounding
 
 end VeriTile.Bench.TritonBenchG.ParallelRetentionAttention
