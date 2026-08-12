@@ -28,25 +28,26 @@ LLM-assist 评估不再是项目的 benchmark 维度。
 
 我们正在把 verification benchmark 与 [TritonBench-G v1][tb] 对齐
 (184 个 GitHub-scraped 真实 Triton kernel,ACL 2025 Findings)。
-**184 个里已移植 158 个。** 最初(2026-05-05)的静态 primitive scan 只估出
+**184 个里已移植 159 个。** 最初(2026-05-05)的静态 primitive scan 只估出
 141 个在 DSL 契约内;它点名的那些杠杆(`tl.math.*` / `tl.extra` adapter、
 concurrency 边界、`tl.num_programs`、`atomic_add` proof shape)此后都已落地,
 所以那组估计已被取代 —— 它是历史,不是现状。
 
-剩下的 **26 个是"占位目录建了、上游 `.py` 从未导入"**。按 DSL 的**实际** surface
+剩下的 **25 个是"占位目录建了、上游 `.py` 从未导入"**。按 DSL 的**实际** surface
 (95 个 `tl.*` 形式,从 `VeriTile/Triton/DSL/**` 提取)重新实测:
 
 | 判定 | 数量 |
 |---|---:|
 | 现在就能移植 —— 用到的一切形式全在 DSL 里 | 1 |
-| 被缺失 primitive 或 ℝ 模型限制阻塞 | 25 |
+| 被缺失 primitive 或 ℝ 模型限制阻塞 | 24 |
 
-那 25 个的解锁杠杆按产出排序:fp8 dtype channel(7)、RNG(4)、
-有符号定宽整数算术(3)、**降序 `for` range**(1,`chunk_linear_attn`/
-`chunk_retention`/`chunk_retention_ops`/`parallel_attention` 四连已通过升序换元
-零库改动落地,最后一个含 `-BTS` 步长的 `cdiv` 圈数变体)、`Stmt` 里的 `while` 语句(3)、
+那 24 个的解锁杠杆按产出排序:fp8 dtype channel(7)、RNG(4)、
+有符号定宽整数算术(3)、`Stmt` 里的 `while` 语句(3)、
 `tl.interleave`(2)、整数通道 `tl.dot`(2)、`tl.static_assert`(2,宏层 no-op)、
-`tl.broadcast_to`(1,别名)、IEEE inf/NaN + `libdevice.isfinited`(1)。逐 kernel
+`tl.broadcast_to`(1,别名)、IEEE inf/NaN + `libdevice.isfinited`(1)。
+**降序 `for` range 杠杆已收官**(五连:`chunk_linear_attn`/`chunk_retention`/
+`chunk_retention_ops` 的 `-1` 步长与 `parallel_attention`/
+`parallel_retention_attention` 的 `-BTS` 步长,全部升序换元零库改动)。逐 kernel
 表、测法,以及"可移植"到底声称了什么和没声称什么,见
 [`tritonbench_coverage.md`](./tritonbench_coverage.md) —— 包括 2026-08-10 那次把
 `现在就能移植` 从 9 改成 2 的复核:此前的判定是按"每个文件只看一个 jit kernel"

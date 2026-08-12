@@ -139,6 +139,25 @@ unless stated:
   port covers `parallel_rebased_fwd_kernel` (the file's first kernel) and
   the dk/dv helper; the backward shell and `_parallel_rebased_bwd_dq` are
   the trusted boundary.
+- `parallel_retention_attention` — the same helper-as-standalone shape as
+  `parallel_attention`: the backward dk/dv helper
+  `_parallel_retention_bwd_dkv` is ported as a standalone kernel over
+  universally-quantified scalar arguments `i_bh, i_c, i_k, i_v, i_h` (the
+  values the shell `parallel_retention_bwd_kernel` would pass), with its
+  trailing bare `return` dropped and its descending
+  `for i in range(cdiv(T,BTS)·BTS − BTS, (i_c+1)·BTL − BTS, −BTS)` respelled
+  as the ascending change of variable
+  `for j in range(0, cdiv(cdiv(T,BTS)·BTS − (i_c+1)·BTL, BTS))` with
+  body-first `i = cdiv(T,BTS)·BTS − BTS − j·BTS` (the `parallel_attention`
+  respelling verbatim). Additionally its diagonal decay's unary-minus index
+  spelling `-o_k[:, None] + o_q[None, :]` is respelled as the subtraction
+  `o_q[None, :] - o_k[:, None]` (no unary tile negation in the DSL; the two
+  agree on every lane the causal `tl.where` keep mask retains), and the
+  decay prologue's implicit int→float promotions are spelled with the
+  explicit `tl.toReal(...)` cast (the `chunk_retention` precedent). The
+  port covers `parallel_retention_fwd_kernel` (the file's first kernel) and
+  the dk/dv helper; the backward shell and `_parallel_retention_bwd_dq` are
+  the trusted boundary.
 - `sgmv_expand_slice` — proven path is `EVEN_K` loads with
   `ADD_INPUTS = false`, `CAST_TYPE = false`; those constexpr parameters and
   branches are dropped; the `pid → (pid_m, pid_n)` CTA linearization is
