@@ -222,6 +222,8 @@ bench/tritonbench_g/mul_exponent_compensator/MulExponentCompensator.lean	mul_ker
 bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_first_a1_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_first_a1_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/parallel_attention/ParallelAttention.lean	pa_fwd_o_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/parallel_attention/ParallelAttention.lean	pa_bwd_dkv_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_output_summary_general	full_value_candidate	none		end-to-end
 bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_one_tile_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_global_transpose_blocked_output_summary_general	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
