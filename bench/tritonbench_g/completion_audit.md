@@ -174,6 +174,17 @@ The current documented blocker set is:
   `DIM = 128` → `DIM : Nat` binder; dtype/shape-changing `freqs` rebinds
   renamed; `.to(tl.float32)` spelled `tl.toReal`; explicit int→float
   promotion bindings.
+- `chunk_retention` — the state-recurrence pair (`fwd_kernel_h`, the file's
+  first kernel, + `bwd_kernel_dh`) ported; `fwd_kernel_o`/`bwd_kernel_dqkv`
+  are the trusted boundary. The decay prologue's implicit int→float
+  promotions are spelled `tl.toReal(...)` (marker registered in
+  `proof_blockers.md`); tuple assignments split; `bwd_kernel_dh`'s
+  descending `range(NT-1, -1, -1)` spelled as the ascending
+  `for j in range(0, NT)` with `i_t = NT - 1 - j` (the `chunk_linear_attn`
+  respelling), its post-loop `i_t` use pre-initialized (DSL scopes loop-body
+  names), its single shared block size bound as `BT` (its `tl.dot` shapes
+  force `BK = BT = BV`), and its dead signature params (`q`, `s_qk_*`,
+  `scale`) omitted (`fused_recurrent_retention` precedent); `do` → `do_`.
 - `chunk_gla_fwd` — output kernel `chunk_gla_fwd_kernel_o` ported with a
   full multi-block K-loop headline; the four `A`-builder kernels open with
   bare early `return`s (no `Stmt` early exit) and are the trusted boundary.
