@@ -101,6 +101,8 @@ bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding
 bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_body_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_body_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_kernel_whole_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/f8_conversion_utils/F8ConversionUtils.lean	f16_to_f8_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/f8_conversion_utils/F8ConversionUtils.lean	f8_to_f16_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	cross_entropy_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	chunked_cross_entropy_forward_output_summary	full_value_candidate	none		end-to-end
 bench/tritonbench_g/fast_layernorm/FastLayernorm.lean	layernorm_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context

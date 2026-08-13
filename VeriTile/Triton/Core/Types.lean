@@ -30,6 +30,8 @@ inductive TileDType where
   | fp32
   | fp16
   | bf16
+  | f8e4
+  | f8e5
   | int
   | nat
   | bool
@@ -387,8 +389,8 @@ range preconditions on every theorem. With `WithBot ℝ`:
 `tl.store` writes typed cells; floating stores demote via `unbot' 0` —
 well-formed kernels never store `⊥`.
 
-Hardware-shaped floating channels (`.fp32`, `.fp16`, `.bf16`) currently share
-the same `WithBot ℝ` carrier as `.real`. They are a type-layer hook: kernels
+Hardware-shaped floating channels (`.fp32`, `.fp16`, `.bf16`, `.f8e4`,
+`.f8e5`) currently share the same `WithBot ℝ` carrier as `.real`. They are a type-layer hook: kernels
 can express dtype choices and casts, while this branch still proves over the
 existing mathematical real model rather than IEEE rounding semantics. -/
 abbrev TileCarrier : TileDType → Type
@@ -396,6 +398,8 @@ abbrev TileCarrier : TileDType → Type
   | .fp32 => WithBot ℝ
   | .fp16 => WithBot ℝ
   | .bf16 => WithBot ℝ
+  | .f8e4 => WithBot ℝ
+  | .f8e5 => WithBot ℝ
   | .int => Int
   | .nat  => Nat
   | .bool => Bool
@@ -408,6 +412,8 @@ inductive FloatDType where
   | fp32
   | fp16
   | bf16
+  | f8e4
+  | f8e5
   deriving DecidableEq, Repr
 
 namespace FloatDType
@@ -418,11 +424,15 @@ def toTileDType : FloatDType → TileDType
   | .fp32 => .fp32
   | .fp16 => .fp16
   | .bf16 => .bf16
+  | .f8e4 => .f8e4
+  | .f8e5 => .f8e5
 
 @[simp] theorem toTileDType_real : FloatDType.real.toTileDType = .real := rfl
 @[simp] theorem toTileDType_fp32 : FloatDType.fp32.toTileDType = .fp32 := rfl
 @[simp] theorem toTileDType_fp16 : FloatDType.fp16.toTileDType = .fp16 := rfl
 @[simp] theorem toTileDType_bf16 : FloatDType.bf16.toTileDType = .bf16 := rfl
+@[simp] theorem toTileDType_f8e4 : FloatDType.f8e4.toTileDType = .f8e4 := rfl
+@[simp] theorem toTileDType_f8e5 : FloatDType.f8e5.toTileDType = .f8e5 := rfl
 
 end FloatDType
 
@@ -433,6 +443,8 @@ inductive NumericDType : TileDType → Type where
   | fp32 : NumericDType .fp32
   | fp16 : NumericDType .fp16
   | bf16 : NumericDType .bf16
+  | f8e4 : NumericDType .f8e4
+  | f8e5 : NumericDType .f8e5
   | int : NumericDType .int
   | nat  : NumericDType .nat
 
@@ -447,6 +459,8 @@ inductive ComparableDType : TileDType → Type where
   | fp32 : ComparableDType .fp32
   | fp16 : ComparableDType .fp16
   | bf16 : ComparableDType .bf16
+  | f8e4 : ComparableDType .f8e4
+  | f8e5 : ComparableDType .f8e5
   | int : ComparableDType .int
   | nat  : ComparableDType .nat
 
@@ -457,12 +471,16 @@ def numericDType : (f : FloatDType) → NumericDType f.toTileDType
   | .fp32 => NumericDType.fp32
   | .fp16 => NumericDType.fp16
   | .bf16 => NumericDType.bf16
+  | .f8e4 => NumericDType.f8e4
+  | .f8e5 => NumericDType.f8e5
 
 def comparableDType : (f : FloatDType) → ComparableDType f.toTileDType
   | .real => ComparableDType.real
   | .fp32 => ComparableDType.fp32
   | .fp16 => ComparableDType.fp16
   | .bf16 => ComparableDType.bf16
+  | .f8e4 => ComparableDType.f8e4
+  | .f8e5 => ComparableDType.f8e5
 
 end FloatDType
 

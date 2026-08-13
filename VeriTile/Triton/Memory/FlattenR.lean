@@ -1521,6 +1521,8 @@ theorem flattenState_writeMemTypedR (hd : A.Disjoint) (R : RoundingModel)
   case fp32 => exact A.flattenState_writeMemAsR hd R s hr ho .fp32 v
   case fp16 => exact A.flattenState_writeMemAsR hd R s hr ho .fp16 v
   case bf16 => exact A.flattenState_writeMemAsR hd R s hr ho .bf16 v
+  case f8e4 => exact A.flattenState_writeMemAsR hd R s hr ho .f8e4 v
+  case f8e5 => exact A.flattenState_writeMemAsR hd R s hr ho .f8e5 v
   all_goals exact A.flattenState_writeMemTyped hd s hr ho _ v
 
 end FlatAlloc

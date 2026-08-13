@@ -47,6 +47,8 @@ def eraseDType : MemCell → MemCell
   | ⟨.fp32, value⟩ => of .real (FloatDType.fp32.toWithBot value)
   | ⟨.fp16, value⟩ => of .real (FloatDType.fp16.toWithBot value)
   | ⟨.bf16, value⟩ => of .real (FloatDType.bf16.toWithBot value)
+  | ⟨.f8e4, value⟩ => of .real (FloatDType.f8e4.toWithBot value)
+  | ⟨.f8e5, value⟩ => of .real (FloatDType.f8e5.toWithBot value)
   | ⟨.int, value⟩ => of .int value
   | ⟨.nat, value⟩ => of .nat value
   | ⟨.bool, value⟩ => of .bool value
@@ -358,6 +360,8 @@ def writeMemTyped (s : BlockState) (dtype : TileDType)
   | .fp32 => s.writeMemAs .fp32 region offset v
   | .fp16 => s.writeMemAs .fp16 region offset v
   | .bf16 => s.writeMemAs .bf16 region offset v
+  | .f8e4 => s.writeMemAs .f8e4 region offset v
+  | .f8e5 => s.writeMemAs .f8e5 region offset v
   | .int =>
       { s with mem := fun r o =>
           if r = region ∧ o = offset then MemCell.of .int v else s.mem r o }
@@ -492,6 +496,8 @@ def defaultCarrier : (dtype : TileDType) → TileCarrier dtype
   | .fp32 => some 0
   | .fp16 => some 0
   | .bf16 => some 0
+  | .f8e4 => some 0
+  | .f8e5 => some 0
   | .int => 0
   | .nat => 0
   | .bool => false
@@ -552,6 +558,8 @@ and use the dtype default on mismatch. -/
   | .fp32 => s.readMemAs .fp32 region offset
   | .fp16 => s.readMemAs .fp16 region offset
   | .bf16 => s.readMemAs .bf16 region offset
+  | .f8e4 => s.readMemAs .f8e4 region offset
+  | .f8e5 => s.readMemAs .f8e5 region offset
   | .int =>
       match s.readMemTyped .int region offset with
       | some value => value

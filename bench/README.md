@@ -20,10 +20,10 @@ variant, and proof-status tracked.
 
 ## Current state
 
-**160 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
-holds a faithful `.py` + `.lean` pair, all 160 compile (`bench/check_ports.sh`
-reports `160 ok, 0 fail`), and every completed port carries a standard
-`ComputeCorrect.Realizes` correctness surface. The 24 remaining work
+**161 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
+holds a faithful `.py` + `.lean` pair, all 161 compile (`bench/check_ports.sh`
+reports `161 ok, 0 fail`), and every completed port carries a standard
+`ComputeCorrect.Realizes` correctness surface. The 23 remaining work
 directories are README-only scaffolds, not yet counted as ports. The source of
 truth for these counts and the per-port evidence is
 [`tritonbench_g/completion_audit.md`](./tritonbench_g/completion_audit.md); the
@@ -42,27 +42,28 @@ project.
 ## TritonBench-G v1 anchor
 
 We are aligning the verification benchmark with [TritonBench-G v1][tb] (184
-GitHub-scraped real Triton kernels, ACL 2025 Findings). **160 of the 184 are ported.** The original (2026-05-05) static primitive scan
+GitHub-scraped real Triton kernels, ACL 2025 Findings). **161 of the 184 are ported.** The original (2026-05-05) static primitive scan
 estimated only 141 as within the DSL contract; the levers it named
 (`tl.math.*` / `tl.extra` adapters, the concurrency boundary,
 `tl.num_programs`, the `atomic_add` proof shape) have since landed, so that
 estimate is superseded — treat it as history, not status.
 
-The remaining **24 are scaffolded but not imported**: the per-kernel directory
+The remaining **23 are scaffolded but not imported**: the per-kernel directory
 and README exist, the upstream `.py` does not. Re-measured against the DSL's
 actual surface (95 `tl.*` forms, extracted from `VeriTile/Triton/DSL/**`):
 
 | Verdict | Count |
 |---|---:|
 | Portable now — every form it uses already in the DSL | 0 |
-| Blocked on a missing primitive, or on an ℝ-model limit | 24 |
+| Blocked on a missing primitive, or on an ℝ-model limit | 23 |
 
-Ranked unlock levers for the 25: fp8 dtype channel (7), RNG (4), signed
-fixed-width integer arithmetic (3), a **descending `for` range** (1; the
-`chunk_linear_attn`/`chunk_retention`/`chunk_retention_ops`/`parallel_attention`
-quartet landed via an ascending change of variable with zero library change —
-the last with the `-BTS` step's `cdiv` trip-count variant), a `while`
-statement in `Stmt` (3), `tl.interleave` (2), an integer-channel `tl.dot` (2),
+Ranked unlock levers for the 23: the **fp8 dtype channel landed 2026-08-13**
+(`.f8e4`/`.f8e5`; first consumer `f8_conversion_utils`, the 161st port — 6
+fp8 kernels remain, each still needing its own seven-point check + port),
+the integer channel (7: int32-accumulator `tl.dot` + signed fixed-width
+arithmetic + bitwise-on-int; now includes `int8_matmul_kernel` and
+`int_scaled_matmul`, whose one-name blocker rows were under-reported), RNG
+(4), a `while` statement in `Stmt` (3), `tl.interleave` (2),
 `tl.static_assert` (2, a macro no-op), `tl.broadcast_to` (1, an alias), IEEE
 inf/NaN + `libdevice.isfinited` (1). See
 [`tritonbench_coverage.md`](./tritonbench_coverage.md) for the per-kernel table,

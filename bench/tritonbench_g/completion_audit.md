@@ -160,6 +160,13 @@ The current documented blocker set is:
   respelled as a subtraction under the causal `tl.where` mask; int→float
   promotions spelled `tl.toReal(...)`; the backward shell and
   `_parallel_retention_bwd_dq` are the trusted boundary.
+- `f8_conversion_utils` — both jit kernels ported (first consumer of the
+  fp8 dtype channel); the stores' implicit destination-element-type casts
+  spelled explicitly (`(x).to(tl.float16)` / `(x).to(tl.float8e5)`; marker
+  registered in `proof_blockers.md`); `BLOCK_SIZE: tl.constexpr` as a Lean
+  `Nat` parameter; the upstream duplicate store in `kernel_f8_to_f16`
+  transcribed verbatim; host launch and `reinterpret` calls are the
+  trusted boundary.
 - `attn_fwd_triton` — `_attn_fwd_inner` inlined; `128`/`96` head constants
   generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE` binders.
 - `attn_fwd_causal` — `_attn_fwd_inner` inlined; `128`/`96` generalized.
