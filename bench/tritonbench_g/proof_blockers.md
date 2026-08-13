@@ -185,6 +185,18 @@ unless stated:
   `numel` bookkeeping) is the trusted boundary; the f8-side *input*
   buffer's grid membership is a host-pipeline fact the headlines do not
   consume (inputs are exact ℝ per the `⊨[R]` convention).
+- `llama_ff_triton` — the `USE_FP8` constexpr arm is dropped entirely
+  (parameter + branches): that path bit-reinterprets int8 weight bytes as
+  `tl.float8e5` (`.to(tl.float8e5, bitcast=True)`) — a bit-level decode with
+  no value-level ℝ transcription (the fixed-width-cast ℝ-model limit family),
+  so only the `USE_FP8 = False` (fp16-weights) arm is transcribed
+  (`sgmv_expand_slice` dropped-arm precedent). The loop trip count
+  `tl.cdiv(K, BLOCK_SIZE_K)` is the antiquoted `numKBlocks`
+  (`K = BLOCK_SIZE_K · numKBlocks`; the loads are unmasked, so the exact
+  presentation is required). The store's implicit fp16 cast (the host
+  allocates `out` at `x.dtype = float16`) is spelled
+  `(accumulator).to(tl.float16)` (`f8_conversion_utils` precedent). The
+  K-loop counter is spelled `_i` for Python's `_`.
 - `triton_matmul` — the constexpr epilogue branch
   `if (c_ptr.dtype.element_ty == tl.float8e4nv):` (a compile-time dispatch
   on the output buffer's element dtype) is split into two Lean surfaces
