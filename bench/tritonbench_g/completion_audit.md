@@ -167,6 +167,13 @@ The current documented blocker set is:
   `Nat` parameter; the upstream duplicate store in `kernel_f8_to_f16`
   transcribed verbatim; host launch and `reinterpret` calls are the
   trusted boundary.
+- `llama_ff_triton` — `ff_llama` ported at the `USE_FP8 = False` arm (the
+  fp8 path is a `bitcast=True` bit-reinterpretation, an ℝ-model limit;
+  marker registered in `proof_blockers.md`); RMSNorm-fused SwiGLU dual GEMM
+  proven as one exec closed form (3-accumulator/4-pointer loop invariant);
+  `tl.cdiv` trip count as the antiquoted `numKBlocks`; implicit store fp16
+  cast spelled explicitly; host launch and per-dtype dispatch are the
+  trusted boundary.
 - `triton_matmul` — `matmul_kernel` ported with both constexpr epilogue
   arms as twin surfaces (fp16 + fp8e4nv; marker registered in
   `proof_blockers.md`), one od-generic proof stack instantiated per arm
