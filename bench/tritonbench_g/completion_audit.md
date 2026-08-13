@@ -144,6 +144,15 @@ The current documented blocker set is:
   its descending `-BTS` loop as the ascending `hi − j·BTS` change of
   variable with a `cdiv` trip count; the backward shell and
   `_parallel_rebased_bwd_dq` are the trusted boundary.
+- `parallel_retention_attention` — `parallel_retention_fwd_kernel` + the
+  `_parallel_retention_bwd_dkv` helper ported; the helper's scalar arguments
+  become universally-quantified binders (no cross-JIT call surface; marker
+  registered in `proof_blockers.md`); its trailing bare `return` dropped;
+  its descending `-BTS` loop as the ascending `hi − j·BTS` change of
+  variable with a `cdiv` trip count; the diagonal unary-minus decay index
+  respelled as a subtraction under the causal `tl.where` mask; int→float
+  promotions spelled `tl.toReal(...)`; the backward shell and
+  `_parallel_retention_bwd_dq` are the trusted boundary.
 - `attn_fwd_triton` — `_attn_fwd_inner` inlined; `128`/`96` head constants
   generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE` binders.
 - `attn_fwd_causal` — `_attn_fwd_inner` inlined; `128`/`96` generalized.
