@@ -315,6 +315,10 @@ bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_summary
 bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	triton_conv2d_fwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f16_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f8_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f16_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f8_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_inplace_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/triton_softmax/TritonSoftmax.lean	softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context

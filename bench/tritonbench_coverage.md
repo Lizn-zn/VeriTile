@@ -6,10 +6,10 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **161** |
-| Not yet imported | 23 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **162** |
+| Not yet imported | 22 |
 | — of those, expressible with today's DSL surface | 0 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 23 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 22 |
 
 ## What "expressible" means here, and what it does not
 
@@ -96,7 +96,7 @@ accepted set; the only Python-level operators on tiles are `&` on bool masks
 `tl.sum(b, 1)` positional axis is accepted verbatim (`syntax num :
 tritonReduceKwarg`).
 
-## Not yet imported: blocked on a missing primitive (23)
+## Not yet imported: blocked on a missing primitive (22)
 
 The fp8 dtype channel itself **landed 2026-08-13** (`.f8e4`/`.f8e5` in
 `TileDType`/`FloatDType`, spelled `tl.float8e4nv`/`tl.float8e5`), with
@@ -109,8 +109,7 @@ under-reported twice; see the correction after the lever table).
 | Kernel | `.py` lines | missing `tl.*` |
 |---|---:|---|
 | `int_scaled_matmul` | 304 | `tl.broadcast_to` — **under-reported**: its second jit also needs an int32-accumulator `tl.dot` (see correction below) |
-| `matmul_persistent_triton` | 154 | fp8 channel landed; port pending |
-| `triton_matmul` | 133 | fp8 channel landed; port pending |
+| `matmul_persistent_triton` | 154 | fp8 channel landed — but seven-point re-checked 2026-08-13: **also** signed integer registers (`ki = -1` sentinel; `tile_id = start_pid - NUM_SMS` goes negative before its first `+= NUM_SMS`) — the persistent-loop idiom puts it in the signed-integer family too |
 | `attention_llama` | 174 | fp8 channel landed; port pending |
 | `llama_ff_triton` | 152 | fp8 channel landed; port pending |
 | `rms_matmul_rbe` | 279 | fp8 channel landed; port pending |
@@ -174,7 +173,7 @@ that fails.
 
 | Lever | Unlocks | Kernels |
 |---|---:|---|
-| fp8 dtype channel — **LANDED 2026-08-13** (first consumer `f8_conversion_utils`, the 161st port) | 6 remaining | `attention_llama`, `llama_ff_triton`, `matmul_persistent_triton`, `rms_matmul_rbe`, `rms_rbe_matmul`, `triton_matmul` — each still needs its own seven-point check + port |
+| fp8 dtype channel — **LANDED 2026-08-13** (`f8_conversion_utils` the 161st port; `triton_matmul` the 162nd, the first fp8 **matmul** face) | 4 remaining | `attention_llama`, `llama_ff_triton`, `rms_matmul_rbe`, `rms_rbe_matmul` — each still needs its own seven-point check + port; `matmul_persistent_triton` re-checked and moved (signed-int registers, see its row) |
 | RNG | 4 | `layer_norm_fwd`, `multinomial_sampling`, `seeded_dropout`, `uniform_sampling` |
 | integer channel (int32-accumulator `tl.dot` + signed fixed-width arithmetic + bitwise-on-int) | 7 | `int8_dequant_matmul`, `int8_matmul_quantization`, `int4_matmul`, `matmul_dequant_int4`, `matmul_dequantize`, `int8_matmul_kernel`, `int_scaled_matmul` — see the correction below for why the last two moved here |
 | tl.interleave | 2 | `fp4_to_bf16`, `fp4_to_bf16_conversion` |

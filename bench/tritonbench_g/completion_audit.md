@@ -167,6 +167,13 @@ The current documented blocker set is:
   `Nat` parameter; the upstream duplicate store in `kernel_f8_to_f16`
   transcribed verbatim; host launch and `reinterpret` calls are the
   trusted boundary.
+- `triton_matmul` — `matmul_kernel` ported with both constexpr epilogue
+  arms as twin surfaces (fp16 + fp8e4nv; marker registered in
+  `proof_blockers.md`), one od-generic proof stack instantiated per arm
+  (exec closed form + `⊨[R]` streaming face each); `tl.cdiv` trip count as
+  the antiquoted `numKBlocks`; K-loop counter spelled `kk`;
+  `launch_metadata` hook and per-dtype host config table are the trusted
+  boundary.
 - `attn_fwd_triton` — `_attn_fwd_inner` inlined; `128`/`96` head constants
   generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE` binders.
 - `attn_fwd_causal` — `_attn_fwd_inner` inlined; `128`/`96` generalized.
