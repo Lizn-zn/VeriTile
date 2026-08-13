@@ -185,6 +185,19 @@ unless stated:
   `numel` bookkeeping) is the trusted boundary; the f8-side *input*
   buffer's grid membership is a host-pipeline fact the headlines do not
   consume (inputs are exact ℝ per the `⊨[R]` convention).
+- `triton_matmul` — the constexpr epilogue branch
+  `if (c_ptr.dtype.element_ty == tl.float8e4nv):` (a compile-time dispatch
+  on the output buffer's element dtype) is split into two Lean surfaces
+  (`triton_matmul_f16_surface` / `triton_matmul_f8_surface`, one per arm —
+  the `matmul_tma` twin-surface precedent), so the branch statement itself
+  appears in neither surface; the loop trip count `tl.cdiv(K, BLOCK_SIZE_K)`
+  is supplied as the antiquoted `numKBlocks` binder
+  (`K = BLOCK_SIZE_K · numKBlocks` presentation, `matmul_triton_autotune`
+  precedent); the K-loop counter is spelled `kk` where Python spells it `k`
+  (clash with the antiquoted dimension binder). The
+  `triton.jit(launch_metadata=...)` hook and the host's per-dtype config
+  table are the trusted boundary; `tl.max_contiguous`/`tl.multiple_of` are
+  kept in the surface text and erased by the DSL to their value argument.
 - `sgmv_expand_slice` — proven path is `EVEN_K` loads with
   `ADD_INPUTS = false`, `CAST_TYPE = false`; those constexpr parameters and
   branches are dropped; the `pid → (pid_m, pid_n)` CTA linearization is
