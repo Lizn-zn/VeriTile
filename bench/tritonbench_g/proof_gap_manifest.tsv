@@ -41,6 +41,7 @@ bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_output_summary_
 bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/bmm_optimized/BmmOptimized.lean	bmm_o_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	decoding_cache_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cache_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/chunk_bwd_dqkg/ChunkBwdDqkg.lean	chunk_bwd_dqkg_exec_genuine	full_value_candidate	none		end-to-end

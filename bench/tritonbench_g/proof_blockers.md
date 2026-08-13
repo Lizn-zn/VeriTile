@@ -158,6 +158,22 @@ unless stated:
   port covers `parallel_retention_fwd_kernel` (the file's first kernel) and
   the dk/dv helper; the backward shell and `_parallel_retention_bwd_dq` are
   the trusted boundary.
+- `bmm_optimized` — the `DIVISIBLE_M/N/K` `triton.heuristics` constexprs
+  select between arms in which the load/store *mask arguments* are `None`
+  or mask tiles; a register holding "`None` or a tile" has no DSL analogue
+  (`MaskOpt` is syntax-level), so the port fixes the constexpr assignment
+  `DIVISIBLE_M = DIVISIBLE_N = DIVISIBLE_K = False` — the fully-masked arm,
+  total for arbitrary `M, N, K` (the other arms are mask-elision
+  optimizations the host may select when a dimension happens to be
+  divisible). The `GROUP_M == 1` / `else` CTA-reorder branch is transcribed
+  in full (both arms; the runtime `GROUP_SIZE` boundary gate as a nested
+  `Stmt.ifThenElse`). The three batch-offset parameter reassignments
+  (`A += pid_b*M*K`, `B += pid_b*K*N`, `O += pid_b*M*N`) are folded into
+  the three pointer-tile constructions (the DSL cannot rebind a region
+  parameter), the tuple assignment `pid_m, pid_n = pidx, pidy` is split
+  into one statement each, and the single-argument `range(num_iters)` is
+  spelled `range($(0), num_iters, $(1))`. The `triton.autotune` config
+  sweep and the host launch are the trusted boundary.
 - `sgmv_expand_slice` — proven path is `EVEN_K` loads with
   `ADD_INPUTS = false`, `CAST_TYPE = false`; those constexpr parameters and
   branches are dropped; the `pid → (pid_m, pid_n)` CTA linearization is

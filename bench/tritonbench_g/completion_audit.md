@@ -144,6 +144,13 @@ The current documented blocker set is:
   its descending `-BTS` loop as the ascending `hi − j·BTS` change of
   variable with a `cdiv` trip count; the backward shell and
   `_parallel_rebased_bwd_dq` are the trusted boundary.
+- `bmm_optimized` — `bmm_kernel` ported at the fully-masked
+  `DIVISIBLE_M = DIVISIBLE_N = DIVISIBLE_K = False` constexpr arm (marker
+  registered in `proof_blockers.md`); both `GROUP_M` CTA-reorder arms
+  transcribed (runtime `GROUP_SIZE` gate as a nested `ifThenElse`);
+  batch-offset parameter reassignments folded into the pointer tiles;
+  tuple assignment split; `range(num_iters)` spelled with explicit
+  start/step; the autotune sweep and host launch are the trusted boundary.
 - `parallel_retention_attention` — `parallel_retention_fwd_kernel` + the
   `_parallel_retention_bwd_dkv` helper ported; the helper's scalar arguments
   become universally-quantified binders (no cross-JIT call surface; marker
