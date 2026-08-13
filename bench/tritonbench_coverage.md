@@ -6,9 +6,9 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **159** |
-| Not yet imported | 25 |
-| — of those, expressible with today's DSL surface | 1 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **160** |
+| Not yet imported | 24 |
+| — of those, expressible with today's DSL surface | 0 |
 | — of those, blocked on a missing primitive or an ℝ-model limit | 24 |
 
 ## What "expressible" means here, and what it does not
@@ -51,25 +51,18 @@ correctness depends on inter-program interleaving (spin locks, cooperative
 reductions) elaborate fine — the host launch is the trusted boundary — but their
 *specification* has to be chosen with that boundary in mind.
 
-## Not yet imported: portable now (1)
+## Not yet imported: portable now (0)
 
-Every form these use — including the non-`tl.` ones — is already in the DSL
-surface, and **every** `@triton.jit` kernel in the file has been checked, not just
-the one the file is named after. Each row is one port-sized unit of work: import the
-`.py` **together with** its `.lean` port, because `bench/audit_tritonbench_g.sh`
-enforces `py_count == lean_count` — the guard that stops a kernel being imported and
-then forgotten.
-
-| Kernel | `.py` lines | `@triton.jit` kernels |
-|---|---:|---:|
-| `bmm_optimized` | 232 | 1 |
-
-It is not small, and it is not one port-shaped unit either: its 10 `constexpr`
-branches specialize **whether each `tl.load` carries a mask** (`mask_a = None` vs
-`mask_a = mask_m[:, None]`), and `MaskOpt` is part of `Stmt`, not a value — so the
-specialization cannot be an `ifThen` and has to happen at transcription time,
-2³ × 2 = 16 surfaces. (`chunk_gla_fwd`, formerly listed here, is ported — its
-output kernel, with the four `A`-builders as the trusted boundary.)
+This bucket is now **empty**: `bmm_optimized` (its last member, 2026-08-13)
+is ported. Its 10 `constexpr` branches specialize **whether each `tl.load`
+carries a mask** (`mask_a = None` vs `mask_a = mask_m[:, None]`), and
+`MaskOpt` is part of `Stmt`, not a value — so the port fixes the constexpr
+assignment `DIVISIBLE_M = DIVISIBLE_N = DIVISIBLE_K = False` (the
+fully-masked arm, total for arbitrary `M, N, K`; the other arms are
+mask-elision optimizations on their divisible domains) rather than emitting
+2³ × 2 = 16 surfaces, and transcribes **both** `GROUP_M` CTA-reorder arms
+in one surface. Every remaining unimported kernel is blocked on a missing
+primitive or an ℝ-model limit.
 
 ### Correction: this count was 9, and 7 of those were wrong
 
