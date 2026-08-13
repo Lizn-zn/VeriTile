@@ -174,6 +174,17 @@ unless stated:
   into one statement each, and the single-argument `range(num_iters)` is
   spelled `range($(0), num_iters, $(1))`. The `triton.autotune` config
   sweep and the host launch are the trusted boundary.
+- `f8_conversion_utils` — Triton's `tl.store` implicitly casts the stored
+  value to the destination pointer's element type, and both hosts fix that
+  type outside the kernel text (`triton.reinterpret(x, tl.float8e5)` on the
+  fp8 side, a `torch.float16` allocation on the fp16 side); the DSL types a
+  store by its **value**, so the implicit casts are spelled explicitly —
+  `(x).to(tl.float16)` in `kernel_f8_to_f16`, `(x).to(tl.float8e5)` in
+  `kernel_f16_to_f8`. Python `BLOCK_SIZE: tl.constexpr` becomes a Lean
+  `Nat` parameter. The host launch (grid, the `reinterpret` calls, the
+  `numel` bookkeeping) is the trusted boundary; the f8-side *input*
+  buffer's grid membership is a host-pipeline fact the headlines do not
+  consume (inputs are exact ℝ per the `⊨[R]` convention).
 - `sgmv_expand_slice` — proven path is `EVEN_K` loads with
   `ADD_INPUTS = false`, `CAST_TYPE = false`; those constexpr parameters and
   branches are dropped; the `pid → (pid_m, pid_n)` CTA linearization is

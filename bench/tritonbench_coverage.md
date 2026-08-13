@@ -6,10 +6,10 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **160** |
-| Not yet imported | 24 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **161** |
+| Not yet imported | 23 |
 | — of those, expressible with today's DSL surface | 0 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 24 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 23 |
 
 ## What "expressible" means here, and what it does not
 
@@ -96,25 +96,32 @@ accepted set; the only Python-level operators on tiles are `&` on bool masks
 `tl.sum(b, 1)` positional axis is accepted verbatim (`syntax num :
 tritonReduceKwarg`).
 
-## Not yet imported: blocked on a missing primitive (24)
+## Not yet imported: blocked on a missing primitive (23)
+
+The fp8 dtype channel itself **landed 2026-08-13** (`.f8e4`/`.f8e5` in
+`TileDType`/`FloatDType`, spelled `tl.float8e4nv`/`tl.float8e5`), with
+`f8_conversion_utils` as its first consumer (the 161st port). The six
+remaining fp8 rows below lose their *named* blocker, but none has been
+seven-point re-checked yet — each next port in the family must run the
+full per-jit check first (this table's one-name-per-row format has
+under-reported twice; see the correction after the lever table).
 
 | Kernel | `.py` lines | missing `tl.*` |
 |---|---:|---|
-| `int_scaled_matmul` | 304 | `tl.broadcast_to` |
-| `matmul_persistent_triton` | 154 | `tl.float8e4nv` |
-| `triton_matmul` | 133 | `tl.float8e4nv` |
-| `attention_llama` | 174 | `tl.float8e5` |
-| `f8_conversion_utils` | 68 | `tl.float8e5` |
-| `llama_ff_triton` | 152 | `tl.float8e5` |
-| `rms_matmul_rbe` | 279 | `tl.float8e5` |
-| `rms_rbe_matmul` | 190 | `tl.float8e5` |
+| `int_scaled_matmul` | 304 | `tl.broadcast_to` — **under-reported**: its second jit also needs an int32-accumulator `tl.dot` (see correction below) |
+| `matmul_persistent_triton` | 154 | fp8 channel landed; port pending |
+| `triton_matmul` | 133 | fp8 channel landed; port pending |
+| `attention_llama` | 174 | fp8 channel landed; port pending |
+| `llama_ff_triton` | 152 | fp8 channel landed; port pending |
+| `rms_matmul_rbe` | 279 | fp8 channel landed; port pending |
+| `rms_rbe_matmul` | 190 | fp8 channel landed; port pending |
 | `fp4_to_bf16` | 214 | `tl.interleave` |
 | `fp4_to_bf16_conversion` | 275 | `tl.interleave` |
 | `uniform_sampling` | 226 | `tl.philox`, `tl.static_assert`, `tl.uint_to_uniform_float` |
 | `layer_norm_fwd` | 218 | `tl.rand` |
 | `multinomial_sampling` | 136 | `tl.rand` |
 | `seeded_dropout` | 60 | `tl.rand` |
-| `int8_matmul_kernel` | 271 | `tl.static_assert` |
+| `int8_matmul_kernel` | 271 | `tl.static_assert` — **under-reported**: also an int32-accumulator `tl.dot`, `&`/`>>` on tiles, and a signed int8 subtraction (see correction below) |
 | `isfinite_kernel` | 262 | `libdevice.isfinited` / `finitef` — **and** an ℝ-model limit (see below) |
 | `int4_matmul` | 252 | signed integer arithmetic: after unpacking, `int_b - int_bzp` ranges over `[-15, 15]` **before** it crosses to `ℝ`, and the `.nat` channel truncates at `0`. |
 | `matmul_dequant_int4` | 302 | same signed-nibble subtraction, in its `dequantize_kernel`: `((int32_b >> s) & 0xF) - ((zp_b >> t) & 0xF)`. Its `matmul4_kernel` is fine — that one is what `matmul_dequantize_int4` ports. |
@@ -167,19 +174,45 @@ that fails.
 
 | Lever | Unlocks | Kernels |
 |---|---:|---|
-| fp8 dtype channel | 7 | `attention_llama`, `f8_conversion_utils`, `llama_ff_triton`, `matmul_persistent_triton`, `rms_matmul_rbe`, `rms_rbe_matmul`, `triton_matmul` |
+| fp8 dtype channel — **LANDED 2026-08-13** (first consumer `f8_conversion_utils`, the 161st port) | 6 remaining | `attention_llama`, `llama_ff_triton`, `matmul_persistent_triton`, `rms_matmul_rbe`, `rms_rbe_matmul`, `triton_matmul` — each still needs its own seven-point check + port |
 | RNG | 4 | `layer_norm_fwd`, `multinomial_sampling`, `seeded_dropout`, `uniform_sampling` |
+| integer channel (int32-accumulator `tl.dot` + signed fixed-width arithmetic + bitwise-on-int) | 7 | `int8_dequant_matmul`, `int8_matmul_quantization`, `int4_matmul`, `matmul_dequant_int4`, `matmul_dequantize`, `int8_matmul_kernel`, `int_scaled_matmul` — see the correction below for why the last two moved here |
 | tl.interleave | 2 | `fp4_to_bf16`, `fp4_to_bf16_conversion` |
 | tl.static_assert (macro no-op) | 2 | `int8_matmul_kernel`, `uniform_sampling` |
 | tl.broadcast_to (alias of tl.broadcast) | 1 | `int_scaled_matmul` |
 | IEEE special values (inf / NaN) + `libdevice.isfinited`/`finitef` | 1 | `isfinite_kernel` |
 | `while` statement in `Stmt` (+ a termination story) | 3 | `layer_norm_triton`, `spinning_lock_reduction`, `streamk_matmul` |
-| integer-channel `tl.dot` (int8×int8 → int32 accumulate) | 2 | `int8_dequant_matmul`, `int8_matmul_quantization` |
-| signed fixed-width integer arithmetic | 3 | `int4_matmul`, `matmul_dequant_int4`, `matmul_dequantize` |
 
-The column sums to 25, not 24: `uniform_sampling` needs both RNG and
-`tl.static_assert`, so it appears under two levers. Every other kernel appears
-once.
+Kernels can appear under several levers (`uniform_sampling` under RNG +
+static_assert; `int8_matmul_kernel` under integer channel + static_assert;
+`int_scaled_matmul` under integer channel + broadcast_to), so the column
+does not sum to 23.
+
+### Correction (2026-08-13): two "cheap-lever" rows were under-reported
+
+The pre-fp8 version of this file listed `int8_matmul_kernel` under
+`tl.static_assert` *only* and `int_scaled_matmul` under `tl.broadcast_to`
+*only* — both wrong, and both instances of the already-recorded root cause
+(the missing-`tl.*` column is a **name scan**, and Python-level operators,
+dtype keywords, and loop step signs are invisible to it). The seven-point
+per-jit check finds:
+
+* **`int8_matmul_kernel`** also has `tl.dot(a, b - 1, out_dtype=tl.int32)`
+  into a `tl.zeros(..., dtype=tl.int32)` accumulator (the integer-dot
+  blocker), `b_uint8 & mask` / `>> (2*i)` bitwise on tiles, and
+  `b - tl.full((1,), 1, dtype=tl.int8)` with `b ∈ [0,3]` — a **signed**
+  int8 subtraction before the crossing to ℝ (the `int4_matmul` blocker).
+* **`int_scaled_matmul`**'s second jit (`scaled_matmul_kernel_with_block_pointers`)
+  also has an `ACC_TYPE = tl.int32` accumulator fed by `tl.dot` over int8
+  tiles (integer dot), a `for k in range(K, 0, -BLOCK_K)` descending loop
+  (respellable via the closed descending-range recipe), a constexpr
+  parameter runtime-rebound (`GROUP_M = min(...)`, respellable), and
+  `tl.max_contiguous`/`tl.multiple_of` hints (already in the DSL surface).
+
+So neither is a cheap port: both sit in the **integer channel** family, and
+`tl.static_assert`/`tl.broadcast_to` alone unlock nothing (a lever must
+land with its first consumer, and these two have none until the integer
+channel exists).
 
 The **descending-range** lever is now **closed** — five landed consumers,
 zero library change (`forRangeDyn_inv` drives the ascending counter
@@ -199,16 +232,21 @@ respelling, additionally respelling its unary-minus decay index
 `tl.where` mask keeps). No counting-down `Stmt` constructor or mirror
 invariant principle was needed after all.
 
-Two of these are cheap: `tl.static_assert` erases at the algorithm layer (it
-constrains `constexpr`s at Triton compile time, so the lowered kernel is
-unchanged), and `tl.broadcast_to` is the shape-explicit spelling of the
-`tl.broadcast` the DSL already has. Neither should land before its first
-consumer, though — an unconsumed surface form is dead code by this repo's own
-standard.
+`tl.static_assert` erases at the algorithm layer (it constrains
+`constexpr`s at Triton compile time, so the lowered kernel is unchanged),
+and `tl.broadcast_to` is the shape-explicit spelling of the `tl.broadcast`
+the DSL already has — but per the correction above, neither is a lever that
+unlocks anything *by itself* anymore, and neither should land before its
+first consumer (an unconsumed surface form is dead code by this repo's own
+standard).
 
-The fp8 channel is the largest single lever (7 kernels). It is a real extension:
-`FloatDType` would gain `e4m3`/`e5m2` grids, and every `RoundingModel` obligation
-(`round_idem`, `round_real = id`) has to hold for them.
+The fp8 channel — formerly the largest single lever — **landed** exactly as
+priced: `TileDType`/`FloatDType` gained `.f8e4`/`.f8e5` (Triton spellings
+`tl.float8e4nv`/`tl.float8e5`), every match arm follows the `.fp16` pattern
+(all float channels share the `WithBot ℝ` carrier), and no per-dtype
+`RoundingModel` obligation arose (`round : FloatDType → ℝ → ℝ` is quantified
+over the tag, so `triv` and every existing model extend for free). The
+remaining big lever by yield is the **integer channel** (7).
 
 ### The ℝ-model limit — `isfinite_kernel`
 
