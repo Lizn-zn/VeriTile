@@ -60,6 +60,8 @@ def writeMemTypedR (R : RoundingModel) (s : BlockState) (dtype : TileDType)
   | .fp32 => s.writeMemAsR R .fp32 region offset v
   | .fp16 => s.writeMemAsR R .fp16 region offset v
   | .bf16 => s.writeMemAsR R .bf16 region offset v
+  | .f8e4 => s.writeMemAsR R .f8e4 region offset v
+  | .f8e5 => s.writeMemAsR R .f8e5 region offset v
   | dtype => s.writeMemTyped dtype region offset v
 
 @[simp] theorem writeMemTypedR_triv (s : BlockState) (dtype : TileDType)
@@ -468,6 +470,16 @@ lets a later store's value register be read over an earlier store. -/
     s.writeMemTypedR R .bf16 region offset v =
       s.writeMemAsR R .bf16 region offset v := rfl
 
+@[simp] theorem writeMemTypedR_f8e4 (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier .f8e4) :
+    s.writeMemTypedR R .f8e4 region offset v =
+      s.writeMemAsR R .f8e4 region offset v := rfl
+
+@[simp] theorem writeMemTypedR_f8e5 (R : RoundingModel) (s : BlockState)
+    (region : RegionName) (offset : Nat) (v : TileCarrier .f8e5) :
+    s.writeMemTypedR R .f8e5 region offset v =
+      s.writeMemAsR R .f8e5 region offset v := rfl
+
 /-- Single-cell readback of the R-write, at the `MemCell` layer. -/
 theorem writeMemAsR_mem (R : RoundingModel) (dtype : FloatDType)
     (s : BlockState) (region : RegionName) (offset : Nat)
@@ -623,6 +635,42 @@ theorem foldl_writeMemAsR_masked_pids {α : Type} (R : RoundingModel)
         rw [ih, writeMemAsR_pids]
       · simp only [h, if_false]
         exact ih s
+
+/-- The R-write leaves every register untouched (foldl form): a `P`-masked
+`writeMemAsR` scatter only rewrites `mem`, so a later statement's register
+reads pass over an earlier store's whole scatter. `@[simp]` so sequential
+multi-store walks reduce without manual induction. -/
+@[simp] theorem foldl_writeMemAsR_masked_regs {α : Type} (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier dtype.toTileDType)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState) :
+    ((l.foldl (fun acc k =>
+        if P k then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k) else acc)
+      s).regs) = s.regs := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases h : P hd
+      · rw [if_pos h, ih]; rfl
+      · rw [if_neg h, ih]
+
+/-- The R-write leaves the `undef` channel untouched (foldl form) — the
+`undef` sibling of `foldl_writeMemAsR_masked_regs`. -/
+@[simp] theorem foldl_writeMemAsR_masked_undef {α : Type} (R : RoundingModel)
+    (dtype : FloatDType) {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → TileCarrier dtype.toTileDType)
+    (P : α → Prop) [DecidablePred P] (l : List α) (s : BlockState) :
+    ((l.foldl (fun acc k =>
+        if P k then acc.writeMemAsR R dtype region (offsetFn k) (valueFn k) else acc)
+      s).undef) = s.undef := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases h : P hd
+      · rw [if_pos h, ih]; rfl
+      · rw [if_neg h, ih]
 
 /-- A `P`-masked `writeMemAsR` scatter `foldl` into `region` leaves every
 other region's cells untouched (the frame the pipeline composition needs). -/

@@ -50,6 +50,8 @@ def expandLeanAntiquoteAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
         | .fp32 => pure (← `(Op.constFloat FloatDType.fp32 $t), .fp32)
         | .fp16 => pure (← `(Op.constFloat FloatDType.fp16 $t), .fp16)
         | .bf16 => pure (← `(Op.constFloat FloatDType.bf16 $t), .bf16)
+        | .f8e4 => pure (← `(Op.constFloat FloatDType.f8e4 $t), .f8e4)
+        | .f8e5 => pure (← `(Op.constFloat FloatDType.f8e5 $t), .f8e5)
         | .nat => pure (← `(Op.constNat $t), .nat)
         | .int => pure (← `(Op.constInt $t), .int)
         | .bool => pure (← `(Op.constBool $t), .bool)
@@ -68,7 +70,7 @@ def expandLeanAntiquoteAs (dtype : DInfo) (e : TSyntax `tritonExpr) :
 def realMathTerm (ctx : String) (e : EOut) : MacroM (TSyntax `term) := do
   match e.dtype with
   | .real => pure e.term
-  | .fp32 | .fp16 | .bf16 | .floatVar _ =>
+  | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 | .floatVar _ =>
       let srcProof ← e.dtype.floatProof
       pure (← `(Op.castFloat $srcProof FloatDType.real $e.term))
   | _ =>
@@ -81,9 +83,9 @@ def coerceRealArithOperands (ctx : String) (a b : EOut) : MacroM (EOut × EOut) 
       pure (a, { b with term := ← `(Op.natToReal $b.term), dtype := .real })
   | .nat, .real =>
       pure ({ a with term := ← `(Op.natToReal $a.term), dtype := .real }, b)
-  | .real, .fp32 | .real, .fp16 | .real, .bf16 | .real, .floatVar _ =>
+  | .real, .fp32 | .real, .fp16 | .real, .bf16 | .real, .f8e4 | .real, .f8e5 | .real, .floatVar _ =>
       pure (a, { b with term := ← realMathTerm (ctx ++ " rhs") b, dtype := .real })
-  | .fp32, .real | .fp16, .real | .bf16, .real | .floatVar _, .real =>
+  | .fp32, .real | .fp16, .real | .bf16, .real | .f8e4, .real | .f8e5, .real | .floatVar _, .real =>
       pure ({ a with term := ← realMathTerm (ctx ++ " lhs") a, dtype := .real }, b)
   | _, _ =>
       pure (a, b)

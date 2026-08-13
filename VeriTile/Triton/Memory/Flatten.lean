@@ -109,6 +109,8 @@ def trCarrier : (d : TileDType) → TileCarrier d → TileCarrier d
   | .fp32, v => v
   | .fp16, v => v
   | .bf16, v => v
+  | .f8e4, v => v
+  | .f8e5, v => v
   | .int,  v => v
   | .nat,  v => v
   | .bool, v => v
@@ -346,6 +348,8 @@ pointer-shaped channels move. -/
 @[simp] theorem trCarrier_fp32 (v : TileCarrier .fp32) : A.trCarrier .fp32 v = v := rfl
 @[simp] theorem trCarrier_fp16 (v : TileCarrier .fp16) : A.trCarrier .fp16 v = v := rfl
 @[simp] theorem trCarrier_bf16 (v : TileCarrier .bf16) : A.trCarrier .bf16 v = v := rfl
+@[simp] theorem trCarrier_f8e4 (v : TileCarrier .f8e4) : A.trCarrier .f8e4 v = v := rfl
+@[simp] theorem trCarrier_f8e5 (v : TileCarrier .f8e5) : A.trCarrier .f8e5 v = v := rfl
 @[simp] theorem trCarrier_int (v : TileCarrier .int) : A.trCarrier .int v = v := rfl
 @[simp] theorem trCarrier_nat (v : TileCarrier .nat) : A.trCarrier .nat v = v := rfl
 @[simp] theorem trCarrier_bool (v : TileCarrier .bool) : A.trCarrier .bool v = v := rfl
@@ -410,6 +414,8 @@ theorem flattenState_readMemValue (hd : A.Disjoint) (s : BlockState)
   | fp32 => exact A.flattenState_readMemAs hd s hr ho .fp32
   | fp16 => exact A.flattenState_readMemAs hd s hr ho .fp16
   | bf16 => exact A.flattenState_readMemAs hd s hr ho .bf16
+  | f8e4 => exact A.flattenState_readMemAs hd s hr ho .f8e4
+  | f8e5 => exact A.flattenState_readMemAs hd s hr ho .f8e5
   | int =>
       rw [A.flattenState_readMemTyped hd s hr ho .int]
       cases s.readMemTyped .int r o <;> simp

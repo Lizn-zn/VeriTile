@@ -85,6 +85,8 @@ def add : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → Til
   | .fp32, x, y => WithBot.realAdd x y
   | .fp16, x, y => WithBot.realAdd x y
   | .bf16, x, y => WithBot.realAdd x y
+  | .f8e4, x, y => WithBot.realAdd x y
+  | .f8e5, x, y => WithBot.realAdd x y
   | .int, x, y => x + y
   | .nat, x, y => x + y
 
@@ -93,6 +95,8 @@ def sub : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → Til
   | .fp32, x, y => WithBot.realSub x y
   | .fp16, x, y => WithBot.realSub x y
   | .bf16, x, y => WithBot.realSub x y
+  | .f8e4, x, y => WithBot.realSub x y
+  | .f8e5, x, y => WithBot.realSub x y
   | .int, x, y => x - y
   | .nat, x, y => x - y
 
@@ -101,6 +105,8 @@ def mul : NumericDType dtype → TileCarrier dtype → TileCarrier dtype → Til
   | .fp32, x, y => WithBot.realMul x y
   | .fp16, x, y => WithBot.realMul x y
   | .bf16, x, y => WithBot.realMul x y
+  | .f8e4, x, y => WithBot.realMul x y
+  | .f8e5, x, y => WithBot.realMul x y
   | .int, x, y => x * y
   | .nat, x, y => x * y
 
@@ -109,6 +115,8 @@ noncomputable def div : NumericDType dtype → TileCarrier dtype → TileCarrier
   | .fp32, x, y => WithBot.realDiv x y
   | .fp16, x, y => WithBot.realDiv x y
   | .bf16, x, y => WithBot.realDiv x y
+  | .f8e4, x, y => WithBot.realDiv x y
+  | .f8e5, x, y => WithBot.realDiv x y
   | .int, x, y => x / y
   | .nat, x, y => x / y
 
@@ -168,6 +176,8 @@ noncomputable def lt :
   | .fp32, x, y => decide (x < y)
   | .fp16, x, y => decide (x < y)
   | .bf16, x, y => decide (x < y)
+  | .f8e4, x, y => decide (x < y)
+  | .f8e5, x, y => decide (x < y)
   | .int, x, y => decide (x < y)
   | .nat, x, y => decide (x < y)
 
@@ -177,6 +187,8 @@ noncomputable def le :
   | .fp32, x, y => decide (x ≤ y)
   | .fp16, x, y => decide (x ≤ y)
   | .bf16, x, y => decide (x ≤ y)
+  | .f8e4, x, y => decide (x ≤ y)
+  | .f8e5, x, y => decide (x ≤ y)
   | .int, x, y => decide (x ≤ y)
   | .nat, x, y => decide (x ≤ y)
 
@@ -186,6 +198,8 @@ noncomputable def eq :
   | .fp32, x, y => decide (x = y)
   | .fp16, x, y => decide (x = y)
   | .bf16, x, y => decide (x = y)
+  | .f8e4, x, y => decide (x = y)
+  | .f8e5, x, y => decide (x = y)
   | .int, x, y => decide (x = y)
   | .nat, x, y => decide (x = y)
 
@@ -195,6 +209,8 @@ noncomputable def gt :
   | .fp32, x, y => decide (x > y)
   | .fp16, x, y => decide (x > y)
   | .bf16, x, y => decide (x > y)
+  | .f8e4, x, y => decide (x > y)
+  | .f8e5, x, y => decide (x > y)
   | .int, x, y => decide (x > y)
   | .nat, x, y => decide (x > y)
 
@@ -204,6 +220,8 @@ noncomputable def ge :
   | .fp32, x, y => decide (x ≥ y)
   | .fp16, x, y => decide (x ≥ y)
   | .bf16, x, y => decide (x ≥ y)
+  | .f8e4, x, y => decide (x ≥ y)
+  | .f8e5, x, y => decide (x ≥ y)
   | .int, x, y => decide (x ≥ y)
   | .nat, x, y => decide (x ≥ y)
 
@@ -217,6 +235,8 @@ noncomputable def ne :
   | .fp32, x, y => decide (x ≠ y)
   | .fp16, x, y => decide (x ≠ y)
   | .bf16, x, y => decide (x ≠ y)
+  | .f8e4, x, y => decide (x ≠ y)
+  | .f8e5, x, y => decide (x ≠ y)
   | .int, x, y => decide (x ≠ y)
   | .nat, x, y => decide (x ≠ y)
 
@@ -304,12 +324,16 @@ def ofWithBot : (dtype : FloatDType) → WithBot ℝ → TileCarrier dtype.toTil
   | .fp32, x => x
   | .fp16, x => x
   | .bf16, x => x
+  | .f8e4, x => x
+  | .f8e5, x => x
 
 def toWithBot : (dtype : FloatDType) → TileCarrier dtype.toTileDType → WithBot ℝ
   | .real, x => x
   | .fp32, x => x
   | .fp16, x => x
   | .bf16, x => x
+  | .f8e4, x => x
+  | .f8e5, x => x
 
 def ofReal (h : FloatDType) (x : ℝ) : TileCarrier h.toTileDType :=
   h.ofWithBot (some x)
@@ -354,6 +378,18 @@ adjustment. -/
 
 @[simp] theorem bf16_toWithBot (x : TileCarrier FloatDType.bf16.toTileDType) :
     FloatDType.bf16.toWithBot x = x := rfl
+
+@[simp] theorem f8e4_ofWithBot (x : WithBot ℝ) :
+    FloatDType.f8e4.ofWithBot x = x := rfl
+
+@[simp] theorem f8e4_toWithBot (x : TileCarrier FloatDType.f8e4.toTileDType) :
+    FloatDType.f8e4.toWithBot x = x := rfl
+
+@[simp] theorem f8e5_ofWithBot (x : WithBot ℝ) :
+    FloatDType.f8e5.ofWithBot x = x := rfl
+
+@[simp] theorem f8e5_toWithBot (x : TileCarrier FloatDType.f8e5.toTileDType) :
+    FloatDType.f8e5.toWithBot x = x := rfl
 
 end FloatDType
 

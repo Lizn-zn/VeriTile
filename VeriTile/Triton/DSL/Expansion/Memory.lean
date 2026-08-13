@@ -73,6 +73,8 @@ private def dtypeName : DInfo → String
   | .fp32 => "fp32"
   | .fp16 => "fp16"
   | .bf16 => "bf16"
+  | .f8e4 => "f8e4"
+  | .f8e5 => "f8e5"
   | .int => "int"
   | .nat => "nat"
   | .bool => "bool"

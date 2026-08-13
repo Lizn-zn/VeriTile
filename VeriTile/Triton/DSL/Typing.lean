@@ -16,6 +16,8 @@ inductive DInfo where
   | fp32
   | fp16
   | bf16
+  | f8e4
+  | f8e5
   | int
   | nat
   | bool
@@ -66,6 +68,8 @@ def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .fp32 => `(TileDType.fp32)
   | .fp16 => `(TileDType.fp16)
   | .bf16 => `(TileDType.bf16)
+  | .f8e4 => `(TileDType.f8e4)
+  | .f8e5 => `(TileDType.f8e5)
   | .int => `(TileDType.int)
   | .nat => `(TileDType.nat)
   | .bool => `(TileDType.bool)
@@ -80,6 +84,8 @@ def DInfo.floatProof : DInfo → MacroM (TSyntax `term)
   | .fp32 => `(FloatDType.fp32)
   | .fp16 => `(FloatDType.fp16)
   | .bf16 => `(FloatDType.bf16)
+  | .f8e4 => `(FloatDType.f8e4)
+  | .f8e5 => `(FloatDType.f8e5)
   | .int => Macro.throwError "tl.cast: signed integer casts are not modeled yet"
   | .nat => Macro.throwError "tl.cast: Nat casts are not modeled yet; use tl.toReal for Nat to real"
   | .bool => Macro.throwError "tl.cast: Bool casts are not supported"
@@ -101,6 +107,8 @@ def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
   | .fp32 => `(NumericDType.fp32)
   | .fp16 => `(NumericDType.fp16)
   | .bf16 => `(NumericDType.bf16)
+  | .f8e4 => `(NumericDType.f8e4)
+  | .f8e5 => `(NumericDType.f8e5)
   | .int => `(NumericDType.int)
   | .nat => `(NumericDType.nat)
   | .bool => Macro.throwError "arithmetic on Bool values is not supported"
@@ -117,6 +125,8 @@ def DInfo.integralProof : DInfo → MacroM (TSyntax `term)
   | .fp32 => Macro.throwError "integer division/remainder on floating values is not supported"
   | .fp16 => Macro.throwError "integer division/remainder on floating values is not supported"
   | .bf16 => Macro.throwError "integer division/remainder on floating values is not supported"
+  | .f8e4 => Macro.throwError "integer division/remainder on floating values is not supported"
+  | .f8e5 => Macro.throwError "integer division/remainder on floating values is not supported"
   | .bool => Macro.throwError "integer division/remainder on Bool values is not supported"
   | .ptr => Macro.throwError "integer division/remainder on pointer values is not supported"
   | .blockPtr => Macro.throwError "integer division/remainder on block pointers is not supported"
@@ -127,6 +137,8 @@ def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
   | .fp32 => `(ComparableDType.fp32)
   | .fp16 => `(ComparableDType.fp16)
   | .bf16 => `(ComparableDType.bf16)
+  | .f8e4 => `(ComparableDType.f8e4)
+  | .f8e5 => `(ComparableDType.f8e5)
   | .int => `(ComparableDType.int)
   | .nat => `(ComparableDType.nat)
   | .bool => Macro.throwError "comparison on Bool values is not supported"
@@ -141,6 +153,8 @@ def expandDType : TSyntax `tritonDType → MacroM DInfo
   | `(tritonDType| tl.float32) => pure .fp32
   | `(tritonDType| tl.float16) => pure .fp16
   | `(tritonDType| tl.bfloat16) => pure .bf16
+  | `(tritonDType| tl.float8e4nv) => pure .f8e4
+  | `(tritonDType| tl.float8e5) => pure .f8e5
   | `(tritonDType| tl.int1) => pure .bool
   | `(tritonDType| tl.int8) => pure .int
   | `(tritonDType| tl.int16) => pure .int
@@ -160,6 +174,8 @@ def expandDTypeIdent (name : Name) : MacroM DInfo :=
   | "tl.float32" => pure .fp32
   | "tl.float16" => pure .fp16
   | "tl.bfloat16" => pure .bf16
+  | "tl.float8e4nv" => pure .f8e4
+  | "tl.float8e5" => pure .f8e5
   | "tl.int1" => pure .bool
   | "tl.int8" => pure .int
   | "tl.int16" => pure .int

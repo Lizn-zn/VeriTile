@@ -57,6 +57,8 @@ def floatCell : FloatDType → ℝ → MemCell
   | .fp32, v => MemCell.of .fp32 (some v)
   | .fp16, v => MemCell.of .fp16 (some v)
   | .bf16, v => MemCell.of .bf16 (some v)
+  | .f8e4, v => MemCell.of .f8e4 (some v)
+  | .f8e5, v => MemCell.of .f8e5 (some v)
 
 /-- `MemCell`-layer counterpart of `InputLoadedAt`: the current program's active
 lanes (`s.pid * N + i.val < cols`) of `region` hold the narrow-float cells

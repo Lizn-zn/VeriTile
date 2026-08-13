@@ -16,6 +16,8 @@ def eraseDType : TileDType → TileDType
   | .fp32 => .real
   | .fp16 => .real
   | .bf16 => .real
+  | .f8e4 => .real
+  | .f8e5 => .real
   | dtype => dtype
 
 /-- Erase a floating dtype tag to the real channel. -/
@@ -34,6 +36,8 @@ def eraseDType : NumericDType dtype → NumericDType (VeriTile.Triton.eraseDType
   | .fp32 => .real
   | .fp16 => .real
   | .bf16 => .real
+  | .f8e4 => .real
+  | .f8e5 => .real
   | .int => .int
   | .nat => .nat
 
@@ -56,6 +60,8 @@ def eraseDType : ComparableDType dtype → ComparableDType (VeriTile.Triton.eras
   | .fp32 => .real
   | .fp16 => .real
   | .bf16 => .real
+  | .f8e4 => .real
+  | .f8e5 => .real
   | .int => .int
   | .nat => .nat
 
