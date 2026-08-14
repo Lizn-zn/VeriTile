@@ -253,6 +253,7 @@ bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cu
 bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_vec_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_vec_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rms_norm_triton/RmsNormTriton.lean	rms_norm_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/rms_rbe_matmul/RmsRbeMatmul.lean	rms_matmul_rbe_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_output_summary	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/rmsnorm_fused_llama/RmsnormFusedLlama.lean	rms_norm_fwd_fused_llama_output_summary	full_value_candidate	none		no proof-gap marker in summary context

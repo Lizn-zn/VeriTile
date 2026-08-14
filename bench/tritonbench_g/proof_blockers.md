@@ -197,6 +197,19 @@ unless stated:
   allocates `out` at `x.dtype = float16`) is spelled
   `(accumulator).to(tl.float16)` (`f8_conversion_utils` precedent). The
   K-loop counter is spelled `_i` for Python's `_`.
+- `rms_rbe_matmul` — the target JIT is the file's **second** kernel,
+  `rms_matmul_rbe`; the first, `rbe_triton`, is dead code in this file (no
+  host function launches it, and it calls `get_freq_multi_tokens`, which
+  the file never defines — the upstream file itself cannot run it) and is
+  not modeled. The `USE_FP8` constexpr arm is dropped (parameter +
+  branches; `.to(tl.float8e5, bitcast=True)` bit-reinterpretation, the
+  ℝ-model-limit family; `llama_ff_triton` precedent). The unused
+  parameters `start_token_position` / `RBE_EPILOGUE` / `THETA` are dropped
+  (`sgmv_expand_slice` unused-param precedent). The loop trip count
+  `tl.cdiv(K, BLOCK_SIZE_K)` is the antiquoted `numKBlocks` (unmasked
+  loads). The store's implicit fp16 cast is spelled
+  `(accumulator).to(tl.float16)` (`f8_conversion_utils` precedent). The
+  K-loop counter is spelled `_i` for Python's `_`.
 - `triton_matmul` — the constexpr epilogue branch
   `if (c_ptr.dtype.element_ty == tl.float8e4nv):` (a compile-time dispatch
   on the output buffer's element dtype) is split into two Lean surfaces

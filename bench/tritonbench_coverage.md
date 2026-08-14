@@ -6,10 +6,10 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **163** |
-| Not yet imported | 21 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **164** |
+| Not yet imported | 20 |
 | — of those, expressible with today's DSL surface | 0 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 21 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 20 |
 
 ## What "expressible" means here, and what it does not
 
@@ -96,23 +96,22 @@ accepted set; the only Python-level operators on tiles are `&` on bool masks
 `tl.sum(b, 1)` positional axis is accepted verbatim (`syntax num :
 tritonReduceKwarg`).
 
-## Not yet imported: blocked on a missing primitive (21)
+## Not yet imported: blocked on a missing primitive (20)
 
-The fp8 dtype channel itself **landed 2026-08-13** (`.f8e4`/`.f8e5` in
-`TileDType`/`FloatDType`, spelled `tl.float8e4nv`/`tl.float8e5`), with
-`f8_conversion_utils` as its first consumer (the 161st port). The six
-remaining fp8 rows below lose their *named* blocker, but none has been
-seven-point re-checked yet — each next port in the family must run the
-full per-jit check first (this table's one-name-per-row format has
-under-reported twice; see the correction after the lever table).
+The fp8 dtype channel **landed 2026-08-13 and closed as a lever** (ports
+161–163; every remaining `tl.float8e5` mention below is a `bitcast=True`
+bit-reinterpretation, the ℝ-model-limit family, not a dtype-channel
+consumer). This table's one-name-per-row format has under-reported
+repeatedly — every port decision must start from a fresh per-jit
+seven-point check, not from this column (see the correction after the
+lever table).
 
 | Kernel | `.py` lines | missing `tl.*` |
 |---|---:|---|
 | `int_scaled_matmul` | 304 | `tl.broadcast_to` — **under-reported**: its second jit also needs an int32-accumulator `tl.dot` (see correction below) |
 | `matmul_persistent_triton` | 154 | fp8 channel landed — but seven-point re-checked 2026-08-13: **also** signed integer registers (`ki = -1` sentinel; `tile_id = start_pid - NUM_SMS` goes negative before its first `+= NUM_SMS`) — the persistent-loop idiom puts it in the signed-integer family too |
 | `attention_llama` | 174 | **re-framed 2026-08-13**: its "fp8" is a `USE_FP8` arm that bit-reinterprets int8 bytes as `tl.float8e5` (`bitcast=True`) — an ℝ-model limit, NOT a dtype-channel gap; the non-fp8 arm is expected portable pending its full seven-point check (streaming-softmax attention body) |
-| `rms_matmul_rbe` | 279 | same `bitcast=True` re-framing; the non-fp8 arm's `rms_matmul_rbe` jit ≈ `llama_ff_triton` minus SwiGLU; the sibling `rbe_triton` jit (rotary embedding: even/odd `ptr+1` interleave, `tl.debug_barrier`, `get_freq_multi_tokens` helper with sin/cos) still needs its check |
-| `rms_rbe_matmul` | 190 | same re-framing and same two-jit structure as `rms_matmul_rbe` |
+| `rms_matmul_rbe` | 279 | same `bitcast=True` re-framing (its single-GEMM jit is now ported standalone as the `rms_rbe_matmul` port, the 164th); what remains here is `rms_matmul_rbe_qkv` — a **cross-JIT caller** invoking that GEMM three times (Q/K/V) — needing the helper-inline treatment (`attn_fwd` precedent) |
 | `fp4_to_bf16` | 214 | `tl.interleave` |
 | `fp4_to_bf16_conversion` | 275 | `tl.interleave` |
 | `uniform_sampling` | 226 | `tl.philox`, `tl.static_assert`, `tl.uint_to_uniform_float` |
