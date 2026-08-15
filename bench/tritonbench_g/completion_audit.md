@@ -174,6 +174,12 @@ The current documented blocker set is:
   `tl.cdiv` trip count as the antiquoted `numKBlocks`; implicit store fp16
   cast spelled explicitly; host launch and per-dtype dispatch are the
   trusted boundary.
+- `rms_rbe_matmul` — target JIT `rms_matmul_rbe` (the file's second
+  kernel) ported at the `USE_FP8 = False` arm; `rbe_triton` is dead
+  in-file (never launched; calls an undefined helper) and unmodeled;
+  unused params dropped; batched RMSNorm-fused GEMM proven as one exec
+  closed form (2-accumulator/3-pointer invariant + batch-axis register
+  clause); markers registered in `proof_blockers.md`.
 - `triton_matmul` — `matmul_kernel` ported with both constexpr epilogue
   arms as twin surfaces (fp16 + fp8e4nv; marker registered in
   `proof_blockers.md`), one od-generic proof stack instantiated per arm
