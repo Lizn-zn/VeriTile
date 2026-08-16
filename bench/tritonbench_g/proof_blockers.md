@@ -158,6 +158,26 @@ unless stated:
   port covers `parallel_retention_fwd_kernel` (the file's first kernel) and
   the dk/dv helper; the backward shell and `_parallel_retention_bwd_dq` are
   the trusted boundary.
+- `attention_llama` — the `USE_FP8` constexpr arm is dropped entirely
+  (parameter + both `if USE_FP8:` blocks): that path bit-reinterprets int8
+  K/V bytes as `tl.float8e5` (`.to(tl.float8e5, bitcast=True)`) and
+  re-encodes to fp16 — the fixed-width-cast ℝ-model-limit family
+  (`llama_ff_triton` / `sgmv_expand_slice` dropped-arm precedent), so only
+  the `USE_FP8 = False` arm is transcribed (upstream test cases 1/2; the
+  int8 cases 3/4 launch the dropped arm and are out of the modeled
+  surface). The `IS_CAUSAL` constexpr is split into twin surfaces
+  (`attention_llama_fwd_surface` / `attention_llama_fwd_causal_surface`,
+  the `triton_matmul` twin-surface precedent); the causal twin keeps both
+  `block_n_end` assignments and the causal `tl.where` statement, and the
+  loop bound is a runtime register in both arms (`forRangeDyn`). The K/V
+  loads' POSITIONAL `other` argument (`tl.load(k_ptrs, mask, 0.)`) has no
+  DSL spelling (the grammar has the `other=` kwarg only, and adding the
+  kwarg would break the audit's kwarg-sequence scan against the Python),
+  so they are spelled as plain masked loads whose masked-off lanes read
+  the `undef` carrier — pinned to `0` (Python's exact fill value) by the
+  headlines' `hundef` hypothesis. The host launch (grid,
+  `assert Lk in {16,32,64,128}`, `num_warps`/`num_stages`) is the trusted
+  boundary.
 - `bmm_optimized` — the `DIVISIBLE_M/N/K` `triton.heuristics` constexprs
   select between arms in which the load/store *mask arguments* are `None`
   or mask tiles; a register holding "`None` or a tile" has no DSL analogue

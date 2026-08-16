@@ -194,6 +194,15 @@ The current documented blocker set is:
   the antiquoted `numKBlocks`; K-loop counter spelled `kk`;
   `launch_metadata` hook and per-dtype host config table are the trusted
   boundary.
+- `attention_llama` — `_fwd_kernel` ported at the `USE_FP8 = False` arm
+  (the fp8 path is a `bitcast=True` bit-reinterpretation, an ℝ-model
+  limit; marker registered in `proof_blockers.md`); `IS_CAUSAL` split into
+  twin faithful surfaces (runtime `forRangeDyn` loop bound in both); two
+  dimension-general exec closed forms — full natural-exp softmax attention
+  (non-causal, under `N_CTX = BLOCK_N · numKVBlocks`) and shifted-causal
+  softmax (under `start_position ≤ pid₀ · BLOCK_M` and span `≤ N_CTX`);
+  the K/V positional-`other` loads spelled as plain masked loads whose
+  dead lanes are pinned by `hundef`; host launch is the trusted boundary.
 - `attn_fwd_triton` — `_attn_fwd_inner` inlined; `128`/`96` head constants
   generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE` binders.
 - `attn_fwd_causal` — `_attn_fwd_inner` inlined; `128`/`96` generalized.
