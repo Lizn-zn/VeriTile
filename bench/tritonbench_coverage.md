@@ -6,10 +6,10 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **164** |
-| Not yet imported | 20 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **165** |
+| Not yet imported | 19 |
 | — of those, expressible with today's DSL surface | 0 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 20 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 19 |
 
 ## What "expressible" means here, and what it does not
 
@@ -96,7 +96,7 @@ accepted set; the only Python-level operators on tiles are `&` on bool masks
 `tl.sum(b, 1)` positional axis is accepted verbatim (`syntax num :
 tritonReduceKwarg`).
 
-## Not yet imported: blocked on a missing primitive (20)
+## Not yet imported: blocked on a missing primitive (19)
 
 The fp8 dtype channel **landed 2026-08-13 and closed as a lever** (ports
 161–163; every remaining `tl.float8e5` mention below is a `bitcast=True`
@@ -110,8 +110,7 @@ lever table).
 |---|---:|---|
 | `int_scaled_matmul` | 304 | `tl.broadcast_to` — **under-reported**: its second jit also needs an int32-accumulator `tl.dot` (see correction below) |
 | `matmul_persistent_triton` | 154 | fp8 channel landed — but seven-point re-checked 2026-08-13: **also** signed integer registers (`ki = -1` sentinel; `tile_id = start_pid - NUM_SMS` goes negative before its first `+= NUM_SMS`) — the persistent-loop idiom puts it in the signed-integer family too |
-| `attention_llama` | 174 | **re-framed 2026-08-13**: its "fp8" is a `USE_FP8` arm that bit-reinterprets int8 bytes as `tl.float8e5` (`bitcast=True`) — an ℝ-model limit, NOT a dtype-channel gap; the non-fp8 arm is expected portable pending its full seven-point check (streaming-softmax attention body) |
-| `rms_matmul_rbe` | 279 | same `bitcast=True` re-framing (its single-GEMM jit is now ported standalone as the `rms_rbe_matmul` port, the 164th); what remains here is `rms_matmul_rbe_qkv` — a **cross-JIT caller** invoking that GEMM three times (Q/K/V) — needing the helper-inline treatment (`attn_fwd` precedent) |
+| `attention_llama` | 174 | `bitcast=True` re-framing; **seven-point check completed 2026-08-14**: the non-fp8 arm is portable with existing machinery (streaming-softmax m/l/acc recurrence, positional load masks, `forRangeDyn` dynamic loop stop with `BLOCK_N` step, `IS_CAUSAL` gate, `.to(Q.dtype.element_ty)` erasure) — the last expected-portable kernel; heavyweight attention-genre proof |
 | `fp4_to_bf16` | 214 | `tl.interleave` |
 | `fp4_to_bf16_conversion` | 275 | `tl.interleave` |
 | `uniform_sampling` | 226 | `tl.philox`, `tl.static_assert`, `tl.uint_to_uniform_float` |

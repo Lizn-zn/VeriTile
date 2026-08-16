@@ -197,6 +197,17 @@ unless stated:
   allocates `out` at `x.dtype = float16`) is spelled
   `(accumulator).to(tl.float16)` (`f8_conversion_utils` precedent). The
   K-loop counter is spelled `_i` for Python's `_`.
+- `rms_matmul_rbe` — the second kernel `rms_matmul_rbe_qkv` (the only one
+  any host function launches) is a **cross-JIT caller**: its body invokes
+  `rms_matmul_rbe(...)` three times (Q/K/V). The DSL has no jit-to-jit
+  call surface, so the callee body is inlined three times (`attn_fwd`
+  inline precedent); the callee's unused parameters
+  (`start_token_position` / `RBE_EPILOGUE` / `THETA`) vanish under
+  inlining. The `USE_FP8` constexpr arm is dropped (`bitcast=True`
+  bit-reinterpretation, the ℝ-model-limit family). The loop trip count
+  `tl.cdiv(K, BLOCK_SIZE_K)` is the antiquoted `numKBlocks` (unmasked
+  loads); the stores' implicit fp16 casts are spelled
+  `(accumulator).to(tl.float16)`; loop counters `_i` for Python's `_`.
 - `rms_rbe_matmul` — the target JIT is the file's **second** kernel,
   `rms_matmul_rbe`; the first, `rbe_triton`, is dead code in this file (no
   host function launches it, and it calls `get_freq_multi_tokens`, which
