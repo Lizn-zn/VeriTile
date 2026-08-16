@@ -174,6 +174,13 @@ The current documented blocker set is:
   `tl.cdiv` trip count as the antiquoted `numKBlocks`; implicit store fp16
   cast spelled explicitly; host launch and per-dtype dispatch are the
   trusted boundary.
+- `rms_matmul_rbe` — both kernels ported: the GEMM as a twin mirror of
+  the `rms_rbe_matmul` port, and `rms_matmul_rbe_qkv` with its three
+  cross-JIT calls inlined (markers registered in `proof_blockers.md`);
+  the QKV headline is one bundled specification (a conjunction of three
+  `Realizes` faces per MAIN_THEOREM_CONVENTIONS §4) proven via one
+  region-parameterized pass bundle applied thrice with frame transport
+  (10 region-distinctness hypotheses).
 - `rms_rbe_matmul` — target JIT `rms_matmul_rbe` (the file's second
   kernel) ported at the `USE_FP8 = False` arm; `rbe_triton` is dead
   in-file (never launched; calls an undefined helper) and unmodeled;
