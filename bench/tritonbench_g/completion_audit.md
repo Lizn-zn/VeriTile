@@ -211,6 +211,16 @@ The current documented blocker set is:
   and promotes through `Op.intToReal` (first consumer of the
   signed-promotion lever); `tl.cdiv` trip count as the antiquoted
   `numKBlocks`; autotune sweep and host launch are the trusted boundary.
+- `matmul_dequant_int4` — the target JIT is the file's second kernel,
+  `dequantize_kernel`, the only one launched (the first, `matmul4_kernel`,
+  is dead code byte-identical to the `matmul_dequantize_int4` port's
+  kernel — not modeled; markers registered in `proof_blockers.md`);
+  straight-line masked int4 dequantization proven as one fully
+  dimension-general exec closed form whose only hypothesis is store-map
+  injectivity; the signed nibble difference runs on the `.int` channel via
+  explicit `tl.cast` and promotes through `Op.intToReal` (second consumer
+  of the signed-promotion lever); the masked loads keep `other=0.0`
+  faithfully; the autotune sweep and host launch are the trusted boundary.
 - `attn_fwd_triton` — `_attn_fwd_inner` inlined; `128`/`96` head constants
   generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE` binders.
 - `attn_fwd_causal` — `_attn_fwd_inner` inlined; `128`/`96` generalized.
