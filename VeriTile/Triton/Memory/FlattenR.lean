@@ -221,6 +221,7 @@ def Op.SafeAtR (R : RoundingModel) (bounds : RegionBounds) (s : BlockState) : Op
         | .maskOther m other => m.SafeAtR R bounds s ∧ other.SafeAtR R bounds s) ∧
       mem.ActiveAddressSafeR R bounds s (mask.ActiveR R s)
   | .natToReal a => a.SafeAtR R bounds s
+  | .intToReal a => a.SafeAtR R bounds s
 
 /-- `mapM`-level commutation for dynamic block-pointer offset lists: if every
 member op evaluates identically after translation, so does the scalar-offset
@@ -616,6 +617,13 @@ theorem FlatAlloc.evalOpR_flatten (A : FlatAlloc) (hd : A.Disjoint)
       simp only [Op.FlattenOkR] at hok
       simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R a s hms hok hu,
         A.trTileFun_data (d := .nat) (by decide) (by decide),
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .intToReal a, s, hms, hok, hu => by
+      simp only [Op.SafeAtR] at hms
+      simp only [Op.FlattenOkR] at hok
+      simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R a s hms hok hu,
+        A.trTileFun_data (d := .int) (by decide) (by decide),
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .castNatToInt a, s, hms, hok, hu => by

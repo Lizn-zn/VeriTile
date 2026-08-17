@@ -273,6 +273,7 @@ def flattenOp (A : FlatAlloc) :
          | .mask m => .mask (A.flattenOp m)
          | .maskOther m o => .maskOther (A.flattenOp m) (A.flattenOp o))
   | _, _, .natToReal a => .natToReal (A.flattenOp a)
+  | _, _, .intToReal a => .intToReal (A.flattenOp a)
 
 /-- Translate a memory access (the named form of the `.load` case above,
 shared with the store/atomic statements). -/
@@ -540,6 +541,7 @@ def Op.FlattenOk : Op dtype shape → Prop
         | .mask m => m.FlattenOk
         | .maskOther m other => m.FlattenOk ∧ other.FlattenOk)
   | .natToReal a => a.FlattenOk
+  | .intToReal a => a.FlattenOk
 
 set_option maxHeartbeats 1600000 in
 /-- The `Op` fragment covered by the **rounding-model** flat-memory bridge
@@ -638,6 +640,7 @@ def Op.FlattenOkR : Op dtype shape → Prop
         | .mask m => m.FlattenOkR
         | .maskOther m other => m.FlattenOkR ∧ other.FlattenOkR)
   | .natToReal a => a.FlattenOkR
+  | .intToReal a => a.FlattenOkR
 
 set_option maxHeartbeats 1600000 in
 /-- The exact-bridge fragment sits inside the `R`-bridge fragment. -/
@@ -889,6 +892,7 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
         | .maskOther m other => m.SafeAt bounds s ∧ other.SafeAt bounds s) ∧
       mem.ActiveAddressSafe bounds s (mask.Active s)
   | .natToReal a => a.SafeAt bounds s
+  | .intToReal a => a.SafeAt bounds s
 
 
 /-- `mapM`-level commutation for dynamic block-pointer offset lists: if every
@@ -1285,6 +1289,13 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .nat) (by decide) (by decide),
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .intToReal a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .int) (by decide) (by decide),
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .castNatToInt a, s, hms, hok, hu => by

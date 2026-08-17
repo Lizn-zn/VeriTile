@@ -83,6 +83,10 @@ def coerceRealArithOperands (ctx : String) (a b : EOut) : MacroM (EOut × EOut) 
       pure (a, { b with term := ← `(Op.natToReal $b.term), dtype := .real })
   | .nat, .real =>
       pure ({ a with term := ← `(Op.natToReal $a.term), dtype := .real }, b)
+  | .real, .int =>
+      pure (a, { b with term := ← `(Op.intToReal $b.term), dtype := .real })
+  | .int, .real =>
+      pure ({ a with term := ← `(Op.intToReal $a.term), dtype := .real }, b)
   | .real, .fp32 | .real, .fp16 | .real, .bf16 | .real, .f8e4 | .real, .f8e5 | .real, .floatVar _ =>
       pure (a, { b with term := ← realMathTerm (ctx ++ " rhs") b, dtype := .real })
   | .fp32, .real | .fp16, .real | .bf16, .real | .f8e4, .real | .f8e5, .real | .floatVar _, .real =>

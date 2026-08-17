@@ -1156,8 +1156,11 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandReduceMax expandExpr env e kwargs
   | `(tritonExpr| tl.toReal($e:tritonExpr)) => do
       let e' ← expandExpr env e
-      ensureDType .nat e'.dtype "tl.toReal"
-      pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape, none, none⟩
+      match e'.dtype with
+      | .int => pure ⟨← `(Op.intToReal $e'.term), .real, e'.shape, none, none⟩
+      | _ =>
+          ensureDType .nat e'.dtype "tl.toReal"
+          pure ⟨← `(Op.natToReal $e'.term), .real, e'.shape, none, none⟩
   | `(tritonExpr| tl.multiple_of($e:tritonExpr, $_align:tritonExpr)) => do
       expandExpr env e
   | `(tritonExpr| tl.max_contiguous($e:tritonExpr, $_align:tritonExpr)) => do
@@ -2558,6 +2561,11 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
         ← `(ComputeStmt.effectMarker "tl.debug_barrier"), env, Bool.true)
   | `(tritonStmt| tl.static_print($_msg:term)) =>
+      pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
+        ← `(ComputeStmt.alg (Stmt.ifThen (Op.constBool Bool.false) [])), env,
+        Bool.false)
+  | `(tritonStmt| tl.static_assert($cond:tritonExpr $[, $_msg:str]?)) => do
+      discard <| expandExpr env cond
       pure (← `(Stmt.ifThen (Op.constBool Bool.false) []),
         ← `(ComputeStmt.alg (Stmt.ifThen (Op.constBool Bool.false) [])), env,
         Bool.false)

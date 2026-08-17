@@ -294,6 +294,7 @@ syntax "tl.async_copy(" tritonExpr ", " tritonExpr ("," tritonMemKwarg)* ")" : t
 syntax "tl.async_wait()" : tritonStmt
 syntax "tl.debug_barrier()" : tritonStmt
 syntax "tl.static_print(" term ")" : tritonStmt
+syntax "tl.static_assert(" tritonExpr ("," str)? ")" : tritonStmt
 syntax (name := tritonReturn) "return" : tritonStmt
 syntax "tl.for " ident " in " "$(" term ")" " { " tritonStmt* " }" : tritonStmt
 syntax "tl.for " ident " in " num " { " tritonStmt* " }" : tritonStmt

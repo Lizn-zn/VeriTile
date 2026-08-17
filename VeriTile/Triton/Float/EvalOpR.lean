@@ -236,6 +236,7 @@ noncomputable def evalOpR (R : RoundingModel) :
           let others ← evalOpR R other s
           some ⟨fun i => if masks.data i then read i else others.data i⟩
   | .natToReal a, s => return Tile.natToReal (← evalOpR R a s)
+  | .intToReal a, s => return Tile.intToReal (← evalOpR R a s)
 
 /-! ## Degeneration to the trivial model
 
@@ -380,6 +381,7 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
   | _, _, .load _ (.blockPtr p _) (.maskOther m other), s => by
       simp only [evalOpR, evalOp, evalOpR_triv p s, evalOpR_triv m s, evalOpR_triv other s]
   | _, _, .natToReal a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .intToReal a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
 termination_by dtype shape op _ => sizeOf op
 decreasing_by all_goals (simp_wf <;> omega)
 
