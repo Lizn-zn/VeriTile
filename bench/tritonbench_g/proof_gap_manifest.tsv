@@ -22,6 +22,8 @@ bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_genui
 bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/attention_llama/AttentionLlama.lean	attention_llama_fwd_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/attention_llama/AttentionLlama.lean	attention_llama_fwd_causal_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_python_case1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_case1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context

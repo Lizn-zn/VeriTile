@@ -6,10 +6,10 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **165** |
-| Not yet imported | 19 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **166** |
+| Not yet imported | 18 |
 | — of those, expressible with today's DSL surface | 0 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 19 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 18 |
 
 ## What "expressible" means here, and what it does not
 
@@ -110,7 +110,6 @@ lever table).
 |---|---:|---|
 | `int_scaled_matmul` | 304 | `tl.broadcast_to` — **under-reported**: its second jit also needs an int32-accumulator `tl.dot` (see correction below) |
 | `matmul_persistent_triton` | 154 | fp8 channel landed — but seven-point re-checked 2026-08-13: **also** signed integer registers (`ki = -1` sentinel; `tile_id = start_pid - NUM_SMS` goes negative before its first `+= NUM_SMS`) — the persistent-loop idiom puts it in the signed-integer family too |
-| `attention_llama` | 174 | `bitcast=True` re-framing; **seven-point check completed 2026-08-14**: the non-fp8 arm is portable with existing machinery (streaming-softmax m/l/acc recurrence, positional load masks, `forRangeDyn` dynamic loop stop with `BLOCK_N` step, `IS_CAUSAL` gate, `.to(Q.dtype.element_ty)` erasure) — the last expected-portable kernel; heavyweight attention-genre proof |
 | `fp4_to_bf16` | 214 | `tl.interleave` |
 | `fp4_to_bf16_conversion` | 275 | `tl.interleave` |
 | `uniform_sampling` | 226 | `tl.philox`, `tl.static_assert`, `tl.uint_to_uniform_float` |
@@ -170,7 +169,7 @@ that fails.
 
 | Lever | Unlocks | Kernels |
 |---|---:|---|
-| fp8 dtype channel — **LANDED 2026-08-13 and CLOSED as a lever** (`f8_conversion_utils` 161st, `triton_matmul` 162nd with the first fp8 matmul face, `llama_ff_triton` 163rd at its fp16 arm) | 0 | the three remaining `tl.float8e5` mentions (`attention_llama`, `rms_matmul_rbe`, `rms_rbe_matmul`) are `bitcast=True` bit-reinterpretations — the ℝ-model-limit family, not dtype-channel consumers; their non-fp8 arms are port candidates pending seven-point checks; `matmul_persistent_triton` moved to signed-int |
+| fp8 dtype channel — **LANDED 2026-08-13 and CLOSED as a lever** (`f8_conversion_utils` 161st, `triton_matmul` 162nd with the first fp8 matmul face, `llama_ff_triton` 163rd at its fp16 arm) | 0 | the three remaining `tl.float8e5` mentions (`attention_llama`, `rms_matmul_rbe`, `rms_rbe_matmul`) are `bitcast=True` bit-reinterpretations — the ℝ-model-limit family, not dtype-channel consumers; all three non-fp8 arms are now PORTED (164th–166th, `attention_llama` 166th on 2026-08-16 closing the expected-portable frontier); `matmul_persistent_triton` moved to signed-int |
 | RNG | 4 | `layer_norm_fwd`, `multinomial_sampling`, `seeded_dropout`, `uniform_sampling` |
 | integer channel (int32-accumulator `tl.dot` + signed fixed-width arithmetic + bitwise-on-int) | 7 | `int8_dequant_matmul`, `int8_matmul_quantization`, `int4_matmul`, `matmul_dequant_int4`, `matmul_dequantize`, `int8_matmul_kernel`, `int_scaled_matmul` — see the correction below for why the last two moved here |
 | tl.interleave | 2 | `fp4_to_bf16`, `fp4_to_bf16_conversion` |
