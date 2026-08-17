@@ -6,9 +6,9 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **167** |
-| Not yet imported | 17 |
-| — of those, expressible with today's DSL surface | 2 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **168** |
+| Not yet imported | 16 |
+| — of those, expressible with today's DSL surface | 1 |
 | — of those, blocked on a missing primitive or an ℝ-model limit | 15 |
 
 ## What "expressible" means here, and what it does not
@@ -118,7 +118,6 @@ lever table).
 | `seeded_dropout` | 60 | `tl.rand` |
 | `int8_matmul_kernel` | 271 | `tl.static_assert` — **under-reported**: also an int32-accumulator `tl.dot`, `&`/`>>` on tiles, and a signed int8 subtraction (see correction below) |
 | `isfinite_kernel` | 262 | `libdevice.isfinited` / `finitef` — **and** an ℝ-model limit (see below) |
-| `matmul_dequant_int4` | 302 | signed-nibble subtraction in its `dequantize_kernel` — **UNBLOCKED 2026-08-17** by `Op.intToReal` (landed with the `int4_matmul` port, the 167th); portable now. Its `matmul4_kernel` was always fine — that one is what `matmul_dequantize_int4` ports. |
 | `matmul_dequantize` | 357 | same `dequantize_kernel` (byte-identical) — **UNBLOCKED 2026-08-17** by `Op.intToReal`; portable now. Plus a plain `matmul_kernel` that is fine. |
 | `int8_dequant_matmul` | 212 | `tl.dot` into a `tl.zeros(..., dtype=tl.int32)` accumulator — `Op.dot` is `.real`-only in the AST |
 | `int8_matmul_quantization` | 268 | same int32-accumulator `tl.dot`, plus `.to(tl.int8)` quantization |
@@ -170,7 +169,7 @@ that fails.
 |---|---:|---|
 | fp8 dtype channel — **LANDED 2026-08-13 and CLOSED as a lever** (`f8_conversion_utils` 161st, `triton_matmul` 162nd with the first fp8 matmul face, `llama_ff_triton` 163rd at its fp16 arm) | 0 | the three remaining `tl.float8e5` mentions (`attention_llama`, `rms_matmul_rbe`, `rms_rbe_matmul`) are `bitcast=True` bit-reinterpretations — the ℝ-model-limit family, not dtype-channel consumers; all three non-fp8 arms are now PORTED (164th–166th, `attention_llama` 166th on 2026-08-16 closing the expected-portable frontier); `matmul_persistent_triton` moved to signed-int |
 | RNG | 4 | `layer_norm_fwd`, `multinomial_sampling`, `seeded_dropout`, `uniform_sampling` |
-| integer channel — **signed-promotion tier LANDED 2026-08-17** (`Op.intToReal` + `tl.static_assert`; `int4_matmul` ported as the 167th, its first consumer) | 2 now + 4 pending int-dot | unblocked now: `matmul_dequant_int4`, `matmul_dequantize` (their only gap was the signed-nibble subtraction). Still blocked on an int32-accumulator `tl.dot`: `int8_dequant_matmul`, `int8_matmul_quantization`, `int8_matmul_kernel`, `int_scaled_matmul` — see the correction below for why the last two moved here |
+| integer channel — **signed-promotion tier LANDED 2026-08-17** (`Op.intToReal` + `tl.static_assert`; `int4_matmul` ported as the 167th, its first consumer; `matmul_dequant_int4` followed as the 168th) | 1 now + 4 pending int-dot | unblocked now: `matmul_dequantize` (its only gap was the signed-nibble subtraction; its `dequantize_kernel` is byte-identical to the one the 168th port proves). Still blocked on an int32-accumulator `tl.dot`: `int8_dequant_matmul`, `int8_matmul_quantization`, `int8_matmul_kernel`, `int_scaled_matmul` — see the correction below for why the last two moved here |
 | tl.interleave | 2 | `fp4_to_bf16`, `fp4_to_bf16_conversion` |
 | tl.static_assert (macro no-op) | 2 | `int8_matmul_kernel`, `uniform_sampling` |
 | tl.broadcast_to (alias of tl.broadcast) | 1 | `int_scaled_matmul` |

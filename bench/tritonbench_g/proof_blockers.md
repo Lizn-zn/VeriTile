@@ -242,6 +242,31 @@ unless stated:
   allocates `out` at `x.dtype = float16`) is spelled
   `(accumulator).to(tl.float16)` (`f8_conversion_utils` precedent). The
   K-loop counter is spelled `_i` for Python's `_`.
+- `matmul_dequant_int4` — two disclosed surface deviations, neither
+  semantic, plus a dead-kernel disclosure. The target JIT is the file's
+  **second** kernel, `dequantize_kernel` — the only one any host launches
+  (`matmul_dequantize_int4_s1` → `dequantize_int4` →
+  `dequantize_kernel[grid]`, followed by a host-side `torch.mm`); the
+  file's first kernel, `matmul4_kernel`, is dead code — no host references
+  it, and its body is byte-identical to the kernel the
+  `matmul_dequantize_int4` port proves — so it is not modeled
+  (`rms_rbe_matmul` dead-kernel precedent). (1) The dequant statement is
+  spelled `(tl.cast((int32_b >> b_shift) & $(15), tl.int32) -
+  tl.cast((zp_b >> bzp_shift) & $(15), tl.int32)) * scale_b`: the packed
+  containers live on the `.nat` channel (bitwise ops are nat-only), the
+  nibble difference goes negative and ℕ subtraction truncates, so the
+  subtraction runs on the `.int` channel via `tl.cast`
+  (`Op.castNatToInt`, `kcache_copy_triton` precedent) and the
+  `int × real` product promotes through `Op.intToReal` — the
+  `int4_matmul` disclosure-(3) respell, applied inline. (2) Index
+  literals are antiquoted (`$(8)` / `$(4)`; `0xF` as the decimal `$(15)`;
+  the runtime `group_size` as `$(group_size)`). The three masked loads
+  keep their `other=0.0` kwargs faithfully — on the two packed `.nat`
+  channels the expander reads the literal `0.0` as the nat constant `0`,
+  value-identical. The packed weight/zero-point regions are `Region .nat`
+  (`matmul_dequantize_int4` precedent); the autotune sweep and the host
+  launch (grid, strides, the downstream `torch.mm`) are the trusted
+  boundary.
 - `rms_matmul_rbe` — the second kernel `rms_matmul_rbe_qkv` (the only one
   any host function launches) is a **cross-JIT caller**: its body invokes
   `rms_matmul_rbe(...)` three times (Q/K/V). The DSL has no jit-to-jit
