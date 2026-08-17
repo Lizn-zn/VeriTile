@@ -1984,6 +1984,42 @@ example (theta t : ℝ) (N : Nat) (s : BlockState) (i : TileIndex [N]) :
   simp [Tile.bop_data]
   rfl
 
+/-! ## Integer-channel lever: `Op.intToReal`, `tl.static_assert`, int×real
+
+Regression gates for the signed-promotion lever (dequantization family):
+`tl.static_assert` lowers to a dead-branch no-op; `tl.cast(x, tl.int32)` on a
+`.nat` value is the explicit `Op.castNatToInt` spelling (a bare
+`.to(tl.int32)` on nat stays width-erased by design); a signed difference
+multiplied by an ℝ value auto-promotes through the new `Op.intToReal`. -/
+
+def intPromoteSmoke (sReg outReg : RegionName) (B : Nat) : ComputeKernel :=
+  triton {
+    tl.static_assert($(B) % $(8) == $(0), "B divisible by 8")
+    tl.static_assert($(B) > $(0))
+    offs = tl.arange(0, $(B))
+    s = tl.load($(sReg) + offs)
+    nib = (offs >> $(2)) & $(15)
+    zp = (offs % $(8)) * $(4)
+    d = tl.cast(nib, tl.int32) - tl.cast(zp, tl.int32)
+    v = d * s
+    tl.store($(outReg) + offs, v)
+  }
+
+#check intPromoteSmoke
+
+/-- The int-promotion surface lowers to the algorithm layer. -/
+example (sReg outReg : RegionName) (B : Nat) :
+    ∃ alg, (intPromoteSmoke sReg outReg B).toAlgorithm? = Except.ok alg := by
+  unfold intPromoteSmoke
+  exact ⟨_, rfl⟩
+
+/-- `Op.intToReal` evaluates pointwise to the ℝ embedding of the lane. -/
+example (s : BlockState) (x : Op .int [4]) (v : Tile .int [4])
+    (hx : evalOp x s = some v) (idx : TileIndex [4]) :
+    (evalOp (.intToReal x) s).map (fun t => t.data idx)
+      = some (some ((v.data idx : ℝ))) := by
+  simp [hx]; rfl
+
 /-! ## Trust gates -/
 
 #axiomsClean argmax2_index_store_correct_view

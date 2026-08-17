@@ -42,6 +42,10 @@ Notes on individual constructors:
 * `natToReal` lifts a `Nat`-channel value (`scalarNat` / `tileNat`) into
   the `ℝ` channel. Used by kernels that mix loop counters / sizes with
   ℝ data (e.g. Welford's `delta / (i + 1)`, division by block size).
+* `intToReal` is the signed sibling: it lifts an `Int`-channel value into
+  the `ℝ` channel. Used by dequantization kernels whose zero-point
+  subtraction produces signed values that then multiply ℝ scales
+  (e.g. `(int_b - int_bzp) * scale`).
 * `sqrt` applies `Real.sqrt` pointwise on the `ℝ` channel. Used by
   LayerNorm's `1 / √(var + ε)` and similar normalization kernels.
 * `lt`/`le`/`eq`/`gt`/`ge`/`ne` are pointwise comparison operators
@@ -269,6 +273,7 @@ inductive Op : TileDType → TileShape → Type where
   | load      : (dtype : TileDType) → MemAccess dtype shape →
                 MaskOpt dtype shape → Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
+  | intToReal : Op .int shape → Op .real shape
 
 /-- Memory address form shared by load and store nodes.
 

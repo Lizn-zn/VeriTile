@@ -766,6 +766,16 @@ real value). -/
     (x : Tile .nat shape) (idx : TileIndex shape) :
     (Tile.natToReal x).data idx = some ((x.data idx : ℝ)) := rfl
 
+def Tile.intToReal {shape} (x : Tile .int shape) : Tile .real shape :=
+  ⟨fun i => some ((x.data i : ℝ))⟩
+
+/-- `Tile.intToReal` lifts each `Int` lane to a `some` real value: the signed
+sibling of `Tile.natToReal`, for bridging Int-channel values (e.g. signed
+zero-point differences in dequantization) into Real-channel arithmetic. -/
+@[simp] theorem Tile.intToReal_data {shape : TileShape}
+    (x : Tile .int shape) (idx : TileIndex shape) :
+    (Tile.intToReal x).data idx = some ((x.data idx : ℝ)) := rfl
+
 /-- Block-level (possibly batched) matrix multiply (Triton's `tl.dot`):
 `c[…, m, n] = ∑_k a[…, m, k] * b[…, k, n]`.
 

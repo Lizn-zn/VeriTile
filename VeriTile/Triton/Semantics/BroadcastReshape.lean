@@ -41,6 +41,7 @@ attribute [tile_elementwise]
 
 attribute [tile_elementwise]
   Tile.expandDim Tile.ofReal Tile.natToReal Tile.natToReal_data
+  Tile.intToReal Tile.intToReal_data
   Tile.dot Tile.transpose Tile.select
   Tile.mat_data
 

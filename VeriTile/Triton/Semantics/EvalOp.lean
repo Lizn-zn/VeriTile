@@ -229,6 +229,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
           let others ← evalOp other s
           some ⟨fun i => if masks.data i then read i else others.data i⟩
   | .natToReal a, s => return Tile.natToReal (← evalOp a s)
+  | .intToReal a, s => return Tile.intToReal (← evalOp a s)
 
 @[simp] theorem evalOp_programId (axis : Nat) (s : BlockState) :
     evalOp (.programId axis) s = some (Tile.scalar (s.pids axis)) := by
@@ -348,6 +349,12 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
     evalOp (.natToReal x) s = (do
       let vx ← evalOp x s
       some (Tile.natToReal vx)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_intToReal (x : Op .int shape) (s : BlockState) :
+    evalOp (.intToReal x) s = (do
+      let vx ← evalOp x s
+      some (Tile.intToReal vx)) := by
   simp [evalOp]
 
 @[simp] theorem evalOp_lt

@@ -205,6 +205,31 @@ unless stated:
   `numel` bookkeeping) is the trusted boundary; the f8-side *input*
   buffer's grid membership is a host-pipeline fact the headlines do not
   consume (inputs are exact ℝ per the `⊨[R]` convention).
+- `int4_matmul` — three disclosed surface deviations, none semantic.
+  (1) The `SPLIT_K` constexpr is fixed to `1` (the `tl.store` epilogue arm;
+  the autotune table sweeps `SPLIT_K ∈ {1,2}` and the atomic-add arm
+  accumulates into a host-zeroed `C` via `reset_to_zero` — the
+  `bmm_optimized` fixed-arm precedent), so the headline carries the launch
+  fact `s.pids 1 = 0` (grid axis 1 has extent `SPLIT_K = 1`). (2) The
+  K-loop bound `tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)` is the antiquoted
+  `numKBlocks` with the honest side condition
+  `K = BLOCK_SIZE_K · numKBlocks` (the kernel docstring's own assert; the
+  loads are unmasked so the exact presentation is required —
+  `llama_ff_triton` precedent). (3) The dequant subtraction is spelled
+  `(tl.cast(int_b, tl.int32) - tl.cast(int_bzp, tl.int32)) * bs`: the
+  packed nibbles live on the `.nat` channel (bitwise ops are nat-only) but
+  the nibble difference ranges over `[-15, 15]`, so the subtraction must
+  run on the `.int` channel — `tl.cast(x, tl.int32)` is the explicit
+  `Op.castNatToInt` spelling (`kcache_copy_triton` precedent), and the
+  `int × real` product promotes through `Op.intToReal` (this port is its
+  first consumer). The statement's trailing `.to(a.dtype)` — an
+  erased-identity cast on the ℝ carrier — is dropped from this one
+  assignment (the DSL's `.to(<ident>.dtype)` wrapper raw-text-matches
+  `tl.int*` and rejects the ℝ `bs` operand); the following
+  `tl.dot(a, (b).to(a.dtype))` keeps its cast faithfully. The packed
+  weight/zero-point regions are `Region .nat`
+  (`matmul_dequantize_int4` precedent). The `triton.autotune` sweep and
+  the host launch are the trusted boundary.
 - `llama_ff_triton` — the `USE_FP8` constexpr arm is dropped entirely
   (parameter + branches): that path bit-reinterprets int8 weight bytes as
   `tl.float8e5` (`.to(tl.float8e5, bitcast=True)`) — a bit-level decode with

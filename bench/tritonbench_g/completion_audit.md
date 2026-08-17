@@ -203,6 +203,14 @@ The current documented blocker set is:
   softmax (under `start_position ≤ pid₀ · BLOCK_M` and span `≤ N_CTX`);
   the K/V positional-`other` loads spelled as plain masked loads whose
   dead lanes are pinned by `hundef`; host launch is the trusted boundary.
+- `int4_matmul` — `matmul_kernel` ported at the `SPLIT_K = 1` store arm
+  (markers registered in `proof_blockers.md`); GPTQ int4-dequantize GEMM
+  proven as one exec closed form mirroring the `matmul_dequantize_int4`
+  twin (packed `Region .nat` channels, per-lane group rows); the
+  sub-first dequant runs on the `.int` channel via explicit `tl.cast`
+  and promotes through `Op.intToReal` (first consumer of the
+  signed-promotion lever); `tl.cdiv` trip count as the antiquoted
+  `numKBlocks`; autotune sweep and host launch are the trusted boundary.
 - `attn_fwd_triton` — `_attn_fwd_inner` inlined; `128`/`96` head constants
   generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE` binders.
 - `attn_fwd_causal` — `_attn_fwd_inner` inlined; `128`/`96` generalized.

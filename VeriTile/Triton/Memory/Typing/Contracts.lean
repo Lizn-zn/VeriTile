@@ -189,6 +189,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .load dtype mem mask =>
       mem.RespectsRegionTyping Γ dtype ∧ mask.RespectsRegionTyping Γ
   | .natToReal a => a.RespectsRegionTyping Γ
+  | .intToReal a => a.RespectsRegionTyping Γ
 termination_by op => sizeOf op
 decreasing_by
   all_goals

@@ -156,6 +156,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .advanceBlockPtr ptr deltas => .advanceBlockPtr ptr.eraseDType deltas
   | .load dtype mem mask => .load (VeriTile.Triton.eraseDType dtype) mem.eraseDType mask.eraseDType
   | .natToReal a => .natToReal a.eraseDType
+  | .intToReal a => .intToReal a.eraseDType
 termination_by e => sizeOf e
 decreasing_by
   all_goals

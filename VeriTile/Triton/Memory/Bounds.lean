@@ -159,6 +159,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
                 bp.inBounds idx boundaryCheck = true →
                   bp.address idx < bounds bp.region
   | .natToReal a => a.MemorySafe bounds
+  | .intToReal a => a.MemorySafe bounds
 
 /-- Dynamic pointer addresses are safe for active lanes in state `s`. -/
 def Op.PointerAddressesSafeOn (bounds : RegionBounds) (ptr : Op .ptr shape)
