@@ -267,6 +267,32 @@ unless stated:
   (`matmul_dequantize_int4` precedent); the autotune sweep and the host
   launch (grid, strides, the downstream `torch.mm`) are the trusted
   boundary.
+- `matmul_dequantize` — three JIT kernels, all launched by hosts the test
+  exercises, all three modeled in py order (the audit anchor is the first,
+  `matmul4_kernel`). Per-kernel disclosures, none semantic.
+  **`matmul4_kernel`** (light textual variant of the kernel the
+  `matmul_dequantize_int4` port proves — the source drops the dot's
+  `.to(a.dtype)` cast and spells the dead `c = accumulator.to(…)` binding
+  directly as `tl.float16`): `$(n)` literal antiquoting only (`0xF` as the
+  decimal `$(15)`); `NO_GROUPS` stays a genuine `Bool` parameter with both
+  arms modeled. **`matmul_kernel`** (light textual variant of the kernel
+  the `int4_matmul` port proves): the int4_matmul disclosures (1)–(3)
+  verbatim — `SPLIT_K` fixed to `1` (the `tl.store` arm; the
+  `tl.atomic_add` arm and its `reset_to_zero` host contract are dropped
+  with the constexpr; headline carries `s.pids 1 = 0`), the
+  `tl.cdiv(K, BLOCK_SIZE_K * SPLIT_K)` trip count as the antiquoted
+  `numKBlocks` with `K = BLOCK_SIZE_K · numKBlocks` (unmasked loads), and
+  the signed dequant respell through `tl.cast(·, tl.int32)` +
+  `Op.intToReal`. Unlike the twin, this source spells its value casts
+  directly (`.to(tl.float16)` on the dequantized tile, both `tl.dot`
+  operands, and the stored `c`) — all kept faithfully; the genuinely
+  `.fp16`-typed masked store makes the honest headline readback
+  MemCell-level (the `matmul_tma` fp16 precedent, masked).
+  **`dequantize_kernel`** (byte-identical to the kernel the
+  `matmul_dequant_int4` port proves): that port's disclosures verbatim —
+  the inline `.int`-hop dequant respell and `$(n)` antiquoting; the
+  masked loads keep `other=0.0` faithfully. The autotune sweeps and the
+  three host launches are the trusted boundary.
 - `rms_matmul_rbe` — the second kernel `rms_matmul_rbe_qkv` (the only one
   any host function launches) is a **cross-JIT caller**: its body invokes
   `rms_matmul_rbe(...)` three times (Q/K/V). The DSL has no jit-to-jit

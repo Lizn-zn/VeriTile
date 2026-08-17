@@ -198,6 +198,9 @@ bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_io_correctnes
 bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_dequant_int4/MatmulDequantInt4.lean	matmul_dequant_int4_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_matmul4_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_dequantize_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_dequantize_int4/MatmulDequantizeInt4.lean	matmul_dequantize_int4_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context

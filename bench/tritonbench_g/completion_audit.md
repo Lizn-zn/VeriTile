@@ -221,6 +221,15 @@ The current documented blocker set is:
   explicit `tl.cast` and promotes through `Op.intToReal` (second consumer
   of the signed-promotion lever); the masked loads keep `other=0.0`
   faithfully; the autotune sweep and host launch are the trusted boundary.
+- `matmul_dequantize` — all three JIT kernels launched and modeled in py
+  order (markers registered in `proof_blockers.md`); three disjoint proof
+  stacks mirroring the `matmul_dequantize_int4` / `int4_matmul` /
+  `matmul_dequant_int4` twins; `matmul4_kernel` proven with `NO_GROUPS`
+  as a genuine `Bool` parameter (both arms), `matmul_kernel` at the
+  `SPLIT_K = 1` store arm with a MemCell-level `.fp16` readback (its
+  source keeps explicit `.to(tl.float16)` casts), `dequantize_kernel` a
+  1:1 mirror of the byte-identical 168th port; the three host launches
+  are the trusted boundary.
 - `attn_fwd_triton` — `_attn_fwd_inner` inlined; `128`/`96` head constants
   generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE` binders.
 - `attn_fwd_causal` — `_attn_fwd_inner` inlined; `128`/`96` generalized.
