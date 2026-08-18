@@ -170,6 +170,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .argMin _ a => a.RespectsRegionTyping Γ
   | .sort _ a => a.RespectsRegionTyping Γ
   | .dot a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .dotInt a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .transpose a => a.RespectsRegionTyping Γ
   | .reshape _ a => a.RespectsRegionTyping Γ
   | .remap _ _ a => a.RespectsRegionTyping Γ

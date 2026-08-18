@@ -130,6 +130,10 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.dot batch va vb)
+  | .dotInt (batch := batch) a b, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      some (Tile.dotInt batch va vb)
   | .expandDim axis a, s => return Tile.expandDim axis (← evalOp a s)
   | .where c a b, s => do
       let vc ← evalOp c s
@@ -425,6 +429,15 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
       let vx ← evalOp x s
       let vy ← evalOp y s
       some (Tile.dot batch vx vy)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_dotInt
+    (batch : TileShape) (x : Op .int (batch ++ [M, K]))
+    (y : Op .int (batch ++ [K, N])) (s : BlockState) :
+    evalOp (.dotInt (batch := batch) x y) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      some (Tile.dotInt batch vx vy)) := by
   simp [evalOp]
 
 @[simp] theorem evalOp_transpose

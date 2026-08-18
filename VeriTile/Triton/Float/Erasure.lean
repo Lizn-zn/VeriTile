@@ -137,6 +137,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .argMin axis a => .argMin axis a.eraseDType
   | .sort axis a => .sort axis a.eraseDType
   | .dot a b => .dot a.eraseDType b.eraseDType
+  | .dotInt a b => .dotInt a.eraseDType b.eraseDType
   | .transpose a => .transpose a.eraseDType
   | .reshape outShape a => .reshape outShape a.eraseDType
   | .remap outShape map a => .remap outShape map a.eraseDType

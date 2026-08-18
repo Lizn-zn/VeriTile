@@ -404,6 +404,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .argMin _ a => a.check ctx
   | .sort _ a => a.check ctx
   | .dot a b => a.check ctx *> b.check ctx
+  | .dotInt a b => a.check ctx *> b.check ctx
   | .transpose a => a.check ctx
   | .reshape _ a => a.check ctx
   | .remap _ _ a => a.check ctx

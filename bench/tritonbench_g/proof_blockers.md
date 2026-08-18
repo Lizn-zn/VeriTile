@@ -267,6 +267,32 @@ unless stated:
   (`matmul_dequantize_int4` precedent); the autotune sweep and the host
   launch (grid, strides, the downstream `torch.mm`) are the trusted
   boundary.
+- `int8_dequant_matmul` — five disclosed surface deviations, none semantic.
+  (1) The `SPLIT_K` constexpr is fixed to `1` (the `tl.store` arm; the
+  autotune table sweeps `SPLIT_K ∈ {1,2,4,8,16}` with
+  `pre_hook=init_to_zero("C")`, and the `tl.atomic_add` arm drops with the
+  constexpr — the `int4_matmul` fixed-arm precedent); every `* SPLIT_K`
+  factor folds to 1, `pid_z` and `rk = pid_z*BLOCK_K + arange` stay
+  faithfully spelled, and the headline carries `s.pids 1 = 0`. (2) The
+  `EVEN_K` `triton.heuristics` constexpr (`K % (BLOCK_K*SPLIT_K) == 0`)
+  is fixed to `True` (the unmasked-load arm; the masked `else` arm drops —
+  the `bmm_optimized` heuristics + `sgmv_expand_slice` `EVEN_K`
+  precedents), with the `tl.cdiv` trip count as the antiquoted
+  `numKBlocks` and the honest side condition `K = BLOCK_K · numKBlocks`.
+  (3) `has_bias` stays a genuine `Bool` parameter with BOTH arms modeled
+  (the `matmul_dequantize` `NO_GROUPS` precedent); one headline covers
+  both via a guarded bias term. (4) The two `.to(C.dtype.element_ty)`
+  casts are spelled `.to(tl.float16)` (the host allocates `C` as
+  `float16`; `llama_ff_triton` precedent) — the accumulator cast is a
+  genuine `Op.castFloat real → fp16` making the masked store
+  `.fp16`-typed (MemCell-level readback, the `matmul_dequantize`
+  precedent), and `tl.load(bias + rn).to(tl.float16)` compiles to a
+  direct `.fp16`-typed load by a dedicated syntax rule (not
+  load-then-cast). (5) `$(n)` literal antiquoting. The int8 `A`/`B`
+  regions are `Region .int` (signed channel); `acc += tl.dot(a, b)` is
+  the first `Op.dotInt` consumer, and the epilogue's `acc * divfactor`
+  promotes through `Op.intToReal`. The autotune sweep, the heuristics
+  lambda, and the host launch are the trusted boundary.
 - `matmul_dequantize` — three JIT kernels, all launched by hosts the test
   exercises, all three modeled in py order (the audit anchor is the first,
   `matmul4_kernel`). Per-kernel disclosures, none semantic.

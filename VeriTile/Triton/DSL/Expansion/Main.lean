@@ -1248,20 +1248,24 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandDot expandExpr env a b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr $[, $_kwargs:tritonReduceKwarg]*)) => do
       -- Triton dot kwargs such as `allow_tf32` and `out_dtype` are execution
-      -- hints for the current real-valued carrier, so the compute semantics
-      -- erase them.
+      -- hints, so the compute semantics erase them: for float operands the
+      -- current carrier is real-valued, and for int operands
+      -- `out_dtype=tl.int32` is redundant with the operand dtype (the `.int`
+      -- channel already accumulates exactly in ℤ).
       expandDot expandExpr env a b
   | `(tritonExpr| tl.dot($a:tritonExpr, $b:tritonExpr, $acc:tritonExpr)) => do
       -- Fused accumulator form: `tl.dot(a, b, acc) ≡ acc + tl.dot(a, b)`.
       -- Both `tl.dot(a, b)` and `acc` have shape `[M, N]`; their `+` uses
-      -- the standard same-shape broadcast.
+      -- the standard same-shape broadcast. The accumulator channel follows
+      -- the dot's (`.real`, or `.int` for the integer tl.dot).
       let dot ← expandDot expandExpr env a b
       let acc' ← expandExpr env acc
-      ensureDType .real acc'.dtype "tl.dot accumulator"
+      ensureDType dot.dtype acc'.dtype "tl.dot accumulator"
       ensureShape dot.shape acc'.shape "tl.dot accumulator"
+      let np ← dot.dtype.numericProof
       let (bc, outShape) ← broadcastTerm dot.shape acc'.shape "tl.dot accumulator"
-      pure ⟨← `(Op.add NumericDType.real $bc $dot.term $acc'.term),
-            .real, outShape, none, none⟩
+      pure ⟨← `(Op.add $np $bc $dot.term $acc'.term),
+            dot.dtype, outShape, none, none⟩
   | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $baseKw:ident=$base:tritonExpr,
         $shapeKw:ident=[$parentDims:tritonExpr,*], $stridesKw:ident=[$strideDims:tritonExpr,*],
         $offsetsKw:ident=[$offsetDims:tritonExpr,*], $blockShapeKw:ident=[$blockDims:tritonExpr,*])) => do

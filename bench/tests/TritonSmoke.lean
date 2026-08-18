@@ -2020,6 +2020,55 @@ example (s : BlockState) (x : Op .int [4]) (v : Tile .int [4])
       = some (some ((v.data idx : ℝ))) := by
   simp [hx]; rfl
 
+/-! ### Integer `tl.dot` (`Op.dotInt`): int32-accumulator matmul -/
+
+/-- Two `.int`-channel 2×2 loads feeding an integer `tl.dot` into an
+int32 zero accumulator via `+=`, then an int×real promotion
+(`Op.intToReal`) on the way to the store — the `int8_dequant_matmul`
+accumulator shape in miniature. -/
+def dotIntSmoke (aReg bReg : Region .int) (outReg : RegionName) :
+    ComputeKernel := triton {
+  rm = tl.arange(0, $(2))
+  rn = tl.arange(0, $(2))
+  offs = rm[:, None] * $(2) + rn[None, :]
+  a = tl.load($((aReg : Region .int)) + offs)
+  b = tl.load($((bReg : Region .int)) + offs)
+  acc = tl.zeros([$(2), $(2)], dtype=tl.int32)
+  acc += tl.dot(a, b)
+  out = acc * $((0.5 : ℝ))
+  tl.store($(outReg) + offs, out)
+}
+
+#check dotIntSmoke
+
+/-- The integer-dot surface lowers to the algorithm layer. -/
+example (aReg bReg : Region .int) (outReg : RegionName) :
+    ∃ alg, (dotIntSmoke aReg bReg outReg).toAlgorithm? = Except.ok alg := by
+  unfold dotIntSmoke
+  exact ⟨_, rfl⟩
+
+/-- `Op.dotInt` evaluates entrywise to the exact ℤ sum-product. (The
+dependent `batch ++ [M, N]` shape keeps `evalOp_dotInt` /
+`Tile.dotInt_nil_data` from firing under plain `simp`, so the rewrites are
+`erw`s — same as `evalOp_dot`.) -/
+example (s : BlockState) (x y : Op .int [2, 2]) (vx vy : Tile .int [2, 2])
+    (hx : evalOp x s = some vx) (hy : evalOp y s = some vy) (m n : Fin 2) :
+    (evalOp (.dotInt (batch := []) x y) s).map (fun t => t.data (m, n, PUnit.unit)) =
+      some (@Finset.sum (Fin 2) Int _ Finset.univ
+        (fun k => vx.data (m, k, PUnit.unit) * vy.data (k, n, PUnit.unit))) := by
+  erw [evalOp_dotInt]
+  simp [hx, hy]
+  erw [Tile.dotInt_nil_data]
+  simp [Fin.sum_univ_two]
+
+/-- Concrete entry check: with `a ≡ 3` and `b ≡ 5` on 2×2 tiles, each
+`dotInt` entry is the ℤ sum-product `3*5 + 3*5 = 30`. -/
+example :
+    (Tile.dotInt [] (M := 2) (K := 2) (N := 2)
+        ⟨fun _ => (3 : Int)⟩ ⟨fun _ => (5 : Int)⟩).data (0, 0, PUnit.unit)
+      = 30 := by
+  decide
+
 /-! ## Trust gates -/
 
 #axiomsClean argmax2_index_store_correct_view

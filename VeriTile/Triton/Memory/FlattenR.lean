@@ -191,6 +191,7 @@ def Op.SafeAtR (R : RoundingModel) (bounds : RegionBounds) (s : BlockState) : Op
   | .argMin _ a => a.SafeAtR R bounds s
   | .sort _ a => a.SafeAtR R bounds s
   | .dot a b => a.SafeAtR R bounds s ∧ b.SafeAtR R bounds s
+  | .dotInt a b => a.SafeAtR R bounds s ∧ b.SafeAtR R bounds s
   | .transpose a => a.SafeAtR R bounds s
   | .reshape _ a => a.SafeAtR R bounds s
   | .remap _ _ a => a.SafeAtR R bounds s
@@ -515,6 +516,16 @@ theorem FlatAlloc.evalOpR_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOpR_flatten A hd hcov R a s hma hka hu,
         evalOpR_flatten A hd hcov R b s hmb hkb hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .dotInt a b, s, hms, hok, hu => by
+      simp only [Op.SafeAtR] at hms
+      simp only [Op.FlattenOkR] at hok
+      obtain ⟨hma, hmb⟩ := hms
+      obtain ⟨hka, hkb⟩ := hok
+      simp only [flattenOp, evalOpR,
+        evalOpR_flatten A hd hcov R a s hma hka hu,
+        evalOpR_flatten A hd hcov R b s hmb hkb hu,
+        A.trTileFun_data (d := .int) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .exp a, s, hms, hok, hu => by
       simp only [Op.SafeAtR] at hms
