@@ -39,6 +39,8 @@ private def expandLoadOtherAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
       | `(tritonExpr| -$n:num) =>
           let t : TSyntax `term := ⟨Syntax.mkNumLit (toString n.getNat)⟩
           pure (some ⟨← `(Op.constInt (-($t : Int))), .int, SInfo.scalar, none, none⟩)
+      | `(tritonExpr| 0.0) =>
+          pure (some ⟨← `(Op.constInt 0), .int, SInfo.scalar, none, none⟩)
       | `(tritonExpr| $($t:term)) =>
           pure (some ⟨← `(Op.constInt $t), .int, SInfo.scalar, none, none⟩)
       | _ => pure none
