@@ -293,6 +293,34 @@ unless stated:
   the first `Op.dotInt` consumer, and the epilogue's `acc * divfactor`
   promotes through `Op.intToReal`. The autotune sweep, the heuristics
   lambda, and the host launch are the trusted boundary.
+- `int8_matmul_quantization` — two JIT kernels, both launched
+  (`matmul_quantize_int8` chains the per-row quantizer into the int8
+  GEMM), both modeled in py order (audit anchor = the first,
+  `quantize_int8_perrow_kernel`). Per-kernel disclosures, none semantic.
+  **`quantize_int8_perrow_kernel`**: (1) both `tl.cdiv` K-loop bounds are
+  the antiquoted `numKBlocks` in the honestly-ragged **ceil form**
+  `K ≤ numKBlocks · BK` (the loads and the int8 store carry genuine
+  remainder masks, so extra all-masked blocks contribute nothing — weaker
+  than the exact-divisibility `matmul_triton_autotune` form); (2) the
+  final scale store is Triton's implicit fp16 store cast (the host
+  allocates `a_scale` as `float16`), spelled `(a_scale).to(tl.float16)`
+  (`f8_conversion_utils` precedent) — an `.fp16`-typed store read back at
+  the MemCell level; (3) `127.` is written `127.0` and index literals are
+  antiquoted `$(n)`. The `.to(tl.int8)` quantization is
+  `Op.castRealToInt8` (truncate-toward-zero; the ±127 hardware-saturation
+  caveat is the #154-family disclosure, `quantize_copy_kv` wording).
+  **`matmul_kernel`**: (1) `SPLIT_K` fixed to `1` (the `tl.store` arm;
+  autotune sweeps {1,2} with `reset_to_zero=['c_ptr']`, the
+  `tl.atomic_add` arm drops; headline carries `s.pids 1 = 0`); (2) the
+  epilogue's `accumulator.to(tl.float32)` has no explicit int→float
+  spelling in the DSL — the promotion is carried by the auto-inserted
+  `Op.intToReal` at exactly the Python cast's site in
+  `(accumulator * a_scale[:, None] * b_scale[None, :]).to(tl.float16)`;
+  (3) the same ceil-form `numKBlocks`; (4) `$(n)` literals. The masked
+  `.int` K loads' `other=0.0` kwargs are kept faithfully — the expander's
+  `.int` channel gained the literal-`0.0` arm (a two-line mechanical
+  clone of the `.nat` arm) with this port. The autotune sweeps and both
+  host launches are the trusted boundary.
 - `matmul_dequantize` — three JIT kernels, all launched by hosts the test
   exercises, all three modeled in py order (the audit anchor is the first,
   `matmul4_kernel`). Per-kernel disclosures, none semantic.

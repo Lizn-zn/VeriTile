@@ -20,10 +20,10 @@ variant, and proof-status tracked.
 
 ## Current state
 
-**170 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
-holds a faithful `.py` + `.lean` pair, all 170 compile (`bench/check_ports.sh`
-reports `170 ok, 0 fail`), and every completed port carries a standard
-`ComputeCorrect.Realizes` correctness surface. The 14 remaining work
+**171 TritonBench-G kernels are ported** — each `bench/tritonbench_g/<kernel>/`
+holds a faithful `.py` + `.lean` pair, all 171 compile (`bench/check_ports.sh`
+reports `171 ok, 0 fail`), and every completed port carries a standard
+`ComputeCorrect.Realizes` correctness surface. The 13 remaining work
 directories are README-only scaffolds, not yet counted as ports. The source of
 truth for these counts and the per-port evidence is
 [`tritonbench_g/completion_audit.md`](./tritonbench_g/completion_audit.md); the
@@ -42,22 +42,22 @@ project.
 ## TritonBench-G v1 anchor
 
 We are aligning the verification benchmark with [TritonBench-G v1][tb] (184
-GitHub-scraped real Triton kernels, ACL 2025 Findings). **170 of the 184 are ported.** The original (2026-05-05) static primitive scan
+GitHub-scraped real Triton kernels, ACL 2025 Findings). **171 of the 184 are ported.** The original (2026-05-05) static primitive scan
 estimated only 141 as within the DSL contract; the levers it named
 (`tl.math.*` / `tl.extra` adapters, the concurrency boundary,
 `tl.num_programs`, the `atomic_add` proof shape) have since landed, so that
 estimate is superseded — treat it as history, not status.
 
-The remaining **14 are scaffolded but not imported**: the per-kernel directory
+The remaining **13 are scaffolded but not imported**: the per-kernel directory
 and README exist, the upstream `.py` does not. Re-measured against the DSL's
 actual surface (95 `tl.*` forms, extracted from `VeriTile/Triton/DSL/**`):
 
 | Verdict | Count |
 |---|---:|
 | Portable now — every form it uses already in the DSL | 0 |
-| Blocked on a missing primitive, or on an ℝ-model limit | 14 |
+| Blocked on a missing primitive, or on an ℝ-model limit | 13 |
 
-Ranked unlock levers for the 14: the **fp8 dtype channel landed and closed
+Ranked unlock levers for the 13: the **fp8 dtype channel landed and closed
 2026-08-13** (`.f8e4`/`.f8e5`; ports 161–163 — the three remaining
 `tl.float8e5` mentions are `bitcast=True` bit-reinterpretations, an ℝ-model
 limit, whose non-fp8 arms are now all ported as the 164th–166th ports,
@@ -66,10 +66,11 @@ limit, whose non-fp8 arms are now all ported as the 164th–166th ports,
 the integer channel — its **signed-promotion tier landed 2026-08-17**
 (`Op.intToReal` + `tl.static_assert`; consumers = ports 167–169) and its
 **int-dot tier landed 2026-08-18** (`Op.dotInt`, the integer-accumulator
-`tl.dot`; first consumer `int8_dequant_matmul` = the 170th port; the 3
-remaining int-family kernels — `int8_matmul_quantization`,
-`int8_matmul_kernel`, `int_scaled_matmul` — need only small riders now:
-`tl.broadcast_to`, a `tl.full` tuple-dims respell, `castRealToInt8`), RNG
+`tl.dot`; consumers: `int8_dequant_matmul` = the 170th port,
+`int8_matmul_quantization` — both its JIT kernels — = the 171st; the 2
+remaining int-family kernels — `int8_matmul_kernel`, `int_scaled_matmul`
+— need only small riders now: `tl.broadcast_to`, a `tl.full` tuple-dims
+respell), RNG
 (4), a `while` statement in `Stmt` (3), `tl.interleave` (2),
 `tl.static_assert` (2, a macro no-op), `tl.broadcast_to` (1, an alias), IEEE
 inf/NaN + `libdevice.isfinited` (1). See
