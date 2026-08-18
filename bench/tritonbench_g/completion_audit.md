@@ -211,6 +211,15 @@ The current documented blocker set is:
   and promotes through `Op.intToReal` (first consumer of the
   signed-promotion lever); `tl.cdiv` trip count as the antiquoted
   `numKBlocks`; autotune sweep and host launch are the trusted boundary.
+- `int8_dequant_matmul` — `_int8_matmul_rowwise_dequantize` ported at the
+  `SPLIT_K = 1` store arm and the `EVEN_K = True` load arm (markers
+  registered in `proof_blockers.md`); int8×int8→int32 GEMM with rowwise
+  dequant epilogue, the first `Op.dotInt` consumer — the accumulator
+  stays on the ℤ channel through the whole K loop and promotes to ℝ once
+  via `Op.intToReal` in the epilogue; `has_bias` a genuine `Bool` with
+  both arms under one headline; the faithful `.to(tl.float16)` casts make
+  the masked store `.fp16`-typed, read back at the MemCell level; the
+  autotune sweep and host launch are the trusted boundary.
 - `matmul_dequant_int4` — the target JIT is the file's second kernel,
   `dequantize_kernel`, the only one launched (the first, `matmul4_kernel`,
   is dead code byte-identical to the `matmul_dequantize_int4` port's
