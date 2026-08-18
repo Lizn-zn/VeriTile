@@ -28,27 +28,27 @@ LLM-assist 评估不再是项目的 benchmark 维度。
 
 我们正在把 verification benchmark 与 [TritonBench-G v1][tb] 对齐
 (184 个 GitHub-scraped 真实 Triton kernel,ACL 2025 Findings)。
-**184 个里已移植 168 个。** 最初(2026-05-05)的静态 primitive scan 只估出
+**184 个里已移植 169 个。** 最初(2026-05-05)的静态 primitive scan 只估出
 141 个在 DSL 契约内;它点名的那些杠杆(`tl.math.*` / `tl.extra` adapter、
 concurrency 边界、`tl.num_programs`、`atomic_add` proof shape)此后都已落地,
 所以那组估计已被取代 —— 它是历史,不是现状。
 
-剩下的 **16 个是"占位目录建了、上游 `.py` 从未导入"**。按 DSL 的**实际** surface
+剩下的 **15 个是"占位目录建了、上游 `.py` 从未导入"**。按 DSL 的**实际** surface
 (95 个 `tl.*` 形式,从 `VeriTile/Triton/DSL/**` 提取)重新实测:
 
 | 判定 | 数量 |
 |---|---:|
-| 现在就能移植 —— 用到的一切形式全在 DSL 里 | 1 |
+| 现在就能移植 —— 用到的一切形式全在 DSL 里 | 0 |
 | 被缺失 primitive 或 ℝ 模型限制阻塞 | 15 |
 
-那 16 个的解锁杠杆按产出排序:**fp8 dtype channel 已于 2026-08-13 落地并收官**
+那 15 个的解锁杠杆按产出排序:**fp8 dtype channel 已于 2026-08-13 落地并收官**
 (`.f8e4`/`.f8e5`;第 161–163 港;剩余三处 `tl.float8e5` 全是 `bitcast=True`
 位重解释 = ℝ 模型限制,其非 fp8 臂已全部移植 = 第 164–166 港,
 `attention_llama` 收尾 = 预期可移植前沿清空;
 `matmul_persistent_triton` 复查后并入有符号整型家族)、整数通道——其**有符号提升档
 已于 2026-08-17 落地**(`Op.intToReal` + `tl.static_assert`;首个消费者
-`int4_matmul` = 第 167 港,`matmul_dequant_int4` = 第 168 港,剩
-`matmul_dequantize` 为"现在就能移植";其余 4 个整型家族港仍缺 int32 累加器
+`int4_matmul` = 第 167 港,`matmul_dequant_int4` = 第 168 港,
+`matmul_dequantize` 三核全建模 = 第 169 港,消费者队列清空;其余 4 个整型家族港仍缺 int32 累加器
 `tl.dot`,含 `int8_matmul_kernel` 与
 `int_scaled_matmul`——其单名阻塞行此前漏报)、RNG(4)、`Stmt` 里的
 `while` 语句(3)、`tl.interleave`(2)、`tl.static_assert`(2,宏层
