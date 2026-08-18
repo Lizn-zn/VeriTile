@@ -215,6 +215,16 @@ inductive Op : TileDType → TileShape → Type where
                 Op .real (batch ++ [M, K]) → Op .real (batch ++ [K, N]) →
                 Op .real (batch ++ [M, N])
   /--
+  Integer matrix multiply: Triton's `tl.dot` on two int8/int32 tiles
+  accumulates in int32 (`acc = tl.zeros(..., dtype=tl.int32);
+  acc += tl.dot(a, b)` in `int8_dequant_matmul`, the first consumer). On
+  the DSL's `.int` channel (carrier ℤ) this is the exact integer
+  sum-product `c[…, m, n] = ∑_k a[…, m, k] * b[…, k, n]`, with no
+  rounding obligations. Batch/shape discipline is identical to `Op.dot`. -/
+  | dotInt    : {batch : TileShape} → {M K N : Nat} →
+                Op .int (batch ++ [M, K]) → Op .int (batch ++ [K, N]) →
+                Op .int (batch ++ [M, N])
+  /--
   Trailing-two-axes transpose (`x.T` in Triton, mirrors how `Op.dot`
   treats the trailing two dims as the matrix and any leading dims as a
   passthrough `batch` prefix). For 2D this is the standard `.T`; for

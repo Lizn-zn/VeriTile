@@ -137,6 +137,10 @@ noncomputable def evalOpR (R : RoundingModel) :
       let va ← evalOpR R a s
       let vb ← evalOpR R b s
       some (Tile.dot batch va vb)
+  | .dotInt (batch := batch) a b, s => do
+      let va ← evalOpR R a s
+      let vb ← evalOpR R b s
+      some (Tile.dotInt batch va vb)
   | .expandDim axis a, s => return Tile.expandDim axis (← evalOpR R a s)
   | .where c a b, s => do
       let vc ← evalOpR R c s
@@ -339,6 +343,8 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
   | _, _, .argMin _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .sort _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .dot a b, s => by
+      simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
+  | _, _, .dotInt a b, s => by
       simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
   | _, _, .expandDim _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .where c a b, s => by

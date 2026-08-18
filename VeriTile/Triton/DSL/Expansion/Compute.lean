@@ -617,18 +617,30 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
           pure []
       pure ⟨term, outDType, SInfo.dims outDims, none, none⟩
 
-/-- Lower a `tl.dot(a, b)` to `Op.dot a b`.
+/-- Lower a `tl.dot(a, b)` to `Op.dot a b` (or `Op.dotInt` on the `.int`
+channel).
 
-Algorithm-layer dot is real-valued. If the surface operands were explicitly
-cast to fp32/fp16/bf16, first project those float tiles back to real so the
-cast remains visible in the operand term before the dot. -/
+Algorithm-layer dot is real-valued unless *both* operands are `.int`, in
+which case the lowering is the integer matmul `Op.dotInt` (Triton's
+int8/int32-accumulator `tl.dot`) and the result stays `.int`. If the
+surface operands were explicitly cast to fp32/fp16/bf16, first project
+those float tiles back to real so the cast remains visible in the operand
+term before the dot. Mixed int/float operands are rejected (Triton would
+not accept them either); nat operands must be cast to a signed int first
+(int8 loads are signed). -/
 partial def expandDot (expandExpr : ExprExpander) (env : Env)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a0 ← expandExpr env a
   let b0 ← expandExpr env b
+  if (a0.dtype == .int) != (b0.dtype == .int) then
+    Macro.throwError
+      ("tl.dot: mixed operand dtypes — both operands must be int "
+        ++ "(integer tl.dot, `Op.dotInt`) or both float (`Op.dot`); "
+        ++ "cast the odd side first (nat values: `tl.cast(x, tl.int32)`)")
+  let outDType : DInfo := if a0.dtype == .int then .int else .real
   let a' ←
     match a0.dtype with
-    | .real => pure a0
+    | .real | .int => pure a0
     | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 | .floatVar _ =>
         pure { a0 with term := ← realMathTerm "tl.dot lhs" a0, dtype := .real }
     | _ =>
@@ -636,7 +648,7 @@ partial def expandDot (expandExpr : ExprExpander) (env : Env)
         pure a0
   let b' ←
     match b0.dtype with
-    | .real => pure b0
+    | .real | .int => pure b0
     | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 | .floatVar _ =>
         pure { b0 with term := ← realMathTerm "tl.dot rhs" b0, dtype := .real }
     | _ =>
@@ -678,9 +690,14 @@ partial def expandDot (expandExpr : ExprExpander) (env : Env)
         let tail ← batchTerm rest
         `($d :: $tail)
   let batchT ← batchTerm aBatch
-  pure ⟨← `(Op.dot (batch := $batchT) (M := $aM) (K := $aK) (N := $bN)
-              $a'.term $b'.term),
-        .real, .dims (aBatch ++ [aM, bN]), none, none⟩
+  let opTerm ←
+    if outDType == .int then
+      `(Op.dotInt (batch := $batchT) (M := $aM) (K := $aK) (N := $bN)
+          $a'.term $b'.term)
+    else
+      `(Op.dot (batch := $batchT) (M := $aM) (K := $aK) (N := $bN)
+          $a'.term $b'.term)
+  pure ⟨opTerm, outDType, .dims (aBatch ++ [aM, bN]), none, none⟩
 
 partial def expandShapeDims (ctx : String) (dims : Array (TSyntax `tritonExpr)) :
     MacroM (TSyntax `term × SInfo) := do

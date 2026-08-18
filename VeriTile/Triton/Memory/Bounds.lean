@@ -49,6 +49,7 @@ def Active (s : BlockState) : (mask : MaskOpt dtype shape) → TileIndex shape �
 
 end MaskOpt
 
+set_option maxHeartbeats 800000 in
 /-- State-independent memory-safety contract for expressions.
 
 For `Op.load`, the predicate recursively checks address/mask/other
@@ -118,6 +119,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .argMin _ a => a.MemorySafe bounds
   | .sort _ a => a.MemorySafe bounds
   | .dot a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
+  | .dotInt a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .transpose a => a.MemorySafe bounds
   | .reshape _ a => a.MemorySafe bounds
   | .remap _ _ a => a.MemorySafe bounds
