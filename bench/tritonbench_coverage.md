@@ -6,10 +6,10 @@ kernels (THUNLP / Tsinghua, ACL 2025 Findings; arXiv 2502.14752).
 | | Count |
 |---|---:|
 | Anchor corpus | 184 |
-| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **170** |
-| Not yet imported | 14 |
+| **Ported** (faithful `.py` + `.lean` pair, compiles, headline proven) | **171** |
+| Not yet imported | 13 |
 | — of those, expressible with today's DSL surface | 0 |
-| — of those, blocked on a missing primitive or an ℝ-model limit | 14 |
+| — of those, blocked on a missing primitive or an ℝ-model limit | 13 |
 
 ## What "expressible" means here, and what it does not
 
@@ -118,7 +118,6 @@ lever table).
 | `seeded_dropout` | 60 | `tl.rand` |
 | `int8_matmul_kernel` | 271 | `tl.static_assert` — **under-reported**: also an int32-accumulator `tl.dot`, `&`/`>>` on tiles, and a signed int8 subtraction (see correction below) |
 | `isfinite_kernel` | 262 | `libdevice.isfinited` / `finitef` — **and** an ℝ-model limit (see below) |
-| `int8_matmul_quantization` | 268 | same int32-accumulator `tl.dot`, plus `.to(tl.int8)` quantization |
 | `layer_norm_triton` | 231 | `while tl.atomic_cas(Lock, 0, 1) == 1` **inside** `_layer_norm_bwd_dx_fused` — `Stmt` has `forLoop`/`forRange`/`forRangeDyn` but no `while` |
 | `spinning_lock_reduction` | 99 | two `while`s, one a `tl.atomic_cas` spin whose exit depends on another program |
 | `streamk_matmul` | 295 | two `while`s plus three atomics |
@@ -167,7 +166,7 @@ that fails.
 |---|---:|---|
 | fp8 dtype channel — **LANDED 2026-08-13 and CLOSED as a lever** (`f8_conversion_utils` 161st, `triton_matmul` 162nd with the first fp8 matmul face, `llama_ff_triton` 163rd at its fp16 arm) | 0 | the three remaining `tl.float8e5` mentions (`attention_llama`, `rms_matmul_rbe`, `rms_rbe_matmul`) are `bitcast=True` bit-reinterpretations — the ℝ-model-limit family, not dtype-channel consumers; all three non-fp8 arms are now PORTED (164th–166th, `attention_llama` 166th on 2026-08-16 closing the expected-portable frontier); `matmul_persistent_triton` moved to signed-int |
 | RNG | 4 | `layer_norm_fwd`, `multinomial_sampling`, `seeded_dropout`, `uniform_sampling` |
-| integer channel — **signed-promotion tier LANDED 2026-08-17** (`Op.intToReal` + `tl.static_assert`; consumers = ports 167–169) and the **int-dot tier LANDED 2026-08-18** (`Op.dotInt`, the integer-accumulator `tl.dot`; first consumer `int8_dequant_matmul` = the 170th port) | 3 remaining | `int8_matmul_quantization` (also `.to(tl.int8)` quantization = `castRealToInt8`, already in the DSL), `int8_matmul_kernel` (also a `tl.full` tuple-dims respell + int8 subtraction), `int_scaled_matmul` (also `tl.broadcast_to`) — see the correction below for why the last two moved here |
+| integer channel — **signed-promotion tier LANDED 2026-08-17** (`Op.intToReal` + `tl.static_assert`; consumers = ports 167–169) and the **int-dot tier LANDED 2026-08-18** (`Op.dotInt`, the integer-accumulator `tl.dot`; consumers so far: `int8_dequant_matmul` = the 170th port, `int8_matmul_quantization` — both its JIT kernels — = the 171st) | 2 remaining | `int8_matmul_kernel` (also a `tl.full` tuple-dims respell + int8 subtraction), `int_scaled_matmul` (also `tl.broadcast_to`) — see the correction below for why both moved here |
 | tl.interleave | 2 | `fp4_to_bf16`, `fp4_to_bf16_conversion` |
 | tl.static_assert (macro no-op) | 2 | `int8_matmul_kernel`, `uniform_sampling` |
 | tl.broadcast_to (alias of tl.broadcast) | 1 | `int_scaled_matmul` |

@@ -220,6 +220,16 @@ The current documented blocker set is:
   both arms under one headline; the faithful `.to(tl.float16)` casts make
   the masked store `.fp16`-typed, read back at the MemCell level; the
   autotune sweep and host launch are the trusted boundary.
+- `int8_matmul_quantization` — both JIT kernels launched and modeled in
+  py order (markers registered in `proof_blockers.md`): the per-row
+  float→int8 quantizer (two sequential K loops — a 0-seeded streaming
+  abs-max pass, then the `Op.castRealToInt8` quantize-and-store pass;
+  one exec headline with two MemCell readback conjuncts, int8 cells +
+  fp16 scale cells) and the int8×int8→int32 GEMM (second `Op.dotInt`
+  consumer, remainder-masked K loads at the honestly-ragged ceil-form
+  `numKBlocks`, `SPLIT_K = 1` store arm, per-row × per-col scale
+  epilogue promoted through `Op.intToReal`, fp16 MemCell readback);
+  the autotune sweeps and host launches are the trusted boundary.
 - `matmul_dequant_int4` — the target JIT is the file's second kernel,
   `dequantize_kernel`, the only one launched (the first, `matmul4_kernel`,
   is dead code byte-identical to the `matmul_dequantize_int4` port's
