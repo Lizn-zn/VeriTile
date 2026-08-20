@@ -146,6 +146,7 @@ bench/tritonbench_g/index_select_bwd/IndexSelectBwd.lean	index_select_cat_bwd_ke
 bench/tritonbench_g/index_select_cat/IndexSelectCat.lean	index_select_cat_fwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/int4_matmul/Int4Matmul.lean	int4_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/int8_dequant_matmul/Int8DequantMatmul.lean	int8_dequant_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/int8_matmul_kernel/Int8MatmulKernel.lean	int8_matmul_kernel_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/int8_matmul_quantization/Int8MatmulQuantization.lean	int8_matmul_quantization_quantize_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/int8_matmul_quantization/Int8MatmulQuantization.lean	int8_matmul_quantization_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/int8_quantization/Int8Quantization.lean	per_block_int8_correctness	full_value_candidate	none		no proof-gap marker in summary context
