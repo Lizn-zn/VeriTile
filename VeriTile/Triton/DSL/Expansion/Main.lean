@@ -1567,6 +1567,15 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       expandPermute expandExpr env e axes.getElems.toList
   | `(tritonExpr| tl.reshape($e:tritonExpr, [$dims:tritonExpr,*])) => do
       expandReshapeLike expandExpr env "tl.reshape" e dims.getElems
+  | `(tritonExpr| tl.broadcast_to($e:tritonExpr, [$dims:tritonExpr,*])) => do
+      -- `tl.broadcast_to(e, [dims*])`: broadcast `e` to the literal target
+      -- shape, reusing the mutual-broadcast machinery (`Op.broadcast` for a
+      -- scalar source, `Op.remap` over `Broadcast.leftIndex` otherwise; an
+      -- already-matching shape is the identity).
+      let e' ← expandExpr env e
+      let (_, targetShape) ← expandShapeDims "tl.broadcast_to" dims.getElems
+      let out ← coerceShape e'.term e'.shape targetShape "tl.broadcast_to"
+      pure ⟨out, e'.dtype, targetShape, none, none⟩
   | `(tritonExpr| tl.view($e:tritonExpr, [$dims:tritonExpr,*])) => do
       expandReshapeLike expandExpr env "tl.view" e dims.getElems
   | `(tritonExpr| tl.ravel($e:tritonExpr)) => do

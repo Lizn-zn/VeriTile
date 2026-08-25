@@ -293,6 +293,42 @@ unless stated:
   the first `Op.dotInt` consumer, and the epilogue's `acc * divfactor`
   promotes through `Op.intToReal`. The autotune sweep, the heuristics
   lambda, and the host launch are the trusted boundary.
+- `int_scaled_matmul` — two JIT kernels, both launched, both modeled in
+  py order (audit anchor = the first, `matmul_kernel_with_block_pointers`).
+  **`matmul_kernel_with_block_pointers`** (block-pointer int8 GEMM):
+  (1) integer widths erased — the block-ptr loads are spelled faithfully
+  (`tl.load(bp, boundary_check=(0, 1))`, no added kwargs; their `.int`
+  channel is inherited from the typed base region of `tl.make_block_ptr`
+  via this port's inference rider — untyped bases keep the historical
+  `.real` default, so every existing block-ptr port lowers unchanged),
+  and the int8/int32 widths collapse onto the `.int` channel (#154
+  fixed-width family);
+  (2) tuple→bracket respells (`tl.advance` deltas, `tl.zeros` shape);
+  (3) the `GROUP_M = min(…, GROUP_M)` parameter-name rebind is spelled
+  as a register assignment whose RHS reads the antiquoted binder —
+  shadowing works, no rename; (4) `order=(1, 0)` erased (`matmul_tma`
+  precedent). The step-form loop `range(0, K, BLOCK_K)` is spelled
+  directly (no trip-count binder; boundary checks keep it ragged-safe
+  under the sole hypothesis `0 < BK`).
+  **`scaled_matmul_kernel_with_block_pointers`** (pointer GEMM +
+  inductor store suffix): (1) the descending loop
+  `range(K, 0, -BLOCK_K)` is the ascending change of variable with the
+  in-body `k` rematerialization (`parallel_retention_attention`
+  precedent); (2) `ACC_TYPE : tl.constexpr = tl.int32` fixed at its only
+  instantiation (`bmm_optimized` fixed-arm family); (3) the
+  `tl.broadcast_to(…, mask.shape)` shape attribute is respelled to the
+  literal dims `[BLOCK_M, BLOCK_N]` (the `tl.broadcast_to` syntax itself
+  landed with this port); (4) `eviction_policy="evict_last"` is kept and
+  macro-erased; (5) integer widths erased, and the suffix's
+  `acc * tmp0` store — an `.int × .real` product promoted through
+  `Op.intToReal` — writes `.real`-typed cells into the int32-allocated
+  `C`: the cell carries the exact real product and the hardware's
+  float→int32 store truncation is outside the model (#154 family).
+  `EVEN_K` stays a genuine `Bool` with both arms modeled
+  (`hEven : EVEN_K = true → K = numKBlocks·BK` guards only the unmasked
+  arm); `stride_s1m`/`stride_s1n` are dead parameters (the `s1` load is
+  strideless — `fused_recurrent_retention` dead-stride precedent). The
+  host launches are the trusted boundary.
 - `int8_matmul_kernel` — four disclosed surface deviations, none
   semantic, in a **pure-integer** kernel (int32 A × 2-bit-packed uint8 B
   → int32 C; no floats anywhere). (1) The inner loop bound

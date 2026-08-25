@@ -220,6 +220,19 @@ The current documented blocker set is:
   both arms under one headline; the faithful `.to(tl.float16)` casts make
   the masked store `.fp16`-typed, read back at the MemCell level; the
   autotune sweep and host launch are the trusted boundary.
+- `int_scaled_matmul` — both JIT kernels launched and modeled in py
+  order (markers registered in `proof_blockers.md`): the block-pointer
+  int8 GEMM (first `.int`-channel block-ptr port — element dtype
+  inherited from the typed base region via the port's inference rider,
+  private `.int` boundary-check load lemmas, `tl.advance` walk,
+  `MemCell.of .int` readback; step-form K loop spelled directly under
+  `0 < BK` only) and
+  the pointer GEMM with the inductor store suffix (descending loop as
+  ascending substitution, `EVEN_K` a genuine `Bool` with both arms,
+  `tl.broadcast_to` — whose syntax rider landed with this port — flat
+  `col + N·row` store of the `Op.intToReal`-promoted `acc · s1(row)`
+  read back as exact-`.real` cells); the host launches are the trusted
+  boundary.
 - `int8_matmul_kernel` — `matmul_kernel` ported in full (markers
   registered in `proof_blockers.md`); a pure-integer 2-bit-packed-weight
   GEMM proven as one fully dimension-general exec closed form — the

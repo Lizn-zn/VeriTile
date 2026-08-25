@@ -2069,6 +2069,48 @@ example :
       = 30 := by
   decide
 
+/-! ## `tl.broadcast_to`: explicit-target broadcast (the inductor-suffix spelling)
+
+Regression gates for `tl.broadcast_to(e, [dims*])`: a `[B, 1]`-shaped tile
+broadcast to `[B, B]` lowers through the existing mutual-broadcast machinery
+(`Op.remap` over `Broadcast.leftIndex`), and an operand already at the target
+shape is the identity (no wrapper node). The `.shape` attribute argument of
+the inductor spelling (`tl.broadcast_to(idx_m, mask.shape)`) is respelled to
+explicit literal dims by ports. -/
+
+def broadcastToSmoke (sReg outReg : RegionName) (B : Nat) : ComputeKernel :=
+  triton {
+    rm = tl.arange(0, $(B))
+    rn = tl.arange(0, $(B))
+    idx_m = rm[:, None]
+    idx_n = rn[None, :]
+    mask = (idx_m < $(B)) & (idx_n < $(B))
+    xindex = idx_n + ($(B) * idx_m)
+    tmp0 = tl.load($(sReg) + (tl.broadcast_to(idx_m, [$(B), $(B)])), mask)
+    tl.store($(outReg) + (tl.broadcast_to(xindex, [$(B), $(B)])), tmp0, mask)
+  }
+
+#check broadcastToSmoke
+
+/-- The broadcast_to surface lowers to the algorithm layer. -/
+example (sReg outReg : RegionName) (B : Nat) :
+    ∃ alg, (broadcastToSmoke sReg outReg B).toAlgorithm? = Except.ok alg := by
+  unfold broadcastToSmoke
+  exact ⟨_, rfl⟩
+
+/-- The `[B, 1] → [B, B]` lowering is `Op.remap` over
+`Broadcast.leftIndex (Broadcast.consSame (Broadcast.consL Broadcast.nil))`:
+each output lane reads its source row. -/
+example (s : BlockState) (x : Op .nat [2, 1]) (v : Tile .nat [2, 1])
+    (hx : evalOp x s = some v) (i j : Fin 2) :
+    (evalOp (Op.remap [2, 2]
+        (Broadcast.leftIndex
+          (Broadcast.consSame (Broadcast.consL Broadcast.nil))) x) s).map
+      (fun t => t.data (i, j, PUnit.unit))
+      = some (v.data (i, (0 : Fin 1), PUnit.unit)) := by
+  simp only [evalOp, hx, Option.bind_some, Option.map_some]
+  rfl
+
 /-! ## Trust gates -/
 
 #axiomsClean argmax2_index_store_correct_view

@@ -202,6 +202,10 @@ syntax "tl.flip(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.join(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.split(" tritonExpr ", " num ")" : tritonExpr
 syntax "tl.broadcast(" tritonExpr ", " tritonExpr ")" : tritonExpr
+-- `tl.broadcast_to(e, [dims*])` — broadcast `e` to an explicit target shape
+-- (literal dims, like `tl.zeros`' shape list). Attribute-style shape
+-- arguments (`mask.shape`) are respelled to their literal dims by ports.
+syntax "tl.broadcast_to(" tritonExpr ", " "[" tritonExpr,* "]" ")" : tritonExpr
 
 syntax "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ")" : tritonExpr
 syntax (priority := low) "tl.full(" "[" tritonExpr,* "]" ", " tritonExpr ", " ident "=" tritonDType ")" : tritonExpr

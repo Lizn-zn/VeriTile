@@ -76,6 +76,7 @@ partial def natExprIdents : TSyntax `tritonExpr → List String := fun stx =>
   | `(tritonExpr| $e:tritonExpr[ : , : , None ]) => natExprIdents e
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:tritonReduceKwarg)) => natExprIdents e
   | `(tritonExpr| tl.expand_dims($e:tritonExpr, $_:num)) => natExprIdents e
+  | `(tritonExpr| tl.broadcast_to($e:tritonExpr, [$_:tritonExpr,*])) => natExprIdents e
   | _ => []
 
 /-- The names of identifiers that have been previously assigned in the
@@ -929,6 +930,26 @@ private partial def rootedPtrDType (regionDTypes : RegionDTypes)
           | none => none
   | `(tritonExpr| $a:tritonExpr + $_:tritonExpr) =>
       rootedPtrDType regionDTypes ptrElems a
+  -- `tl.make_block_ptr(base=…)`: a block pointer knows its element type —
+  -- it is the base region's. Recursing on the base lets `tl.load(bp, …)`
+  -- through a block-ptr register default to the base's element dtype (the
+  -- same inheritance plain `name = region + offset` bindings get); untyped
+  -- bases resolve to `none`, keeping the historical `.real` default.
+  | `(tritonExpr| tl.make_block_ptr($p:tritonExpr, $_:ident=$base:tritonExpr,
+        $_:ident=[$_:tritonExpr,*], $_:ident=[$_:tritonExpr,*],
+        $_:ident=[$_:tritonExpr,*], $_:ident=[$_:tritonExpr,*])) =>
+      match rootedPtrDType regionDTypes ptrElems p with
+      | some d => some d
+      | none => rootedPtrDType regionDTypes ptrElems base
+  | `(tritonExpr| tl.make_block_ptr($_:ident=$base:tritonExpr,
+        $_:ident=($_:tritonExpr,*), $_:ident=($_:tritonExpr,*),
+        $_:ident=($_:tritonExpr,*), $_:ident=($_:tritonExpr,*),
+        $_:ident=($_:num,*))) =>
+      rootedPtrDType regionDTypes ptrElems base
+  | `(tritonExpr| tl.make_block_ptr($_:ident=$base:tritonExpr,
+        $_:ident=($_:tritonExpr,*), $_:ident=($_:tritonExpr,*),
+        $_:ident=($_:tritonExpr,*), $_:ident=($_:tritonExpr,*))) =>
+      rootedPtrDType regionDTypes ptrElems base
   | _ => none
 
 mutual
