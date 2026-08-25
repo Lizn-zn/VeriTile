@@ -293,6 +293,25 @@ unless stated:
   the first `Op.dotInt` consumer, and the epilogue's `acc * divfactor`
   promotes through `Op.intToReal`. The autotune sweep, the heuristics
   lambda, and the host launch are the trusted boundary.
+- `int8_matmul_kernel` — four disclosed surface deviations, none
+  semantic, in a **pure-integer** kernel (int32 A × 2-bit-packed uint8 B
+  → int32 C; no floats anywhere). (1) The inner loop bound
+  `tl.cdiv(K // 4, BLOCK_SIZE_K)` is the antiquoted `numKBlocks` with
+  the honest side condition `K = 4 · (BK · numKBlocks)` — exactly the
+  kernel's own `tl.static_assert(K % (4*BLOCK_SIZE_K) == 0)` (spelled
+  faithfully; the assert makes both load masks degenerately all-true,
+  which the port proves). (2) `tl.full((1,), 1, dtype=tl.int8)` spells
+  its shape `[1]` (tuple → bracket; the rank-1 `[1]` operand needs no
+  further respell — the expander's broadcast does rank promotion).
+  (3) Integer width erasure at three sites: the A-load's `.to(tl.int8)`
+  is a width-erasure no-op on the `.int` channel (the host feeds
+  0..255, so hardware int8 would wrap values ≥ 128 — the #154
+  fixed-width caveat); the extract's `.to(tl.int8)` is the genuine
+  `Op.castNatToInt` signed hop (values {0..3}, no honesty gap); the
+  `tl.full` dtype hint's int8 width is erased to `.int`. (4) `$(n)`
+  literal antiquoting. The `out_dtype=tl.int32` dot kwarg is kept and
+  macro-erased (redundant on the exact-ℤ `Op.dotInt`). The autotune
+  sweep and host launch are the trusted boundary.
 - `int8_matmul_quantization` — two JIT kernels, both launched
   (`matmul_quantize_int8` chains the per-row quantizer into the int8
   GEMM), both modeled in py order (audit anchor = the first,

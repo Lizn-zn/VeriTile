@@ -220,6 +220,16 @@ The current documented blocker set is:
   both arms under one headline; the faithful `.to(tl.float16)` casts make
   the masked store `.fp16`-typed, read back at the MemCell level; the
   autotune sweep and host launch are the trusted boundary.
+- `int8_matmul_kernel` — `matmul_kernel` ported in full (markers
+  registered in `proof_blockers.md`); a pure-integer 2-bit-packed-weight
+  GEMM proven as one fully dimension-general exec closed form — the
+  first **nested-loop** `Op.dotInt` consumer (static field loop ×
+  dynamic K loop; the A pointer advances continuously across both, the
+  B pointer rebinds per field); `tl.static_assert` spelled faithfully
+  (second consumer) and its divisibility is the headline's only K
+  hypothesis; `.int`-typed store cells read back over launch-state
+  accessors; the autotune sweep and host launch are the trusted
+  boundary.
 - `int8_matmul_quantization` — both JIT kernels launched and modeled in
   py order (markers registered in `proof_blockers.md`): the per-row
   float→int8 quantizer (two sequential K loops — a 0-seeded streaming

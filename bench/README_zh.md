@@ -28,20 +28,20 @@ LLM-assist 评估不再是项目的 benchmark 维度。
 
 我们正在把 verification benchmark 与 [TritonBench-G v1][tb] 对齐
 (184 个 GitHub-scraped 真实 Triton kernel,ACL 2025 Findings)。
-**184 个里已移植 171 个。** 最初(2026-05-05)的静态 primitive scan 只估出
+**184 个里已移植 172 个。** 最初(2026-05-05)的静态 primitive scan 只估出
 141 个在 DSL 契约内;它点名的那些杠杆(`tl.math.*` / `tl.extra` adapter、
 concurrency 边界、`tl.num_programs`、`atomic_add` proof shape)此后都已落地,
 所以那组估计已被取代 —— 它是历史,不是现状。
 
-剩下的 **13 个是"占位目录建了、上游 `.py` 从未导入"**。按 DSL 的**实际** surface
+剩下的 **12 个是"占位目录建了、上游 `.py` 从未导入"**。按 DSL 的**实际** surface
 (95 个 `tl.*` 形式,从 `VeriTile/Triton/DSL/**` 提取)重新实测:
 
 | 判定 | 数量 |
 |---|---:|
 | 现在就能移植 —— 用到的一切形式全在 DSL 里 | 0 |
-| 被缺失 primitive 或 ℝ 模型限制阻塞 | 13 |
+| 被缺失 primitive 或 ℝ 模型限制阻塞 | 12 |
 
-那 13 个的解锁杠杆按产出排序:**fp8 dtype channel 已于 2026-08-13 落地并收官**
+那 12 个的解锁杠杆按产出排序:**fp8 dtype channel 已于 2026-08-13 落地并收官**
 (`.f8e4`/`.f8e5`;第 161–163 港;剩余三处 `tl.float8e5` 全是 `bitcast=True`
 位重解释 = ℝ 模型限制,其非 fp8 臂已全部移植 = 第 164–166 港,
 `attention_llama` 收尾 = 预期可移植前沿清空;
@@ -49,8 +49,9 @@ concurrency 边界、`tl.num_programs`、`atomic_add` proof shape)此后都已�
 已于 2026-08-17 落地**(`Op.intToReal` + `tl.static_assert`;消费者 = 第
 167–169 港),**int-dot 档已于 2026-08-18 落地**(`Op.dotInt` 整型累加
 `tl.dot`;消费者:`int8_dequant_matmul` = 第 170 港、
-`int8_matmul_quantization` 双核全建模 = 第 171 港;剩余 2 个整型家族港
-只差小零件:`tl.broadcast_to`、`tl.full` 元组维改拼)、RNG(4)、`Stmt` 里的
+`int8_matmul_quantization` 双核全建模 = 第 171 港、`int8_matmul_kernel`
+= 第 172 港;整型家族只剩 `int_scaled_matmul`,只差
+`tl.broadcast_to` 小零件)、RNG(4)、`Stmt` 里的
 `while` 语句(3)、`tl.interleave`(2)、`tl.static_assert`(2,宏层
 no-op)、`tl.broadcast_to`(1,别名)、IEEE inf/NaN +
 `libdevice.isfinited`(1)。
