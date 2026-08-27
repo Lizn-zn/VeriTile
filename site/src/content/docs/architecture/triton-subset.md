@@ -30,6 +30,12 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 - `tl.program_id(axis)` and `tl.program_id(axis=axis)` where `axis` is a
   numeric literal or `$(n)`. The runtime state stores `pids : Nat → Nat`,
   so every axis is total.
+- `tl.num_programs(axis)` and `tl.num_programs(axis=axis)` (#92): the
+  launch-grid dimension along `axis`. The runtime state stores
+  `numPids : Nat → Nat` (default `1` on every axis — one program per
+  unspanned axis); `BlockState.withGridIndex` sets it to the actual grid
+  dimensions when instantiating per-program states, so under an ND launch
+  (#88 / `Launch.Grid`) `tl.num_programs` reads the true grid extent.
 - `tl.for i in $(n) { ... }` and `tl.for i in N { ... }`.
   The loop is operationally modeled and proved through `forLoop_inv`.
 - `tl.static_range i in $(n) { ... }` and `tl.static_range i in N { ... }`
@@ -118,10 +124,11 @@ Supported channels:
 - `tl.maximum(a, b)` and `tl.minimum(a, b)` as pointwise select-based sugar
   over comparable channels. Branch broadcasting is currently limited to
   scalar-to-tile lifting, matching `tl.where`.
-- Prefix scans: `tl.cumsum`, `tl.cumprod`, and `tl.associative_scan(x, op,
-  axis=N)` on `.real` tiles. The supported associative op names are the closed
-  enum `sum`, `prod`, `max`, `min`; arbitrary user functions are not embedded
-  in the AST.
+- Directed scans: `tl.cumsum`, `tl.cumprod`, and `tl.associative_scan(x, op,
+  axis=N)` on `.real` tiles, each accepting `reverse=True/False` (#94):
+  `forward` is the prefix fold, `reverse` the suffix fold along the scanned
+  axis. The supported associative op names are the closed enum `sum`, `prod`,
+  `max`, `min`; arbitrary user functions are not embedded in the AST.
 - Index/order ops: `tl.argmax`, `tl.argmin`, and `tl.sort` on `.real` tiles
   with static `axis=N`. Arg ties return the smallest axis index; sort is
   ascending along the selected axis.
@@ -177,7 +184,7 @@ ComputeCorrect gap contract path (#59).
 - `tl.max(x, axis=N, return_indices=True)` returns a (value, index) tuple
   consumable only via the multi-assign binding form
   `vmax, imax = tl.max(x, axis=N, return_indices=True)`. Use
-  [`ComputeCorrect.OutputPairWhere`](/VeriTile/proofs/correctness-surfaces/) for the
+  [`ComputeCorrect.OutputPairWhere`](./CorrectnessSurfaces.md) for the
   paired-channel correctness surface.
 
 Omitted `axis` follows Triton's `axis=None` behavior: reduce over all
@@ -226,6 +233,13 @@ Supported stores:
 Unknown kwargs are rejected. For block pointers, `boundary_check` is supported
 only on block-pointer `tl.load` / `tl.store`; it cannot be mixed with `mask` or
 `other`. The only modeled `padding_option` is `"zero"`.
+
+The executable checker rejects block-pointer metadata rank mismatches
+(`parentShape`, `blockShape`, `strides`, and `offsets` must have the same
+rank) and statically visible `tl.advance` underflow. Runtime execution remains
+total for unchecked terms; theorem statements should use `BlockPtr.WellFormed`,
+`BlockPtr.CheckedAxesValid`, and `BlockPtr.AdvanceNonnegative` when they rely
+on Triton-style well-formed block pointers.
 
 Masked load semantics:
 
@@ -285,8 +299,26 @@ Kernel.checkStrict Γ k
 reports undeclared regions. The checker tracks register dtype/shape
 consistency, pointer and block-pointer provenance through assignments, direct
 and pointer-derived load/store dtype mismatches, and basic block-pointer
-metadata sanity. It deliberately does not prove bounds, aliasing, launch
-coverage, page ownership, or IEEE/hardware dtype fidelity.
+metadata sanity, including rank equality and static block-pointer advance
+underflow. A unified `BlockPtrSummary` carries block-pointer region, optional
+parent rank, and optional static offsets through simple expressions and
+registers, so checks continue across simple assignment and `tl.advance`
+chains. It deliberately does not prove bounds, aliasing,
+launch coverage, page ownership, or IEEE/hardware dtype fidelity.
+The first proof-facing bridges are available as
+`checkBlockPtrMetadata_ok`, `checkBoundaryAxes_ok`, and
+`checkStaticAdvanceNonnegative_ok`; summary-level bridges
+`BlockPtrSummary.ofStaticChecked_ok`,
+`BlockPtrSummary.ofDynamicOffsetsChecked_ok`,
+`BlockPtrSummary.checkedAdvance_ok`, and
+`BlockPtrSummary.checkBoundary_ok` cover construction and propagation. These
+lemmas turn successful local checker calls into the corresponding theorem-side
+block-pointer contracts.
+The convention for these local obligations is: checker code and decidable
+contracts share executable `BlockPtr.*Valid` / axis-level Bool helpers,
+theorem statements expose Prop wrappers such as `BlockPtr.WellFormed` and
+`BlockPtr.AdvanceNonnegative`, and `_ok` lemmas bridge successful checker
+results to those Prop contracts.
 
 Pointer values can be used inline, assigned, and reused:
 
@@ -304,7 +336,10 @@ shape, block shape, strides, and logical offsets. Block-pointer load/store
 computes each lane address from that layout; out-of-bounds checked load lanes
 return zero, and out-of-bounds checked store lanes leave memory unchanged. It
 does not yet model pointer casts, pointer comparison, hardware/TMA block-pointer
-behavior, or a typed address space.
+behavior, or a typed address space. For proof-facing contracts, use
+`BlockPtr.WellFormed` for metadata rank equality, `BlockPtr.CheckedAxesValid`
+for `boundary_check` axes, and `BlockPtr.AdvanceNonnegative` for signed
+`tl.advance` deltas.
 
 Offsets are explicit `.nat` expressions. For higher-dimensional tensors, the
 user supplies strided offset formulas such as:
@@ -319,8 +354,10 @@ still use the lower-level `InputAt` escape hatch for arbitrary offset maps and
 then package the result as a `TensorView`. Aliasing is represented by choosing
 equal or distinct `RegionName`s; arbitrary pointer alias analysis beyond those
 named regions is not modeled. See
-[`GpuMemoryModel.md`](/VeriTile/architecture/gpu-memory-model/) for the GPU memory hierarchy scope
-and the sequential-consistency assumptions.
+[`GpuMemoryModel.md`](./GpuMemoryModel.md) for the GPU memory hierarchy scope
+and the sequential-consistency assumptions. See
+[`SemanticCaveats.md`](./SemanticCaveats.md) for the semantic assumptions that
+affect theorem interpretation.
 
 ## Floating-Point Model
 
@@ -335,7 +372,10 @@ Arithmetic is currently an `ℝ` abstraction:
 What this means: theorems prove real-valued mathematical correctness, not
 bit-level IEEE-754 equivalence. Rounding, NaNs, signed zeros, overflow,
 underflow, denormals, exception flags, hardware dot precision, and fast-math
-rewrites are not modeled.
+rewrites are not modeled. See
+[`SemanticCaveats.md`](./SemanticCaveats.md) for the review checklist around
+partial math functions, fixed-width integers, pointer offsets, and total
+memory reads.
 
 The core AST uses one dtype-indexed memory form:
 
@@ -382,6 +422,7 @@ current semantic contract.
 | --- | --- | --- |
 | Scalar/tile constants | Supported | Real literals, context-sensitive `$(x)`, `-inf` / `-float("inf")`, register refs |
 | Program IDs | Limited | `tl.program_id(axis)` and `tl.program_id(axis=axis)` for literal or antiquoted `Nat` axes; ND grid quantification is available through `GridIndex` / `Kernel.ForAllPrograms`, but no launch executor is modeled |
+| Grid dims | Limited | `tl.num_programs(axis)` / `tl.num_programs(axis=axis)` reading `BlockState.numPids` (default `1`); `withGridIndex` sets it from the launch grid |
 | Loops | Supported | Bounded `tl.for`; `tl.static_range` alias backed by the same loop AST |
 | Conditionals | Limited | Scalar `if cond { ... }` and `tl.if cond { ... }` (and `... else { ... }`); no `break` or `continue` |
 | Multi-assign | Supported | `x, y = e1, e2` parallel binding; `value, index = tl.max(..., return_indices=True)` tuple-op binding |
@@ -392,7 +433,7 @@ current semantic contract.
 | Pointwise select | Supported | `tl.where(cond, a, b)` with scalar lifting and matching non-scalar shapes |
 | Unary math | Supported | `tl.exp`, `tl.exp2`, `tl.log`, `tl.log2`, `tl.sigmoid`, `tl.sqrt`, `tl.tanh`, `tl.sin`, `tl.cos`, `tl.tan`, `tl.atan`, `tl.cosh`, `tl.sinh`, `tl.erf`, `tl.extra.cuda.libdevice.erf`; floating dtype tags project to `.real` for algorithm proofs |
 | Reductions | Supported | `tl.sum`, `tl.max` with optional `axis=` (or positional axis) and `keep_dims` over `.real` or floating-tagged tiles; floating tags project to `.real`; `tl.max(..., return_indices=True)` returns a value/index tuple via multi-assign |
-| Prefix scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` over `.real` or floating-tagged tiles; no arbitrary combine functions |
+| Directed scans | Limited | `tl.cumsum`, `tl.cumprod`, `tl.associative_scan(x, sum/prod/max/min, axis=N)` with optional `reverse=True/False` (prefix/suffix fold) over `.real` or floating-tagged tiles; no arbitrary combine functions |
 | Index/order ops | Limited | `tl.argmax`, `tl.argmin`, `tl.sort` over `.real` or floating-tagged tiles with static `axis=N`; arg ties return the smallest axis index, sort is ascending |
 | Broadcast | Supported | ND same-dim, scalar-to-tile, and dimension-`1` expansion |
 | Shape construction | Limited | `tl.arange`, `tl.full`, `tl.zeros`, rank-1 `[:, None]` / `[None, :]`, literal-axis `tl.expand_dims` |
@@ -451,13 +492,15 @@ A lifter is only useful for kernels whose operations are already representable.
 - Arbitrary pointer alias analysis beyond named-region equality.
 - General Python/Triton JIT semantics, decorators, meta-parameter execution,
   and Python control flow outside the embedded `triton { ... }` block.
-- Atomic operations.
+- Atomic-family members beyond the current limited `atomic_add` /
+  `atomic_xchg` / `atomic_cas` algorithm slices.
 - Async copy / TMA / shared-memory staging.
 - Barriers and inter-program or inter-warp synchronization.
 - Full grid launch execution. `GridIndex` / `Kernel.ForAllPrograms` provide a
   theorem surface for quantifying over every program instance in an ND grid,
   but VeriTile still does not model a sequential or concurrent launch executor,
-  global memory merge, overlapping writes, races, atomics, or scheduling.
+  overlapping ordinary writes, races, full CUDA atomic memory ordering, or
+  scheduling.
 - Caches and performance hints such as `cache_modifier`, `eviction_policy`,
   `volatile`, or `is_volatile`.
 - Higher-rank bracket slicing beyond the currently supported rank-1

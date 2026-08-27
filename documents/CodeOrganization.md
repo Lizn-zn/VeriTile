@@ -141,7 +141,7 @@ VeriTile/
   Triton.lean               Umbrella prelude — `import VeriTile.Triton` pulls
                             the whole subset (Core + Semantics + Memory +
                             KernelLemmas + Correctness + Float + DSL + Math +
-                            Launch + Concurrency). All 152 bench ports and the
+                            Launch + Concurrency). All 173 bench ports and the
                             showcase files import this single module.
   Triton/
     Core/                   AST: the `Kernel` / `ComputeKernel` types and the
@@ -149,7 +149,10 @@ VeriTile/
                             `Triton/Compute.lean` was folded in here and deleted).
     Semantics/              Typed operational semantics: exec, step, tiled
                             indexing, masked reduction, streaming accumulator, …
-    Memory/                 BlockState, tensor views, readback.
+    Memory/                 BlockState, tensor views, readback. Also the
+                            flat-memory bridge (Flatten*) and KernelSpec.lean
+                            — the 61 `KernelIO` skins behind the `⊨` headline
+                            surface (see documents/CorrectnessSurfaces.md).
     DSL/                    `triton { ... }` macro front-end.
     Math/                   Pure `(Fin N → ℝ) → ...` operators (see three-layer
                             rule). Math/Erf is split: lightweight

@@ -12,6 +12,13 @@ kernel,作为 [TritonBench, ACL 2025 Findings][paper] 的 headline channel
 > 构造是否被 VeriTile 的 DSL 契约覆盖",不是 "proof 可行吗"。许多
 > `OK` 判定的 kernel 仍需新 proof 工程。见 §Caveats。
 
+> **结果(2026-08-27)。** 这份 2026-05-05 静态扫描预测 184 个 kernel 里有 141 个
+> 落在 DSL 契约内。实际移植数是 **173** —— 扫描低估了,因为它列为 blocker 的
+> 若干杠杆后来都落地了(fp8 dtype、整型 `Op.intToReal`/`Op.dotInt` 通道、降序
+> `range`、block pointer),另有 6 个 kernel 被 `tl.*` 名字扫描误判(Python 级
+> 运算符和 `dtype=` 关键字逃过了它)。剩下 11 个未移植的是 README-only 占位目录。
+> 下面的数字是原扫描的,作为当时的历史估计保留。
+
 ## Headline
 
 | 判定 | 数量 | 占比 |

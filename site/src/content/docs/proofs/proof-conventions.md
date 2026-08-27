@@ -2,6 +2,7 @@
 title: "VeriTile Proof Conventions"
 ---
 
+
 Tactic-level conventions that came out of repeated kernel proofs. These are
 not absolute rules — when a proof is uncomfortable, you can deviate, but the
 default choices below are what most VeriTile kernel proofs use.
@@ -138,7 +139,7 @@ mimic the writeIf — let `writeIf` do the masking, keep the spec pure.
 
 ## See also
 
-- [`CodeOrganization.md`](/VeriTile/architecture/code-organization/) — three-layer structure
+- [`CodeOrganization.md`](./CodeOrganization.md) — three-layer structure
   (Math / Semantics / per-kernel glue)
-- [`CorrectnessSurfaces.md`](/VeriTile/proofs/correctness-surfaces/) — the user-facing
+- [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) — the user-facing
   theorem surfaces (`Realizes`, `WriteMap`, `OutputReadable`)

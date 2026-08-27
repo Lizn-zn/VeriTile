@@ -37,14 +37,19 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   `ComputeCorrect.Realizes_without_Rounding`) at the trivial model. See the
   fused-vs-unfused SwiGLU showcase
   [`bench/examples/FusedSwigluEquiv.lean`](./bench/examples/FusedSwigluEquiv.lean).
-- **Examples**: 152 ported TritonBench-G kernels with proofs (source of truth:
+- **Examples**: 173 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   see [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
   forward, online softmax, Welford, LayerNorm, log-sum-exp.
-- **CI gate**: `lake build` + `scripts/check-artifact.sh` (no `sorry`,
-  axiom whitelist, manifest schema, doc-drift checks).
-  `bench/check_ports.sh` is a separate local check (not run in CI) that
-  builds the TritonBench-G ports one by one.
+- **CI gates**: `.github/workflows/bench-audit.yml` runs
+  `bench/audit_tritonbench_g.sh` — per-port elaboration
+  (`bench/check_ports.sh`), the Python↔Lean faithfulness scans, the proof-gap
+  manifest, and both trust audits (`#axiomsClean` over the library via
+  `VeriTile.Meta.TrustReport`, and over the standalone bench corpus via
+  `bench/audit_trust.sh`). `.github/workflows/artifact.yml` runs `lake build` +
+  `scripts/check-artifact.sh` (no `sorry`, axiom whitelist, manifest schema,
+  doc-drift checks); that workflow is currently disabled in repository settings
+  (`gh workflow enable artifact.yml` re-enables it).
 
 Out of scope: IEEE-754 floating-point semantics, PTX-level codegen,
 detailed concurrency (atomics / async-copy serialization, beyond the
@@ -160,7 +165,7 @@ VeriTile/
     Launch/                Grid-launch composition / write footprints
     Concurrency/           Grid-wide atomic-add correctness (above Launch)
   Examples/                Worked correctness/refinement proofs
-bench/tritonbench_g/       TritonBench-G v1 ports (152 pairs; see completion_audit.md)
+bench/tritonbench_g/       TritonBench-G v1 ports (173 pairs; see completion_audit.md)
 bench/examples/            Showcase proofs (SwiGLU rounding invariance, ...)
 documents/                 Design notes, subset spec, surface guide
 scripts/                   CI gate, kernel manifest, LLM proof wrapper
@@ -173,7 +178,10 @@ verso/                     Slide deck / overview
 - `scripts/check-artifact.sh` — `lake build` ∧ `no sorry` ∧ axiom
   whitelist ∧ kernel-manifest schema ∧ README/doc-term drift
 - `bench/check_ports.sh` — per-port build of the TritonBench-G ports
-  (local / manual; not part of the CI gate)
+  (also run inside `bench/audit_tritonbench_g.sh`, the bench-audit CI gate)
+- `bench/audit_tritonbench_g.sh` — the full bench gate: the per-port build
+  above ∧ faithfulness scans ∧ proof-gap manifest ∧ both trust audits
+- `bench/audit_trust.sh` — `#axiomsClean` over every standalone bench file
 
 ## Environment
 

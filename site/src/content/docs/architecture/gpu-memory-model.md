@@ -43,6 +43,10 @@ Partially modeled:
 - First-class pointer values for `RegionName × Nat`.
 - Triton-style block pointer values for `tl.make_block_ptr` / `tl.advance` and
   checked block-pointer load/store with zero padding / store skip.
+  The optional checker enforces metadata rank equality and static
+  `tl.advance` no-underflow cases; theorem-side contracts are
+  `BlockPtr.WellFormed`, `BlockPtr.CheckedAxesValid`, and
+  `BlockPtr.AdvanceNonnegative`.
 
 Not modeled yet:
 
@@ -72,16 +76,20 @@ This is the right abstraction for current per-program proofs. Whole-grid
 execution is only modeled as a theorem surface: `GridIndex` instantiates
 `BlockState.pids`, and `Kernel.ForAllPrograms` / `ForAllProgramsSome` quantify
 over every program instance in an ND grid. VeriTile does not yet model a
-sequential or concurrent launch executor, global memory merge, overlapping
-writes, races, atomics, or scheduling.
+sequential or concurrent launch executor, overlapping writes, races, full CUDA
+atomic memory ordering, or scheduling. Whole-grid memory results are available
+only through explicit disjoint-frame or atomic/RMW merge relations.
 
 Layer-2a frame reasoning is modeled as a predicate-level proof contract:
 `WriteFootprint := (RegionName × Nat) → Prop` and `BlockState.WriteWithin`
 state that a single-program execution changed only the cells inside a supplied
 footprint. Layer-2b adds `Kernel.mergeFrames`: an extensional, disjoint
 whole-grid merge over explicit per-program `Kernel.ExecFrame`s. This is still
-not a concurrent/interleaved executor; overlapping writes, atomics, scheduling,
-barriers, async, and shared memory remain outside the model.
+not a concurrent/interleaved executor. Overlapping ordinary writes,
+scheduling, barriers, async, and shared memory remain outside the model.
+Atomics are covered only by the narrow algorithm-level slices described in
+[`ConcurrencySemantics.md`](./ConcurrencySemantics.md): atomic-add sum merge
+and selected single-cell RMW linearization with explicit witnesses.
 
 ## Not Modeled
 
@@ -95,7 +103,9 @@ the current semantic contract:
   lanes, or scheduling.
 - Tensor Core / WGMMA instruction behavior and mixed-precision accumulation.
 - Async copy, TMA, barriers, fences, or inter-program synchronization.
-- Atomics and cross-block memory races.
+- Full CUDA atomic memory ordering and cross-block memory races. VeriTile has
+  only limited algorithm-level atomic slices with explicit merge or
+  linearization witnesses.
 
 These omissions mean VeriTile proves real-valued functional correctness for a
 single symbolic Triton program instance. It does not prove performance

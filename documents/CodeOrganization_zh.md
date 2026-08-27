@@ -137,7 +137,10 @@ VeriTile/
                             位常量(原 `Triton/Compute.lean` 已折进这里并删除)。
     Semantics/              typed 操作语义:exec、step、tiled indexing、masked
                             reduction、streaming accumulator ……
-    Memory/                 BlockState、tensor view、readback。
+    Memory/                 BlockState、tensor view、readback。另含平铺内存桥
+                            (Flatten*)与 KernelSpec.lean —— `⊨` 头条 surface
+                            背后的 61 张 `KernelIO` 皮(见
+                            documents/CorrectnessSurfaces.md)。
     DSL/                    `triton { ... }` 宏前端。
     Math/                   纯 `(Fin N → ℝ) → ...` 算子(见三层规则)。Math/Erf
                             拆分:轻量的 `Triton.Math.Erf`(def `realErf`,被

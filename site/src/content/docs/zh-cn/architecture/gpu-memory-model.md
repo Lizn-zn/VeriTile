@@ -41,6 +41,9 @@ offset 函数。
 - 针对 `RegionName × Nat` 的一等公民 pointer value。
 - `tl.make_block_ptr` / `tl.advance` 的 Triton 风格 block pointer value,
   以及带 zero padding / store skip 的 checked block-pointer load/store。
+  可选 checker 会检查 metadata rank equality 和静态 `tl.advance` 不 underflow;
+  证明侧 contract 是 `BlockPtr.WellFormed`、`BlockPtr.CheckedAxesValid` 和
+  `BlockPtr.AdvanceNonnegative`。
 
 尚未建模:
 
@@ -69,16 +72,19 @@ offset 函数。
 这是当前 per-program 证明的合适抽象。整网格执行只作为 theorem surface
 建模:`GridIndex` 实例化 `BlockState.pids`,`Kernel.ForAllPrograms` /
 `ForAllProgramsSome` 在 ND grid 上量化每个 program instance。VeriTile 还没建模
-sequential 或 concurrent 的 launch executor、global memory merge、overlapping
-write、race、atomic 或 scheduling。
+sequential 或 concurrent 的 launch executor、overlapping write、race、完整 CUDA
+atomic memory ordering 或 scheduling。整网格 memory result 只能通过显式
+disjoint-frame 或 atomic/RMW merge relation 获得。
 
 Layer-2a frame reasoning 作为谓词级证明 contract 建模:
 `WriteFootprint := (RegionName × Nat) → Prop` 和 `BlockState.WriteWithin`
 表示一次 single-program execution 只修改了所给 footprint 内的 cell。Layer-2b
 增加了 `Kernel.mergeFrames`:在显式 per-program `Kernel.ExecFrame` 上做
 extensional、disjoint 的整网格 merge。这仍不是 concurrent / interleaved
-executor;overlapping write、atomic、scheduling、barrier、async 和 shared
-memory 仍在模型范围之外。
+executor;overlapping ordinary write、scheduling、barrier、async 和 shared
+memory 仍在模型范围之外。atomic 只覆盖
+[`ConcurrencySemantics.md`](./ConcurrencySemantics.md) 中描述的窄算法切片:
+atomic-add sum merge,以及带显式 witness 的 selected single-cell RMW linearization。
 
 ## 未建模
 
@@ -91,7 +97,8 @@ memory 仍在模型范围之外。
   或 scheduling。
 - Tensor Core / WGMMA 指令行为和 mixed-precision accumulation。
 - Async copy、TMA、barrier、fence,或跨 program 同步。
-- Atomic 操作和跨 block 的 memory race。
+- 完整 CUDA atomic memory ordering 和跨 block memory race。VeriTile 只有带显式
+  merge 或 linearization witness 的 limited algorithm-level atomic 切片。
 
 这些缺省意味着 VeriTile 为单个 symbolic Triton program instance 证明实数值的
 functional correctness。它不证明性能性质,也不证明 CUDA memory-system fidelity。

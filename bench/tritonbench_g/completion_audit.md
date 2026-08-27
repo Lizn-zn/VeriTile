@@ -9,27 +9,27 @@ surface.
 
 | Requirement | Evidence | Current status |
 |---|---|---|
-| Check every `bench/tritonbench_g` problem. | 184 work directories are present; 151 currently have `.py` / `.lean` port pairs, and 33 are README-only scaffolds. | Covered for completed port pairs; scaffolds are not counted as completed ports. |
-| Ensure every completed Python port has a Lean port. | Python/Lean file counts both report 151; `bench/audit_tritonbench_g.sh` enforces the count match. | Passing. |
-| Ensure Lean ports compile. | `bench/check_ports.sh` reports `TritonBench-G ports: 151 ok, 0 fail`; the audit script reruns this gate. | Passing. |
+| Check every `bench/tritonbench_g` problem. | 184 work directories are present; 173 currently have `.py` / `.lean` port pairs, and 11 are README-only scaffolds. | Covered for completed port pairs; scaffolds are not counted as completed ports. |
+| Ensure every completed Python port has a Lean port. | Python/Lean file counts both report 173; `bench/audit_tritonbench_g.sh` enforces the count match. | Passing. |
+| Ensure Lean ports compile. | `bench/check_ports.sh` reports `TritonBench-G ports: 173 ok, 0 fail`; the audit script reruns this gate. | Passing. |
 | Apply `review_criteria.md` faithful-translation rules. | Mechanical gates check dtype-load additions, `keep_dims` substitutions, `+=` coverage, normalized pointer-update lhs, `rsqrt` preservation, Lean-only `tl.where`, `tl.*(...)` call set/order, kernel control-flow counts, statement lhs order, and documented translation-surface blockers. | Mechanically covered for the listed must-fix patterns; still not a substitute for human line review of arbitrary arithmetic structure. |
-| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/helper-call/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No unannotated mechanical mismatch remains; the twenty deliberate surface deviations carry explicit `Translation-surface blocker:` markers registered below and in `proof_blockers.md`. |
+| Fix Python/Lean mismatches found by the sweep. | Recent fixes restored faithful loop/tuple/helper-call/statement surfaces and moved policy checks into `bench/audit_tritonbench_g.sh`; current audit passes. | No unannotated mechanical mismatch remains; the forty deliberate surface deviations carry explicit `Translation-surface blocker:` markers registered below and in `proof_blockers.md`. |
 | Ensure completed ports expose a standard correctness surface. | Audit scans every `.lean` for `ComputeCorrect.Realizes`, `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named `correct_target`. | Passing. |
-| Classify stronger proof gaps from #146. | `bench/check_proof_gap_manifest.py` extracts every `output_summary` declaration and checks it against `proof_gap_manifest.tsv`. | Passing; 251 summaries are classified across 151 files. |
+| Classify stronger proof gaps from #146. | `bench/check_proof_gap_manifest.py` extracts every headline (`specification`) declaration and checks it against `proof_gap_manifest.tsv`. | Passing; 345 headlines are classified across 173 files. |
 | Do not count placeholder proofs as complete. | Placeholder scan (comment-stripped Lean source) for `sorry`, `admit`, `True := by` goals, and whole-proof `trivial` reports no matches. | Passing. |
 | Do not close while algorithm-layer proof obligations remain. | Audit now checks that there are no explicit `hAlg` blockers and that the documented translation-surface blocker list matches the active marker set with no stale entries. | Passing; no algorithm-layer blocker remains, and every translation-surface marker is registered. |
 
 ## Evidence Checked
 
 - Directory coverage: `find bench/tritonbench_g -mindepth 1 -maxdepth 1 -type d`
-  reports 184 work directories. Of these, 151 currently contain a `.py` /
-  `.lean` port pair; the remaining 33 are README-only scaffolds and are not
+  reports 184 work directories. Of these, 173 currently contain a `.py` /
+  `.lean` port pair; the remaining 11 are README-only scaffolds and are not
   counted as completed ports by this audit.
 - Python/Lean file coverage: `find bench/tritonbench_g -maxdepth 2 -name '*.py'`
-  and the matching Lean query both report 151 files.
+  and the matching Lean query both report 173 files.
 - Build gate: `lake build` succeeds.
 - Per-port source elaboration gate: `bench/check_ports.sh` reports
-  `TritonBench-G ports: 151 ok, 0 fail`.
+  `TritonBench-G ports: 173 ok, 0 fail`.
 - Mechanical audit gate: `bench/audit_tritonbench_g.sh` reports
   `TritonBench-G audit gates passed`, covering Python/Lean count matching,
   port elaboration, placeholder-proof scanning, and correctness-surface
@@ -69,9 +69,9 @@ surface.
   every `bench/tritonbench_g/*/*.lean` file now contains a
   `ComputeCorrect.Realizes` target or theorem.
 - Proof-gap manifest scan:
-  `bench/check_proof_gap_manifest.py` reports 251 `output_summary`
-  declarations across 151 files. It classifies 248 as conservative
-  `full_value_candidate` and 3 as `blocked_summary`. Every non-full candidate is linked to a currently open
+  `bench/check_proof_gap_manifest.py` reports 345 headline (`specification`)
+  declarations across 173 files. It classifies 344 as conservative
+  `full_value_candidate` and 1 as `blocked_summary`. Every non-full candidate is linked to a currently open
   follow-up issue and blocker family in `proof_gap_manifest.tsv`.
   The #148 matmul/dot rows are upgraded to full-value candidates by connecting
   GEMV, BMM, dequantization, IV-dependent matmul, plain matmul, activation-tail,
@@ -340,7 +340,6 @@ The current documented blocker set is:
 - `fused_layernorm_triton` — inductor `welford_reduce`/`welford` helpers
   inlined as exact-ℝ closed forms; `tl.broadcast_to` via tuple
   `tl.broadcast`; unmasked `tl.store`; `libdevice.rsqrt` spelled
-  `tl.rsqrt`; register casts parenthesized.
 - `fast_ce_loss` — `_cross_entropy_forward`'s `labels_ptr += row_idx`
   pointer bump folded into the load offset (`tl.load(labels_ptr + row_idx)` —
   same address, same single load) and the following `.to(tl.int32)` (identity
@@ -352,6 +351,7 @@ The current documented blocker set is:
   `Realizes_without_Rounding` face, which constrains no load shape — keeps the
   literal spelling. Host launch and `@triton.heuristics` are the trusted
   boundary.
+  `tl.rsqrt`; register casts parenthesized.
 
 The current proof-gap blocker set is exactly the non-full rows in
 `proof_gap_manifest.tsv`: 3 fixed-width int8 blocked summaries

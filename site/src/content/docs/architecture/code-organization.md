@@ -2,6 +2,7 @@
 title: "VeriTile Code Organization"
 ---
 
+
 VeriTile separates three concerns into three layers. Knowing which layer
 something belongs in saves churn when adding new operators, new bridge
 lemmas, and new kernel transcriptions.
@@ -11,7 +12,7 @@ lemmas, and new kernel transcriptions.
 ```
                     ┌─────────────────────────────────────────────┐
                     │  bench/tritonbench_g/<kernel>/X.lean        │  ← per-kernel glue
-   per-kernel       │  VeriTile/Examples/X.lean                   │
+   per-kernel       │  bench/examples/X.lean                      │
                     │  - kernel definition (`triton { ... }`)     │
                     │  - kernel-specific *Spec, *Load, *Offset    │
                     │  - kernel correctness theorem               │
@@ -92,9 +93,15 @@ mechanism (e.g. masked reduction) is reused across operators. Mechanism-named
 files keep the deduplication right: `MaskedReduction.lean` holds bridges for
 softmax / log-sum-exp / L2 / max-with-mask alike.
 
-### `bench/tritonbench_g/<kernel>/`, `VeriTile/Examples/`
+### `bench/tritonbench_g/<kernel>/`, `bench/examples/`
 
-**Naming**: per-kernel (`L2NormTriton1.lean`, `FlashAttention1.lean`).
+**Naming**: per-kernel (`L2NormTriton1.lean`, `RowWise.lean`). Every showcased
+kernel is **self-contained in one bench file** (kernel definition +
+correctness/refinement stack + trust gates); bench files import library
+modules only, never each other. `VeriTile/Examples/` retains only shared
+vocabulary (`Common.lean`), pure-math spec files (`AttentionForwardClosedForm`,
+`FlashAttention2` identities), and the multi-file `FlashAttention1` /
+`ApproxGeLU` stacks (relocation pending).
 
 **Belongs here**:
 - The `triton { ... }` kernel transcription
@@ -124,9 +131,65 @@ When you write a new lemma or definition, ask:
 4. **Is it a 1-line composite of Mathlib + the kernel's argument names?**
    → Keep it kernel-local. Don't move it to `Math/`.
 
+## Physical module layout
+
+The three-layer rule above is about *where new math/bridge/glue lives*. The
+physical `VeriTile/Triton/` tree also carries the semantic, correctness, and
+float infrastructure. Current directory map:
+
+```text
+VeriTile/
+  Triton.lean               Umbrella prelude — `import VeriTile.Triton` pulls
+                            the whole subset (Core + Semantics + Memory +
+                            KernelLemmas + Correctness + Float + DSL + Math +
+                            Launch + Concurrency). All 173 bench ports and the
+                            showcase files import this single module.
+  Triton/
+    Core/                   AST: the `Kernel` / `ComputeKernel` types and the
+                            `ComputeOp` bit constants (the former
+                            `Triton/Compute.lean` was folded in here and deleted).
+    Semantics/              Typed operational semantics: exec, step, tiled
+                            indexing, masked reduction, streaming accumulator, …
+    Memory/                 BlockState, tensor views, readback.
+    DSL/                    `triton { ... }` macro front-end.
+    Math/                   Pure `(Fin N → ℝ) → ...` operators (see three-layer
+                            rule). Math/Erf is split: lightweight
+                            `Triton.Math.Erf` (def `realErf`, used by
+                            Semantics/TileOps) vs heavy `Math.RealErf` (the
+                            Gaussian-integral proofs) — the split keeps the lite
+                            build's Mathlib closure small.
+    KernelLemmas/           Reusable bench-proof helpers (EvalHelpers,
+                            LoopInvariant, Matmul, OffsetInjective, ScatterStore).
+                            This directory was renamed from `Triton/Kernel/`; it
+                            holds proof lemmas, NOT the `Kernel` type (that is in
+                            Core/Ast).
+    Correctness.lean        Top-level correctness/refinement surfaces:
+                            `Kernel.Correct_without_Rounding`, `ComputeCorrect.*`,
+                            `ComputeRefine.*`, `WriteMap`, `OutputReadable`.
+                            (Moved out of Float/; was
+                            `VeriTile.Triton.Float.Correctness`.)
+    Float/                  Floating-dtype machinery only: dtype erasure
+                            (Erasure, StateErasure) + the rounding model
+                            (RoundingModel, EvalOpR, StepR, Refine, Pipeline).
+                            The rounding surfaces `Realizes`/`Refines`/
+                            `RefinesAt` live in `Float/Refine.lean`.
+    Launch/                 Grid-launch composition: GridWriteFootprint,
+                            GridFrames, mergeFrames, GridWritesDisjoint.
+    Concurrency/            Grid-wide atomic-add correctness.
+```
+
+### Dependency direction
+
+`Concurrency/Atomic` depends on `Launch.Composition` (it reuses
+GridWriteFootprint / GridFrames / GridWritesDisjoint), and `Launch` never
+imports `Concurrency` — so the edge is one-way, no cycle. Place
+**Concurrency/Atomic *above* Launch** in any layer diagram: grid-wide
+atomic-add correctness is an application layer built on top of grid-launch, not
+below it.
+
 ## See also
 
-- [`ProofConventions.md`](/VeriTile/proofs/proof-conventions/) — proof-tactic conventions,
+- [`ProofConventions.md`](./ProofConventions.md) — proof-tactic conventions,
   including the `erw` carrier-bridge fallback.
-- [`CorrectnessSurfaces.md`](/VeriTile/proofs/correctness-surfaces/) — the user-facing
-  theorem surfaces (`Realizes`, `WriteMap`, `OutputReadable`).
+- [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) — the user-facing
+  theorem surfaces (`Realizes`, `Refines`, `WriteMap`, `OutputReadable`).

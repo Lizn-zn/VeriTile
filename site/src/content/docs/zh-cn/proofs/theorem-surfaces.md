@@ -4,21 +4,20 @@ title: "Examples 定理 surface 风格"
 
 `VeriTile/Examples/` 中面向用户的定理 surface 都应当从公开的 compute-facing
 API 出发。完整 user guide 见
-[`CorrectnessSurfaces.md`](/VeriTile/zh-cn/proofs/correctness-surfaces/)。
+[`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md)。
 
 - 单 kernel 对照数学或算法 spec 的 correctness 用
-  `ComputeCorrect.Realizes`、`ComputeCorrect.Post` 或
-  `ComputeCorrect.General`。
+  `ComputeCorrect.Realizes`(*一个 kernel realize 某个 spec*)、
+  `ComputeCorrect.Post` 或 `ComputeCorrect.General`。
 - 双 kernel 等价或 rewrite refinement 用 `ComputeRefine.Refines`
-  (*一个 kernel refine 另一个* —— 两个终态 memory 在 declared scratch 区域之外
-  writes-equality)、pointwise 的 `ComputeRefine.RefinesAt`、`ComputeRefine.Post`
-  或 `ComputeRefine.General`。
-- 上面这些默认的 `ComputeCorrect.Realizes` / `ComputeRefine.Refines` /
-  `RefinesAt` surface 是 rounding surface,对每个 `RoundingModel` 参数化;
-  exact-ℝ 理想化是它们的 `*_without_Rounding` mirror,在 trivial model 处从它们
-  退化出来。窄浮点 showcase kernel 直接落在 unqualified 的 rounding surface 上;
-  见 [`CorrectnessSurfaces.md`](/VeriTile/zh-cn/proofs/correctness-surfaces/)
-  和 showcase `bench/examples/FusedSwiglu.lean`。
+  (*一个 kernel refine 另一个* —— 两个终态 memory 在所有非 scratch region 上
+  writes-equality)、pointwise 的 `ComputeRefine.RefinesAt`、
+  `ComputeRefine.Post` 或 `ComputeRefine.General`。
+- 窄浮点 kernel 的 correctness 落在舍入 surface 上:不带限定词的
+  `ComputeRefine.Realizes`(单 kernel)和 `Refines` / `RefinesAt`(双 kernel)都
+  接受一个 `RoundingModel R`,在 `execR` 下执行;对应的精确实数理想化是它们的
+  `*_without_Rounding` 变体。见 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md)
+  及 showcase `bench/examples/FusedSwigluEquiv.lean`。
 
 投影后的算法 lemma 仍然可以提到 `Kernel.Correct_without_Rounding` 或 `Kernel.Refine`,
 但仅限于明确属于内部 bridge lemma。这些 lemma 不应当作为

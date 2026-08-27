@@ -14,6 +14,15 @@ current VeriTile DSL semantic boundary.
 > "is the proof feasible". Many `OK`-verdict kernels still need fresh proof
 > engineering. See §Caveats.
 
+> **Outcome (2026-08-27).** This 2026-05-05 static scan predicted 141 of the 184
+> kernels were inside the DSL contract. The actual port count is **173** — the
+> scan under-counted because several levers it listed as blockers landed
+> (fp8 dtypes, the integer `Op.intToReal`/`Op.dotInt` channel, descending
+> `range`, block pointers) and because six kernels were misclassified by the
+> `tl.*` name scan (Python-level operators and `dtype=` keywords slip past it).
+> The 11 that remain unported are README-only scaffolds. The numbers below are
+> the original scan's, kept as the historical estimate they were.
+
 ## Headline
 
 | Verdict | Count | Share |

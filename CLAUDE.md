@@ -22,8 +22,14 @@ KernelLemmas, Correctness, Float, DSL, Math, Launch, Concurrency).
 
 - Library: `lake build` must exit 0. **Judge Lean by exit code, never by
   tail-ing output** (early parse errors scroll off).
-- Bench ports: `bash bench/check_ports.sh` → `173 ok, 0 fail` (~4 min; bench is
-  standalone, not in any lake target).
+- Bench ports: `bash bench/check_ports.sh` → `173 ok, 0 fail` (~23 min on a
+  96-core box; bench is standalone, not in any lake target).
+- Full bench gate (what CI runs): `bash bench/audit_tritonbench_g.sh` →
+  `TritonBench-G audit gates passed`, 35 scans (~55 min). Wraps check_ports +
+  the Python↔Lean faithfulness scans + the proof-gap manifest + both trust
+  audits. Run it in the background: it exceeds the 10-min foreground cap.
+- Artifact gate: `bash scripts/check-artifact.sh` exit 0 (no `sorry`, axiom
+  whitelist, kernel-manifest schema, README link drift).
 - Showcase: `lake env lean bench/examples/<F>.lean` exit 0, zero `sorry`.
 
 ## Conventions (read before non-trivial work)

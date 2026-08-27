@@ -10,10 +10,10 @@ these commands check exactly that.
 ## Run the gates
 
 ```bash
-# every proven LIBRARY theorem is axiom-clean (134 theorems)
+# every proven LIBRARY theorem is axiom-clean (118 theorems)
 lake build VeriTile.Meta.TrustReport
 
-# every bench port + showcase is axiom-clean (159 files)
+# every bench port + showcase is axiom-clean (196 files)
 bash bench/audit_trust.sh                    # whole corpus
 bash bench/audit_trust.sh swiglu_fwd         # just named kernels
 

@@ -21,7 +21,7 @@ The Lean filename is the **CamelCase form** of the directory name (e.g. `vector_
 
 A port goes through three stages, tracked per-kernel in `README.md`:
 
-1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes are documented in [`review_criteria.md`](./review_criteria.md). The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 142 / 142 port pairs; 42 of the 184 work directories are README-only scaffolds and are not counted as completed ports.**
+1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes are documented in [`review_criteria.md`](./review_criteria.md). The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 173 / 173 port pairs; 11 of the 184 work directories are README-only scaffolds and are not counted as completed ports.**
 2. **Spec** — Real-valued mathematical specification of the kernel's intended output is written.
 3. **Verification** — `ComputeCorrect.Realizes` / `ComputeRefine.Realizes` theorem is proved and registered in `scripts/kernel-manifest.tsv`.
 
@@ -31,7 +31,7 @@ Stage 1 is the verbatim transcription contract; reaching stage 3 (verification) 
 
 The current sweep is tracked in [`completion_audit.md`](./completion_audit.md).
 `bench/check_ports.sh` compiles every Python/Lean port pair and currently
-reports `TritonBench-G ports: 142 ok, 0 fail`. The placeholder scan
+reports `TritonBench-G ports: 173 ok, 0 fail`. The placeholder scan
 `rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
 currently reports no matches.
 
@@ -41,7 +41,7 @@ The stronger #146 proof-status audit is tracked in
 [`proof_gap_manifest.tsv`](./proof_gap_manifest.tsv) and checked by
 [`../check_proof_gap_manifest.py`](../check_proof_gap_manifest.py). That
 manifest classifies every public headline theorem (each `*output_summary*`
-declaration plus the spec-sheet-style headline tier per file, so all 142
+declaration plus the spec-sheet-style headline tier per file, so all 173
 kernels are covered) as either a conservative `full_value_candidate`, a
 `public_summary_with_proof_gap` linked to a specific follow-up issue and
 blocker family, or an explicit `blocked_summary`. Classification uses hard
@@ -95,8 +95,9 @@ remain tracked in [`proof_blockers.md`](./proof_blockers.md).
 | Date imported | Upstream commit | Kernels | Notes |
 |---|---|---|---|
 | 2026-05-06 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 15 (Tier 1) | initial DSL ports; no specs / theorems yet |
-| 2026-05-13 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 141 port pairs | current audited port set; see `completion_audit.md` for remaining proof obligations |
+| 2026-05-13 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 141 port pairs | the audited port set as of that date; see `completion_audit.md` for remaining proof obligations |
 | 2026-07-04 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 1 (`reversed_cumsum_scalar`) | reverse-range port; DSL blocker resolved by #94/#448 |
+| 2026-08-25 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 173 port pairs | current audited port set (`int_scaled_matmul` closed the integer family); the remaining 11 of the 184 upstream kernels are README-only scaffolds |
 
 ### Local modifications to vendored `.py` files
 

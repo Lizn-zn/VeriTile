@@ -8,9 +8,11 @@ the date below. Numbers come from a direct sweep of `bench/tritonbench_g/`
 and `git log`, not from a manifest.
 
 :::tip[Last verified]
-Numbers below verified against `main` on **2026-05-19**. Re-run
+Numbers below verified against `main` on **2026-08-27**. Re-run
+[`bench/audit_tritonbench_g.sh`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/audit_tritonbench_g.sh)
+(the full bench gate) and
 [`scripts/check-artifact.sh`](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/check-artifact.sh)
-and the counts at the top of this file to refresh.
+to refresh.
 :::
 
 ## Bench corpus
@@ -18,79 +20,55 @@ and the counts at the top of this file to refresh.
 | Metric | Value |
 |---|---|
 | `bench/tritonbench_g/<kernel>/` directories | **184** |
-| With paired `.py` + `.lean` | **141** |
-| README-only scaffolds (no port yet) | **43** |
-| `ComputeCorrect.Realizes_without_Rounding` proofs across bench | **742** |
+| With paired `.py` + `.lean` | **173** |
+| README-only scaffolds (no port yet) | **11** |
+| Ports elaborating (`bench/check_ports.sh`) | **173 ok, 0 fail** |
+| Bench files axiom-clean (`bench/audit_trust.sh`) | **196 ok, 0 fail** |
+| Headline declarations classified in `proof_gap_manifest.tsv` | **345** (344 `full_value_candidate`, 1 `blocked_summary`) |
+| Ports stating a `KernelIO` `⊨` face | **153** |
+| … of which also carry the rounding face `⊨[R]` | **68** |
 | `ComputeRefine.Refines_without_Rounding` proofs across bench | 0 |
 | `sorry` / `admit` across bench | **0** |
-| Theorems + lemmas across `VeriTile/` + `bench/` | **2,567** |
 
 The zero-`sorry`, zero-`admit` invariant is enforced by
-[`scripts/check-artifact.sh`](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/check-artifact.sh)
-in CI. Adding a `sorry` breaks the build.
+[`scripts/check-artifact.sh`](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/check-artifact.sh);
+the stronger "no smuggled axiom in any headline" invariant is enforced by
+`bench/audit_trust.sh`, which appends `#axiomsClean` to every headline in every
+standalone bench file and compiles it.
 
 Why `ComputeRefine.Refines_without_Rounding` is zero across bench: the refinement surface
-exists, but every bench port so far has been "kernel ↔ math spec" rather
-than "kernel ↔ kernel", so `ComputeCorrect.Realizes_without_Rounding` is the right surface
-for the current corpus.
+exists, but every `bench/tritonbench_g` port is "kernel ↔ math spec" rather
+than "kernel ↔ kernel". The kernel-vs-kernel stories live in `bench/examples/`,
+where they are stated on the `⊨` refinement notation `io₁ ≡[R] io₂`.
 
 ## Bench coverage status
 
-The 141 kernels with `.lean` ports fall into three coverage buckets.
+All 173 ported kernels compile, are dimension-general (no test-shape pins), are
+non-self-referential (`scripts/spec_sheet.py` reports `self-ref-flagged: 0`),
+and are axiom-clean. The old "slice-only" and "substrate-blocked" buckets are
+gone — `tl.dot`, the streaming-softmax invariant chain, direction-aware
+`tl.cumsum`, `make_block_ptr` boundary checks, packed int4/int8 and signed
+pointer arithmetic all landed.
 
-### Fully closed
+What is still tracked, and where:
 
-Full `ComputeCorrect.Realizes_without_Rounding` for every Python-tested output. Roughly half
-the ported bench. Examples: `add_example`, `cosine_compute`,
-`dropout_triton`, `swiglu_fwd`, `kldiv_compute`, `dequantize_rowwise`,
-`l2_norm_triton2`, `apply_penalty`, `destindex_copy{,_kv1,_kv2}`,
-`max_reduction`, `var_len_copy`, `fifth_order_sph_harmonics`
-(Y00–Y10), and the rotary embedding Q+K half stores.
+- **1 blocked summary** — `quant_transpose_kernel`, on fixed-width int8 cast
+  semantics (issue #154). Recorded in `proof_gap_manifest.tsv`.
+- **16 ports not yet on a named correctness surface** — their headlines are
+  inline exec-existentials that omit the frame conjunct. Each carries a
+  `Correctness-surface blocker:` marker and a row under "Correctness-Surface
+  Blockers" in `proof_blockers.md`; the bench gate rejects any unregistered
+  addition.
+- **40 registered translation-surface deviations** — deliberate, documented
+  departures from a literal 1:1 transcription (inlined helper JITs, constexpr
+  arm specialization, …), each with a `Translation-surface blocker:` marker
+  registered in both `proof_blockers.md` and `completion_audit.md`.
+- **11 unported upstream kernels** — README-only scaffolds, blocked on RNG,
+  `while` loops, fp4 and IEEE-bit paths.
 
-### Slice-only
-
-Lean proves a partial slice of the kernel and the preamble doc-comment
-says so. Categories blocking full closure:
-
-- **Intra-region offset disjointness** — multi-store kernels writing to
-  the same region at interleaved offsets (rotary embedding families,
-  fifth-order spherical harmonics multi-output). Cross-region helpers
-  don't apply.
-- **Intra-kernel reduceSum interleaving** — `fast_layernorm`,
-  `fast_rms_layernorm`, `layer_norm_liger`, `layer_norm_ops`: Y store
-  closes; mean / rstd stores interleave with `reduceSum + setReg` in a
-  way that `rw [BlockState.writeMem_readMem]` won't unify without
-  interactive goal inspection.
-
-### Substrate-blocked
-
-Closed slice is at the maximum scope achievable without new
-infrastructure beyond the basic-lemma layer. The remaining work needs
-substantial new substrate:
-
-- **`tl.dot` algorithmic model** — all 10 matmul kernels, all 14
-  flash / attention families, `attn_fwd_causal`, all chunk kernels with
-  `tl.dot`.
-- **Streaming softmax invariant chain** — attention forward kernels,
-  `token_softmax_*`, `token_attn_*`.
-- **`tl.cumsum` direction-aware semantics** — recurrent / cumsum
-  backward kernels (issue #94).
-- **`make_block_ptr` + boundary checks** — cumsum, recurrent,
-  attention with block pointers.
-- **Int rounding / packed int4-int8** — `int8_quantization`,
-  quantized KV per-block scales (issues #129 / #137).
-- **Signed pointer arithmetic** — `conv2d` (issue #130).
-- **forLoop-wrapped store proofs** — `rope_embedding`,
-  `fast_rope_embedding`, `kv_cache_filling`, `kv_cache_copy`. Need
-  `forLoop_inv`-based proofs, not flat-foldl strip.
-- **Constexpr branch case-splitting** — `rotary_transform` (4
-  `Stmt.ifThenElse` branches), `layer_norm_ops` forward (4 Bool flags
-  → 16 combos).
-
-The collected substrate-blocker categories account for the bulk of
-unproven bench entries. See the cookbook's
+See the cookbook's
 [proof templates](/VeriTile/cookbook/proof-templates/) page for the helpers that
-*do* exist.
+exist today.
 
 ## Recent batches
 

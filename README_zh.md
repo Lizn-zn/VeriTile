@@ -32,14 +32,18 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
   `Realizes.toRealizes` 在 trivial model 处把它退化出来(作为
   `ComputeCorrect.Realizes_without_Rounding`)。见 fused-vs-unfused SwiGLU showcase
   [`bench/examples/FusedSwigluEquiv.lean`](./bench/examples/FusedSwigluEquiv.lean)。
-- **示例**:151 个 TritonBench-G 端口及其证明(真值来源:
+- **示例**:173 个 TritonBench-G 端口及其证明(真值来源:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   见 [`bench/tritonbench_g/`](./bench/tritonbench_g/)),加上
   FlashAttention-1 forward、online softmax、Welford、LayerNorm、log-sum-exp。
-- **CI gate**:`lake build` + `scripts/check-artifact.sh`(无 `sorry`、
-  公理白名单、manifest schema、文档漂移检查)。
-  `bench/check_ports.sh` 是独立的本地检查(不在 CI 中运行),
-  逐个构建 TritonBench-G 端口。
+- **CI gate**:`.github/workflows/bench-audit.yml` 跑
+  `bench/audit_tritonbench_g.sh` —— 逐港 elaboration(`bench/check_ports.sh`)、
+  Python↔Lean 忠实性扫描、proof-gap manifest,以及两套信任审计
+  (库侧 `VeriTile.Meta.TrustReport`、独立语料侧 `bench/audit_trust.sh` 的
+  `#axiomsClean`)。`.github/workflows/artifact.yml` 跑 `lake build` +
+  `scripts/check-artifact.sh`(无 `sorry`、公理白名单、manifest schema、
+  文档漂移检查);该 workflow 目前在仓库设置里处于 disabled 状态
+  (`gh workflow enable artifact.yml` 可重新启用)。
 
 不在范围内:IEEE-754 浮点语义、PTX 级 codegen、详细并发(原子操作 /
 async-copy 序列化,投影边界以外)、Python wrapper 执行。
@@ -150,7 +154,7 @@ VeriTile/
     Launch/                Grid-launch 组合 / write footprint
     Concurrency/           Grid 级 atomic-add 正确性(位于 Launch 之上)
   Examples/                已证 correctness/refinement 范例
-bench/tritonbench_g/       TritonBench-G v1 端口(151 对;见 completion_audit.md)
+bench/tritonbench_g/       TritonBench-G v1 端口(173 对;见 completion_audit.md)
 bench/examples/            Showcase 证明(SwiGLU rounding invariance 等)
 documents/                 设计笔记、子集规范、surface 指南
 scripts/                   CI gate、kernel manifest、LLM 证明 wrapper
@@ -163,7 +167,10 @@ verso/                     幻灯片 / 概览
 - `scripts/check-artifact.sh` —— `lake build` ∧ 无 `sorry` ∧ 公理白名单 ∧
   kernel-manifest schema ∧ README/文档术语漂移检查
 - `bench/check_ports.sh` —— TritonBench-G 端口逐个构建
-  (本地手动运行;不属于 CI gate)
+  (也被 `bench/audit_tritonbench_g.sh` 这个 bench-audit CI gate 调用)
+- `bench/audit_tritonbench_g.sh` —— 完整 bench gate:上面的逐港构建 ∧
+  忠实性扫描 ∧ proof-gap manifest ∧ 两套信任审计
+- `bench/audit_trust.sh` —— 对每个独立 bench 文件跑 `#axiomsClean`
 
 ## 环境
 
