@@ -30,7 +30,10 @@ theorem_exists() {
   local name="$2"
   local short_name="${name##*.}"
   [[ -f "${file}" ]] || return 1
-  grep -Eq "^[[:space:]]*(private[[:space:]]+)?theorem[[:space:]]+${short_name}([[:space:]:{(]|$)" "${file}"
+  # Headlines are declared with the `specification` keyword (a macro that
+  # elaborates to `theorem`, VeriTile/Meta/Specification.lean); helper lemmas
+  # stay `theorem`/`lemma`. All three spellings register a real declaration.
+  grep -Eq "^[[:space:]]*(private[[:space:]]+)?(theorem|specification|lemma)[[:space:]]+${short_name}([[:space:]:{(]|$)" "${file}"
 }
 
 run_build_no_sorry() {
@@ -58,17 +61,52 @@ check_axioms() {
   missing="$(mktemp)"
 
   if [[ -f "${AXIOM_WHITELIST}" ]]; then
-    grep -vE '^[[:space:]]*(#|$)' "${AXIOM_WHITELIST}" | sort >"${expected}"
+    grep -vE '^[[:space:]]*(#|$)' "${AXIOM_WHITELIST}" | LC_ALL=C sort >"${expected}"
   else
     : >"${expected}"
   fi
 
-  while IFS=: read -r file _line text; do
-    # Match declaration axioms only. Mentions in comments/docstrings do not count.
-    if [[ "${text}" =~ ^[[:space:]]*axiom[[:space:]]+([^[:space:]:]+) ]]; then
-      printf '%s:%s\n' "${file}" "${BASH_REMATCH[1]}"
-    fi
-  done < <(grep -RInE "^[[:space:]]*axiom[[:space:]]+" VeriTile --include='*.lean' || true) | sort >"${actual}"
+  # Match declaration axioms only. Lean comments are stripped first, so prose
+  # such as a docstring line starting "axiom footprint, ..." cannot register as
+  # a declaration (it used to, and the whole gate reported a phantom axiom).
+  python3 - VeriTile <<'AXIOMSCAN' | LC_ALL=C sort >"${actual}"
+import re
+import sys
+from pathlib import Path
+
+
+def strip_lean_comments(text: str) -> str:
+    """Blank out `--` line comments and (nested) `/- ... -/` block comments."""
+    out = []
+    i, n, depth = 0, len(text), 0
+    while i < n:
+        if depth == 0 and text.startswith("--", i):
+            nl = text.find("\n", i)
+            if nl == -1:
+                break
+            i = nl
+        elif text.startswith("/-", i):
+            depth += 1
+            i += 2
+        elif depth > 0 and text.startswith("-/", i):
+            depth -= 1
+            i += 2
+        else:
+            ch = text[i]
+            out.append(ch if depth == 0 else ("\n" if ch == "\n" else " "))
+            i += 1
+    return "".join(out)
+
+
+decl = re.compile(r"^[ \t]*axiom[ \t]+([^\s:({\[]+)", re.M)
+rows = set()
+for path in Path(sys.argv[1]).rglob("*.lean"):
+    code = strip_lean_comments(path.read_text(encoding="utf-8"))
+    for m in decl.finditer(code):
+        rows.add("{}:{}".format(path.as_posix(), m.group(1)))
+for row in sorted(rows):
+    print(row)
+AXIOMSCAN
 
   comm -23 "${actual}" "${expected}" >"${unexpected}"
   comm -13 "${actual}" "${expected}" >"${missing}"

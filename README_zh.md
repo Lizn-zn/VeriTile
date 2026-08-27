@@ -31,7 +31,7 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
   下运行;exact-ℝ 理想化是带限定的 `*_without_Rounding` 名字,桥
   `Realizes.toRealizes` 在 trivial model 处把它退化出来(作为
   `ComputeCorrect.Realizes_without_Rounding`)。见 fused-vs-unfused SwiGLU showcase
-  [`bench/examples/FusedSwiglu.lean`](./bench/examples/FusedSwiglu.lean)。
+  [`bench/examples/FusedSwigluEquiv.lean`](./bench/examples/FusedSwigluEquiv.lean)。
 - **示例**:151 个 TritonBench-G 端口及其证明(真值来源:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   见 [`bench/tritonbench_g/`](./bench/tritonbench_g/)),加上
@@ -107,12 +107,12 @@ theorem add_kernel_correct
 ## 最小示例
 
 逐元素向量加法对照 `addSpec xs ys i = xs i + ys i` 数学规范——
-见 [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean)。
+见 [`bench/examples/VectorAdd.lean`](./bench/examples/VectorAdd.lean)。
 
 ## Refinement 示例
 
 Naive softmax vs 数值稳定 softmax(kernel pair refinement)——
-见 [`VeriTile/Examples/SoftmaxEq.lean`](./VeriTile/Examples/SoftmaxEq.lean)。
+见 [`bench/examples/SoftmaxStableEquiv.lean`](./bench/examples/SoftmaxStableEquiv.lean)。
 
 ## 文档地图
 

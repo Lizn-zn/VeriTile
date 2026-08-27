@@ -119,19 +119,104 @@ else
   failures=$((failures + 1))
 fi
 
-missing_surface=()
-while IFS= read -r lean_file; do
-  if ! rg -q 'ComputeCorrect\.Realizes|ComputeRefine\.Realizes|ComputeCorrect\.General|correct_target' "${lean_file}"; then
-    missing_surface+=("${lean_file}")
-  fi
-done < <(find "${PORTS_ROOT}" -maxdepth 2 -name '*.lean' | sort)
+# Every completed port must expose its correctness claim through a NAMED
+# surface: the `KernelIO` `⊨` / `⊨[R]` faces, `ComputeCorrect.Realizes`,
+# `ComputeRefine.Realizes`, `ComputeCorrect.General`, or a named
+# `correct_target`. A port that instead states an inline exec-existential
+# headline (`∃ sF, exec … = some sF ∧ …`, which omits the frame) must declare
+# it with an explicit machine-readable preamble line
+#     Correctness-surface blocker: <why the headline is not on a named surface>
+# AND be registered under "## Correctness-Surface Blockers" in
+# proof_blockers.md. Stale markers and stale registry rows are failures too, so
+# the exemption list cannot silently outlive the debt it records.
+#
+# The surface tokens are searched in the CODE region only (after the first
+# `triton {`); the preamble is prose and naming a surface there — as the
+# blocker markers themselves do — must not count as having one.
+if python3 - "${PORTS_ROOT}" "${PORTS_ROOT}/proof_blockers.md" <<'PY'
+from pathlib import Path
+import re
+import sys
 
-if [ "${#missing_surface[@]}" -gt 0 ]; then
-  printf 'FAIL missing correctness surface:\n'
-  printf '  %s\n' "${missing_surface[@]}"
-  failures=$((failures + 1))
-else
+root = Path(sys.argv[1])
+doc = Path(sys.argv[2]).read_text()
+
+surface_re = re.compile(
+    r"ComputeCorrect\.Realizes|ComputeRefine\.Realizes|ComputeCorrect\.General"
+    r"|correct_target|⊨"
+)
+marker_re = re.compile(r"^\s*(?:--\s*)?Correctness-surface blocker:(.*)$", re.M)
+
+section = ""
+m = re.search(r"^## Correctness-Surface Blockers$(.*?)(?=^## |\Z)", doc, re.M | re.S)
+if m:
+    section = m.group(1)
+
+# First column of the registry table only: `| `port` | … |`. Parsing the row
+# shape (not every backtick in the prose) keeps theorem names and vocabulary
+# out of the set, so a row for a port that no longer qualifies is a hard error.
+registered = set(re.findall(r"^\|\s*`([A-Za-z0-9_]+)`\s*\|", section, re.M))
+
+problems = []
+on_surface = 0
+exempt = set()
+for lean_file in sorted(root.glob("*/*.lean")):
+    text = lean_file.read_text()
+    port = lean_file.parent.name
+    cut = text.find("triton {")
+    preamble, code = (text[:cut], text[cut:]) if cut != -1 else ("", text)
+    has_surface = bool(surface_re.search(code))
+    markers = marker_re.findall(preamble)
+    described = [body for body in markers if body.strip()]
+
+    if has_surface:
+        on_surface += 1
+        if markers:
+            problems.append(
+                f"{port}: stale Correctness-surface blocker marker "
+                f"(the file states a named surface now — drop the marker "
+                f"and its proof_blockers.md row)"
+            )
+        continue
+
+    exempt.add(port)
+    if not markers:
+        problems.append(
+            f"{port}: no named correctness surface and no "
+            f"`Correctness-surface blocker:` preamble marker"
+        )
+        continue
+    if not described:
+        problems.append(
+            f"{port}: Correctness-surface blocker marker has no description"
+        )
+    if port not in registered:
+        problems.append(
+            f"{port}: Correctness-surface blocker marker lacks a "
+            f"proof_blockers.md '## Correctness-Surface Blockers' entry"
+        )
+
+for port in sorted(registered - exempt):
+    problems.append(
+        f"{port}: stale proof_blockers.md correctness-surface row "
+        f"(no such port, or the port states a named surface now)"
+    )
+
+if problems:
+    for problem in problems:
+        print(problem)
+    sys.exit(1)
+
+print(
+    f"  {on_surface} ports on a named correctness surface, "
+    f"{len(exempt)} registered correctness-surface blockers"
+)
+PY
+then
   printf 'ok correctness surface scan\n'
+else
+  printf 'FAIL correctness surface scan\n'
+  failures=$((failures + 1))
 fi
 
 if python3 bench/check_proof_gap_manifest.py; then
@@ -329,9 +414,18 @@ def lean_first_preamble(text: str) -> str:
     idx = text.find("triton {")
     return text[:idx] if idx >= 0 else text
 
-def target_kernel_name(preamble: str):
-    matches = re.findall(r"\.py`'s[^`]*`([^`]+)`", preamble, re.S)
-    return matches[-1] if matches else None
+def target_kernel_candidates(preamble: str):
+    """Every ``<file>.py`'s `<name>`'' phrase in the preamble, in order."""
+    return re.findall(r"\.py`'s[^`]*`([^`]+)`", preamble, re.S)
+
+def target_kernel_name(preamble: str, jit_names):
+    """The declared target JIT: the LAST preamble phrase that names a real
+    `@triton.jit` kernel. Prose legitimately reuses the same phrasing for
+    non-kernel snippets (a transcription note quoting `labels_ptr += row_idx`,
+    say); such a phrase must not shadow the declaration, which is what taking
+    the last phrase unconditionally used to do."""
+    named = [name for name in target_kernel_candidates(preamble) if name in jit_names]
+    return named[-1] if named else None
 
 failures = []
 missing_docs = []
@@ -340,13 +434,15 @@ for py_file in sorted(root.glob("*/*.py")):
     if not lean_files:
         continue
     lean_file = lean_files[0]
-    target = target_kernel_name(lean_first_preamble(lean_file.read_text()))
-    if target is None:
+    jit_names = python_jit_names(py_file.read_text())
+    preamble = lean_first_preamble(lean_file.read_text())
+    candidates = target_kernel_candidates(preamble)
+    if not candidates:
         missing_docs.append((py_file, lean_file))
         continue
-    jit_names = python_jit_names(py_file.read_text())
-    if target not in jit_names:
-        failures.append((py_file, lean_file, target, sorted(jit_names)))
+    target = target_kernel_name(preamble, jit_names)
+    if target is None:
+        failures.append((py_file, lean_file, candidates[-1], sorted(jit_names)))
 
 if missing_docs or failures:
     for py_file, lean_file in missing_docs:
@@ -2125,11 +2221,58 @@ else
   printf 'ok no Lean-only tl.load dtype annotations\n'
 fi
 
-if rg -n 'keep_dims\s*=\s*true|keepDims|keep_dims' bench/tritonbench_g -g '*.lean'; then
-  printf 'FAIL keep_dims-style reduction found; review_criteria.md requires source-shape-preserving syntax\n'
-  failures=$((failures + 1))
-else
+# `keep_dims`-style reductions are a review_criteria.md violation in the
+# TRANSCRIBED KERNEL SURFACE only. The scan is scoped to `triton { … }` bodies:
+# `Op.reduceSum` / `Op.reduceMax` carry a `keepDims : Bool` argument, so helper
+# lemmas that quantify over that flag mention the identifier legitimately, and
+# a whole-file grep reported them as violations.
+if python3 - "${PORTS_ROOT}" <<'PY'
+from pathlib import Path
+import re
+import sys
+
+
+def kernel_spans(text: str):
+    """(start, end) offsets of every `triton { … }` body, by brace depth."""
+    spans, i = [], 0
+    while True:
+        i = text.find("triton {", i)
+        if i == -1:
+            return spans
+        open_i = text.index("{", i)
+        depth, k = 0, open_i
+        while k < len(text):
+            if text[k] == "{":
+                depth += 1
+            elif text[k] == "}":
+                depth -= 1
+                if depth == 0:
+                    break
+            k += 1
+        spans.append((open_i, k))
+        i = k + 1
+
+
+pattern = re.compile(r"keep_dims\s*=\s*true|keepDims|keep_dims")
+hits = []
+for lean_file in sorted(Path(sys.argv[1]).glob("*/*.lean")):
+    text = lean_file.read_text()
+    spans = kernel_spans(text)
+    for m in pattern.finditer(text):
+        if any(a <= m.start() <= b for a, b in spans):
+            line = text.count("\n", 0, m.start()) + 1
+            hits.append(f"{lean_file}:{line}: {m.group(0)}")
+
+if hits:
+    for hit in hits:
+        print(hit)
+    sys.exit(1)
+PY
+then
   printf 'ok no keep_dims reduction substitutions\n'
+else
+  printf 'FAIL keep_dims-style reduction found in a kernel body; review_criteria.md requires source-shape-preserving syntax\n'
+  failures=$((failures + 1))
 fi
 
 # Python `+=` coverage. Scoped to `@triton.jit` kernel bodies (host-wrapper
@@ -2622,9 +2765,35 @@ def lean_first_preamble(text: str) -> str:
     idx = text.find("triton {")
     return text[:idx] if idx >= 0 else text
 
-def target_kernel_name(preamble: str):
-    matches = re.findall(r"\.py`'s[^`]*`([^`]+)`", preamble, re.S)
-    return matches[-1] if matches else None
+def python_jit_names(text: str):
+    """`@triton.jit` kernel names, read textually — this scan block has no
+    `ast` import; the walk mirrors `python_kernel_body` below."""
+    names, pending = set(), False
+    for line in text.splitlines():
+        stripped = line.strip()
+        if stripped.startswith("@triton.jit"):
+            pending = True
+            continue
+        if pending and stripped.startswith("def "):
+            names.add(stripped[4:].split("(", 1)[0].strip())
+            pending = False
+            continue
+        if pending and stripped and not stripped.startswith("@"):
+            pending = False
+    return names
+
+def target_kernel_candidates(preamble: str):
+    """Every ``<file>.py`'s `<name>`'' phrase in the preamble, in order."""
+    return re.findall(r"\.py`'s[^`]*`([^`]+)`", preamble, re.S)
+
+def target_kernel_name(preamble: str, jit_names):
+    """The declared target JIT: the LAST preamble phrase that names a real
+    `@triton.jit` kernel. Prose legitimately reuses the same phrasing for
+    non-kernel snippets (a transcription note quoting `labels_ptr += row_idx`,
+    say); such a phrase must not shadow the declaration, which is what taking
+    the last phrase unconditionally used to do."""
+    named = [name for name in target_kernel_candidates(preamble) if name in jit_names]
+    return named[-1] if named else None
 
 def python_kernel_body(text: str, target) -> str:
     lines = text.splitlines()
@@ -2716,8 +2885,9 @@ for py_file in sorted(root.glob("*/*.py")):
         continue
     lean_file = lean_files[0]
     lean_text = lean_file.read_text()
-    target = target_kernel_name(lean_first_preamble(lean_text))
-    py_counts = python_control_counts(py_file.read_text(), target)
+    py_text = py_file.read_text()
+    target = target_kernel_name(lean_first_preamble(lean_text), python_jit_names(py_text))
+    py_counts = python_control_counts(py_text, target)
     lean_counts = lean_control_counts(lean_text)
     scope_text = lean_text[:lean_text.find("triton {")].lower() if "triton {" in lean_text else lean_text.lower()
     if py_counts != lean_counts and not blocker_marker in scope_text:

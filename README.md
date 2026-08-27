@@ -36,7 +36,7 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   bridge `Realizes.toRealizes` degenerates out to (as
   `ComputeCorrect.Realizes_without_Rounding`) at the trivial model. See the
   fused-vs-unfused SwiGLU showcase
-  [`bench/examples/FusedSwiglu.lean`](./bench/examples/FusedSwiglu.lean).
+  [`bench/examples/FusedSwigluEquiv.lean`](./bench/examples/FusedSwigluEquiv.lean).
 - **Examples**: 152 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   see [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
@@ -114,12 +114,12 @@ naming conventions: [KernelManifest.md](./documents/KernelManifest.md),
 ## Minimal Example
 
 Elementwise vector add against the `addSpec xs ys i = xs i + ys i` math
-spec — see [`VeriTile/Examples/VectorAdd.lean`](./VeriTile/Examples/VectorAdd.lean).
+spec — see [`bench/examples/VectorAdd.lean`](./bench/examples/VectorAdd.lean).
 
 ## Refinement Example
 
 Naive vs numerically-stable softmax (kernel pair refinement) — see
-[`VeriTile/Examples/SoftmaxEq.lean`](./VeriTile/Examples/SoftmaxEq.lean).
+[`bench/examples/SoftmaxStableEquiv.lean`](./bench/examples/SoftmaxStableEquiv.lean).
 
 ## Documentation Map
 
