@@ -587,11 +587,33 @@ end ComputeOp
 
 namespace Float32Bits
 
-example :
-    decodeRat { bits := 0x3f800000#32 } = some 1 := by
-  native_decide
+/-- `0x3f800000` is the binary32 encoding of `1`.
+
+Proved without `native_decide` (which would put `Lean.ofReduceBool` in the
+axiom footprint of every consumer): the sign/exponent/fraction split and the
+`scalePow2` branch all reduce by `rfl`, leaving a single `Rat` division that
+the kernel cannot normalize — `Nat.gcd` is well-founded recursion — and
+`div_self` closes that. -/
+theorem decodeRat_one : decodeRat { bits := 0x3f800000#32 } = some 1 := by
+  have h : decodeRat { bits := 0x3f800000#32 }
+      = some (((8388608 : ℕ) : ℚ) / (2 : ℚ) ^ 23) := rfl
+  rw [h]
+  congr 1
+  rw [show ((2 : ℚ) ^ 23) = 8388608 from rfl,
+    show ((8388608 : ℕ) : ℚ) = 8388608 from rfl]
+  exact div_self (by decide)
 
 end Float32Bits
+
+namespace Int32Bits
+
+/-- `0xffffffff` is the two's-complement encoding of `-1`. Proved by `simp`
+rather than `native_decide`, for the same axiom-footprint reason as
+`Float32Bits.decodeRat_one`. -/
+theorem toInt_negOne : toInt { bits := 0xffffffff#32 } = -1 := by
+  simp [toInt]
+
+end Int32Bits
 
 namespace ComputeOp
 
@@ -610,8 +632,8 @@ def minusOneBitcast : ComputeOp .int32 [] :=
 example :
     constOpToAlgorithm? oneBitcast = Except.ok (Op.const 1) := by
   have hdecode :
-      Float32Bits.decodeRat ({ bits := 0x3f800000#32 } : Float32Bits) = some 1 := by
-    native_decide
+      Float32Bits.decodeRat ({ bits := 0x3f800000#32 } : Float32Bits) = some 1 :=
+    Float32Bits.decodeRat_one
   simp [constOpToAlgorithm?, oneBitcast, oneBits, constPayload?, bitcastPayload,
     constToAlgorithm?]
   change
@@ -625,8 +647,8 @@ example :
 theorem oneBitcast_toAlgorithm :
     constOpToAlgorithm? oneBitcast = Except.ok (Op.const 1) := by
   have hdecode :
-      Float32Bits.decodeRat ({ bits := 0x3f800000#32 } : Float32Bits) = some 1 := by
-    native_decide
+      Float32Bits.decodeRat ({ bits := 0x3f800000#32 } : Float32Bits) = some 1 :=
+    Float32Bits.decodeRat_one
   simp [constOpToAlgorithm?, oneBitcast, oneBits, constPayload?, bitcastPayload,
     constToAlgorithm?]
   change
@@ -637,15 +659,11 @@ theorem oneBitcast_toAlgorithm :
   rw [hdecode]
   norm_num
 
-example :
-    Int32Bits.toInt ({ bits := 0xffffffff#32 } : Int32Bits) = -1 := by
-  native_decide
-
 theorem minusOneBitcast_toAlgorithm :
     constOpToAlgorithm? minusOneBitcast = Except.ok (Op.constInt (-1)) := by
   have hsigned :
-      Int32Bits.toInt ({ bits := 0xffffffff#32 } : Int32Bits) = -1 := by
-    native_decide
+      Int32Bits.toInt ({ bits := 0xffffffff#32 } : Int32Bits) = -1 :=
+    Int32Bits.toInt_negOne
   simp [constOpToAlgorithm?, minusOneBitcast, minusOneBits, constPayload?, bitcastPayload,
     constToAlgorithm?]
   change Except.ok (Op.constInt (Int32Bits.toInt ({ bits := 0xffffffff#32 } : Int32Bits))) =
