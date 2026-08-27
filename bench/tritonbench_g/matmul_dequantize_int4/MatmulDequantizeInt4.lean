@@ -69,6 +69,16 @@ rather than semantics:
 The source computes `c = accumulator.to(c_ptr.dtype.element_ty)` and then stores
 **`accumulator`**, not `c` — so `c` is a dead binding. That is transcribed as
 written; the spec below is therefore about the `float32` accumulator.
+
+## Correctness-surface status
+
+Correctness-surface blocker: the `*_exec_genuine` headline(s) in this file
+state correctness as an inline exec-existential
+(`∃ sF, exec … = some sF ∧ <output readback>`) rather than through a named
+`⊨` (`KernelIO`) or `ComputeCorrect.Realizes` surface. Termination and every
+stored output cell are proved; the **frame** — nothing outside the write set
+changes — is not part of the statement. Lifting this to `⊨` therefore needs
+the frame proof, not a rename. Registered in `proof_blockers.md`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MatmulDequantizeInt4

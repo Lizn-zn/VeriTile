@@ -65,6 +65,16 @@ algorithm layer.
 Spelling notes, per `bench/MAIN_THEOREM_CONVENTIONS.md`, all surface syntax
 rather than semantics: integer literals inside index arithmetic are written
 `$(n)`; `boundary_check=(0, 1)` is written `boundary_check=([0, 1] : List Nat)`.
+
+## Correctness-surface status
+
+Correctness-surface blocker: the `*_exec_genuine` headline(s) in this file
+state correctness as an inline exec-existential
+(`∃ sF, exec … = some sF ∧ <output readback>`) rather than through a named
+`⊨` (`KernelIO`) or `ComputeCorrect.Realizes` surface. Termination and every
+stored output cell are proved; the **frame** — nothing outside the write set
+changes — is not part of the statement. Lifting this to `⊨` therefore needs
+the frame proof, not a rename. Registered in `proof_blockers.md`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkLinearAttn

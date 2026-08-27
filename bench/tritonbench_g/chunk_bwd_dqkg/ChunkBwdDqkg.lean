@@ -58,6 +58,16 @@ syntax, not semantics - the statement structure and every shape match the source
   `.nat` reading.
 * The DSL has no unary minus, so the source's `tl.exp(-b_g + b_g_last)` is
   transcribed `tl.exp(0.0 - b_g + b_g_last)`.
+
+## Correctness-surface status
+
+Correctness-surface blocker: the `*_exec_genuine` headline(s) in this file
+state correctness as an inline exec-existential
+(`∃ sF, exec … = some sF ∧ <output readback>`) rather than through a named
+`⊨` (`KernelIO`) or `ComputeCorrect.Realizes` surface. Termination and every
+stored output cell are proved; the **frame** — nothing outside the write set
+changes — is not part of the statement. Lifting this to `⊨` therefore needs
+the frame proof, not a rename. Registered in `proof_blockers.md`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkBwdDqkg

@@ -83,6 +83,16 @@ rather than semantics:
   is inferred `.real` by the DSL's expression typing;
 * `boundary_check=(0, 1)` is written `boundary_check=([0, 1] : List Nat)`, the
   spelling the DSL's `tl.make_block_ptr` loads take.
+
+## Correctness-surface status
+
+Correctness-surface blocker: the `*_exec_genuine` headline(s) in this file
+state correctness as an inline exec-existential
+(`∃ sF, exec … = some sF ∧ <output readback>`) rather than through a named
+`⊨` (`KernelIO`) or `ComputeCorrect.Realizes` surface. Termination and every
+stored output cell are proved; the **frame** — nothing outside the write set
+changes — is not part of the statement. Lifting this to `⊨` therefore needs
+the frame proof, not a rename. Registered in `proof_blockers.md`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ChunkGlaFwd

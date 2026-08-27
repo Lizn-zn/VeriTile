@@ -341,6 +341,17 @@ The current documented blocker set is:
   inlined as exact-ℝ closed forms; `tl.broadcast_to` via tuple
   `tl.broadcast`; unmasked `tl.store`; `libdevice.rsqrt` spelled
   `tl.rsqrt`; register casts parenthesized.
+- `fast_ce_loss` — `_cross_entropy_forward`'s `labels_ptr += row_idx`
+  pointer bump folded into the load offset (`tl.load(labels_ptr + row_idx)` —
+  same address, same single load) and the following `.to(tl.int32)` (identity
+  on the already-`.int` channel) dropped (marker registered in
+  `proof_blockers.md`); forced by the `MetaGatherMasked2DKernelIO₂ₓ₂` skin,
+  whose `mwinL := fun pid₀ _ => pid₀` field is the label's address, so the
+  metadata load must be written in that shape. The sibling
+  `_chunked_cross_entropy_forward` surface — stated on the plain
+  `Realizes_without_Rounding` face, which constrains no load shape — keeps the
+  literal spelling. Host launch and `@triton.heuristics` are the trusted
+  boundary.
 
 The current proof-gap blocker set is exactly the non-full rows in
 `proof_gap_manifest.tsv`: 3 fixed-width int8 blocked summaries

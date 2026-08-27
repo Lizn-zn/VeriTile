@@ -84,6 +84,22 @@ the algorithm layer. The forward logits load uses
 inactive lanes (`col_offsets ≥ VOCAB_SIZE`) untouched and assumes the per-tile
 output offset is injective. The spec is built inline; it does not reference a
 `VeriTile.Triton.Math.*` oracle.
+
+## Translation surface
+
+Translation-surface blocker: in `cross_entropy_forward_surface` the upstream
+`labels_ptr += row_idx` pointer bump is folded into the load offset
+(`tl.load(labels_ptr + row_idx)` — same address, same single load) and the
+following `.to(tl.int32)` (identity on the already-`.int` channel) is dropped.
+The forward headline is stated on the `MetaGatherMasked2DKernelIO₂ₓ₂` skin
+whose `mwinL := fun pid₀ _ => pid₀` field *is* the label's address, so the
+metadata load has to be written in that shape; the skin's metadata-load lemma
+is not stated for a rebound pointer register. The sibling
+`chunked_cross_entropy_forward_surface` below keeps the literal
+`labels_ptr += row_idx` / `tl.load(labels_ptr)` / `.to(tl.int32)` spelling —
+it is stated on the plain `Realizes_without_Rounding` surface, which puts no
+shape constraint on the load. Registered in `proof_blockers.md` and
+`completion_audit.md`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.FastCeLoss
@@ -98,12 +114,11 @@ set_option maxHeartbeats 800000
 
 Python's hard-coded `label_idx != -100` sentinel is preserved as the literal
 `-100`, and the label load rides the typed `.int` region channel so the
-sentinel comparison is a genuine signed comparison. Two label-channel
-transcription notes: the `.py`'s `labels_ptr += row_idx` pointer bump is
-folded into the load offset (`tl.load(labels_ptr + row_idx)` — same address,
-same single load) because a dynamic pointer register erases the region's
-element dtype, and the `.to(tl.int32)` cast (identity on the already-int32
-channel) is dropped for the same reason. -/
+sentinel comparison is a genuine signed comparison. The two label-channel
+deviations — the pointer bump folded into the load offset, and the dropped
+`.to(tl.int32)` — are the registered `Translation-surface blocker:` in the
+module preamble above; both are forced by the `MetaGatherMasked2DKernelIO₂ₓ₂`
+skin's `mwinL` address shape, not by the `.int` channel itself. -/
 def cross_entropy_forward_surface
     (logits_ptr loss_ptr logsumexp_ptr : RegionName) (labels_ptr : Region .int)
     (VOCAB_SIZE logits_row_stride BLOCK_SIZE : Nat)

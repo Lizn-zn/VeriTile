@@ -64,6 +64,16 @@ hypothesis on `T`. The only trip-count hypothesis is the host's own
 `assert BTL % BTS == 0`.
 
 The port targets `parallel_attention.py`'s `parallel_rebased_fwd_kernel`.
+
+## Correctness-surface status
+
+Correctness-surface blocker: the `*_exec_genuine` headline(s) in this file
+state correctness as an inline exec-existential
+(`∃ sF, exec … = some sF ∧ <output readback>`) rather than through a named
+`⊨` (`KernelIO`) or `ComputeCorrect.Realizes` surface. Termination and every
+stored output cell are proved; the **frame** — nothing outside the write set
+changes — is not part of the statement. Lifting this to `⊨` therefore needs
+the frame proof, not a rename. Registered in `proof_blockers.md`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.ParallelAttention

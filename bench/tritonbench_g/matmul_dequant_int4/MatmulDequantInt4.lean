@@ -94,6 +94,16 @@ three loads and the store share one mask). The only hypothesis beyond the
 dimension variables is `hInj` — distinct tile lanes must land on distinct
 `fp_b` cells, which `fpbAddr_injective` discharges for the host's row-major
 `fp_b`.
+
+## Correctness-surface status
+
+Correctness-surface blocker: the `*_exec_genuine` headline(s) in this file
+state correctness as an inline exec-existential
+(`∃ sF, exec … = some sF ∧ <output readback>`) rather than through a named
+`⊨` (`KernelIO`) or `ComputeCorrect.Realizes` surface. Termination and every
+stored output cell are proved; the **frame** — nothing outside the write set
+changes — is not part of the statement. Lifting this to `⊨` therefore needs
+the frame proof, not a rename. Registered in `proof_blockers.md`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.MatmulDequantInt4

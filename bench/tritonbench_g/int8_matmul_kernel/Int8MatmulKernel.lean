@@ -92,6 +92,16 @@ kernel); `@triton.autotune` and the host launch (the 1-D grid
 `cdiv(M,BM)·cdiv(N,BN)`, block sizes, `GROUP_SIZE_M`) are the *trusted
 boundary*. Every dimension, stride and block size stays a symbolic
 parameter.
+
+## Correctness-surface status
+
+Correctness-surface blocker: the `*_exec_genuine` headline(s) in this file
+state correctness as an inline exec-existential
+(`∃ sF, exec … = some sF ∧ <output readback>`) rather than through a named
+`⊨` (`KernelIO`) or `ComputeCorrect.Realizes` surface. Termination and every
+stored output cell are proved; the **frame** — nothing outside the write set
+changes — is not part of the statement. Lifting this to `⊨` therefore needs
+the frame proof, not a rename. Registered in `proof_blockers.md`.
 -/
 
 namespace VeriTile.Bench.TritonBenchG.Int8MatmulKernel
