@@ -4,6 +4,11 @@ User-facing theorem surfaces in `VeriTile/Examples/` should start from the
 public compute-facing APIs. See
 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) for the full user guide.
 
+- **Bench-corpus headlines** (`bench/tritonbench_g/`, `bench/examples/`) are
+  stated on a `KernelIO` `⊨` / `⊨[R]` face, not on the surfaces below; that
+  triple bundles the addressing, the output values and the frame into one line.
+  See [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) and
+  [`../bench/MAIN_THEOREM_CONVENTIONS.md`](../bench/MAIN_THEOREM_CONVENTIONS.md) §4.
 - Single-kernel correctness against a mathematical or algorithmic spec uses
   `ComputeCorrect.Realizes` (*a kernel realizes a spec*), `ComputeCorrect.Post`,
   or `ComputeCorrect.General`.

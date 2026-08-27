@@ -2,7 +2,7 @@
 
 This document explains which public theorem surface to use when proving
 properties of `ComputeKernel`s. Surfaces live in
-[`VeriTile.Triton.Correctness`](../VeriTile.Triton.Correctness.lean).
+[`VeriTile.Triton.Correctness`](../VeriTile/Triton/Correctness.lean).
 
 ## The rounding default
 
@@ -18,15 +18,83 @@ Rule of thumb: the unqualified name is what a kernel *actually* does on hardware
 (rounded); `*_without_Rounding` is the mathematician's idealization you fall back
 to when the rounding is irrelevant to the claim. The exact surface **degenerates
 out of** the rounding one at the trivial model `.triv` (where `execR` collapses
-onto `exec`), never the other way around. Most of the 141 ported kernels are
+onto `exec`), never the other way around. Most of the 173 ported kernels are
 proven on `*_without_Rounding` (their outputs are exact-ℝ specs); the showcase
 pairs under `bench/examples/` that carry a bf16 boundary store land on the
 rounding surface `Refines R`.
+
+## KernelIO `⊨` — the per-kernel headline surface
+
+The surfaces below (`Realizes`, `Refines`, …) are the *library* vocabulary. The
+surface that the bench corpus actually states its headlines on is the **KernelIO
+`⊨` triple**, defined in
+[`VeriTile/Triton/Memory/KernelSpec.lean`](../VeriTile/Triton/Memory/KernelSpec.lean)
+(61 IO-signature structures, 41 scoped notations). Today **153 of the 173
+TritonBench-G ports and all 17 `bench/examples/` showcases** state a `⊨` face;
+68 ports additionally carry the rounding face `⊨[R]`.
+
+### What a `KernelIO` is
+
+A `KernelIO*` record is a kernel's **IO signature**: which regions it reads and
+writes, where program `pid`'s window starts in each of them (`read`/`write`),
+which lanes are active (`readMask`/`writeMask`), the tile length `B`, and — on
+the rounding skins — the output element type `outDType`. The many `structure`s
+("skins") differ only in the *shape* of that signature: how many inputs and
+outputs, how many program axes, whether metadata scalars or a gather index sit
+between the pointer and the data.
+
+### What `io ⊨ f` says
+
+```lean
+open scoped VeriTile.Triton.KernelIO₂ in
+specification my_kernel_correctness … :
+    myIO … ⊨ fun xs ys j => xs j + ys j
+```
+
+Unfolded, that is one Hoare triple over **flat pointer memory**: for every
+disjoint flat placement of the declared buffers, every program id whose windows
+are in bounds, and every launch state whose input windows hold `xs`/`ys`, the
+*translated pointer kernel* terminates, every declared output cell holds
+`f xs ys j`, and **every other flat cell is unchanged** (the frame).
+
+That last conjunct is the part a hand-rolled `∃ sF, exec … = some sF ∧ …`
+headline usually omits, which is why it is not merely a different spelling —
+see `proof_blockers.md`'s "Correctness-Surface Blockers" for the ports that
+still owe it.
+
+### The notations
+
+| Notation | Meaning |
+|---|---|
+| `io ⊨ f` | exact-ℝ: `exec`, no rounding |
+| `io ⊨[R] f` | rounding: `execR R`, output rounded at the signature's `outDType` |
+| `io ⊨[R, dtype] f` | same, with `outDType` written out — use this whenever a file states more than one output channel, since the 3-hole form prints an `.fp16` face and a `.real` face identically |
+| `io₁ ≡[R] io₂` | kernel-vs-kernel refinement, the `⊨` counterpart of `Refines` |
+
+`⊨[R]` is quantified over **all** rounding models, so it degenerates to `⊨` at
+`R := .triv` — the rounding face is the strictly stronger statement. It only
+carries float-narrowing *content*, though, when the signature pins a narrow
+`outDType`: 13 ports pin `.fp16`/`.fp32`/`.f8e4`; on the rest `outDType = .real`
+and `R.round .real = id`.
+
+### Proving one
+
+Each skin ships an assembly lemma `<Skin>.Implements.intro` (and
+`.ImplementsR.intro`) that reduces `⊨` to three per-kernel obligations and does
+the flat-memory transport once:
+
+1. `FlattenOk` — the kernel's ops are in the flat-memory bridge fragment;
+2. `TraceSafe` — the per-execution safety walk, given the window-in-bounds contract;
+3. `hrun` — the **region-model** Hoare triple: termination, output values, frame.
+
+Only (3) is mathematical content; (1) and (2) are mechanical walks.
 
 ## Quick-Pick Table
 
 | Goal | Use |
 |---|---|
+| **A bench-port / showcase headline** | a `KernelIO` skin's `⊨` (exact) or `⊨[R]` (rounded) — see the section above |
+| … kernel-vs-kernel, on the same surface | `io₁ ≡[R] io₂` |
 | One kernel realizes an output spec (rounded) | `ComputeCorrect.Realizes` |
 | … the exact-ℝ idealization of that spec | `ComputeCorrect.Realizes_without_Rounding` |
 | One kernel refines another, writes-equality (rounded) | `ComputeRefine.Refines` |

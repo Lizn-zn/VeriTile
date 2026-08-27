@@ -2,7 +2,7 @@
 
 本文档说明在证明 `ComputeKernel` 的性质时,应当选用哪个公开 theorem surface。
 所有 surface 定义在
-[`VeriTile.Triton.Correctness`](../VeriTile.Triton.Correctness.lean)。
+[`VeriTile.Triton.Correctness`](../VeriTile/Triton/Correctness.lean)。
 
 ## 舍入默认
 
@@ -17,14 +17,75 @@
 经验法则:不带限定词的名字是 kernel 在硬件上*实际*做的(带舍入);
 `*_without_Rounding` 是当舍入与结论无关时可退回的数学家理想化。精确 surface
 在 trivial model `.triv` 处(此时 `execR` 退化为 `exec`)**从**舍入 surface
-**退化出来**,反方向从不成立。141 个 ported kernel 大多在 `*_without_Rounding`
+**退化出来**,反方向从不成立。173 个 ported kernel 大多在 `*_without_Rounding`
 上证明(它们的输出是精确实数 spec);`bench/examples/` 下带 bf16 边界 store 的
 showcase pair 落在舍入 surface `Refines R` 上。
+
+## KernelIO `⊨` —— 逐 kernel 头条 surface
+
+上面/下面这些 surface(`Realizes`、`Refines` …)是**库**的词汇。bench 语料实际
+用来陈述头条的,是 **KernelIO `⊨` 三元组**,定义在
+[`VeriTile/Triton/Memory/KernelSpec.lean`](../VeriTile/Triton/Memory/KernelSpec.lean)
+(61 个 IO 签名 structure、41 个 scoped notation)。目前 **173 个 TritonBench-G
+端口中的 153 个、以及 `bench/examples/` 全部 17 个 showcase** 都有 `⊨` 面;
+其中 68 个端口另有舍入面 `⊨[R]`。
+
+### `KernelIO` 是什么
+
+一个 `KernelIO*` record 就是 kernel 的 **IO 签名**:读写哪些 region、程序 `pid`
+在每个 region 里的窗口从哪开始(`read`/`write`)、哪些 lane 活跃
+(`readMask`/`writeMask`)、瓦片长度 `B`,以及在舍入皮上还有输出元素类型
+`outDType`。那么多 `structure`("皮")之间的区别只在签名的*形状*:几进几出、
+几条程序轴、指针与数据之间是否夹着元数据标量或 gather 下标。
+
+### `io ⊨ f` 说了什么
+
+```lean
+open scoped VeriTile.Triton.KernelIO₂ in
+specification my_kernel_correctness … :
+    myIO … ⊨ fun xs ys j => xs j + ys j
+```
+
+展开后就是一条**平铺指针内存**上的 Hoare 三元组:对所有互不重叠的缓冲区平铺
+摆放、所有窗口在界内的 program id、以及所有输入窗口装着 `xs`/`ys` 的启动状态,
+*翻译后的指针 kernel* 终止、每个声明的输出格都等于 `f xs ys j`,并且**其它每个
+平铺格都没被改动**(frame)。
+
+最后这条合取正是手写的 `∃ sF, exec … = some sF ∧ …` 头条通常省掉的部分 ——
+所以它不只是换个写法。仍欠这条的端口见 `proof_blockers.md` 的
+"Correctness-Surface Blockers" 一节。
+
+### 记号
+
+| 记号 | 含义 |
+|---|---|
+| `io ⊨ f` | 精确实数:走 `exec`,无舍入 |
+| `io ⊨[R] f` | 舍入:走 `execR R`,输出按签名的 `outDType` 取整 |
+| `io ⊨[R, dtype] f` | 同上但把 `outDType` 写出来 —— 只要一个文件陈述了多于一条输出通道就该用它,因为三洞形式会把 `.fp16` 面和 `.real` 面印成一样 |
+| `io₁ ≡[R] io₂` | kernel 对 kernel 的 refinement,即 `Refines` 的 `⊨` 对应物 |
+
+`⊨[R]` 对**所有**舍入模型全称量化,所以在 `R := .triv` 处退化成 `⊨` ——
+舍入面是严格更强的陈述。但它只有在签名把 `outDType` 钉成窄类型时才带有浮点
+窄化的*实质内容*:13 个端口钉了 `.fp16`/`.fp32`/`.f8e4`;其余的 `outDType = .real`
+而 `R.round .real = id`。
+
+### 怎么证
+
+每张皮都带一条装配引理 `<Skin>.Implements.intro`(以及 `.ImplementsR.intro`),
+把 `⊨` 归约成三条逐 kernel 义务,平铺内存的搬运只做一次:
+
+1. `FlattenOk` —— kernel 的算子落在平铺内存桥的片段里;
+2. `TraceSafe` —— 在窗口在界契约下的逐次执行安全走查;
+3. `hrun` —— **区域模型**下的 Hoare 三元组:终止、输出值、frame。
+
+只有 (3) 是数学内容,(1)(2) 是机械走查。
 
 ## 速查表
 
 | 目标 | 用 |
 |---|---|
+| **bench 端口 / showcase 的头条** | 某张 `KernelIO` 皮的 `⊨`(精确)或 `⊨[R]`(舍入)—— 见上一节 |
+| …… kernel 对 kernel,同一 surface | `io₁ ≡[R] io₂` |
 | 一个 kernel realize 某个输出规范(带舍入)| `ComputeCorrect.Realizes` |
 | …… 该规范的精确实数理想化 | `ComputeCorrect.Realizes_without_Rounding` |
 | 一个 kernel refine 另一个,writes-equality(带舍入)| `ComputeRefine.Refines` |

@@ -50,9 +50,34 @@ The `expected` value (what the theorem claims the output is) must be a
 own executed output read back and compared to itself. `scripts/spec_sheet.py`
 must report `self-ref-flagged: 0`.
 
-## 4. Structure — `ComputeCorrect.Realizes`
+## 4. Structure — a **named** surface, `⊨` preferred
 
-The headline is stated with the standard trust surface
+The headline must be stated through a named trust surface, never as a
+hand-rolled `exec` statement. There are two, in order of preference.
+
+### 4a. The KernelIO `⊨` face (preferred)
+
+```lean
+open scoped VeriTile.Triton.KernelIO₂ in
+specification <kernel>_correctness … :
+    <kernelIO> … ⊨ fun xs ys j => <input-memory closed form>
+```
+
+`⊨` (and its rounding sibling `⊨[R]`, four-hole `⊨[R, outDType]`) is the
+flat-pointer-memory Hoare triple defined in
+`VeriTile/Triton/Memory/KernelSpec.lean`: termination, every declared output
+cell, **and the frame** — no cell outside the write set changes. The IO record
+carries the addressing (windows, masks, tile length, output dtype), so the
+statement stays one line. Prove it with the skin's `Implements.intro` /
+`ImplementsR.intro`, which reduces the goal to `FlattenOk` + `TraceSafe` +
+the region-model Hoare triple. See
+[`documents/CorrectnessSurfaces.md`](../documents/CorrectnessSurfaces.md).
+
+Pick the skin whose *signature shape* matches (inputs/outputs, program axes,
+metadata scalars, gather index). If none fits, say so in the preamble rather
+than bending the kernel to the skin.
+
+### 4b. `ComputeCorrect.Realizes` (when no skin fits)
 
 ```lean
 ComputeCorrect.Realizes
@@ -67,10 +92,22 @@ is a conjunction of `Realizes`**, one conjunct per stored output (scalar outputs
 use `fun _ : PUnit => some (region, offset)`; masked tile outputs use
 `ComputeCorrect.WriteMap.writeIf mask addr`). Keep the conjunction — do **not**
 split the outputs into separate top-level theorems; the file ends on one bundled
-headline. Do **not** leave the summary in the raw
-`(hExec : exec … = some s') → s'.readMem … = expected` form — that is a proof
-artifact, not the public surface. (`Realizes` internalizes the `exec`
-quantification, so the `s'`/`hExec` binders drop out of the statement.)
+headline.
+
+### 4c. What is not allowed
+
+Do **not** leave the summary in a raw `exec` form — neither
+`(hExec : exec … = some s') → s'.readMem … = expected` nor the existential
+`∃ sF, exec … = some sF ∧ <output readback>`. Both are proof artifacts, not
+public surfaces, and the existential one additionally tends to drop the frame.
+(`Realizes` and `⊨` internalize the `exec` quantification, so the `s'`/`hExec`
+binders drop out of the statement.)
+
+`bench/audit_tritonbench_g.sh`'s correctness-surface scan enforces this. A port
+that genuinely cannot meet it yet must carry a
+`Correctness-surface blocker:` preamble marker **and** a row under
+"## Correctness-Surface Blockers" in `proof_blockers.md`; the scan rejects an
+unregistered offender and a stale registration alike.
 
 ## 5. Axiom-clean
 

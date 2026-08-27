@@ -4,6 +4,11 @@
 API 出发。完整 user guide 见
 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md)。
 
+- **bench 语料的头条**(`bench/tritonbench_g/`、`bench/examples/`)陈述在
+  `KernelIO` 的 `⊨` / `⊨[R]` 面上,而不是下面这些 surface;那条三元组把寻址、
+  输出值和 frame 打包成一行。见
+  [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) 与
+  [`../bench/MAIN_THEOREM_CONVENTIONS.md`](../bench/MAIN_THEOREM_CONVENTIONS.md) §4。
 - 单 kernel 对照数学或算法 spec 的 correctness 用
   `ComputeCorrect.Realizes`(*一个 kernel realize 某个 spec*)、
   `ComputeCorrect.Post` 或 `ComputeCorrect.General`。
