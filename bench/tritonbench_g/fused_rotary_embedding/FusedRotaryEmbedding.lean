@@ -3010,8 +3010,31 @@ def decodingVCacheChainIO
       ((m₁ - 1) % block_size) * vcs_stride + j.val * vcd_stride
   writeMask := fun _ pid₀ _ _ _ _ => pid₀ % KV_GROUP_NUM = 0
 
+/-! ### ════════ ★ TOP SPECIFICATION ★ ════════ -/
 open scoped VeriTile.Triton.ChainMetaGroupedMasked2DKernelIO in
-theorem decoding_fused_rotary_embedding_vcache_chain_correctness
+/-- **`decodingVCacheChainIO ⊨ decodingVCacheChainSpec`** — the paged-V-cache
+copy face of `decoding_fused_rotary_embedding_kernel` as one Hoare triple over
+flat pointer memory.
+
+The destination is reached through a **two-link metadata chain**:
+`context_lengths[pid₁]` is the sequence length `m₁`, and
+`BLOCK_TABLES[pid₁ · bts_stride + ((m₁ - 1) / block_size) · btb_stride]` is the
+physical block index `m₂`. The V row of token `pid₁`, head
+`pid₀ / KV_GROUP_NUM` then lands at
+`m₂ · vcb_stride + (pid₀ / KV_GROUP_NUM) · vch_stride +
+((m₁ - 1) % block_size) · vcs_stride + j · vcd_stride`.
+
+Only KV-group leaders are active: `pid₀ % KV_GROUP_NUM = 0` gates both the load
+and the store. The stored value is the loaded row **verbatim** —
+`decodingVCacheChainSpec` is the identity on `xs` — and every flat cell outside
+the written window is untouched.
+
+Dimension-general: `HEAD_DIM`, `block_size`, `KV_GROUP_NUM` and all eight
+strides are free `Nat` parameters. The headline carries no side conditions of
+its own; the disjoint base-pointer placement, the in-bounds windows and the
+launch state pinning the input row and both metadata cells are all part of the
+`⊨` triple. -/
+specification decoding_fused_rotary_embedding_vcache_chain_correctness
     (v v_cache : RegionName) (BLOCK_TABLES context_lengths : Region .nat)
     (KV_GROUP_NUM k_token_stride k_head_stride head_dim_stride
       vcb_stride vch_stride vcs_stride vcd_stride bts_stride btb_stride

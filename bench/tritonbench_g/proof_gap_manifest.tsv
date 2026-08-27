@@ -138,6 +138,7 @@ bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused
 bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused_recurrent_retention_seed_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused_recurrent_retention_seed_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fused_rotary_embedding/FusedRotaryEmbedding.lean	decoding_fused_rotary_embedding_q_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/fused_rotary_embedding/FusedRotaryEmbedding.lean	decoding_fused_rotary_embedding_vcache_chain_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_state_step_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
 bench/tritonbench_g/geglu_tanh_triton/GegluTanhTriton.lean	geglu_tanh_forward_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
