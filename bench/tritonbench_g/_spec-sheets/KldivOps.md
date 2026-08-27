@@ -334,3 +334,311 @@ def inOffset (s : BlockState) (target_stride : Nat) (i : Fin BLOCK_SIZE) :
   s.pid * target_stride + i.val
 ```
 </details>
+
+## Public theorem: `kldiv_forward_log_target_none_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface**: the `log_target = True`,
+`reduction = None` forward slice implements `exp(y_true) · (y_true − y)` on its
+masked IO signature — for every disjoint flat placement of the three buffers,
+every program id whose active lanes are in bounds, and every launch state whose
+input windows hold `ys`/`gts` at the active lanes, the translated pointer kernel
+terminates, every active output lane holds the spec value, and every other
+memory cell is unchanged.
+
+This is the audit-once surface; the `Realizes_without_Rounding` face above
+states the same computation against a declared write map but does not pin the
+flat placement. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification kldiv_forward_log_target_none_correctness
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) :
+    kldivForwardLogTargetIO y_ptr gt_ptr loss_ptr
+        y_stride gt_stride loss_stride n_cols BLOCK_SIZE
+      ⊨ fun ys gts i => Real.exp (gts i) * (gts i - ys i)
+```
+
+**Closed-form spec defs (transitive):** `kldivForwardLogTargetIO`, `kldiv_forward_log_target_none`
+
+<details><summary><code>kldivForwardLogTargetIO</code></summary>
+
+```
+/-- `kldiv_forward_log_target_none`'s masked **IO signature** — the whole
+kernel-specific audit surface of the headline: which buffer is which argument,
+where program `pid` reads each input tile and writes its output tile (each at
+its **own** stride), and the active-lane predicate `j < n_cols`. The windows and
+mask are declared, not parsed from the kernel: they formalize the host-side
+launch convention (`ptr += pid * stride; offsets = arange; mask = offsets <
+n_cols`), and the headline **proves** the kernel's actual addressing and masking
+match them. Buffer sizes are not signature content: the headline quantifies over
+every allocation whose extents cover the active lanes. -/
+```
+```lean
+def kldivForwardLogTargetIO (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) : MaskedKernelIO₂ where
+  kernel := kldiv_forward_log_target_none y_ptr gt_ptr loss_ptr
+    y_stride gt_stride loss_stride n_cols BLOCK_SIZE
+  in1 := y_ptr
+  in2 := gt_ptr
+  out := loss_ptr
+  B := BLOCK_SIZE
+  read1 := fun pid => pid * y_stride
+  read2 := fun pid => pid * gt_stride
+  write := fun pid => pid * loss_stride
+  mask := fun _pid j => j.val < n_cols
+```
+</details>
+
+<details><summary><code>kldiv_forward_log_target_none</code></summary>
+
+```
+/-- Documented one-block slice of `_kldiv_kernel_forward` for the
+`log_target = True`, `reduction = 0` (None) constexpr branch. -/
+```
+```lean
+def kldiv_forward_log_target_none
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0).to(tl.int64)
+  y_ptr += pid * $(y_stride)
+  gt_ptr += pid * $(gt_stride)
+  loss_ptr += pid * $(loss_stride)
+  offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = offsets < $(n_cols)
+  y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+  y_true = tl.load(gt_ptr + offsets, mask=mask, other=0.0)
+  loss = tl.exp(y_true) * (y_true - y)
+  tl.store(loss_ptr + offsets, loss, mask=mask)
+}
+```
+</details>
+
+## Public theorem: `kldiv_forward_default_none_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface**: the `log_target = False` (default),
+`reduction = None` forward slice implements `y_true · (log(max(y_true, eps)) − y)` on its
+masked IO signature — for every disjoint flat placement of the three buffers,
+every program id whose active lanes are in bounds, and every launch state whose
+input windows hold `ys`/`gts` at the active lanes, the translated pointer kernel
+terminates, every active output lane holds the spec value, and every other
+memory cell is unchanged.
+
+This is the audit-once surface; the `Realizes_without_Rounding` face above
+states the same computation against a declared write map but does not pin the
+flat placement. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification kldiv_forward_default_none_correctness
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ) :
+    kldivForwardDefaultIO y_ptr gt_ptr loss_ptr
+        y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps
+      ⊨ fun ys gts i => gts i * (Real.log (max (gts i) eps) - ys i)
+```
+
+**Closed-form spec defs (transitive):** `kldivForwardDefaultIO`, `kldiv_forward_default_none`
+
+<details><summary><code>kldivForwardDefaultIO</code></summary>
+
+```
+/-- `kldiv_forward_default_none`'s masked **IO signature** — the whole
+kernel-specific audit surface of the headline: which buffer is which argument,
+where program `pid` reads each input tile and writes its output tile (each at
+its **own** stride), and the active-lane predicate `j < n_cols`. The windows and
+mask are declared, not parsed from the kernel: they formalize the host-side
+launch convention (`ptr += pid * stride; offsets = arange; mask = offsets <
+n_cols`), and the headline **proves** the kernel's actual addressing and masking
+match them. Buffer sizes are not signature content: the headline quantifies over
+every allocation whose extents cover the active lanes. -/
+```
+```lean
+def kldivForwardDefaultIO (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ) : MaskedKernelIO₂ where
+  kernel := kldiv_forward_default_none y_ptr gt_ptr loss_ptr
+    y_stride gt_stride loss_stride n_cols BLOCK_SIZE eps
+  in1 := y_ptr
+  in2 := gt_ptr
+  out := loss_ptr
+  B := BLOCK_SIZE
+  read1 := fun pid => pid * y_stride
+  read2 := fun pid => pid * gt_stride
+  write := fun pid => pid * loss_stride
+  mask := fun _pid j => j.val < n_cols
+```
+</details>
+
+<details><summary><code>kldiv_forward_default_none</code></summary>
+
+```
+/-- Documented one-block slice of `kldiv_ops.py`'s `_kldiv_kernel_forward`
+for the `log_target = False`, `reduction = 0` (None) constexpr branch.
+
+This models one `BLOCK_SIZE` iteration of Python's
+`for i in range(0, n_cols, BLOCK_SIZE)` loop after the row pointers have been
+advanced, taking the elementwise-store path of `reduction == 0`. -/
+```
+```lean
+def kldiv_forward_default_none
+    (y_ptr gt_ptr loss_ptr : RegionName)
+    (y_stride gt_stride loss_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0).to(tl.int64)
+  y_ptr += pid * $(y_stride)
+  gt_ptr += pid * $(gt_stride)
+  loss_ptr += pid * $(loss_stride)
+  offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = offsets < $(n_cols)
+  y = tl.load(y_ptr + offsets, mask=mask, other=0.0)
+  y_true = tl.load(gt_ptr + offsets, mask=mask, other=0.0)
+  loss = y_true * (tl.log(tl.maximum(y_true, $(eps))) - y)
+  tl.store(loss_ptr + offsets, loss, mask=mask)
+}
+```
+</details>
+
+## Public theorem: `kldiv_backward_default_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for the `log_target = False` backward
+slice: the gradient is `−target` on every active lane. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification kldiv_backward_default_correctness
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) :
+    kldivBackwardDefaultIO target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE
+      ⊨ fun ts i => ts i * (0.0 - 1)
+```
+
+**Closed-form spec defs (transitive):** `kldivBackwardDefaultIO`, `kldiv_backward_default`
+
+<details><summary><code>kldivBackwardDefaultIO</code></summary>
+
+```
+/-- `kldiv_backward_default`'s masked one-in/one-out **IO signature**. -/
+```
+```lean
+def kldivBackwardDefaultIO (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) : MaskedKernelIO₁ where
+  kernel := kldiv_backward_default target_ptr new_grads_ptr
+    target_stride new_grads_stride n_cols BLOCK_SIZE
+  inp := target_ptr
+  out := new_grads_ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * target_stride
+  write := fun pid => pid * new_grads_stride
+  mask := fun _pid j => j.val < n_cols
+```
+</details>
+
+<details><summary><code>kldiv_backward_default</code></summary>
+
+```
+/-- Documented one-block slice of `kldiv_ops.py`'s `_kldiv_kernel_backward`
+for the `log_target = False` constexpr branch.
+
+This models one `BLOCK_SIZE` iteration of Python's `for i in range(0, n_cols,
+BLOCK_SIZE)` loop after the row pointers have been advanced.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `log_target: tl.constexpr` → separate kernel defs per branch. -/
+```
+```lean
+def kldiv_backward_default
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0).to(tl.int64)
+  target_ptr += pid * $(target_stride)
+  new_grads_ptr += pid * $(new_grads_stride)
+  offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = offsets < $(n_cols)
+  target = tl.load(target_ptr + offsets, mask=mask, other=0.0)
+  res = target * -1
+  tl.store(new_grads_ptr + offsets, res, mask=mask)
+}
+```
+</details>
+
+## Public theorem: `kldiv_backward_log_target_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for the `log_target = True` backward
+slice: the gradient is `−exp(target)` on every active lane. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification kldiv_backward_log_target_correctness
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) :
+    kldivBackwardLogTargetIO target_ptr new_grads_ptr
+        target_stride new_grads_stride n_cols BLOCK_SIZE
+      ⊨ fun ts i => 0.0 - Real.exp (ts i)
+```
+
+**Closed-form spec defs (transitive):** `kldivBackwardLogTargetIO`, `kldiv_backward_log_target`
+
+<details><summary><code>kldivBackwardLogTargetIO</code></summary>
+
+```
+/-- `kldiv_backward_log_target`'s masked one-in/one-out **IO signature**. -/
+```
+```lean
+def kldivBackwardLogTargetIO (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) : MaskedKernelIO₁ where
+  kernel := kldiv_backward_log_target target_ptr new_grads_ptr
+    target_stride new_grads_stride n_cols BLOCK_SIZE
+  inp := target_ptr
+  out := new_grads_ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * target_stride
+  write := fun pid => pid * new_grads_stride
+  mask := fun _pid j => j.val < n_cols
+```
+</details>
+
+<details><summary><code>kldiv_backward_log_target</code></summary>
+
+```
+/-- Documented one-block slice of `_kldiv_kernel_backward` for the
+`log_target = True` constexpr branch. -/
+```
+```lean
+def kldiv_backward_log_target
+    (target_ptr new_grads_ptr : RegionName)
+    (target_stride new_grads_stride n_cols BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0).to(tl.int64)
+  target_ptr += pid * $(target_stride)
+  new_grads_ptr += pid * $(new_grads_stride)
+  offsets = tl.arange(0, $(BLOCK_SIZE))
+  mask = offsets < $(n_cols)
+  target = tl.load(target_ptr + offsets, mask=mask, other=0.0)
+  res = -tl.exp(target)
+  tl.store(new_grads_ptr + offsets, res, mask=mask)
+}
+```
+</details>

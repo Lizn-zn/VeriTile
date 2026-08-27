@@ -2,52 +2,70 @@
 
 **Python source:** `bench/tritonbench_g/swiglu_fwd/swiglu_fwd.py`
 
-## Public theorem: `swiglu_fwd_kernel_output_summary`
+## Public theorem: `swiglu_fwd_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `_swiglu_fwd_kernel`: the DSL surface lowers to
-the algorithm layer, and the masked store to `OUT` is compute-correct — every
-active lane holds `TiledActivation.swiglu (xs i) (ys i)`, out-of-bounds lanes are
-preserved. -/
+/-- **The headline**: `_swiglu_fwd_kernel` implements the oracle SwiGLU
+`TiledActivation.swiglu` (i.e. `x · σ(x) · y`) lane-wise on its masked 2-D IO
+signature — for every disjoint flat placement of the three buffers, every
+program-id pair `(row, col_block)` whose active lanes are in bounds, and every
+launch state whose active input-window lanes hold `xs`/`ys`, the translated
+pointer kernel terminates, every active output lane `j` holds
+`TiledActivation.swiglu (xs j) (ys j)`, and every other memory cell is
+unchanged. Proof: `Masked2DKernelIO₂.Implements.intro` assembles the
+region-model masked triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification swiglu_fwd_kernel_output_summary
+specification swiglu_fwd_kernel_correctness
     (X Y OUT : RegionName)
-    (stride_x_row stride_y_row stride_out_row ncols BLOCK_N : Nat)
-    (s : BlockState)
-    (xs ys : Fin BLOCK_N → ℝ)
-    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i)
-    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i) :
-    (∃ alg, (swiglu_fwd_kernel X Y OUT stride_x_row stride_y_row stride_out_row
-        ncols BLOCK_N).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := swiglu_fwd_kernel X Y OUT stride_x_row stride_y_row stride_out_row
-        ncols BLOCK_N)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_N => s.pids 1 * BLOCK_N + i.val < ncols)
-        (fun i => (OUT, swigluOffset s stride_out_row BLOCK_N i)))
-      (expected := fun i => TiledActivation.swiglu (xs i) (ys i))
+    (stride_x_row stride_y_row stride_out_row ncols BLOCK_N : Nat) :
+    swigluIO X Y OUT stride_x_row stride_y_row stride_out_row ncols BLOCK_N
+      ⊨ fun _ _ xs ys i => TiledActivation.swiglu (xs i) (ys i)
 ```
 
-**Assumptions / layout contracts:**
-- `xs ys : Fin BLOCK_N → ℝ`
-- `h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i`
-- `h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i`
-- `fun i : Fin BLOCK_N => s.pids 1 * BLOCK_N + i.val < ncols`
+**Closed-form spec defs (transitive):** `swigluIO`, `swiglu_fwd_kernel`
 
-**Closed-form spec defs (transitive):** `swigluOffset`, `swiglu_fwd_kernel`
+<details><summary><code>swigluIO</code></summary>
 
-<details><summary><code>swigluOffset</code></summary>
+```
+/-- `_swiglu_fwd_kernel`'s masked **IO signature** — the whole kernel-specific
+audit surface of the `⊨` headline:
 
+* `in1`/`in2`/`out` — which buffer is which argument (the wiring: gate `X`,
+  value `Y`, result `OUT`);
+* `B = BLOCK_N` — the column tile each program owns;
+* `read1`/`read2`/`write` — program `(row, col_block) = (pid₀, pid₁)` touches
+  lane `j` at `pid₀ * stride + pid₁ * BLOCK_N + j` in all three buffers (the
+  host-side 2-D grid `(M, cdiv(N, BLOCK_N))` launch convention, per-buffer row
+  strides);
+* `mask` — the active lanes `pid₁ * BLOCK_N + j < ncols`: the column prefix
+  that actually exists in the row. Inactive lanes (the overhang of the last
+  column block) carry no obligations on either side.
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer sizes
+are not signature content: the headline quantifies over every allocation whose
+extents cover the active lanes. -/
+```
 ```lean
-def swigluOffset (s : BlockState) (stride : Nat) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
-  s.pids 0 * stride + s.pids 1 * BLOCK_N + i.val
+def swigluIO (X Y OUT : RegionName)
+    (stride_x_row stride_y_row stride_out_row ncols BLOCK_N : Nat) :
+    Masked2DKernelIO₂ where
+  kernel := swiglu_fwd_kernel X Y OUT stride_x_row stride_y_row stride_out_row
+    ncols BLOCK_N
+  in1 := X
+  in2 := Y
+  out := OUT
+  B := BLOCK_N
+  read1 := fun pid₀ pid₁ j => pid₀ * stride_x_row + pid₁ * BLOCK_N + j.val
+  read2 := fun pid₀ pid₁ j => pid₀ * stride_y_row + pid₁ * BLOCK_N + j.val
+  write := fun pid₀ pid₁ j => pid₀ * stride_out_row + pid₁ * BLOCK_N + j.val
+  mask := fun _ pid₁ j => pid₁ * BLOCK_N + j.val < ncols
 ```
 </details>
 
@@ -77,6 +95,3 @@ def swiglu_fwd_kernel
 }
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `swiglu_fwd_kernel_compute_correct`

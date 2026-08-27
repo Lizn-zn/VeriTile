@@ -508,3 +508,113 @@ noncomputable def nonInnerBwdOutGradTile
       else some (s.undef out_grad_ptr (nonInnerOffset s N K TILE_K idx)) }
 ```
 </details>
+
+## Public theorem: `softmax_kernel_inner_one_tile_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface**: the inner one-tile FlagGems softmax
+implements the exact stable softmax over the active row prefix. `0 < TILE_N` is
+required — the `max` reduce is only defined on non-empty tiles. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification softmax_kernel_inner_one_tile_correctness
+    (output_ptr input_ptr : RegionName) (N TILE_N : Nat) (hT : 0 < TILE_N) :
+    softmaxFlaggemsInnerIO output_ptr input_ptr N TILE_N
+      ⊨ fun xs i => softmaxFlaggemsSpecOf N TILE_N xs i
+```
+
+**Assumptions / layout contracts:**
+- `hT : 0 < TILE_N`
+
+**Closed-form spec defs (transitive):** `softmaxFlaggemsInnerIO`, `softmaxFlaggemsSpecOf`, `softmax_kernel_inner_one_tile`, `softmaxOfRow`
+
+<details><summary><code>softmaxFlaggemsInnerIO</code></summary>
+
+```
+/-- `softmax_kernel_inner_one_tile`'s masked **IO signature**: one row per
+program, read and written at `pid * N`, active lanes `j < N`. -/
+```
+```lean
+def softmaxFlaggemsInnerIO (output_ptr input_ptr : RegionName)
+    (N TILE_N : Nat) : MaskedKernelIO₁ where
+  kernel := softmax_kernel_inner_one_tile output_ptr input_ptr N TILE_N
+  inp := input_ptr
+  out := output_ptr
+  B := TILE_N
+  read := fun pid => pid * N
+  write := fun pid => pid * N
+  mask := fun _ j => j.val < N
+```
+</details>
+
+<details><summary><code>softmaxFlaggemsSpecOf</code></summary>
+
+```
+/-- The inner one-tile softmax value as a function of the input *tile*. -/
+```
+```lean
+noncomputable def softmaxFlaggemsSpecOf
+    (N TILE_N : Nat) (xs : Fin TILE_N → ℝ) (idx : Fin TILE_N) : ℝ :=
+  softmaxOfRow TILE_N
+    { data := fun i => if i.1.val < N then some (xs i.1) else none } idx
+```
+</details>
+
+<details><summary><code>softmax_kernel_inner_one_tile</code></summary>
+
+```
+/-- Proof-oriented `ONE_TILE_PER_CTA=true` slice of
+`softmax_flaggems.py`'s `softmax_kernel_inner`.
+
+This covers the inner-dimension fast path where one CTA covers a full row. It
+preserves the source kernel's row program id, masked load with `-inf`, stable
+softmax max/sum normalization, output-dtype load cast, and masked store. The
+multi-tile online fallback remains future work. -/
+```
+```lean
+def softmax_kernel_inner_one_tile
+    (output_ptr input_ptr : RegionName)
+    (N TILE_N : Nat) :
+    ComputeKernel := triton {
+  pid_m = tl.program_id(0)
+  n_offsets = tl.arange(0, $(TILE_N))
+  offset = pid_m * $(N) + n_offsets
+  mask = n_offsets < $(N)
+  input_ptrs = input_ptr + offset
+  inp = (tl.load(input_ptrs, mask=mask, other=-float("inf"))).to(output_ptr.dtype.element_ty)
+  m = tl.max(inp, 0)
+  e = tl.exp(inp - m)
+  z = tl.sum(e, 0)
+  out = e / z
+  output_ptrs = output_ptr + offset
+  tl.store(output_ptrs, out, mask=mask)
+}
+```
+</details>
+
+<details><summary><code>softmaxOfRow</code></summary>
+
+```
+/-- The stable-softmax readout of an already-built row tile. Factored out so the
+row tile is an explicit argument (a `let` would elaborate to a `have`, which
+blocks rewriting the row). -/
+```
+```lean
+noncomputable def softmaxOfRow
+    (TILE_N : Nat) (row : Tile .real [TILE_N]) (idx : Fin TILE_N) : ℝ :=
+  match Tile.reduceMax (shape := [TILE_N]) ⟨0, by simp⟩ Bool.false row with
+  | some rowMax =>
+      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
+      let e := Tile.uop WithBot.realExp shifted
+      let z := Tile.reduceSum (shape := [TILE_N]) ⟨0, by simp⟩ Bool.false e
+      WithBot.unbotD 0
+        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR e z).data
+          (idx, PUnit.unit))
+  | none => 0
+```
+</details>

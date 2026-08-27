@@ -2,59 +2,145 @@
 
 **Python source:** `bench/tritonbench_g/fifth_order_sph_harmonics/fifth_order_sph_harmonics.py`
 
-## Public theorem: `fifth_order_fwd_surface_y00_output_summary`
+## Public theorem: `fifth_order_fwd_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `fifth_order_fwd` (representative channel
-`Y00`): the DSL surface lowers to the algorithm layer, and the strided `Y00`
-store to `output_ptr` is compute-correct — every active lane holds the
-spherical-harmonic polynomial value `y00Spec`, inactive lanes are preserved.
-Mirrors `add_kernel_output_summary`. The remaining channels `Y01..Y10` are
-covered by the sibling `fifth_order_fwd_surface_y0k_compute_correct`
-theorems. -/
+/-- **The headline**: `fifth_order_fwd` implements the eleven fifth-order real
+spherical harmonics on its grouped three-input / eleven-output IO signature —
+for every disjoint flat placement of the coordinate and output buffers, every
+program id whose active lanes are in bounds, and every launch state whose
+read-active lanes hold the coordinates `xs`, the translated pointer kernel
+terminates, every write-active lane `j` of every channel `o` holds
+`sphY o (x j) (y j) (z j)`, and every other memory cell is unchanged. One
+statement covers all eleven strided stores, and the frame is a single
+channel-quantified leg.
+
+Side conditions: `hStride : 10 < output_stride` (the eleven channel columns fit
+inside one output row — this also makes the per-lane store offsets injective),
+and `hCover`, the host-layout coupling that a lane whose `Y00` store is in
+range has its three coordinates in range (both extents count the same rows in
+the `calculate_lastdim_num_blocks` launch). Proof:
+`GroupedMasked2DKernelIO.Implements.intro` assembles the region-model grouped
+triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification fifth_order_fwd_surface_y00_output_summary
+specification fifth_order_fwd_correctness
     (coord_ptr output_ptr : RegionName)
     (block_size coord_numel output_numel col_offset output_stride : Nat)
-    (s : BlockState)
     (hStride : 10 < output_stride)
-    (hOutInj : Function.Injective
-      (fun i : Fin block_size => outOffset s block_size col_offset output_stride i)) :
-    (∃ alg, (fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
-        output_numel col_offset output_stride).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
-        output_numel col_offset output_stride)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin block_size =>
-          outOffset s block_size col_offset output_stride i < output_numel)
-        (fun i => (output_ptr, outOffset s block_size col_offset output_stride i)))
-      (expected := fun i => y00Spec s coord_ptr block_size coord_numel i)
+    (hCover : ∀ (pid₀ : Nat) (j : Fin block_size),
+      j.val * output_stride + block_size * output_stride * pid₀ + col_offset
+        < output_numel →
+      j.val * 3 + block_size * 3 * pid₀ + 2 < coord_numel) :
+    fifthOrderFwdIO coord_ptr output_ptr block_size coord_numel output_numel
+        col_offset output_stride ⊨
+      fun _ _ xs o j =>
+        sphY o (xs ⟨0, by show 0 < 3; decide⟩ j) (xs ⟨1, by show 1 < 3; decide⟩ j)
+          (xs ⟨2, by show 2 < 3; decide⟩ j)
 ```
 
 **Assumptions / layout contracts:**
 - `hStride : 10 < output_stride`
-- `hOutInj : Function.Injective
-      (fun i : Fin block_size => outOffset s block_size col_offset output_stride i)`
-- `fun i : Fin block_size =>
-          outOffset s block_size col_offset output_stride i < output_numel`
+- `hCover : ∀ (pid₀ : Nat) (j : Fin block_size),
+      j.val * output_stride + block_size * output_stride * pid₀ + col_offset
+        < output_numel →
+      j.val * 3 + block_size * 3 * pid₀ + 2 < coord_numel`
 
-**Closed-form spec defs (transitive):** `outOffset`, `fifth_order_fwd_surface`, `y00Spec`, `coordX`, `coordZ`, `coordOffset`
+**Closed-form spec defs (transitive):** `fifthOrderFwdIO`, `sphY`, `fifth_order_fwd_surface`, `sphInWin`, `sphOutWin`
 
-<details><summary><code>outOffset</code></summary>
+<details><summary><code>fifthOrderFwdIO</code></summary>
 
+```
+/-- `fifth_order_fwd`'s **grouped IO signature** — the whole kernel-specific
+audit surface of the `⊨` headline:
+
+* `nIn = 3` input channels, all reading the one coordinate buffer `coord_ptr`
+  (`inp` is constant); `nOut = 11` output channels, all writing the one output
+  buffer `output_ptr` (`out` is constant). `bufs = [coord_ptr, output_ptr]` is
+  the decoupled allocation list — two buffers, fourteen channels.
+* `B = block_size` — the lane window each program owns.
+* `read i` (`sphInWin`) — the interleaved coordinate layout: lane `j` of
+  program `pid₀` reads `x`, `y`, `z` at `3j + 3·block_size·pid₀ + i`
+  (`coord_stride = 3`).
+* `write o` (`sphOutWin`) — the strided channel layout: lane `j` writes channel
+  `k` at `j·output_stride + block_size·output_stride·pid₀ + col_offset + k`, so
+  the eleven channels share one region but own **different windows**, one
+  column apart inside each row.
+* `readMask` / `writeMask` — the kernel's own `< coord_numel` /
+  `< output_numel` guards, per channel.
+
+Neither program id is used beyond `pid₀` (the kernel launches a 1-D grid), so
+`pid₁` is ignored by every window. The windows and masks are declared, not
+parsed from the kernel; the headline **proves** the kernel's actual addressing
+and masking match them. Buffer sizes are not signature content: the headline
+quantifies over every allocation whose extents cover the active lanes. -/
+```
 ```lean
-def outOffset
-    (s : BlockState) (block_size col_offset output_stride : Nat)
-    (i : Fin block_size) : Nat :=
-  i.val * output_stride + block_size * output_stride * s.pid + col_offset
+def fifthOrderFwdIO (coord_ptr output_ptr : RegionName)
+    (block_size coord_numel output_numel col_offset output_stride : Nat) :
+    GroupedMasked2DKernelIO where
+  kernel := fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
+    output_numel col_offset output_stride
+  nIn := 3
+  nOut := 11
+  bufs := [coord_ptr, output_ptr]
+  inp := fun _ => coord_ptr
+  out := fun _ => output_ptr
+  B := block_size
+  read := fun i pid₀ _ j => sphInWin block_size pid₀ i j
+  readMask := fun i pid₀ _ j => sphInWin block_size pid₀ i j < coord_numel
+  write := fun o pid₀ _ j => sphOutWin block_size col_offset output_stride pid₀ o j
+  writeMask := fun o pid₀ _ j =>
+    sphOutWin block_size col_offset output_stride pid₀ o j < output_numel
+```
+</details>
+
+<details><summary><code>sphY</code></summary>
+
+```
+/-- The eleven real fifth-order spherical-harmonic polynomials, as pure
+functions of one lane's coordinates `(x, y, z)`. Output channel `o` of the
+kernel writes `sphY o`; these are exactly the `Y00..Y10` expressions of
+`fifth_order_sph_harmonics.py`, with the shared monomial intermediates
+(`VAR05 = x⁵`, `VAR26 = z²`, …) inlined. -/
+```
+```lean
+noncomputable def sphY (o : Fin 11) (x y z : ℝ) : ℝ :=
+  match o with
+  | ⟨0, _⟩ => 2.32681380862329 * x^5 + 11.6340690431164 * z^4 * x
+      - 23.2681380862329 * x^3 * z^2
+  | ⟨1, _⟩ => -29.4321253055229 * y * (x^3 * z - x * z^3)
+  | ⟨2, _⟩ => 1.73430461568895 * x^5
+      + x^3 * (-13.8744369255116 * y^2 - 3.46860923137790 * z^2)
+      + x * (41.6233107765348 * y^2 * z^2 - 5.20291384706685 * z^4)
+  | ⟨3, _⟩ => -16.9926454679664 * x^3 * y * z
+      + x * (33.9852909359329 * y^3 * z - 16.9926454679664 * z^3 * y)
+  | ⟨4, _⟩ => 1.60565407233314 * x^5
+      + x^3 * (3.21130814466628 * z^2 - 19.2678488679977 * y^2)
+      + x * (1.60565407233314 * z^4 + 12.8452325786651 * y^4
+          - 19.2678488679977 * y^2 * z^2)
+  | ⟨5, _⟩ => 3.31662479035540 * y^5
+      + y^3 * (-16.5831239517770 * x^2 - 16.5831239517770 * z^2)
+      + y * (6.21867148191637 * x^4 + 6.21867148191637 * z^4
+          + 12.4373429638327 * x^2 * z^2)
+  | ⟨6, _⟩ => 1.60565407233314 * z^5
+      + z^3 * (3.21130814466628 * x^2 - 19.2678488679977 * y^2)
+      + z * (1.60565407233314 * x^4 + 12.8452325786651 * y^4
+          - 19.2678488679977 * x^2 * y^2)
+  | ⟨7, _⟩ => 16.9926454679664 * y^3 * (z^2 - x^2)
+      + 8.49632273398321 * y * (x^4 - z^4)
+  | ⟨8, _⟩ => -1.73430461568895 * z^5
+      + z^3 * (13.8744369255116 * y^2 + 3.46860923137790 * x^2)
+      + z * (-41.6233107765348 * x^2 * y^2 + 5.20291384706685 * x^4)
+  | ⟨9, _⟩ => y * (7.35803132638072 * x^4 + 7.35803132638072 * z^4
+      - 44.1481879582843 * x^2 * z^2)
+  | ⟨_ + 10, _⟩ => 2.32681380862329 * z^5 + 11.6340690431164 * x^4 * z
+      - 23.2681380862329 * x^2 * z^3
 ```
 </details>
 
@@ -176,61 +262,46 @@ def fifth_order_fwd_surface
 ```
 </details>
 
-<details><summary><code>y00Spec</code></summary>
+<details><summary><code>sphInWin</code></summary>
 
+```
+/-- Input channel `i`'s lane-`j` load address for program `pid₀`: the three
+coordinate reads share the row window `3j + 3·block_size·pid₀` and differ only
+in the component column `+ i` (`x`, `y`, `z`). -/
+```
 ```lean
-noncomputable def y00Spec
-    (s : BlockState) (coord_ptr : RegionName)
-    (block_size coord_numel : Nat) (i : Fin block_size) : ℝ :=
-  let x := coordX s coord_ptr block_size coord_numel i
-  let z := coordZ s coord_ptr block_size coord_numel i
-  let x2 := Option.map₂ (fun x1 x2 => x1 * x2) x x
-  let x3 := Option.map₂ (fun x1 x2 => x1 * x2) x2 x
-  let x5 := Option.map₂ (fun x1 x2 => x1 * x2) x3 x2
-  let z2 := Option.map₂ (fun x1 x2 => x1 * x2) z z
-  let z4 := Option.map₂ (fun x1 x2 => x1 * x2) z2 z2
-  WithBot.unbotD 0
-    (Option.map₂ (fun x1 x2 => x1 - x2)
-      (Option.map₂ (fun x1 x2 => x1 + x2)
-        (Option.map (fun b => 2.32681380862329 * b) x5)
-        (Option.map₂ (fun x1 x2 => x1 * x2)
-          (Option.map (fun b => 11.6340690431164 * b) z4)
-          x))
-      (Option.map₂ (fun x1 x2 => x1 * x2)
-        (Option.map (fun b => 23.2681380862329 * b) x3)
-        z2))
+def sphInWin (block_size pid₀ : Nat) (i : Fin 3) (j : Fin block_size) : Nat :=
+  match i with
+  | ⟨0, _⟩ => j.val * 3 + block_size * 3 * pid₀
+  | ⟨1, _⟩ => j.val * 3 + block_size * 3 * pid₀ + 1
+  | ⟨_ + 2, _⟩ => j.val * 3 + block_size * 3 * pid₀ + 2
 ```
 </details>
 
-<details><summary><code>coordX</code></summary>
+<details><summary><code>sphOutWin</code></summary>
 
-```lean
-noncomputable def coordX
-    (s : BlockState) (coord_ptr : RegionName)
-    (block_size coord_numel : Nat) (i : Fin block_size) : WithBot ℝ :=
-  if coordOffset s block_size i < coord_numel then
-    some (s.readMem coord_ptr (coordOffset s block_size i))
-  else some (s.undef coord_ptr (coordOffset s block_size i))
 ```
-</details>
-
-<details><summary><code>coordZ</code></summary>
-
-```lean
-noncomputable def coordZ
-    (s : BlockState) (coord_ptr : RegionName)
-    (block_size coord_numel : Nat) (i : Fin block_size) : WithBot ℝ :=
-  if coordOffset s block_size i + 2 < coord_numel then
-    some (s.readMem coord_ptr (coordOffset s block_size i + 2))
-  else some (s.undef coord_ptr (coordOffset s block_size i + 2))
+/-- Output channel `o`'s lane-`j` store address for program `pid₀`: the eleven
+`Y0k` stores share the row window
+`j·output_stride + block_size·output_stride·pid₀ + col_offset` and differ only
+in the channel column `+ k`. -/
 ```
-</details>
-
-<details><summary><code>coordOffset</code></summary>
-
 ```lean
-def coordOffset (s : BlockState) (block_size : Nat) (i : Fin block_size) : Nat :=
-  i.val * 3 + block_size * 3 * s.pid
+def sphOutWin (block_size col_offset output_stride pid₀ : Nat)
+    (o : Fin 11) (j : Fin block_size) : Nat :=
+  match o with
+  | ⟨0, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset
+  | ⟨1, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 1
+  | ⟨2, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 2
+  | ⟨3, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 3
+  | ⟨4, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 4
+  | ⟨5, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 5
+  | ⟨6, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 6
+  | ⟨7, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 7
+  | ⟨8, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 8
+  | ⟨9, _⟩ => j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 9
+  | ⟨_ + 10, _⟩ =>
+      j.val * output_stride + block_size * output_stride * pid₀ + col_offset + 10
 ```
 </details>
 

@@ -321,6 +321,182 @@ def logicOffset
 ```
 </details>
 
+## Public theorem: `flash_decode2_llama_final_store_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `flash_decode2_llama.py`'s final
+writeback: for every disjoint flat placement of `Final` / `O`, every program
+coordinate whose lanes are in bounds, and every launch state whose `Final` row holds
+`xs`, the translated pointer kernel terminates, every lane of the `O` row holds
+`xs i`, and every other memory cell is unchanged.
+
+Both windows are built from *two* program axes with different strides on the two
+buffers — the shape the three-axis tile skin exists for. Dimension-general in all six
+strides and `BLOCK_DMODEL`. Honest side-condition: output-address injectivity at every
+program coordinate, the same hypothesis the per-write-map summary takes. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification flash_decode2_llama_final_store_io_correctness (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BLOCK_DMODEL =>
+        p₀ * stride_obs + p₁ * stride_oh + i.val * stride_od)) :
+    finalStoreIO Final O stride_final_b stride_final_h stride_final_d stride_obs
+        stride_oh stride_od BLOCK_DMODEL
+      ⊨ fun _p₀ _p₁ xs i => xs i
+```
+
+**Assumptions / layout contracts:**
+- `hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BLOCK_DMODEL =>
+        p₀ * stride_obs + p₁ * stride_oh + i.val * stride_od)`
+
+**Closed-form spec defs (transitive):** `finalStoreIO`, `flash_decode2_llama_final_store_slice`
+
+<details><summary><code>finalStoreIO</code></summary>
+
+```
+/-- IO signature of the final writeback on the three-axis tile surface. -/
+```
+```lean
+def finalStoreIO (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) : Masked3DTileKernelIO₁ where
+  kernel := flash_decode2_llama_final_store_slice Final O stride_final_b
+    stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL
+  inp := Final
+  out := O
+  shape := [BLOCK_DMODEL]
+  read := fun p₀ p₁ _p₂ i =>
+    p₀ * stride_final_b + p₁ * stride_final_h + i.1.val * stride_final_d
+  write := fun p₀ p₁ _p₂ i =>
+    p₀ * stride_obs + p₁ * stride_oh + i.1.val * stride_od
+  mask := fun _p₀ _p₁ _p₂ _ => True
+```
+</details>
+
+<details><summary><code>flash_decode2_llama_final_store_slice</code></summary>
+
+```
+/-- Proof-oriented final output-store slice of
+`flash_decode2_llama.py`'s `_fwd_kernel_flash_decode_stage2`.
+
+The full stage2 kernel reduces per-sequence-block partial outputs into a final
+`acc / sum_exp` vector. This slice starts from a precomputed normalized `Final`
+vector and proves the unmasked writeback into `O`. -/
+```
+```lean
+def flash_decode2_llama_final_store_slice
+    (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  final = tl.load(Final + cur_batch * $(stride_final_b) +
+      cur_head * $(stride_final_h) + offs_d * $(stride_final_d))
+  tl.store(O + cur_batch * $(stride_obs) + cur_head * $(stride_oh) +
+      offs_d * $(stride_od), final)
+}
+```
+</details>
+
+## Public theorem: `flash_decode2_llama_final_store_io_correctnessR`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` headline** for `flash_decode2_llama.py`'s final writeback: for
+**every** rounding model `R`, the same Hoare triple as
+`flash_decode2_llama_final_store_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs i)`.
+
+The writeback is a pure copy and carries no `.to(...)`, so the slice is cast-free
+and the exact run transports verbatim. The content of the rounding face here is
+exactly that: *this kernel introduces no rounding event of its own*, at any
+`R`. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification flash_decode2_llama_final_store_io_correctnessR (R : RoundingModel)
+    (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BLOCK_DMODEL =>
+        p₀ * stride_obs + p₁ * stride_oh + i.val * stride_od)) :
+    finalStoreIO Final O stride_final_b stride_final_h stride_final_d stride_obs
+        stride_oh stride_od BLOCK_DMODEL
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs i => xs i
+```
+
+**Assumptions / layout contracts:**
+- `hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BLOCK_DMODEL =>
+        p₀ * stride_obs + p₁ * stride_oh + i.val * stride_od)`
+
+**Closed-form spec defs (transitive):** `finalStoreIO`, `flash_decode2_llama_final_store_slice`
+
+<details><summary><code>finalStoreIO</code></summary>
+
+```
+/-- IO signature of the final writeback on the three-axis tile surface. -/
+```
+```lean
+def finalStoreIO (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d stride_obs stride_oh
+      stride_od BLOCK_DMODEL : Nat) : Masked3DTileKernelIO₁ where
+  kernel := flash_decode2_llama_final_store_slice Final O stride_final_b
+    stride_final_h stride_final_d stride_obs stride_oh stride_od BLOCK_DMODEL
+  inp := Final
+  out := O
+  shape := [BLOCK_DMODEL]
+  read := fun p₀ p₁ _p₂ i =>
+    p₀ * stride_final_b + p₁ * stride_final_h + i.1.val * stride_final_d
+  write := fun p₀ p₁ _p₂ i =>
+    p₀ * stride_obs + p₁ * stride_oh + i.1.val * stride_od
+  mask := fun _p₀ _p₁ _p₂ _ => True
+```
+</details>
+
+<details><summary><code>flash_decode2_llama_final_store_slice</code></summary>
+
+```
+/-- Proof-oriented final output-store slice of
+`flash_decode2_llama.py`'s `_fwd_kernel_flash_decode_stage2`.
+
+The full stage2 kernel reduces per-sequence-block partial outputs into a final
+`acc / sum_exp` vector. This slice starts from a precomputed normalized `Final`
+vector and proves the unmasked writeback into `O`. -/
+```
+```lean
+def flash_decode2_llama_final_store_slice
+    (Final O : RegionName)
+    (stride_final_b stride_final_h stride_final_d
+      stride_obs stride_oh stride_od
+      BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  final = tl.load(Final + cur_batch * $(stride_final_b) +
+      cur_head * $(stride_final_h) + offs_d * $(stride_final_d))
+  tl.store(O + cur_batch * $(stride_obs) + cur_head * $(stride_oh) +
+      offs_d * $(stride_od), final)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `flash_decode2_llama_final_store_slice_compute_correct`
 - `flash_decode2_llama_normalization_store_kernel_compute_correct`

@@ -2,62 +2,121 @@
 
 **Python source:** `bench/tritonbench_g/destindex_copy_kv1/destindex_copy_kv1.py`
 
-## Public theorem: `fwd_kernel_destindex_copy_kv_output_summary`
+## Public theorem: `fwd_kernel_destindex_copy_kv_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `_fwd_kernel_destindex_copy_kv`: the DSL
-surface lowers to the algorithm layer, and the dest-indexed masked scatter to
-`Out` is compute-correct — every active `[head, dim]` cell holds the matching
-cell of `K`, inactive cells are preserved. -/
+/-- **The headline**: the dest-indexed KV scatter implements the pure copy `xs`
+on its metadata IO signature — for every disjoint flat placement of the
+buffers, every program id whose declared cells/lanes are in bounds, and every
+launch state pinning the loaded destination row to `m₁` and the active source
+lanes to `xs`, the translated pointer kernel terminates, every active lane
+(`head < head_num ∧ dim < head_dim`) of the **`m₁`-indexed** output row holds
+`xs j`, and every other memory cell is unchanged.
+
+Side condition `hInj` (required for truth, not convenience): the tile part of
+the output address map is injective, i.e. no two cells of one program's tile
+scatter to the same cell. Without it the masked scatter is last-writer-wins
+and the per-lane readback is false. It does not mention `Dest_loc`: the loaded
+row only shifts every address by the constant `m₁ · stride_o_bs`.
+
+Proof: `MetaMasked2DKernelIO₁.Implements.intro` assembles the region-model
+metadata triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification fwd_kernel_destindex_copy_kv_output_summary
+specification fwd_kernel_destindex_copy_kv_correctness
     (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
     (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
       head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
+    (hInj : Function.Injective
       (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
-        outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)) :
-    (∃ alg, (fwd_kernel_destindex_copy_kv K Dest_loc Out
+        stride_o_h * headIndex idx + stride_o_d * dimIndex idx)) :
+    destindexCopyKvIO K Dest_loc Out
         stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
-        head_num head_dim BLOCK_DMODEL BLOCK_HEAD).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fwd_kernel_destindex_copy_kv K Dest_loc Out
-        stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
-        head_num head_dim BLOCK_DMODEL BLOCK_HEAD)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] => active head_num head_dim idx)
-        (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
-          (Out, outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)))
-      (expected := fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
-        s.readMem K (sourceAddr s stride_k_bs stride_k_h stride_k_d idx))
+        head_num head_dim BLOCK_DMODEL BLOCK_HEAD
+      ⊨ fun _ _ _ _ xs => xs
 ```
 
 **Assumptions / layout contracts:**
-- `hOutInj : Function.Injective
+- `hInj : Function.Injective
       (fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
-        outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)`
-- `fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] => active head_num head_dim idx`
-- `fun idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL] =>
-          (Out, outAddr s Dest_loc stride_o_bs stride_o_h stride_o_d idx)`
+        stride_o_h * headIndex idx + stride_o_d * dimIndex idx)`
 
-**Closed-form spec defs (transitive):** `outAddr`, `fwd_kernel_destindex_copy_kv`, `active`, `sourceAddr`, `destBase`, `headIndex`, `dimIndex`
+**Closed-form spec defs (transitive):** `headIndex`, `dimIndex`, `destindexCopyKvIO`, `fwd_kernel_destindex_copy_kv`
 
-<details><summary><code>outAddr</code></summary>
+<details><summary><code>headIndex</code></summary>
 
 ```lean
-def outAddr
-    (s : BlockState) (Dest_loc : RegionName)
-    (stride_o_bs stride_o_h stride_o_d : Nat)
-    (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
-  destBase s Dest_loc * stride_o_bs + stride_o_h * headIndex idx + stride_o_d * dimIndex idx
+def headIndex (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
+  idx.1.val
+```
+</details>
+
+<details><summary><code>dimIndex</code></summary>
+
+```lean
+def dimIndex (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
+  idx.2.1.val
+```
+</details>
+
+<details><summary><code>destindexCopyKvIO</code></summary>
+
+```
+/-- `_fwd_kernel_destindex_copy_kv`'s metadata-genre **IO signature** — the
+whole kernel-specific audit surface of the `⊨` headline
+(`MetaMasked2DKernelIO₁`, the genre where a value *loaded from memory* drives
+the windows):
+
+* `mbuf1 = mbuf2 = Dest_loc`, `mwin1 = mwin2 = pid₀` — the `.nat` metadata
+  slot: program `cur_index = pid₀` reads cell `pid₀` of `Dest_loc`, yielding
+  the destination row `m₁`. This kernel has **one** slot; the genre carries
+  two, so the second is wired to the same cell (hence `m₂ = m₁`) and is
+  ignored by every window;
+* `inp = K`, `out = Out`;
+* `B = BLOCK_HEAD * BLOCK_DMODEL` — the flattened `[head, dim]` tile: lane `j`
+  is cell `(j / BLOCK_DMODEL, j % BLOCK_DMODEL)`;
+* `read` — lane `j` reads `pid₀·stride_k_bs + stride_k_h·head + stride_k_d·dim`
+  (the program's own source row);
+* `write` — lane `j` writes `m₁·stride_o_bs + stride_o_h·head +
+  stride_o_d·dim`: the address **eats the loaded slot value**, which is the
+  whole point of the scatter;
+* `mask` (and the defaulted `writeMask`) — the active lanes
+  `head < head_num ∧ dim < head_dim`.
+
+The slot cell, windows, and masks are declared, not parsed from the kernel;
+the headline **proves** the kernel's actual slot load, addressing and masking
+match them. Buffer sizes are not signature content: the headline quantifies
+over every allocation whose extents cover the declared cells. -/
+```
+```lean
+def destindexCopyKvIO
+    (K : RegionName) (Dest_loc : Region .nat) (Out : RegionName)
+    (stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+      head_num head_dim BLOCK_DMODEL BLOCK_HEAD : Nat) :
+    MetaMasked2DKernelIO₁ where
+  kernel := fwd_kernel_destindex_copy_kv K Dest_loc Out
+    stride_k_bs stride_k_h stride_k_d stride_o_bs stride_o_h stride_o_d
+    head_num head_dim BLOCK_DMODEL BLOCK_HEAD
+  mbuf1 := Dest_loc
+  mbuf2 := Dest_loc
+  inp := K
+  out := Out
+  B := BLOCK_HEAD * BLOCK_DMODEL
+  mwin1 := fun pid₀ _ => pid₀
+  mwin2 := fun pid₀ _ => pid₀
+  read := fun pid₀ _ _ _ j =>
+    pid₀ * stride_k_bs + stride_k_h * (j.val / BLOCK_DMODEL) +
+      stride_k_d * (j.val % BLOCK_DMODEL)
+  write := fun _ _ m₁ _ j =>
+    m₁ * stride_o_bs + stride_o_h * (j.val / BLOCK_DMODEL) +
+      stride_o_d * (j.val % BLOCK_DMODEL)
+  mask := fun _ _ _ _ j =>
+    j.val / BLOCK_DMODEL < head_num ∧ j.val % BLOCK_DMODEL < head_dim
 ```
 </details>
 
@@ -93,48 +152,3 @@ def fwd_kernel_destindex_copy_kv
 }
 ```
 </details>
-
-<details><summary><code>active</code></summary>
-
-```lean
-def active (head_num head_dim : Nat) (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Prop :=
-  headIndex idx < head_num ∧ dimIndex idx < head_dim
-```
-</details>
-
-<details><summary><code>sourceAddr</code></summary>
-
-```lean
-def sourceAddr
-    (s : BlockState) (stride_k_bs stride_k_h stride_k_d : Nat)
-    (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
-  s.pid * stride_k_bs + stride_k_h * headIndex idx + stride_k_d * dimIndex idx
-```
-</details>
-
-<details><summary><code>destBase</code></summary>
-
-```lean
-def destBase (s : BlockState) (Dest_loc : RegionName) : Nat :=
-  s.readMemValue .nat Dest_loc s.pid
-```
-</details>
-
-<details><summary><code>headIndex</code></summary>
-
-```lean
-def headIndex (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
-  idx.1.val
-```
-</details>
-
-<details><summary><code>dimIndex</code></summary>
-
-```lean
-def dimIndex (idx : TileIndex [BLOCK_HEAD, BLOCK_DMODEL]) : Nat :=
-  idx.2.1.val
-```
-</details>
-
-## Also present (pinned special-case summaries)
-- `fwd_kernel_destindex_copy_kv_compute_correct`

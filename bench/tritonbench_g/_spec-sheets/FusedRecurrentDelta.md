@@ -9,7 +9,14 @@
 ```
 /-! ### ════════ ★ MAIN THEOREM ★ ════════
 
-**Genuine, dimension-general delta-rule compute-correctness.** Parameterized
+**SCOPE — this is a claim about eight hand-cut single-step slices, not about the
+launched kernels.** The launched surfaces appear only in clauses 1 and 2, which
+say nothing more than "they lower to the algorithm layer". Clause 4 writes `HOut`,
+a **fiction region** modelling the carried state register `h`, not a Python
+tensor. Neither cross-step fold is modeled, and the `STORE_FINAL_STATE` writeback
+has no face.
+
+**Genuine, shape-general delta-rule step summary.** Parameterized
 over the symbolic head strides `s_qk_h s_vo_h`, grid extents `NK B H T`,
 key/value extents `K V`, tile sizes `BK BV`, the real `scale`, the step index
 `m`, the final time `T`, and **all** compile-time flags (`IS_HEADWISE_BETA`,
@@ -29,29 +36,56 @@ never a read-back of the kernel's own output:
    carry-fold — given `HPrev = deltaState(m)`;
 5. one forward **output** body realizes `outputClosed(m)` (the key-axis
    readout of the *post-update* state), given `HNext = deltaState(m+1)`;
-6. the **final-state** writeback realizes `deltaState(T)` (masked), given
-   `HFinal = deltaState(T)`;
-7. one backward loop-1 **`dk`** body (flag-selected) realizes the genuine
+6. one backward loop-1 **`dk`** body (flag-selected) realizes the genuine
    `dkStepSpec` over the materialized reverse-carry `DHPrev` and input rows;
-8. one backward loop-1 **`dv`** body (flag-selected) realizes `dvStepSpec`;
-9. one backward loop-1 headwise **`dbeta`** body realizes `dbetaStepSpec`;
-10. one backward loop-1 scalar **`dbeta`** body realizes the full-reduction
-    `dbetaScalarStepSpec` (scalar cell);
-11. one backward loop-2 **`dk` correction** body realizes `dkCorrStepSpec`
-    (the in-place fixup — the final memory value of the `dk` row) over the
-    materialized recomputed state `HRec`;
-12. one backward loop-2 **`dq`** body (flag-selected) realizes `dqStepSpec`.
+7. one backward loop-1 **`dv`** body (flag-selected) realizes `dvStepSpec`;
+8. one backward loop-1 headwise **`dbeta`** body realizes `dbetaStepSpec`;
+9. one backward loop-1 scalar **`dbeta`** body realizes the full-reduction
+   `dbetaScalarStepSpec` (scalar cell);
+10. one backward loop-2 **`dk` correction** body, *sequenced onto the loop-1
+    stores*: under the two clause-local hypotheses that the `dk`/`dv` rows still
+    hold clause 6's and clause 7's values (which is what Python's two-loop
+    structure does — loop 2 re-walks the same `dk`/`dv` addresses forward after
+    the `tl.debug_barrier()`), the in-place fixup realizes `dkCorrClosed`
+    = `dkStepSpec − Σ_{j_v} dvStepSpec · HRec`, the final memory value of the
+    `dk` row expressed through the loop-1 formulas rather than through
+    unconstrained reads of the kernel's own output rows;
+11. one backward loop-2 **`dq`** body (flag-selected) realizes `dqStepSpec`.
 
-Honest structural side conditions only: `BV ≤ V`, `BK ≤ K` (the state tile
-fits the logical extents, giving state-address injectivity); all row-address
-injectivities are unconditional. The cross-step folds threading `h`, `d_h`
-and the recomputed `h` are the trusted loop boundary (carried state presented
-as materialized buffers; see the module docstring, including the in-place-`v`
-consequence), and the forward carry invariant `HPrev = deltaState(m)` is
-propagated by clause 4 itself (`stateStepSpec_eq_deltaState_succ`). By the
-time the backward kernel runs, region `v` holds the forward pass's stored
-deltas `v_new` — the backward faces are genuine over the backward launch's
-actual inputs. -/
+Clause 10 is why clause 6 and clause 10 are consistent rather than two
+unrelated values for one `dk` cell: they are `Realizes` facts about *different*
+slices run from the same initial state (loop 1's body and loop 2's body), and
+clause 10 now names the loop-1 value it starts from instead of reading `dk` at
+its own write address with nothing said about it.
+
+The `STORE_FINAL_STATE` writeback has **no** conjunct: its face was a masked
+memcpy (load address `HFinal + i_bh·K·V + offs_k·V + offs_v`, store address
+`ht + …` — identical under the same mask) whose entire content was the
+assumption `HFinal = deltaState(T)`, so it has been deleted rather than
+presented as a result about `ht`.
+
+Side conditions. Structural: `BV ≤ V`, `BK ≤ K` (the state tile fits the logical
+extents, giving state-address injectivity); all row-address injectivities are
+unconditional. There are **no** scope-fixing hypotheses left: every
+slice in this file masks exactly where Python masks, and every specification is
+guarded to match, so all eleven clauses hold for partial tiles. **Load-bearing:** `hPrev` and `hNext` are *assumptions* and they
+carry the entire forward recurrence; every clause mentioning `deltaState`,
+`vNewClosed` or `outputClosed` holds only under them.
+
+**They are not self-propagating, and clause 4 does not discharge `hNext`.**
+Clause 4 concludes about the state *after executing* the state-step slice, while
+`hNext` constrains region `HOut` in the *initial* state `s` of the output slice;
+sequencing one slice's post-state into the next slice's pre-state is not modeled.
+(`HOut` is at least now the same region in both clauses — previously clause 4
+wrote `HOut` while clause 5 read a separate `HNext` with nothing relating them, so
+`deltaState(m+1)` was proved into a region nothing read and independently assumed
+for the region that was read.) The cross-step folds threading `h`, `d_h` and the
+recomputed `h` are not modeled (carried state presented as materialized buffers;
+see the module docstring, including the in-place-`v` consequence).
+
+By the time the backward kernel runs, region `v` holds the forward pass's stored
+deltas `v_new` — the backward faces are genuine over the backward launch's actual
+inputs. -/
 ```
 </details>
 
@@ -59,7 +93,7 @@ actual inputs. -/
 ```lean
 specification fused_recurrent_delta_output_summary_general
     (q k v beta o h0 ht dht dh0 do_ dq dk dv dbeta : RegionName)
-    (HPrev HNext HOut HFinal DHPrev HRec : RegionName)
+    (HPrev HOut DHPrev HRec : RegionName)
     (IS_HEADWISE_BETA USE_INITIAL_STATE STORE_FINAL_STATE USE_DH0 USE_DHT : Bool)
     (m s_qk_h s_vo_h NK B H T K V BK BV : Nat) (scale : ℝ) (s : BlockState)
     (hBV : BV ≤ V) (hBK : BK ≤ K)
@@ -67,14 +101,12 @@ specification fused_recurrent_delta_output_summary_general
       s.readMem HPrev (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV m idx)
+    -- the post-update carry buffer is the SAME region clause 4 stores into;
+    -- this hypothesis is NOT discharged by clause 4 (see the docstring)
     (hNext : ∀ idx : TileIndex [BV, BK],
-      s.readMem HNext (stateOffset s K V BK BV idx)
+      s.readMem HOut (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV (m + 1) idx)
-    (hFinal : ∀ idx : TileIndex [BV, BK],
-      s.readMem HFinal (stateOffset s K V BK BV idx)
-        = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV T idx) :
+            s_qk_h s_vo_h T K V BK BV (m + 1) idx) :
     -- (1) the full forward surface lowers to the algorithm layer
     (∃ alg, (fused_recurrent_delta_fwd_surface q k v beta o h0 ht s_qk_h s_vo_h
       B H T K V BK BV scale USE_INITIAL_STATE STORE_FINAL_STATE
@@ -103,14 +135,16 @@ specification fused_recurrent_delta_output_summary_general
           fused_recurrent_delta_state_step_slice_scalarbeta HPrev k v beta HOut
             m s_qk_h s_vo_h T K V BK BV)
       (initialState := s)
-      (write := fun idx : TileIndex [BV, BK] =>
-        some (HOut, stateOffset s K V BK BV idx))
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx)
+        (fun idx => (HOut, stateOffset s K V BK BV idx)))
       (expected := fun idx =>
         deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV (m + 1) idx)) ∧
-    -- (5) the output body realizes the genuine `outputClosed(m)`
+    -- (5) the output body realizes the genuine `outputClosed(m)` — mask-faithful,
+    --     so it holds for partial tiles and carries no full-tile antecedent
     (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_delta_output_step_slice HNext q o
+      (kernel := fused_recurrent_delta_output_step_slice HOut q o
         m s_qk_h s_vo_h B H K V BK BV scale)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
@@ -119,19 +153,8 @@ specification fused_recurrent_delta_output_summary_general
       (expected := fun jv : Fin BV =>
         outputClosed s q k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
           s_qk_h s_vo_h T K V BK BV scale m jv)) ∧
-    -- (6) the final-state writeback realizes the genuine `deltaState(T)` (masked)
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_delta_final_state_store_slice HFinal ht K V BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BV, BK] => finalActive s K V BK BV idx)
-        (fun idx : TileIndex [BV, BK] => (ht, stateOffset s K V BK BV idx)))
-      (expected := fun idx : TileIndex [BV, BK] =>
-        if finalActive s K V BK BV idx then
-          deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV T idx
-        else 0)) ∧
-    -- (7) the backward loop-1 `dk` body realizes the genuine `dkStepSpec`
+    -- (6) the backward loop-1 `dk` body realizes the genuine `dkStepSpec` —
+    --     mask-faithful, so no full-tile antecedent
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dk_step_slice_headwise DHPrev q do_ v beta dk
@@ -146,7 +169,8 @@ specification fused_recurrent_delta_output_summary_general
       (expected := fun jk : Fin BK =>
         dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
           m s_qk_h s_vo_h T K V BK BV scale jk)) ∧
-    -- (8) the backward loop-1 `dv` body realizes the genuine `dvStepSpec`
+    -- (7) the backward loop-1 `dv` body realizes the genuine `dvStepSpec` —
+    --     mask-faithful, so no full-tile antecedent
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dv_step_slice_headwise DHPrev q do_ k beta dv
@@ -161,7 +185,8 @@ specification fused_recurrent_delta_output_summary_general
       (expected := fun jv : Fin BV =>
         dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
           m s_qk_h s_vo_h T K V BK BV scale jv)) ∧
-    -- (9) the backward loop-1 headwise `dbeta` body realizes `dbetaStepSpec`
+    -- (8) the backward loop-1 headwise `dbeta` body realizes `dbetaStepSpec` —
+    --     mask-faithful, so no full-tile antecedent
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_headwise DHPrev q do_ k v
         dbeta m s_qk_h s_vo_h NK B H T K V BK BV scale)
@@ -171,7 +196,8 @@ specification fused_recurrent_delta_output_summary_general
         (fun jv => (dbeta, dbetaRowOffset s m s_vo_h B H NK V BV jv)))
       (expected := fun jv : Fin BV =>
         dbetaStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale jv)) ∧
-    -- (10) the backward loop-1 scalar `dbeta` body realizes `dbetaScalarStepSpec`
+    -- (9) the backward loop-1 scalar `dbeta` body realizes `dbetaScalarStepSpec`
+    --     — mask-faithful (guarded on both nested reductions)
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta DHPrev q do_ k v
         dbeta m s_qk_h s_vo_h B H T K V BK BV scale)
@@ -179,17 +205,29 @@ specification fused_recurrent_delta_output_summary_general
       (write := fun _ : PUnit => some (dbeta, dbetaScalarOffset s m T B H))
       (expected := fun _ =>
         dbetaScalarStepSpec s DHPrev q do_ k v m s_qk_h s_vo_h K V BK BV scale)) ∧
-    -- (11) the backward loop-2 `dk` correction body realizes `dkCorrStepSpec`
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_delta_bwd_dk_correction_step_slice HRec dv dk
-        m s_qk_h s_vo_h B H K V BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun jk : Fin BK => activeK s K BK jk)
-        (fun jk => (dk, dkRowOffset s m s_qk_h B H K BK jk)))
-      (expected := fun jk : Fin BK =>
-        dkCorrStepSpec s HRec dv dk m s_qk_h s_vo_h B H K V BK BV jk)) ∧
-    -- (12) the backward loop-2 `dq` body realizes the genuine `dqStepSpec`
+    -- (10) the backward loop-2 `dk` correction body, **sequenced onto the loop-1
+    --      stores**: given that the `dk`/`dv` rows still hold what clauses 6 and 7
+    --      put there, the final `dk` row is `dkCorrClosed`
+    ((∀ jk : Fin BK,
+        s.readMem dk (dkRowOffset s m s_qk_h B H K BK jk)
+          = dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
+              m s_qk_h s_vo_h T K V BK BV scale jk) →
+      (∀ jv : Fin BV,
+        s.readMem dv (outOffset s m s_vo_h B H V BV jv)
+          = dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
+              m s_qk_h s_vo_h T K V BK BV scale jv) →
+      ComputeCorrect.Realizes_without_Rounding
+        (kernel := fused_recurrent_delta_bwd_dk_correction_step_slice HRec dv dk
+          m s_qk_h s_vo_h B H K V BK BV)
+        (initialState := s)
+        (write := ComputeCorrect.WriteMap.writeIf
+          (fun jk : Fin BK => activeK s K BK jk)
+          (fun jk => (dk, dkRowOffset s m s_qk_h B H K BK jk)))
+        (expected := fun jk : Fin BK =>
+          dkCorrClosed s DHPrev HRec q do_ k v beta IS_HEADWISE_BETA
+            m s_qk_h s_vo_h T K V BK BV scale jk)) ∧
+    -- (11) the backward loop-2 `dq` body realizes the genuine `dqStepSpec` —
+    --     mask-faithful, so no full-tile antecedent
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := if IS_HEADWISE_BETA then
           fused_recurrent_delta_bwd_dq_step_slice_headwise HRec k v beta do_ dq
@@ -214,24 +252,27 @@ specification fused_recurrent_delta_output_summary_general
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV m idx`
 - `hNext : ∀ idx : TileIndex [BV, BK],
-      s.readMem HNext (stateOffset s K V BK BV idx)
+      s.readMem HOut (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV (m + 1) idx`
-- `hFinal : ∀ idx : TileIndex [BV, BK],
-      s.readMem HFinal (stateOffset s K V BK BV idx)
-        = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-            s_qk_h s_vo_h T K V BK BV T idx`
 - `fun jv : Fin BV => activeV s V BV jv`
+- `fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx`
 - `fun jv : Fin BV => activeV s V BV jv`
-- `fun idx : TileIndex [BV, BK] => finalActive s K V BK BV idx`
-- `fun idx : TileIndex [BV, BK] => (ht, stateOffset s K V BK BV idx)`
 - `fun jk : Fin BK => activeK s K BK jk`
 - `fun jv : Fin BV => activeV s V BV jv`
 - `fun jv : Fin BV => activeV s V BV jv`
+- `∀ jk : Fin BK,
+        s.readMem dk (dkRowOffset s m s_qk_h B H K BK jk)
+          = dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
+              m s_qk_h s_vo_h T K V BK BV scale jk`
+- `∀ jv : Fin BV,
+        s.readMem dv (outOffset s m s_vo_h B H V BV jv)
+          = dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
+              m s_qk_h s_vo_h T K V BK BV scale jv`
 - `fun jk : Fin BK => activeK s K BK jk`
 - `fun jk : Fin BK => activeK s K BK jk`
 
-**Closed-form spec defs (transitive):** `stateOffset`, `deltaState`, `fused_recurrent_delta_fwd_surface`, `fused_recurrent_delta_bwd_surface`, `fused_recurrent_delta_vnew_step_slice`, `activeV`, `vRowOffset`, `vNewClosed`, `fused_recurrent_delta_state_step_slice_headwise`, `fused_recurrent_delta_state_step_slice_scalarbeta`, `fused_recurrent_delta_output_step_slice`, `outOffset`, `outputClosed`, `fused_recurrent_delta_final_state_store_slice`, `finalActive`, `fused_recurrent_delta_bwd_dk_step_slice_headwise`, `fused_recurrent_delta_bwd_dk_step_slice_scalarbeta`, `activeK`, `dkRowOffset`, `dkStepSpec`, `fused_recurrent_delta_bwd_dv_step_slice_headwise`, `fused_recurrent_delta_bwd_dv_step_slice_scalarbeta`, `dvStepSpec`, `fused_recurrent_delta_bwd_dbeta_step_slice_headwise`, `dbetaRowOffset`, `dbetaStepSpec`, `fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta`, `dbetaScalarOffset`, `dbetaScalarStepSpec`, `fused_recurrent_delta_bwd_dk_correction_step_slice`, `dkCorrStepSpec`, `fused_recurrent_delta_bwd_dq_step_slice_headwise`, `fused_recurrent_delta_bwd_dq_step_slice_scalarbeta`, `dqStepSpec`, `kIndex`, `vIndex`, `stateSeed`, `kVal`, `betaVal`, `vVal`, `vMinusClosed`, `qVal`, `dhOffset`, `h0Val`
+**Closed-form spec defs (transitive):** `stateOffset`, `deltaState`, `fused_recurrent_delta_fwd_surface`, `fused_recurrent_delta_bwd_surface`, `fused_recurrent_delta_vnew_step_slice`, `activeV`, `vRowOffset`, `vNewClosed`, `fused_recurrent_delta_state_step_slice_headwise`, `fused_recurrent_delta_state_step_slice_scalarbeta`, `activeKV`, `fused_recurrent_delta_output_step_slice`, `outOffset`, `outputClosed`, `fused_recurrent_delta_bwd_dk_step_slice_headwise`, `fused_recurrent_delta_bwd_dk_step_slice_scalarbeta`, `activeK`, `dkRowOffset`, `dkStepSpec`, `fused_recurrent_delta_bwd_dv_step_slice_headwise`, `fused_recurrent_delta_bwd_dv_step_slice_scalarbeta`, `dvStepSpec`, `fused_recurrent_delta_bwd_dbeta_step_slice_headwise`, `dbetaRowOffset`, `dbetaStepSpec`, `fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta`, `dbetaScalarOffset`, `dbetaScalarStepSpec`, `fused_recurrent_delta_bwd_dk_correction_step_slice`, `dkCorrClosed`, `fused_recurrent_delta_bwd_dq_step_slice_headwise`, `fused_recurrent_delta_bwd_dq_step_slice_scalarbeta`, `dqStepSpec`, `kIndex`, `vIndex`, `stateSeed`, `kVal`, `betaVal`, `vVal`, `vMinusClosed`, `qVal`, `dhOffset`, `h0Val`
 
 <details><summary><code>stateOffset</code></summary>
 
@@ -272,9 +313,11 @@ noncomputable def deltaState (s : BlockState) (k v beta h0 : RegionName)
           (betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV m idx.1 *
             (vVal s v s_vo_h V BV m idx.1
               - ∑ jk : Fin BK,
-                  deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-                      s_qk_h s_vo_h T K V BK BV m (idx.1, jk, PUnit.unit)
-                    * kVal s k s_qk_h K BK m jk))
+                  if activeK s K BK jk then
+                    deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+                        s_qk_h s_vo_h T K V BK BV m (idx.1, jk, PUnit.unit)
+                      * kVal s k s_qk_h K BK m jk
+                  else 0))
 ```
 </details>
 
@@ -524,11 +567,16 @@ def fused_recurrent_delta_vnew_step_slice
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
   mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
   prev = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   _v_minus = tl.sum(prev * b_k[None, :], axis=1)
   b_v -= _v_minus
   tl.store(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
@@ -594,18 +642,25 @@ def fused_recurrent_delta_state_step_slice_headwise
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
   prev = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   _v_minus = tl.sum(prev * b_k[None, :], axis=1)
   b_v -= _v_minus
-  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   b_v *= b_beta
   acc = prev + b_k[None, :] * b_v[:, None]
   tl.store(HOut + i_bh * $(K) * $(V) +
     (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
-    (acc).to(HOut.dtype.element_ty))
+    (acc).to(HOut.dtype.element_ty), mask=mask_kv)
 }
 ```
 </details>
@@ -621,10 +676,16 @@ def fused_recurrent_delta_state_step_slice_scalarbeta
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
   prev = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   _v_minus = tl.sum(prev * b_k[None, :], axis=1)
   b_v -= _v_minus
   b_beta = tl.load(beta + i_bh * $(T) + $(t))
@@ -632,8 +693,19 @@ def fused_recurrent_delta_state_step_slice_scalarbeta
   acc = prev + b_k[None, :] * b_v[:, None]
   tl.store(HOut + i_bh * $(K) * $(V) +
     (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
-    (acc).to(HOut.dtype.element_ty))
+    (acc).to(HOut.dtype.element_ty), mask=mask_kv)
 }
+```
+</details>
+
+<details><summary><code>activeKV</code></summary>
+
+```
+/-- Python's `mask_kv` tile predicate (`mask_bk[None, :] & mask_bv[:, None]`). -/
+```
+```lean
+def activeKV (s : BlockState) (K V BK BV : Nat) (idx : TileIndex [BV, BK]) : Prop :=
+  activeK s K BK idx.2.1 ∧ activeV s V BV idx.1
 ```
 </details>
 
@@ -643,11 +715,14 @@ def fused_recurrent_delta_state_step_slice_scalarbeta
 /-! ## Output-readout step slice (the per-step `o_t` store)
 
 One loop body's output store, isolated from the cross-step loop. The delta
-rule reads out the **post-update** state, so this face consumes the
-materialized post-update tile `HNext` (which the state face above realizes as
-`deltaState(m+1)` from `HPrev = deltaState(m)`): it loads `HNext` and the
-scaled `q_t` row, reduces over the key axis and masked-stores the `[BV]` row
-into `o` at time row `t`. -/
+rule reads out the **post-update** state, so this face consumes a materialized
+post-update tile `HNext`: it loads `HNext` and the scaled `q_t` row, reduces
+over the key axis and masked-stores the `[BV]` row into `o` at time row `t`.
+
+`HNext` holding `deltaState(m+1)` is an *assumption* wherever this face is used
+(the headline's `hNext`). The state-update face proves `deltaState(m+1)` about
+the state *after executing* its own slice; nothing in this file sequences that
+post-state into this face's pre-state. -/
 ```
 ```lean
 def fused_recurrent_delta_output_step_slice
@@ -658,10 +733,14 @@ def fused_recurrent_delta_output_step_slice
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
   mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
   prev = tl.load(HNext + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]))
-  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K)) * $(scale)
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
   _o = prev * b_q[None, :]
   _o = tl.sum(_o, axis=1)
   tl.store(o + (i_bh + i_k * $(B) * $(H)) * $(s_vo_h) + i_v * $(BV) + offs_v +
@@ -695,52 +774,11 @@ noncomputable def outputClosed (s : BlockState) (q k v beta h0 : RegionName)
     (IS_HEADWISE_BETA USE_INITIAL_STATE : Bool)
     (s_qk_h s_vo_h T K V BK BV : Nat) (scale : ℝ) (m : Nat) (jv : Fin BV) : ℝ :=
   ∑ jk : Fin BK,
-    deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-        s_qk_h s_vo_h T K V BK BV (m + 1) (jv, jk, PUnit.unit)
-      * qVal s q s_qk_h K BK scale m jk
-```
-</details>
-
-<details><summary><code>fused_recurrent_delta_final_state_store_slice</code></summary>
-
-```
-/-! ## Final-state store slice (the `STORE_FINAL_STATE` branch)
-
-After the loop, the kernel masked-stores the final state tile `h` into `ht`.
-This slice models that writeback exactly, reading the materialized final-state
-tile `HFinal` and writing the masked `[BV,BK]` face into `Ht` (mask operand
-order `mask_bk[None,:] & mask_bv[:,None]` as in the Python). -/
-```
-```lean
-def fused_recurrent_delta_final_state_store_slice
-    (HFinal Ht : RegionName) (K V BK BV : Nat) :
-    ComputeKernel := triton {
-  i_v = tl.program_id(0)
-  i_k = tl.program_id(1)
-  i_bh = tl.program_id(2)
-  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
-  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
-  mask_kv = (offs_k[None, :] < $(K)) & (offs_v[:, None] < $(V))
-  b_h = tl.load(HFinal + i_bh * $(K) * $(V) +
-      offs_k[None, :] * $(V) + offs_v[:, None],
-    mask=mask_kv, other=0.0)
-  tl.store(Ht + i_bh * $(K) * $(V) +
-      offs_k[None, :] * $(V) + offs_v[:, None],
-    b_h, mask=mask_kv)
-}
-```
-</details>
-
-<details><summary><code>finalActive</code></summary>
-
-```
-/-- Active predicate of the `[BV, BK]` final-state mask
-`mask_bk[None,:] & mask_bv[:,None]` (operand order as in the Python). -/
-```
-```lean
-def finalActive (s : BlockState) (K V BK BV : Nat)
-    (idx : TileIndex [BV, BK]) : Prop :=
-  kIndex s BK idx.2.1 < K ∧ vIndex s BV idx.1 < V
+    if activeK s K BK jk then
+      deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+          s_qk_h s_vo_h T K V BK BV (m + 1) (jv, jk, PUnit.unit)
+        * qVal s q s_qk_h K BK scale m jk
+    else 0
 ```
 </details>
 
@@ -757,12 +795,19 @@ def fused_recurrent_delta_bwd_dk_step_slice_headwise
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
   mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   prev = tl.load(DHPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
-  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K)) * $(scale)
-  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
+  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   d_h = prev + b_q[:, None] * b_do[None, :]
   d_k = tl.sum(d_h * (b_v * b_beta)[None, :], axis=1)
   tl.store(dk + (i_bh + i_v * $(B) * $(H)) * $(s_qk_h) + i_k * $(BK) + offs_k +
@@ -784,11 +829,17 @@ def fused_recurrent_delta_bwd_dk_step_slice_scalarbeta
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
   mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   prev = tl.load(DHPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
-  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K)) * $(scale)
-  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
+  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   b_beta = tl.load(beta + i_bh * $(T) + $(t))
   d_h = prev + b_q[:, None] * b_do[None, :]
   d_k = tl.sum(d_h * (b_v * b_beta)[None, :], axis=1)
@@ -829,10 +880,12 @@ noncomputable def dkStepSpec (s : BlockState) (DHPrev q do_ v beta : RegionName)
     (IS_HEADWISE_BETA : Bool) (t s_qk_h s_vo_h T K V BK BV : Nat) (scale : ℝ)
     (jk : Fin BK) : ℝ :=
   ∑ jv : Fin BV,
-    (s.readMem DHPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
-        + qVal s q s_qk_h K BK scale t jk * vVal s do_ s_vo_h V BV t jv)
-      * (vVal s v s_vo_h V BV t jv *
-          betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV t jv)
+    if activeV s V BV jv then
+      (s.readMem DHPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
+          + qVal s q s_qk_h K BK scale t jk * vVal s do_ s_vo_h V BV t jv)
+        * (vVal s v s_vo_h V BV t jv *
+            betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV t jv)
+    else 0
 ```
 </details>
 
@@ -848,13 +901,20 @@ def fused_recurrent_delta_bwd_dv_step_slice_headwise
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
   mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   prev = tl.load(DHPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
-  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K)) * $(scale)
-  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
+  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   d_h = prev + b_q[:, None] * b_do[None, :]
   d_v = tl.sum(d_h * b_k[:, None], axis=0)
   d_v = d_v * b_beta
@@ -876,12 +936,18 @@ def fused_recurrent_delta_bwd_dv_step_slice_scalarbeta
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
   mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   prev = tl.load(DHPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
-  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K)) * $(scale)
-  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
+  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
   b_beta = tl.load(beta + i_bh * $(T) + $(t))
   d_h = prev + b_q[:, None] * b_do[None, :]
   d_v = tl.sum(d_h * b_k[:, None], axis=0)
@@ -903,9 +969,11 @@ noncomputable def dvStepSpec (s : BlockState) (DHPrev q do_ k beta : RegionName)
     (IS_HEADWISE_BETA : Bool) (t s_qk_h s_vo_h T K V BK BV : Nat) (scale : ℝ)
     (jv : Fin BV) : ℝ :=
   (∑ jk : Fin BK,
-      (s.readMem DHPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
-          + qVal s q s_qk_h K BK scale t jk * vVal s do_ s_vo_h V BV t jv)
-        * kVal s k s_qk_h K BK t jk)
+      if activeK s K BK jk then
+        (s.readMem DHPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
+            + qVal s q s_qk_h K BK scale t jk * vVal s do_ s_vo_h V BV t jv)
+          * kVal s k s_qk_h K BK t jk
+      else 0)
     * betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV t jv
 ```
 </details>
@@ -922,13 +990,20 @@ def fused_recurrent_delta_bwd_dbeta_step_slice_headwise
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
   mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   prev = tl.load(DHPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
-  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K)) * $(scale)
-  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
+  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   d_h = prev + b_q[:, None] * b_do[None, :]
   d_v = tl.sum(d_h * b_k[:, None], axis=0)
   d_beta = d_v * b_v
@@ -963,9 +1038,11 @@ def dbetaRowOffset (s : BlockState) (t s_vo_h B H NK V BV : Nat)
 noncomputable def dbetaStepSpec (s : BlockState) (DHPrev q do_ k v : RegionName)
     (t s_qk_h s_vo_h K V BK BV : Nat) (scale : ℝ) (jv : Fin BV) : ℝ :=
   (∑ jk : Fin BK,
-      (s.readMem DHPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
-          + qVal s q s_qk_h K BK scale t jk * vVal s do_ s_vo_h V BV t jv)
-        * kVal s k s_qk_h K BK t jk)
+      if activeK s K BK jk then
+        (s.readMem DHPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
+            + qVal s q s_qk_h K BK scale t jk * vVal s do_ s_vo_h V BV t jv)
+          * kVal s k s_qk_h K BK t jk
+      else 0)
     * vVal s v s_vo_h V BV t jv
 ```
 </details>
@@ -982,12 +1059,20 @@ def fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta
   i_bh = tl.program_id(2)
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   prev = tl.load(DHPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
-  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K)) * $(scale)
-  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
+  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   d_h = prev + b_q[:, None] * b_do[None, :]
   d_v = tl.sum(d_h * b_k[:, None], axis=0)
   d_beta = tl.sum(d_v * b_v)
@@ -1019,7 +1104,9 @@ def dbetaScalarOffset (s : BlockState) (t T B H : Nat) : Nat :=
 noncomputable def dbetaScalarStepSpec (s : BlockState) (DHPrev q do_ k v : RegionName)
     (t s_qk_h s_vo_h K V BK BV : Nat) (scale : ℝ) : ℝ :=
   ∑ jv : Fin BV,
-    dbetaStepSpec s DHPrev q do_ k v t s_qk_h s_vo_h K V BK BV scale jv
+    if activeV s V BV jv then
+      dbetaStepSpec s DHPrev q do_ k v t s_qk_h s_vo_h K V BK BV scale jv
+    else 0
 ```
 </details>
 
@@ -1038,12 +1125,15 @@ def fused_recurrent_delta_bwd_dk_correction_step_slice
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
   mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   d_k = tl.load(dk + (i_bh + i_v * $(B) * $(H)) * $(s_qk_h) + i_k * $(BK) + offs_k +
-    $(t) * $(K))
+    $(t) * $(K), mask=mask_bk, other=0.0)
   d_v = tl.load(dv + (i_bh + i_k * $(B) * $(H)) * $(s_vo_h) + i_v * $(BV) + offs_v +
-    $(t) * $(V))
+    $(t) * $(V), mask=mask_bv, other=0.0)
   h = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
   d_k -= tl.sum(d_v[None, :] * h, axis=1)
   tl.store(dk + (i_bh + i_v * $(B) * $(H)) * $(s_qk_h) + i_k * $(BK) + offs_k +
     $(t) * $(K), (d_k).to(dk.dtype.element_ty), mask=mask_bk)
@@ -1051,22 +1141,27 @@ def fused_recurrent_delta_bwd_dk_correction_step_slice
 ```
 </details>
 
-<details><summary><code>dkCorrStepSpec</code></summary>
+<details><summary><code>dkCorrClosed</code></summary>
 
 ```
-/-- The genuine per-lane loop-2 `dk` correction formula: the loop-1 `dk` row
-minus the readout of the recomputed *pre-update* state,
-`dk_t[j_k] − Σ_{j_v} dv_t[j_v] · HPrev[j_k,j_v]`. Both the `dk` and `dv` rows
-are the loop-1 stores (this face rewrites `dk` at the same address it reads,
-after the read — the final memory value of the `dk` row). -/
+/-- **The sequenced loop-2 `dk` correction**: loop 1's `dk` row minus the
+recomputed-state readout of loop 1's `dv` row,
+`dkStepSpec_t[j_k] − Σ_{j_v} dvStepSpec_t[j_v] · HRec[j_k,j_v]`. A formula over
+the backward-launch inputs and the two materialized carries (`DHPrev`, `HRec`) —
+no unconstrained read of the kernel's own output rows. -/
 ```
 ```lean
-noncomputable def dkCorrStepSpec (s : BlockState) (HPrev dv dk : RegionName)
-    (t s_qk_h s_vo_h B H K V BK BV : Nat) (jk : Fin BK) : ℝ :=
-  s.readMem dk (dkRowOffset s t s_qk_h B H K BK jk)
+noncomputable def dkCorrClosed (s : BlockState)
+    (DHPrev HRec q do_ k v beta : RegionName) (IS_HEADWISE_BETA : Bool)
+    (t s_qk_h s_vo_h T K V BK BV : Nat) (scale : ℝ) (jk : Fin BK) : ℝ :=
+  dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
+      t s_qk_h s_vo_h T K V BK BV scale jk
     - ∑ jv : Fin BV,
-        s.readMem dv (outOffset s t s_vo_h B H V BV jv)
-          * s.readMem HPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
+        if activeV s V BV jv then
+          dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
+              t s_qk_h s_vo_h T K V BK BV scale jv
+            * s.readMem HRec (dhOffset s K V BK BV (jk, jv, PUnit.unit))
+        else 0
 ```
 </details>
 
@@ -1083,12 +1178,19 @@ def fused_recurrent_delta_bwd_dq_step_slice_headwise
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
   mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   prev = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_beta = tl.load(beta + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   b_v *= b_beta
   h = prev + b_k[:, None] * b_v[None, :]
   _d_q = h * b_do[None, :]
@@ -1112,11 +1214,17 @@ def fused_recurrent_delta_bwd_dq_step_slice_scalarbeta
   offs_k = tl.arange(0, $(BK))
   offs_v = tl.arange(0, $(BV))
   mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[:, None] & mask_bv[None, :]
   prev = tl.load(HPrev + i_bh * $(K) * $(V) +
-    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]))
-  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K))
-  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
-  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V))
+    (i_k * $(BK) + offs_k[:, None]) * $(V) + (i_v * $(BV) + offs_v[None, :]),
+    mask=mask_kv, other=0.0)
+  b_k = tl.load(k + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0)
+  b_v = tl.load(v + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
+  b_do = tl.load(do_ + i_bh * $(s_vo_h) + i_v * $(BV) + offs_v + $(t) * $(V),
+    mask=mask_bv, other=0.0)
   b_beta = tl.load(beta + i_bh * $(T) + $(t))
   b_v *= b_beta
   h = prev + b_k[:, None] * b_v[None, :]
@@ -1141,11 +1249,13 @@ noncomputable def dqStepSpec (s : BlockState) (HPrev k v beta do_ : RegionName)
     (IS_HEADWISE_BETA : Bool) (t s_qk_h s_vo_h T K V BK BV : Nat) (scale : ℝ)
     (jk : Fin BK) : ℝ :=
   (∑ jv : Fin BV,
-      (s.readMem HPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
-          + kVal s k s_qk_h K BK t jk *
-              (vVal s v s_vo_h V BV t jv *
-                betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV t jv))
-        * vVal s do_ s_vo_h V BV t jv)
+      if activeV s V BV jv then
+        (s.readMem HPrev (dhOffset s K V BK BV (jk, jv, PUnit.unit))
+            + kVal s k s_qk_h K BK t jk *
+                (vVal s v s_vo_h V BV t jv *
+                  betaVal s beta IS_HEADWISE_BETA s_vo_h T V BV t jv))
+          * vVal s do_ s_vo_h V BV t jv
+      else 0)
     * scale
 ```
 </details>
@@ -1244,9 +1354,11 @@ noncomputable def vMinusClosed (s : BlockState) (k v beta h0 : RegionName)
     (IS_HEADWISE_BETA USE_INITIAL_STATE : Bool)
     (s_qk_h s_vo_h T K V BK BV : Nat) (m : Nat) (jv : Fin BV) : ℝ :=
   ∑ jk : Fin BK,
-    deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
-        s_qk_h s_vo_h T K V BK BV m (jv, jk, PUnit.unit)
-      * kVal s k s_qk_h K BK m jk
+    if activeK s K BK jk then
+      deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
+          s_qk_h s_vo_h T K V BK BV m (jv, jk, PUnit.unit)
+        * kVal s k s_qk_h K BK m jk
+    else 0
 ```
 </details>
 
@@ -1284,12 +1396,125 @@ noncomputable def h0Val (s : BlockState) (h0 : RegionName)
 ```
 </details>
 
+## Public theorem: `fused_recurrent_delta_output_step_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `fused_recurrent_delta_rule.py`'s
+output store: for every disjoint flat placement of `HNext` / `q` / `o`, every
+program coordinate whose active lanes are in bounds, and every launch state whose
+`HNext` state tile holds `xs` and whose `q` row holds `ys` on their active lanes,
+the kernel terminates, every write-active lane of the `o` row holds the guarded
+contraction `Σ_{j_k} ⟦i_k·BK + j_k < K⟧ · xs[j_v, j_k] · ys[j_k]`, and every other
+memory cell is unchanged.
+
+The `mask_bk` guard inside the sum is not a proof convenience: it is what Python's
+`other = 0` loads do, and dropping it would make the face false for partial key
+tiles. Dimension-general in `K`, `V`, `BK`, `BV`, `B`, `H` and the strides; stated
+at `scale = 1`, where the kernel's `b_q = tl.load(...) * scale` is the loaded row
+itself — the general-`scale` face is the same statement with `ys` scaled, already
+carried by `fused_recurrent_delta_output_step_slice_correct`. Honest
+side-condition: output-address injectivity at every program coordinate. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification fused_recurrent_delta_output_step_io_correctness
+    (HNext q o : RegionName) (t s_qk_h s_vo_h B H K V BK BV : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun jv : Fin BV =>
+        (p₂ + p₁ * B * H) * s_vo_h + p₀ * BV + jv.val + t * V)) :
+    outputStepIO HNext q o t s_qk_h s_vo_h B H K V BK BV
+      ⊨ fun _p₀ p₁ xs ys jv =>
+          ∑ jk : Fin BK,
+            if p₁ * BK + jk.val < K then
+              xs (jv.1, jk, PUnit.unit) * ys (jk, PUnit.unit)
+            else 0
+```
+
+**Assumptions / layout contracts:**
+- `fun jv : Fin BV =>
+        (p₂ + p₁ * B * H) * s_vo_h + p₀ * BV + jv.val + t * V`
+
+**Closed-form spec defs (transitive):** `outputStepIO`, `fused_recurrent_delta_output_step_slice`
+
+<details><summary><code>outputStepIO</code></summary>
+
+```
+/-- IO signature of the output store: the `[BV, BK]` state tile and the `[BK]`
+`q` row contract into the `[BV]` `o` row. -/
+```
+```lean
+noncomputable def outputStepIO (HNext q o : RegionName)
+    (t s_qk_h s_vo_h B H K V BK BV : Nat) :
+    Masked3DTileShapedKernelIO₂ where
+  kernel := fused_recurrent_delta_output_step_slice HNext q o t s_qk_h s_vo_h B H
+    K V BK BV 1
+  in1 := HNext
+  in2 := q
+  out := o
+  shape1 := [BV, BK]
+  shape2 := [BK]
+  shapeOut := [BV]
+  read1 := fun p₀ p₁ p₂ idx =>
+    p₂ * K * V + (p₁ * BK + idx.2.1.val) * V + (p₀ * BV + idx.1.val)
+  read2 := fun _p₀ p₁ p₂ jk => p₂ * s_qk_h + p₁ * BK + jk.1.val + t * K
+  write := fun p₀ p₁ p₂ jv =>
+    (p₂ + p₁ * B * H) * s_vo_h + p₀ * BV + jv.1.val + t * V
+  mask1 := fun p₀ p₁ _p₂ idx =>
+    p₁ * BK + idx.2.1.val < K ∧ p₀ * BV + idx.1.val < V
+  mask2 := fun _p₀ p₁ _p₂ jk => p₁ * BK + jk.1.val < K
+  writeMask := fun p₀ _p₁ _p₂ jv => p₀ * BV + jv.1.val < V
+```
+</details>
+
+<details><summary><code>fused_recurrent_delta_output_step_slice</code></summary>
+
+```
+/-! ## Output-readout step slice (the per-step `o_t` store)
+
+One loop body's output store, isolated from the cross-step loop. The delta
+rule reads out the **post-update** state, so this face consumes a materialized
+post-update tile `HNext`: it loads `HNext` and the scaled `q_t` row, reduces
+over the key axis and masked-stores the `[BV]` row into `o` at time row `t`.
+
+`HNext` holding `deltaState(m+1)` is an *assumption* wherever this face is used
+(the headline's `hNext`). The state-update face proves `deltaState(m+1)` about
+the state *after executing* its own slice; nothing in this file sequences that
+post-state into this face's pre-state. -/
+```
+```lean
+def fused_recurrent_delta_output_step_slice
+    (HNext q o : RegionName) (t s_qk_h s_vo_h B H K V BK BV : Nat) (scale : ℝ) :
+    ComputeKernel := triton {
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  offs_k = tl.arange(0, $(BK))
+  offs_v = tl.arange(0, $(BV))
+  mask_bk = (i_k * $(BK) + offs_k) < $(K)
+  mask_bv = (i_v * $(BV) + offs_v) < $(V)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
+  prev = tl.load(HNext + i_bh * $(K) * $(V) +
+    (i_k * $(BK) + offs_k[None, :]) * $(V) + (i_v * $(BV) + offs_v[:, None]),
+    mask=mask_kv, other=0.0)
+  b_q = tl.load(q + i_bh * $(s_qk_h) + i_k * $(BK) + offs_k + $(t) * $(K),
+    mask=mask_bk, other=0.0) * $(scale)
+  _o = prev * b_q[None, :]
+  _o = tl.sum(_o, axis=1)
+  tl.store(o + (i_bh + i_k * $(B) * $(H)) * $(s_vo_h) + i_v * $(BV) + offs_v +
+    $(t) * $(V), (_o).to(o.dtype.element_ty), mask=mask_bv)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `fused_recurrent_delta_vnew_step_slice_compute_correct`
 - `fused_recurrent_delta_state_step_slice_headwise_compute_correct`
 - `fused_recurrent_delta_state_step_slice_scalarbeta_compute_correct`
 - `fused_recurrent_delta_output_step_slice_compute_correct`
-- `fused_recurrent_delta_final_state_store_slice_compute_correct`
 - `fused_recurrent_delta_bwd_dk_step_slice_compute_correct`
 - `fused_recurrent_delta_bwd_dv_step_slice_compute_correct`
 - `fused_recurrent_delta_bwd_dbeta_step_slice_headwise_compute_correct`

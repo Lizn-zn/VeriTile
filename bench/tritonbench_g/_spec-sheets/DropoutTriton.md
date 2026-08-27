@@ -2,40 +2,67 @@
 
 **Python source:** `bench/tritonbench_g/dropout_triton/dropout_triton.py`
 
-## Public theorem: `dropout_kernel_output_summary`
+## Public theorem: `dropout_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `_dropout`: the DSL surface lowers to the
-algorithm layer, and the masked store to `output_ptr` is compute-correct — every
-active lane holds `dropoutSpec` (the keep-gated scaled input), out-of-bounds
-lanes are preserved. -/
+/-- **The headline**: `_dropout` implements lane-wise keep-gated inverted
+dropout on its masked bool-input IO signature — for every disjoint flat
+placement of the three buffers, every program id whose active lanes are in
+bounds, and every launch state whose input windows hold the data tile `xs`
+and the keep tile `bs` at the active lanes, the translated pointer kernel
+terminates, every active output lane holds `if bs i then xs i / (1 - p)
+else 0`, and every other memory cell is unchanged. Proof:
+`BoolMasked2DKernelIO₁.Implements.intro` assembles the region-model masked
+triple with the flat-memory bridge side conditions; the store is gated by the
+static mask, so `hsub` is the identity. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification dropout_kernel_output_summary
+specification dropout_kernel_correctness
     (x_ptr x_keep_ptr output_ptr : RegionName)
-    (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat)
-    (s : BlockState) :
-    (∃ alg, (dropout_kernel x_ptr x_keep_ptr output_ptr
-        n_elements p BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := dropout_kernel x_ptr x_keep_ptr output_ptr
-        n_elements p BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => dropoutOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (output_ptr, dropoutOffset s BLOCK_SIZE i)))
-      (expected := fun i => dropoutSpec s x_ptr x_keep_ptr p BLOCK_SIZE i)
+    (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat) :
+    dropoutIO x_ptr x_keep_ptr output_ptr n_elements p BLOCK_SIZE ⊨
+      fun _ _ bs xs i => if bs i then xs i / (1 - p) else 0
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : Fin BLOCK_SIZE => dropoutOffset s BLOCK_SIZE i < n_elements`
+**Closed-form spec defs (transitive):** `dropoutIO`, `dropout_kernel`
 
-**Closed-form spec defs (transitive):** `dropout_kernel`, `dropoutOffset`, `dropoutSpec`
+<details><summary><code>dropoutIO</code></summary>
+
+```
+/-- `_dropout`'s masked bool-input **IO signature** — the whole
+kernel-specific audit surface of the headline: which buffer is which argument
+(the wiring: `inp` the ℝ data, `mbuf` the `.bool` keep-mask, `out` the
+output), where program `pid` reads/writes its `BLOCK_SIZE`-lane window (all
+three at `pid * BLOCK_SIZE + j`), and the active-lane predicate
+`pid * BLOCK_SIZE + j < n_elements`. The grid is 1D, so the second program-id
+axis is unused. The store is masked by the same *static* load mask — the keep
+bit gates the stored **value**, not the write set — so `writeMask` keeps the
+struct's default (= `mask`). The windows and mask are declared, not parsed
+from the kernel: they formalize the host-side launch convention
+(`offsets = pid * BLOCK_SIZE + arange; mask = offsets < n_elements`), and the
+headline **proves** the kernel's actual addressing and masking match them.
+Buffer sizes are not signature content: the headline quantifies over every
+allocation whose extents cover the active lanes. -/
+```
+```lean
+def dropoutIO (x_ptr x_keep_ptr output_ptr : RegionName)
+    (n_elements : Nat) (p : ℝ) (BLOCK_SIZE : Nat) : BoolMasked2DKernelIO₁ where
+  kernel := dropout_kernel x_ptr x_keep_ptr output_ptr n_elements p BLOCK_SIZE
+  inp := x_ptr
+  mbuf := x_keep_ptr
+  out := output_ptr
+  B := BLOCK_SIZE
+  read := fun pid _ j => pid * BLOCK_SIZE + j.val
+  readm := fun pid _ j => pid * BLOCK_SIZE + j.val
+  write := fun pid _ j => pid * BLOCK_SIZE + j.val
+  mask := fun pid _ j => pid * BLOCK_SIZE + j.val < n_elements
+```
+</details>
 
 <details><summary><code>dropout_kernel</code></summary>
 
@@ -63,27 +90,3 @@ def dropout_kernel
 }
 ```
 </details>
-
-<details><summary><code>dropoutOffset</code></summary>
-
-```lean
-def dropoutOffset (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pid * BLOCK_SIZE + i.val
-```
-</details>
-
-<details><summary><code>dropoutSpec</code></summary>
-
-```lean
-noncomputable def dropoutSpec
-    (s : BlockState) (x_ptr x_keep_ptr : RegionName)
-    (p : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  if s.readMemValue .bool x_keep_ptr (dropoutOffset s BLOCK_SIZE i) then
-    s.readMem x_ptr (dropoutOffset s BLOCK_SIZE i) / (1 - p)
-  else
-    0.0
-```
-</details>
-
-## Also present (pinned special-case summaries)
-- `dropout_kernel_compute_correct`

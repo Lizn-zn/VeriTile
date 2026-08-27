@@ -96,5 +96,119 @@ noncomputable def matrixReduceInputTile
 ```
 </details>
 
+## Public theorem: `matrix_reduction_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `matrix_reduction.py`'s
+`load_reduce_kernel`: for every disjoint flat placement of the two buffers, every
+launch state whose `BLOCK_M × BLOCK_N` input tile holds `xs`, the translated
+pointer kernel terminates, `y_ptr[i]` holds the genuine row-wise maximum of row
+`i` of `xs`, and every other memory cell is unchanged.
+
+Dimension-general in both strides, `BLOCK_M` and `BLOCK_N`. Honest
+side-condition: `0 < BLOCK_N` — with an empty reduction axis `tl.max` faults, so
+termination genuinely fails there; the same hypothesis witnesses a write-active
+lane, turning the skin's lane-wise frame disjunct into the row-vector one. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification matrix_reduction_io_correctness (x_ptr y_ptr : RegionName)
+    (stride_xm stride_xn stride_y BLOCK_M BLOCK_N : Nat) (hBN : 0 < BLOCK_N) :
+    matrixReduceIO x_ptr y_ptr stride_xm stride_xn stride_y BLOCK_M BLOCK_N
+      ⊨ fun _pid xs idx => matrixReduceSpecOf BLOCK_M BLOCK_N xs idx
+```
+
+**Assumptions / layout contracts:**
+- `hBN : 0 < BLOCK_N`
+
+**Closed-form spec defs (transitive):** `matrixReduceIO`, `matrixReduceSpecOf`, `load_reduce_kernel`, `xOffset`
+
+<details><summary><code>matrixReduceIO</code></summary>
+
+```
+/-- IO signature on the tile-indexed surface: every lane of the
+`BLOCK_M × BLOCK_N` tile reads `x_ptr` at `i·stride_xm + j·stride_xn` and is
+read-active (no `boundary_check`); **column 0** is write-active and writes
+`y_ptr[i]`. -/
+```
+```lean
+def matrixReduceIO (x_ptr y_ptr : RegionName)
+    (stride_xm stride_xn stride_y BLOCK_M BLOCK_N : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := load_reduce_kernel x_ptr y_ptr stride_xm stride_xn stride_y BLOCK_M
+    BLOCK_N
+  inp := x_ptr
+  out := y_ptr
+  shape := [BLOCK_M, BLOCK_N]
+  read := fun _pid idx => xOffset stride_xm stride_xn BLOCK_M BLOCK_N idx
+  write := fun _pid idx => idx.1.val
+  mask := fun _pid _ => True
+  writeMask := fun _pid idx => idx.2.1.val = 0
+```
+</details>
+
+<details><summary><code>matrixReduceSpecOf</code></summary>
+
+```
+/-- Value-level row-wise max spec: the `Tile.reduceMax` along axis 1 of the tile
+that holds `xs`, read off at lane `idx`'s **row**. Written over the loaded values
+rather than over memory, which is what the IO surface quantifies. -/
+```
+```lean
+noncomputable def matrixReduceSpecOf (BLOCK_M BLOCK_N : Nat)
+    (xs : TileIndex [BLOCK_M, BLOCK_N] → ℝ)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : ℝ :=
+  match Tile.reduceMax (shape := [BLOCK_M, BLOCK_N]) ⟨1, by simp⟩ Bool.false
+      ⟨fun k => some (xs k)⟩ with
+  | some out => WithBot.unbotD 0 (out.data (idx.1, PUnit.unit))
+  | none => 0
+```
+</details>
+
+<details><summary><code>load_reduce_kernel</code></summary>
+
+```
+/-- Faithful 1:1 transcription of `matrix_reduction.py`'s `load_reduce_kernel`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `BLOCK_M: tl.constexpr` / `BLOCK_N: tl.constexpr` → Lean `Nat`
+  parameters.
+- `stride_y` is kept as `_stride_y`: the upstream Triton kernel accepts it but
+  stores to `y_ptr + tl.arange(0, BLOCK_M)` and does not use it. -/
+```
+```lean
+def load_reduce_kernel
+    (x_ptr y_ptr : RegionName)
+    (stride_xm stride_xn _stride_y BLOCK_M BLOCK_N : Nat) :
+    ComputeKernel := triton {
+  x_ptr = tl.make_block_ptr(base=x_ptr,
+    shape=($(BLOCK_M), $(BLOCK_N)),
+    strides=($(stride_xm), $(stride_xn)),
+    offsets=($(0), $(0)),
+    block_shape=($(BLOCK_M), $(BLOCK_N)),
+    order=(1, 0))
+  x = tl.load(x_ptr)
+  y = tl.max(x, axis=1)
+  tl.store(y_ptr + tl.arange(0, $(BLOCK_M)), y)
+}
+```
+</details>
+
+<details><summary><code>xOffset</code></summary>
+
+```
+/-- Lane address of the input tile: the block pointer's `[i, j]` cell. -/
+```
+```lean
+def xOffset (stride_xm stride_xn BLOCK_M BLOCK_N : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : Nat :=
+  idx.1.val * stride_xm + idx.2.1.val * stride_xn
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `load_reduce_kernel_compute_correct`

@@ -359,6 +359,111 @@ noncomputable def rowVarSpec (s : BlockState) (in_ptr0 : RegionName)
 ```
 </details>
 
+## Public theorem: `fused_layernorm_triton_normalize_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `fused_layernorm_triton.py`'s normalize loop
+iteration: for every disjoint flat placement of the six buffers, every program
+coordinate whose scalar cells and active tile lanes are in bounds, and every launch
+state whose two per-row scalars hold `m₁` / `m₂` and whose three tile windows hold
+`xs` / `ws` / `bs` at the active lanes, the translated pointer kernel terminates,
+every active output lane holds `((xs i − m₁) · m₂) · ws i + bs i`, and every other
+memory cell is unchanged.
+
+Stronger than the per-write-map summary in one specific way: that one must **assume**
+the mean/rstd cells already hold the reduction's closed forms, because its spec
+`rowYSpec` is phrased over memory. Here the two scalars are channels, so the spec is
+phrased over the values the kernel loaded and the headline carries **no**
+side-condition — the output-offset injectivity the readback needs is discharged
+inline (`base + lane`, by `omega`).
+
+Dimension-general in `rnumel` and `RBLOCK`. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification fused_layernorm_triton_normalize_io_correctness
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) :
+    fusedNormalizeIO out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 rnumel
+        RBLOCK
+      ⊨ fun _p₀ _p₁ m1 m2 xs ws bs i => ((xs i - m1) * m2) * ws i + bs i
+```
+
+**Closed-form spec defs (transitive):** `fusedNormalizeIO`, `fused_layernorm_triton_normalize_slice`
+
+<details><summary><code>fusedNormalizeIO</code></summary>
+
+```
+/-- IO signature of the normalize slice: two per-row scalars, three tile reads, one
+tile write, over the two program axes. -/
+```
+```lean
+def fusedNormalizeIO
+    (out_ptr0 in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) : Scalar2Tile3KernelIO where
+  kernel := fused_layernorm_triton_normalize_slice in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 rnumel RBLOCK
+  sbuf1 := out_ptr0
+  sbuf2 := in_out_ptr0
+  tbuf1 := in_ptr0
+  tbuf2 := in_ptr1
+  tbuf3 := in_ptr2
+  out := out_ptr1
+  shape := [RBLOCK]
+  swin1 := fun p₀ _p₁ => p₀
+  swin2 := fun p₀ _p₁ => p₀
+  read1 := fun p₀ p₁ i => p₁ * RBLOCK + i.1.val + rnumel * p₀
+  read2 := fun _p₀ p₁ i => p₁ * RBLOCK + i.1.val
+  read3 := fun _p₀ p₁ i => p₁ * RBLOCK + i.1.val
+  write := fun p₀ p₁ i => p₁ * RBLOCK + i.1.val + rnumel * p₀
+  mask := fun _p₀ p₁ i => p₁ * RBLOCK + i.1.val < rnumel
+```
+</details>
+
+<details><summary><code>fused_layernorm_triton_normalize_slice</code></summary>
+
+```
+/-! ## Normalize-loop slice (second `for roffset` loop, one iteration)
+
+The second loop's iterations are independent: each reads the already-stored
+row mean (`out_ptr0[x0]`, the kernel's `tmp3`) and rstd (`in_out_ptr0[x0]`,
+the kernel's `tmp10`) plus fresh `in_ptr0/1/2` tiles, and stores one masked
+output chunk. The slice materializes one iteration with the chunk index as
+`tl.program_id(1)` (`roffset = i_t · RBLOCK`); its correctness theorem takes
+the honest hypotheses that the mean/rstd cells hold the genuine closed forms
+— exactly the values the first phase stores — and is dimension-general over
+`rnumel`, `RBLOCK`, and the chunk index. -/
+```
+```lean
+def fused_layernorm_triton_normalize_slice
+    (in_out_ptr0 in_ptr0 in_ptr1 in_ptr2 out_ptr0 out_ptr1 : RegionName)
+    (rnumel RBLOCK : Nat) : ComputeKernel := triton {
+  x0 = tl.program_id(0)
+  i_t = tl.program_id(1)
+  rindex = i_t * $(RBLOCK) + tl.arange(0, $(RBLOCK))
+  rmask = rindex < $(rnumel)
+  r1 = rindex
+  tmp3 = tl.load(out_ptr0 + (x0))
+  tmp10 = tl.load(in_out_ptr0 + (x0))
+  tmp11 = tl.load(in_ptr0 + (r1 + ($(rnumel) * x0)), mask=rmask, other=0.0).to(tl.float32)
+  tmp15 = tl.load(in_ptr1 + (r1), mask=rmask, other=0.0).to(tl.float32)
+  tmp18 = tl.load(in_ptr2 + (r1), mask=rmask, other=0.0).to(tl.float32)
+  tmp12 = (tmp11).to(tl.float32)
+  tmp13 = tmp12 - tmp3
+  tmp14 = tmp13 * tmp10
+  tmp16 = (tmp15).to(tl.float32)
+  tmp17 = tmp14 * tmp16
+  tmp19 = (tmp18).to(tl.float32)
+  tmp20 = tmp17 + tmp19
+  tmp21 = (tmp20).to(tl.float32)
+  tl.store(out_ptr1 + (r1 + ($(rnumel) * x0)), tmp21, mask=rmask)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `fused_layernorm_triton_normalize_slice_compute_correct`
 - `fused_layernorm_triton_reduce_slice_compute_correct`

@@ -2,62 +2,116 @@
 
 **Python source:** `bench/tritonbench_g/token_softmax_llama/token_softmax_llama.py`
 
-## Public theorem: `token_softmax_llama_output_summary_general`
+## Public theorem: `token_softmax_llama_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Public dimension-general coverage summary: for symbolic strides and
-`BLOCK_SIZE`, the full stable-softmax surface lowers to the algorithm layer, and
-the masked `Prob_Out` store is compute-correct — every active lane holds the
-genuine closed-form stable-softmax value `tokenSoftmaxSpec` (read off the input
-memory), inactive lanes are preserved. The `Prob_Out` slice offset-injectivity
-that holds at the Python test shapes is taken as an explicit hypothesis here. -/
+/-- **The headline**: `_fwd_kernel_token_softmax` implements the pure
+masked-row stable softmax on its metadata-driven IO signature — for every
+disjoint flat placement of the four buffers, every program id whose slot
+cells and active window lanes are in bounds, and every launch state whose
+`B_Start_Loc`/`B_Seqlen` slots hold `m₁`/`m₂` and whose active `Logics`
+window holds `xs`, the translated pointer kernel terminates, every active
+lane `j < m₂` of `Prob_Out` holds `tokenSoftmaxRowSpec BLOCK_SIZE m₂ xs j`
+(reduceMax-shift, `exp`, `/ reduceSum` over the masked row), and every other
+memory cell is unchanged. The loaded scalars appear as honest named binders
+of the spec, pinned to the slot cells by the skin's contract. `hOutInj` is
+the trusted host-layout side condition (`Prob_Out` window injectivity, e.g.
+`stride_prob_bs ≠ 0` row-major layouts); `0 < BLOCK_SIZE` is required by the
+`max` reduce. Proof: `MetaMasked2DKernelIO₁.Implements.intro` assembles the
+region-model metadata triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification token_softmax_llama_output_summary_general
+specification token_softmax_llama_correctness
     (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName)
-    (stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => probOffset s B_Start_Loc stride_prob_h stride_prob_bs i)) :
-    (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
-        stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE).toAlgorithm? =
-      Except.ok
-        (token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
-          stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE).toAlgKernel ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
-        stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => active s B_Seqlen i)
-        (fun i : Fin BLOCK_SIZE =>
-          (Prob_Out, probOffset s B_Start_Loc stride_prob_h stride_prob_bs i)))
-      (expected := fun i : Fin BLOCK_SIZE =>
-        tokenSoftmaxSpec s Logics B_Start_Loc B_Seqlen stride_logic_h
-          stride_logic_bs BLOCK_SIZE i))
+    (stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs
+      BLOCK_SIZE : Nat)
+    (hB : 0 < BLOCK_SIZE)
+    (hOutInj : ∀ pid₁ m₁ : Nat, Function.Injective
+      (fun i : Fin BLOCK_SIZE =>
+        pid₁ * stride_prob_h + (m₁ + i.val) * stride_prob_bs)) :
+    tokenSoftmaxLlamaIO Logics B_Start_Loc B_Seqlen Prob_Out
+        stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE
+      ⊨ fun _ _ _ m₂ xs j => tokenSoftmaxRowSpec BLOCK_SIZE m₂ xs j
 ```
 
 **Assumptions / layout contracts:**
-- `hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => probOffset s B_Start_Loc stride_prob_h stride_prob_bs i)`
-- `fun i : Fin BLOCK_SIZE => active s B_Seqlen i`
+- `hB : 0 < BLOCK_SIZE`
 - `fun i : Fin BLOCK_SIZE =>
-          (Prob_Out, probOffset s B_Start_Loc stride_prob_h stride_prob_bs i)`
+        pid₁ * stride_prob_h + (m₁ + i.val) * stride_prob_bs`
 
-**Closed-form spec defs (transitive):** `probOffset`, `token_softmax_surface`, `active`, `tokenSoftmaxSpec`, `tokenIndex`, `seqLen`, `tokenSoftmaxInputTile`, `startLoc`, `logicOffset`
+**Closed-form spec defs (transitive):** `tokenSoftmaxLlamaIO`, `tokenSoftmaxRowSpec`, `token_softmax_surface`, `tokenSoftmaxRowTile`
 
-<details><summary><code>probOffset</code></summary>
+<details><summary><code>tokenSoftmaxLlamaIO</code></summary>
 
+```
+/-- `_fwd_kernel_token_softmax`'s metadata-driven **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `mbuf1 = B_Start_Loc` / `mbuf2 = B_Seqlen` — the two per-program `.nat`
+  scalar slots, both at cell `cur_batch = pid₀` (`mwin1 = mwin2 = pid₀`);
+* `inp = Logics` / `out = Prob_Out` — which buffer is which argument;
+* `B = BLOCK_SIZE` — the row window each program owns;
+* `read`/`write` — lane `j` of program `(pid₀, pid₁)` reads
+  `Logics[pid₁ * stride_logic_h + (m₁ + j) * stride_logic_bs]` and writes
+  `Prob_Out[pid₁ * stride_prob_h + (m₁ + j) * stride_prob_bs]`, where
+  `m₁` is the **loaded** `B_Start_Loc[pid₀]` (`cur_head = pid₁` picks the
+  row, the start index shifts into the packed token dimension);
+* `mask` — the active lanes `j < m₂`, where `m₂` is the **loaded**
+  `B_Seqlen[pid₀]` (`col_offsets < cur_batch_seq_len`, both load and store).
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer
+sizes are not signature content: the headline quantifies over every
+allocation whose extents cover the slot cells and the active lanes. -/
+```
 ```lean
-def probOffset
-    (s : BlockState) (B_Start_Loc : RegionName)
-    (stride_prob_h stride_prob_bs : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pids 1 * stride_prob_h + tokenIndex s B_Start_Loc i * stride_prob_bs
+def tokenSoftmaxLlamaIO
+    (Logics B_Start_Loc B_Seqlen Prob_Out : RegionName)
+    (stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs
+      BLOCK_SIZE : Nat) :
+    MetaMasked2DKernelIO₁ where
+  kernel := token_softmax_surface Logics B_Start_Loc B_Seqlen Prob_Out
+    stride_logic_h stride_logic_bs stride_prob_h stride_prob_bs BLOCK_SIZE
+  mbuf1 := B_Start_Loc
+  mbuf2 := B_Seqlen
+  inp := Logics
+  out := Prob_Out
+  B := BLOCK_SIZE
+  mwin1 := fun pid₀ _ => pid₀
+  mwin2 := fun pid₀ _ => pid₀
+  read := fun _ pid₁ m₁ _ j =>
+    pid₁ * stride_logic_h + (m₁ + j.val) * stride_logic_bs
+  write := fun _ pid₁ m₁ _ j =>
+    pid₁ * stride_prob_h + (m₁ + j.val) * stride_prob_bs
+  mask := fun _ _ _ m₂ j => j.val < m₂
+```
+</details>
+
+<details><summary><code>tokenSoftmaxRowSpec</code></summary>
+
+```
+/-- **Pure** stable-softmax spec of the `⊨` headline: the exact softmax value
+at lane `i` of the masked row — reduceMax-shift, `exp`, `/ reduceSum` — built
+only from the loaded scalar `m₂` and the row `xs` (no launch state). -/
+```
+```lean
+noncomputable def tokenSoftmaxRowSpec (BLOCK_SIZE m₂ : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
+  let row := tokenSoftmaxRowTile BLOCK_SIZE m₂ xs
+  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false row with
+  | some rowMax =>
+      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
+      let numerator := Tile.uop WithBot.realExp shifted
+      let denominator := Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false numerator
+      WithBot.unbotD 0
+        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR numerator denominator).data
+          (i, PUnit.unit))
+  | none => 0
 ```
 </details>
 
@@ -94,92 +148,19 @@ def token_softmax_surface
 ```
 </details>
 
-<details><summary><code>active</code></summary>
-
-```lean
-def active
-    (s : BlockState) (B_Seqlen : RegionName) (i : Fin BLOCK_SIZE) : Prop :=
-  i.val < seqLen s B_Seqlen
-```
-</details>
-
-<details><summary><code>tokenSoftmaxSpec</code></summary>
+<details><summary><code>tokenSoftmaxRowTile</code></summary>
 
 ```
-/-- Exact stable-softmax value produced at one active token lane. -/
+/-- Masked input row as a **pure** function of the loaded sequence length
+`m₂` and the row values `xs`: lane `j < m₂` holds `xs j`, inactive lanes are
+`⊥`, matching the `other=-float("inf")` load. -/
 ```
 ```lean
-noncomputable def tokenSoftmaxSpec
-    (s : BlockState) (Logics B_Start_Loc B_Seqlen : RegionName)
-    (stride_logic_h stride_logic_bs BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  let row :=
-    tokenSoftmaxInputTile s Logics B_Start_Loc B_Seqlen stride_logic_h
-      stride_logic_bs BLOCK_SIZE
-  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false row with
-  | some rowMax =>
-      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
-      let numerator := Tile.uop WithBot.realExp shifted
-      let denominator := Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false numerator
-      WithBot.unbotD 0
-        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR numerator denominator).data
-          (i, PUnit.unit))
-  | none => 0
-```
-</details>
-
-<details><summary><code>tokenIndex</code></summary>
-
-```lean
-def tokenIndex (s : BlockState) (B_Start_Loc : RegionName) (i : Fin BLOCK_SIZE) : Nat :=
-  startLoc s B_Start_Loc + i.val
-```
-</details>
-
-<details><summary><code>seqLen</code></summary>
-
-```lean
-def seqLen (s : BlockState) (B_Seqlen : RegionName) : Nat :=
-  s.readMemValue .nat B_Seqlen (s.pids 0)
-```
-</details>
-
-<details><summary><code>tokenSoftmaxInputTile</code></summary>
-
-```
-/-- Masked input row for the Python token-softmax path. Inactive lanes are `⊥`,
-matching the `other=-float("inf")` load used before the stable softmax. -/
-```
-```lean
-noncomputable def tokenSoftmaxInputTile
-    (s : BlockState) (Logics B_Start_Loc B_Seqlen : RegionName)
-    (stride_logic_h stride_logic_bs BLOCK_SIZE : Nat) :
-    Tile .real [BLOCK_SIZE] :=
-  { data := fun idx =>
-      if idx.1.val < seqLen s B_Seqlen then
-        some (s.readMem Logics
-          (logicOffset s B_Start_Loc stride_logic_h stride_logic_bs idx.1))
-      else none }
-```
-</details>
-
-<details><summary><code>startLoc</code></summary>
-
-```lean
-def startLoc (s : BlockState) (B_Start_Loc : RegionName) : Nat :=
-  s.readMemValue .nat B_Start_Loc (s.pids 0)
-```
-</details>
-
-<details><summary><code>logicOffset</code></summary>
-
-```lean
-def logicOffset
-    (s : BlockState) (B_Start_Loc : RegionName)
-    (stride_logic_h stride_logic_bs : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pids 1 * stride_logic_h + tokenIndex s B_Start_Loc i * stride_logic_bs
+noncomputable def tokenSoftmaxRowTile (BLOCK_SIZE m₂ : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) : Tile .real [BLOCK_SIZE] :=
+  { data := fun idx => if idx.1.val < m₂ then some (xs idx.1) else none }
 ```
 </details>
 
 ## Also present (pinned special-case summaries)
 - `token_softmax_final_store_slice_compute_correct`
-- `token_softmax_surface_spec_compute_correct`

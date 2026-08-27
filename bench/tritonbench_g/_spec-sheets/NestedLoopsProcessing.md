@@ -488,6 +488,159 @@ def nested3_shifted_store (in_ptr out_ptr : RegionName)
 ```
 </details>
 
+## Public theorem: `nested3_first_a1_store_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `nested_loops_processing.py`'s first
+`a1` writeback: for every disjoint flat placement of `in_ptr` / `out_ptr` whose
+2×2 strided window is in bounds, and every launch state whose `in_ptr` window
+holds `xs`, the kernel terminates, every lane of the `out_ptr` window holds
+`xs idx`, and every other memory cell is unchanged.
+
+The store is unmasked, so the mask is `True` and the readback is total on the
+window. General in both strides; honest side-condition = window injectivity, the
+same hypothesis the per-write-map summary takes (`stride_m = stride_n` aliases
+the two diagonal lanes). The tile extents are literal `2 × 2` because the Python
+kernel's `tl.arange(0, 2)` are literals. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification nested3_first_a1_store_io_correctness
+    (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [2, 2] =>
+        idx.1.val * stride_m + idx.2.1.val * stride_n)) :
+    a1StoreIO in_ptr out_ptr stride_m stride_n ⊨ fun _pid xs idx => xs idx
+```
+
+**Assumptions / layout contracts:**
+- `hOutInj : Function.Injective
+      (fun idx : TileIndex [2, 2] =>
+        idx.1.val * stride_m + idx.2.1.val * stride_n)`
+
+**Closed-form spec defs (transitive):** `a1StoreIO`, `nested3_first_a1_store`
+
+<details><summary><code>a1StoreIO</code></summary>
+
+```
+/-- IO signature of the `a1` 2×2 store. -/
+```
+```lean
+def a1StoreIO (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := nested3_first_a1_store in_ptr out_ptr stride_m stride_n
+  inp := in_ptr
+  out := out_ptr
+  shape := [2, 2]
+  read := fun _pid idx => idx.1.val * stride_m + idx.2.1.val * stride_n
+  write := fun _pid idx => idx.1.val * stride_m + idx.2.1.val * stride_n
+  mask := fun _pid _idx => True
+```
+</details>
+
+<details><summary><code>nested3_first_a1_store</code></summary>
+
+```
+/-- Proof-oriented first 2x2 transfer slice of `nested_loops_processing.py`'s
+`nested3`.
+
+The full kernel repeatedly advances `a_ptrs` and `c_ptrs` through nested static
+loops. This slice captures the initial `a1 = tl.load(a_ptrs)` and first
+`tl.store(c_ptrs, a1)` block. -/
+```
+```lean
+def nested3_first_a1_store (in_ptr out_ptr : RegionName)
+    (stride_m stride_n : Nat) : ComputeKernel := triton {
+  offs_am = tl.arange(0, 2)
+  offs_an = tl.arange(0, 2)
+  a = tl.load(in_ptr + offs_am[:, None] * $(stride_m) +
+    offs_an[None, :] * $(stride_n))
+  tl.store(out_ptr + offs_am[:, None] * $(stride_m) +
+    offs_an[None, :] * $(stride_n), a)
+}
+```
+</details>
+
+## Public theorem: `nested3_first_a1_store_io_correctnessR`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` headline** for `nested_loops_processing.py`'s first `a1`
+writeback: for **every** rounding model `R`, the same Hoare triple as
+`nested3_first_a1_store_io_correctness`, but run under `execR R` and read back as
+`.real`-typed cells holding `R.round .real (xs idx)`.
+
+The store is a pure copy carrying no `.to(...)`, so the slice is cast-free and
+the exact run transports verbatim. The content of the rounding face here is
+exactly that: *this kernel introduces no rounding event of its own*, at any
+`R`. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification nested3_first_a1_store_io_correctnessR (R : RoundingModel)
+    (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat)
+    (hOutInj : Function.Injective
+      (fun idx : TileIndex [2, 2] =>
+        idx.1.val * stride_m + idx.2.1.val * stride_n)) :
+    a1StoreIO in_ptr out_ptr stride_m stride_n
+      ⊨[R, FloatDType.real] fun _pid xs idx => xs idx
+```
+
+**Assumptions / layout contracts:**
+- `hOutInj : Function.Injective
+      (fun idx : TileIndex [2, 2] =>
+        idx.1.val * stride_m + idx.2.1.val * stride_n)`
+
+**Closed-form spec defs (transitive):** `a1StoreIO`, `nested3_first_a1_store`
+
+<details><summary><code>a1StoreIO</code></summary>
+
+```
+/-- IO signature of the `a1` 2×2 store. -/
+```
+```lean
+def a1StoreIO (in_ptr out_ptr : RegionName) (stride_m stride_n : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := nested3_first_a1_store in_ptr out_ptr stride_m stride_n
+  inp := in_ptr
+  out := out_ptr
+  shape := [2, 2]
+  read := fun _pid idx => idx.1.val * stride_m + idx.2.1.val * stride_n
+  write := fun _pid idx => idx.1.val * stride_m + idx.2.1.val * stride_n
+  mask := fun _pid _idx => True
+```
+</details>
+
+<details><summary><code>nested3_first_a1_store</code></summary>
+
+```
+/-- Proof-oriented first 2x2 transfer slice of `nested_loops_processing.py`'s
+`nested3`.
+
+The full kernel repeatedly advances `a_ptrs` and `c_ptrs` through nested static
+loops. This slice captures the initial `a1 = tl.load(a_ptrs)` and first
+`tl.store(c_ptrs, a1)` block. -/
+```
+```lean
+def nested3_first_a1_store (in_ptr out_ptr : RegionName)
+    (stride_m stride_n : Nat) : ComputeKernel := triton {
+  offs_am = tl.arange(0, 2)
+  offs_an = tl.arange(0, 2)
+  a = tl.load(in_ptr + offs_am[:, None] * $(stride_m) +
+    offs_an[None, :] * $(stride_n))
+  tl.store(out_ptr + offs_am[:, None] * $(stride_m) +
+    offs_an[None, :] * $(stride_n), a)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `nested3_first_a1_store_compute_correct`
 - `nested3_shifted_store_compute_correct`

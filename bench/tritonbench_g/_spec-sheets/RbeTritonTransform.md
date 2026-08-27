@@ -26,9 +26,23 @@ strides, `start_token_position`, `THETA`, `DIM`, `BLOCK_SIZE_M`,
 * the odd-offset (`out_imag`) store: every `out_imag_mask`-active lane holds
   `x_real·sin(freq) + x_imag·cos(freq)`.
 
+The final conjunct adds the **`⊨` (`GroupedMasked2DKernelIO.Implements`)** face
+of the same two stores: the whole kernel as one grouped masked Hoare triple over
+**flat** pointer memory (`nIn = 2` interleaved read channels `x_ptrs` /
+`x_ptrs + 1`, `nOut = 2` interleaved write channels `out_ptrs` / `out_ptrs + 1`,
+`B = BLOCK_SIZE_M · (BLOCK_SIZE_K / 2)` lanes decoded row-major by `Lane2D.decode`) —
+termination, both stored values on their mask-active lanes, and a frame
+asserting every cell outside the two output windows is untouched.
+
 Honest side conditions: the even-offset output footprint is injective
 (`hOutInj`) and even-offset cells never collide with odd-offset (`+ 1`) cells
-(`hRI`) — both hold for the wrapper's contiguous row-major layout. -/
+(`hRI`) — both hold for the wrapper's contiguous row-major layout. The `⊨`
+conjunct quantifies over every launch state, so it needs those same two
+conditions at **every** program id (`hOutInjAll` / `hRIAll`, the `∀ s` forms);
+`outOff` depends on the state only through `s.pids 0` / `s.pids 1`, so this is
+exactly "the layout is collision-free for every CTA", and it is required for
+truth — without it the two interleaved scatters alias and no closed form
+holds. -/
 ```
 </details>
 
@@ -49,6 +63,16 @@ specification rbe_triton_transform_output_summary_general
       outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
           BLOCK_SIZE_K idx
         ≠ outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
+            BLOCK_SIZE_K k + 1)
+    (hOutInjAll : ∀ s : BlockState, Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2] =>
+        outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
+          BLOCK_SIZE_K idx))
+    (hRIAll : ∀ (s : BlockState)
+        (idx k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]),
+      outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
+          BLOCK_SIZE_K idx
+        ≠ outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
             BLOCK_SIZE_K k + 1) :
     -- (1) the full faithful surface lowers to the algorithm layer
     (∃ alg, (rbe_triton_surface x_ptr out_ptr M K stride_x_batch stride_x_m
@@ -66,6 +90,16 @@ specification rbe_triton_transform_output_summary_general
         outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
           BLOCK_SIZE_K idx)`
 - `hRI : ∀ idx k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2],
+      outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
+          BLOCK_SIZE_K idx
+        ≠ outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
+            BLOCK_SIZE_K k + 1`
+- `hOutInjAll : ∀ s : BlockState, Function.Injective
+      (fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2] =>
+        outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
+          BLOCK_SIZE_K idx)`
+- `hRIAll : ∀ (s : BlockState)
+        (idx k : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]),
       outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
           BLOCK_SIZE_K idx
         ≠ outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M

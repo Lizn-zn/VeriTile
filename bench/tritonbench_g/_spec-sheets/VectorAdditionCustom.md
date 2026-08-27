@@ -2,43 +2,60 @@
 
 **Python source:** `bench/tritonbench_g/vector_addition_custom/vector_addition_custom.py`
 
-## Public theorem: `add_kernel_output_summary`
+## Public theorem: `add_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `_add_kernel`: the DSL surface lowers to the
-algorithm layer, and the masked store to `C` is compute-correct — every active
-lane holds `as i + bs i`, out-of-bounds lanes are preserved. -/
+/-- **The headline**: `_add_kernel` implements pointwise addition on its masked
+IO signature — for every disjoint flat placement of the three buffers, every
+program id whose active lanes are in bounds, and every launch state whose
+input windows hold `as`/`bs` at the active lanes, the translated pointer
+kernel terminates, every active output lane holds `as i + bs i`, and every
+other memory cell is unchanged. Proof: `MaskedKernelIO₂.Implements.intro`
+assembles the region-model masked triple with the flat-memory bridge side
+conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification add_kernel_output_summary
+specification add_kernel_correctness
     (A B C : RegionName)
-    (size BLOCK : Nat) (hBlock : 0 < BLOCK)
-    (s : BlockState) (as bs : Fin BLOCK → ℝ)
-    (h_a : InputLoadedAt s A BLOCK as)
-    (h_b : InputLoadedAt s B BLOCK bs) :
-    (∃ alg, (_add_kernel A B C size BLOCK).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := _add_kernel A B C size BLOCK)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin BLOCK => s.pid * BLOCK + i.val < size)
-          (fun i => (C, s.pid * BLOCK + i.val)))
-      (expected := fun i => as i + bs i)
+    (size BLOCK : Nat) :
+    addCustomIO A B C size BLOCK
+      ⊨ fun as bs i => as i + bs i
 ```
 
-**Assumptions / layout contracts:**
-- `hBlock : 0 < BLOCK`
-- `as bs : Fin BLOCK → ℝ`
-- `h_a : InputLoadedAt s A BLOCK as`
-- `h_b : InputLoadedAt s B BLOCK bs`
-- `fun i : Fin BLOCK => s.pid * BLOCK + i.val < size`
+**Closed-form spec defs (transitive):** `addCustomIO`, `_add_kernel`
 
-**Closed-form spec defs (transitive):** `_add_kernel`
+<details><summary><code>addCustomIO</code></summary>
+
+```
+/-- `_add_kernel`'s masked **IO signature** — the whole kernel-specific audit
+surface of the headline: which buffer is which argument (the wiring), where
+program `prog_id` reads its input tiles / writes its output tile, and the
+active-lane predicate `prog_id * BLOCK + j < size`. The windows and mask are
+declared, not parsed from the kernel: they formalize the host-side launch
+convention (`offs = prog_id * BLOCK + arange; mask = offs < size`), and the
+headline **proves** the kernel's actual addressing and masking match them.
+Buffer sizes are not signature content: the headline quantifies over every
+allocation whose extents cover the active lanes. -/
+```
+```lean
+def addCustomIO (A B C : RegionName)
+    (size BLOCK : Nat) : MaskedKernelIO₂ where
+  kernel := _add_kernel A B C size BLOCK
+  in1 := A
+  in2 := B
+  out := C
+  B := BLOCK
+  read1 := fun pid => pid * BLOCK
+  read2 := fun pid => pid * BLOCK
+  write := fun pid => pid * BLOCK
+  mask := fun pid j => pid * BLOCK + j.val < size
+```
+</details>
 
 <details><summary><code>_add_kernel</code></summary>
 
@@ -61,6 +78,3 @@ def _add_kernel
 }
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `add_kernel_compute_correct`

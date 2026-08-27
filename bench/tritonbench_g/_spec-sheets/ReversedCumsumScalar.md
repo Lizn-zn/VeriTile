@@ -251,6 +251,150 @@ def tIndex (s : BlockState) (BT : Nat) (i : Fin BT) : Nat :=
 ```
 </details>
 
+## Public theorem: `reversed_cumsum_scalar_vec_store_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `reversed_cumsum_scalar.py`'s masked
+vector store: for every disjoint flat placement of `BO` / `O`, every program
+coordinate whose active lanes are in bounds, and every launch state whose `BO`
+vector holds `xs` at the active lanes, the translated pointer kernel terminates,
+every active lane of `O` holds `xs i`, and every other memory cell is unchanged.
+
+Dimension-general in `T` and `BT`. Honest side-condition: output-address
+injectivity at every program coordinate, the same hypothesis the per-write-map
+summary takes. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification reversed_cumsum_scalar_vec_store_io_correctness
+    (BO O : RegionName) (T BT : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BT => p₀ * T + (p₁ * BT + i.val))) :
+    vecStoreIO BO O T BT ⊨ fun _p₀ _p₁ xs i => xs i
+```
+
+**Assumptions / layout contracts:**
+- `fun i : Fin BT => p₀ * T + (p₁ * BT + i.val)`
+
+**Closed-form spec defs (transitive):** `vecStoreIO`, `reversed_cumsum_scalar_store_slice`
+
+<details><summary><code>vecStoreIO</code></summary>
+
+```
+/-- IO signature of the masked vector store on the three-axis tile surface. -/
+```
+```lean
+def vecStoreIO (BO O : RegionName) (T BT : Nat) : Masked3DTileKernelIO₁ where
+  kernel := reversed_cumsum_scalar_store_slice BO O T BT
+  inp := BO
+  out := O
+  shape := [BT]
+  read := fun p₀ p₁ _p₂ i => p₀ * T + (p₁ * BT + i.1.val)
+  write := fun p₀ p₁ _p₂ i => p₀ * T + (p₁ * BT + i.1.val)
+  mask := fun _p₀ p₁ _p₂ i => p₁ * BT + i.1.val < T
+```
+</details>
+
+<details><summary><code>reversed_cumsum_scalar_store_slice</code></summary>
+
+```
+/-- Proof-oriented block store slice of `reversed_cumsum_scalar.py`'s
+`chunk_global_reversed_cumsum_scalar_kernel`.
+
+The full kernel scans chunks in reverse while carrying `b_z`. This slice models
+one chunk iteration with a precomputed `BO` vector and proves the
+boundary-checked store into `O`. -/
+```
+```lean
+def reversed_cumsum_scalar_store_slice
+    (BO O : RegionName) (T BT : Nat) :
+    ComputeKernel := triton {
+  i_bh = tl.program_id(0)
+  i_t = tl.program_id(1)
+  offs_t = i_t * $(BT) + tl.arange(0, $(BT))
+  mask = offs_t < $(T)
+  b_o = tl.load(BO + i_bh * $(T) + offs_t, mask=mask, other=0.0)
+  tl.store(O + i_bh * $(T) + offs_t, (b_o).to(O.dtype.element_ty), mask=mask)
+}
+```
+</details>
+
+## Public theorem: `reversed_cumsum_scalar_vec_store_io_correctnessR`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` headline** for `reversed_cumsum_scalar.py`'s masked vector
+store: for **every** rounding model `R`, the same masked Hoare triple as
+`reversed_cumsum_scalar_vec_store_io_correctness`, but run under `execR R` and
+read back as `.real`-typed cells holding `R.round .real (xs i)`.
+
+The store is a pure copy — no arithmetic, and the `.to(O.dtype.element_ty)`
+erases to `.real` — so the slice is cast-free and the exact run transports
+verbatim. The content of the rounding face here is exactly that: *this kernel
+introduces no rounding event of its own*, at any `R`. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification reversed_cumsum_scalar_vec_store_io_correctnessR
+    (R : RoundingModel) (BO O : RegionName) (T BT : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun i : Fin BT => p₀ * T + (p₁ * BT + i.val))) :
+    vecStoreIO BO O T BT ⊨[R, FloatDType.real] fun _p₀ _p₁ xs i => xs i
+```
+
+**Assumptions / layout contracts:**
+- `fun i : Fin BT => p₀ * T + (p₁ * BT + i.val)`
+
+**Closed-form spec defs (transitive):** `vecStoreIO`, `reversed_cumsum_scalar_store_slice`
+
+<details><summary><code>vecStoreIO</code></summary>
+
+```
+/-- IO signature of the masked vector store on the three-axis tile surface. -/
+```
+```lean
+def vecStoreIO (BO O : RegionName) (T BT : Nat) : Masked3DTileKernelIO₁ where
+  kernel := reversed_cumsum_scalar_store_slice BO O T BT
+  inp := BO
+  out := O
+  shape := [BT]
+  read := fun p₀ p₁ _p₂ i => p₀ * T + (p₁ * BT + i.1.val)
+  write := fun p₀ p₁ _p₂ i => p₀ * T + (p₁ * BT + i.1.val)
+  mask := fun _p₀ p₁ _p₂ i => p₁ * BT + i.1.val < T
+```
+</details>
+
+<details><summary><code>reversed_cumsum_scalar_store_slice</code></summary>
+
+```
+/-- Proof-oriented block store slice of `reversed_cumsum_scalar.py`'s
+`chunk_global_reversed_cumsum_scalar_kernel`.
+
+The full kernel scans chunks in reverse while carrying `b_z`. This slice models
+one chunk iteration with a precomputed `BO` vector and proves the
+boundary-checked store into `O`. -/
+```
+```lean
+def reversed_cumsum_scalar_store_slice
+    (BO O : RegionName) (T BT : Nat) :
+    ComputeKernel := triton {
+  i_bh = tl.program_id(0)
+  i_t = tl.program_id(1)
+  offs_t = i_t * $(BT) + tl.arange(0, $(BT))
+  mask = offs_t < $(T)
+  b_o = tl.load(BO + i_bh * $(T) + offs_t, mask=mask, other=0.0)
+  tl.store(O + i_bh * $(T) + offs_t, (b_o).to(O.dtype.element_ty), mask=mask)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `reversed_cumsum_scalar_store_slice_compute_correct`
 - `reversed_cumsum_scalar_rev_slice_compute_correct`

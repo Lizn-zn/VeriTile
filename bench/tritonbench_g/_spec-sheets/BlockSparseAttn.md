@@ -878,6 +878,349 @@ def headGroups (num_heads num_kv_heads : Nat) : Nat := num_heads / num_kv_heads
 ```
 </details>
 
+## Public theorem: `block_sparse_attn_output_stores_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `block_sparse_attn.py`'s two output-block
+stores: for every disjoint flat placement of the source and `Out` buffers, every
+program coordinate whose active lanes are in bounds, and every launch state whose
+accumulator tile holds `xs` at the active lanes, each slice terminates, every active
+lane of the output block holds `xs idx`, and every other memory cell is unchanged.
+
+`pid₁` is split into `(batch, head)` by `/ num_heads` and `% num_heads`; the window
+*functions* absorb that with no new library surface. The second slice differs only by
+the `+ BLOCK_D` column shift of its write window.
+
+Dimension-general in `num_heads`, `total_seq_len`, all seven strides, `BLOCK_M` and
+`BLOCK_D`. Honest side-condition: output-address injectivity at every program
+coordinate, the same hypothesis the per-write-map summaries take. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification block_sparse_attn_output_stores_io_correctness
+    (Acc Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat)
+    (hInj1 : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val))
+    (hInj2 : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val)) :
+    (out_storeIO Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+      ⊨ fun _p₀ _p₁ xs idx => xs idx) ∧
+    (out2_storeIO Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+      ⊨ fun _p₀ _p₁ xs idx => xs idx)
+```
+
+**Assumptions / layout contracts:**
+- `fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val`
+- `fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val`
+
+**Closed-form spec defs (transitive):** `out_storeIO`, `out2_storeIO`, `block_sparse_attn_output_store_slice`, `block_sparse_attn_output_store_second_slice`
+
+<details><summary><code>out_storeIO</code></summary>
+
+```
+/-- IO signature of `block_sparse_attn_output_store_slice` on the three-axis tile surface. -/
+```
+```lean
+def out_storeIO (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) : Masked3DTileKernelIO₁ where
+  kernel := block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+    stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+  inp := Acc
+  out := Out
+  shape := [BLOCK_M, BLOCK_D]
+  read := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_acc_b + p₁ % num_heads * stride_acc_h
+      + (p₀ * BLOCK_M + idx.1.val) * stride_acc_m + idx.2.1.val * stride_acc_d
+  write := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+      + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val
+  mask := fun p₀ _p₁ _p₂ idx => p₀ * BLOCK_M + idx.1.val < total_seq_len
+```
+</details>
+
+<details><summary><code>out2_storeIO</code></summary>
+
+```
+/-- IO signature of `block_sparse_attn_output_store_second_slice` on the three-axis tile surface. -/
+```
+```lean
+def out2_storeIO (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) : Masked3DTileKernelIO₁ where
+  kernel := block_sparse_attn_output_store_second_slice Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+    stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+  inp := Acc2
+  out := Out
+  shape := [BLOCK_M, BLOCK_D]
+  read := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_acc_b + p₁ % num_heads * stride_acc_h
+      + (p₀ * BLOCK_M + idx.1.val) * stride_acc_m + idx.2.1.val * stride_acc_d
+  write := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+      + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val
+  mask := fun p₀ _p₁ _p₂ idx => p₀ * BLOCK_M + idx.1.val < total_seq_len
+```
+</details>
+
+<details><summary><code>block_sparse_attn_output_store_slice</code></summary>
+
+```
+/-- Surface transcription/proof-oriented first output-block store slice of
+`block_sparse_attn.py`'s `block_sparse_attention_kernel`.
+
+The full kernel walks a CSR sparse layout and accumulates one or two D blocks.
+This slice starts from a precomputed first-block `Acc` tile and proves the final
+masked writeback into `Out`, preserving the source `off_bh` decomposition and
+`offs_m < total_seq_len` row mask. The CSR `tl.int32` row/column index casts,
+`tl.float32` online-softmax accumulator, and `p.to(Q.dtype.element_ty)` dot input cast
+belong to the omitted sparse-attention loop that produces `Acc`. -/
+```
+```lean
+def block_sparse_attn_output_store_slice
+    (Acc Out : RegionName)
+    (num_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_bh = tl.program_id(1)
+  off_h = off_bh % $(num_heads)
+  off_b = off_bh // $(num_heads)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_d = tl.arange(0, $(BLOCK_D))
+  mask = (offs_m[:, None] < $(total_seq_len)) & (offs_d[None, :] < $(BLOCK_D))
+  acc = tl.load(Acc + off_b * $(stride_acc_b) + off_h * $(stride_acc_h) +
+      offs_m[:, None] * $(stride_acc_m) + offs_d[None, :] * $(stride_acc_d),
+      mask=mask, other=0.0)
+  tl.store(Out + off_b * $(stride_ob) + off_h * $(stride_oh) +
+      offs_m[:, None] * $(stride_om) + offs_d[None, :], acc, mask=mask)
+}
+```
+</details>
+
+<details><summary><code>block_sparse_attn_output_store_second_slice</code></summary>
+
+```
+/-- Surface transcription of the second output-block store in
+`block_sparse_attn.py`'s `block_sparse_attention_kernel`.
+
+The benchmark uses `NUM_D_BLOCKS = 2`, so Python stores `acc2` at
+`out_ptrs + BLOCK_D` after the first output block. This slice starts from a
+precomputed second-block `Acc2` tile and preserves the same row mask and
+batch/head decomposition as the first store. -/
+```
+```lean
+def block_sparse_attn_output_store_second_slice
+    (Acc2 Out : RegionName)
+    (num_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_bh = tl.program_id(1)
+  off_h = off_bh % $(num_heads)
+  off_b = off_bh // $(num_heads)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_d = tl.arange(0, $(BLOCK_D))
+  mask = (offs_m[:, None] < $(total_seq_len)) & (offs_d[None, :] < $(BLOCK_D))
+  acc2 = tl.load(Acc2 + off_b * $(stride_acc_b) + off_h * $(stride_acc_h) +
+      offs_m[:, None] * $(stride_acc_m) + offs_d[None, :] * $(stride_acc_d),
+      mask=mask, other=0.0)
+  tl.store(Out + off_b * $(stride_ob) + off_h * $(stride_oh) +
+      offs_m[:, None] * $(stride_om) + $(BLOCK_D) + offs_d[None, :],
+    acc2, mask=mask)
+}
+```
+</details>
+
+## Public theorem: `block_sparse_attn_output_stores_io_correctnessR`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` headline** for `block_sparse_attn.py`'s two output-block stores:
+for **every** rounding model `R`, the same pair of masked Hoare triples as
+`block_sparse_attn_output_stores_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+Both are pure copies carrying no `.to(...)`, so both slices are cast-free and the
+exact runs transport verbatim. The content of the rounding face here is exactly
+that: *neither store introduces a rounding event of its own*, at any `R`. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification block_sparse_attn_output_stores_io_correctnessR (R : RoundingModel)
+    (Acc Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat)
+    (hInj1 : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val))
+    (hInj2 : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val)) :
+    (out_storeIO Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx) ∧
+    (out2_storeIO Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+      stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx)
+```
+
+**Assumptions / layout contracts:**
+- `fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val`
+- `fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
+        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+          + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val`
+
+**Closed-form spec defs (transitive):** `out_storeIO`, `out2_storeIO`, `block_sparse_attn_output_store_slice`, `block_sparse_attn_output_store_second_slice`
+
+<details><summary><code>out_storeIO</code></summary>
+
+```
+/-- IO signature of `block_sparse_attn_output_store_slice` on the three-axis tile surface. -/
+```
+```lean
+def out_storeIO (Acc Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) : Masked3DTileKernelIO₁ where
+  kernel := block_sparse_attn_output_store_slice Acc Out num_heads total_seq_len stride_acc_b stride_acc_h
+    stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+  inp := Acc
+  out := Out
+  shape := [BLOCK_M, BLOCK_D]
+  read := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_acc_b + p₁ % num_heads * stride_acc_h
+      + (p₀ * BLOCK_M + idx.1.val) * stride_acc_m + idx.2.1.val * stride_acc_d
+  write := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+      + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val
+  mask := fun p₀ _p₁ _p₂ idx => p₀ * BLOCK_M + idx.1.val < total_seq_len
+```
+</details>
+
+<details><summary><code>out2_storeIO</code></summary>
+
+```
+/-- IO signature of `block_sparse_attn_output_store_second_slice` on the three-axis tile surface. -/
+```
+```lean
+def out2_storeIO (Acc2 Out : RegionName)
+    (num_heads total_seq_len stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om BLOCK_M BLOCK_D : Nat) : Masked3DTileKernelIO₁ where
+  kernel := block_sparse_attn_output_store_second_slice Acc2 Out num_heads total_seq_len stride_acc_b stride_acc_h
+    stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
+  inp := Acc2
+  out := Out
+  shape := [BLOCK_M, BLOCK_D]
+  read := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_acc_b + p₁ % num_heads * stride_acc_h
+      + (p₀ * BLOCK_M + idx.1.val) * stride_acc_m + idx.2.1.val * stride_acc_d
+  write := fun p₀ p₁ _p₂ idx =>
+    p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
+      + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val
+  mask := fun p₀ _p₁ _p₂ idx => p₀ * BLOCK_M + idx.1.val < total_seq_len
+```
+</details>
+
+<details><summary><code>block_sparse_attn_output_store_slice</code></summary>
+
+```
+/-- Surface transcription/proof-oriented first output-block store slice of
+`block_sparse_attn.py`'s `block_sparse_attention_kernel`.
+
+The full kernel walks a CSR sparse layout and accumulates one or two D blocks.
+This slice starts from a precomputed first-block `Acc` tile and proves the final
+masked writeback into `Out`, preserving the source `off_bh` decomposition and
+`offs_m < total_seq_len` row mask. The CSR `tl.int32` row/column index casts,
+`tl.float32` online-softmax accumulator, and `p.to(Q.dtype.element_ty)` dot input cast
+belong to the omitted sparse-attention loop that produces `Acc`. -/
+```
+```lean
+def block_sparse_attn_output_store_slice
+    (Acc Out : RegionName)
+    (num_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_bh = tl.program_id(1)
+  off_h = off_bh % $(num_heads)
+  off_b = off_bh // $(num_heads)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_d = tl.arange(0, $(BLOCK_D))
+  mask = (offs_m[:, None] < $(total_seq_len)) & (offs_d[None, :] < $(BLOCK_D))
+  acc = tl.load(Acc + off_b * $(stride_acc_b) + off_h * $(stride_acc_h) +
+      offs_m[:, None] * $(stride_acc_m) + offs_d[None, :] * $(stride_acc_d),
+      mask=mask, other=0.0)
+  tl.store(Out + off_b * $(stride_ob) + off_h * $(stride_oh) +
+      offs_m[:, None] * $(stride_om) + offs_d[None, :], acc, mask=mask)
+}
+```
+</details>
+
+<details><summary><code>block_sparse_attn_output_store_second_slice</code></summary>
+
+```
+/-- Surface transcription of the second output-block store in
+`block_sparse_attn.py`'s `block_sparse_attention_kernel`.
+
+The benchmark uses `NUM_D_BLOCKS = 2`, so Python stores `acc2` at
+`out_ptrs + BLOCK_D` after the first output block. This slice starts from a
+precomputed second-block `Acc2` tile and preserves the same row mask and
+batch/head decomposition as the first store. -/
+```
+```lean
+def block_sparse_attn_output_store_second_slice
+    (Acc2 Out : RegionName)
+    (num_heads total_seq_len
+      stride_acc_b stride_acc_h stride_acc_m stride_acc_d
+      stride_ob stride_oh stride_om
+      BLOCK_M BLOCK_D : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_bh = tl.program_id(1)
+  off_h = off_bh % $(num_heads)
+  off_b = off_bh // $(num_heads)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_d = tl.arange(0, $(BLOCK_D))
+  mask = (offs_m[:, None] < $(total_seq_len)) & (offs_d[None, :] < $(BLOCK_D))
+  acc2 = tl.load(Acc2 + off_b * $(stride_acc_b) + off_h * $(stride_acc_h) +
+      offs_m[:, None] * $(stride_acc_m) + offs_d[None, :] * $(stride_acc_d),
+      mask=mask, other=0.0)
+  tl.store(Out + off_b * $(stride_ob) + off_h * $(stride_oh) +
+      offs_m[:, None] * $(stride_om) + $(BLOCK_D) + offs_d[None, :],
+    acc2, mask=mask)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `block_sparse_attn_output_store_slice_compute_correct`
 - `block_sparse_attn_output_store_second_slice_compute_correct`

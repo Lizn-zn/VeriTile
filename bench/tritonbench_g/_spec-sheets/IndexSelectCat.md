@@ -2,57 +2,107 @@
 
 **Python source:** `bench/tritonbench_g/index_select_cat/index_select_cat.py`
 
-## Public theorem: `index_select_cat_fwd_kernel_output_summary`
+## Public theorem: `index_select_cat_fwd_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `index_select_cat_fwd_kernel`: the DSL surface
-lowers to the algorithm layer, and the contiguous store to `output_ptr` is
-compute-correct — under the injectivity hypothesis `hOutInj`, every active cell
-holds the gathered value `source[index[i], col]`. -/
+/-- **The headline**: `index_select_cat_fwd_kernel` implements the pure gather
+`output[i, col] = source[index[i], col]` on its gather IO signature — for every
+disjoint flat placement of `source_ptr`/`index_ptr`/`output_ptr`, every pair of
+program ids whose active lanes are in bounds, and every launch state whose
+windows hold the row-index tile `ids` (`.nat` channel) and the gathered data
+tile `xs`, the translated pointer kernel terminates; every write-active lane
+`j` (`indices < num_indices ∧ cols < num_cols`, the kernel's 2D `mask`) has
+`xs j` at its contiguous destination cell; and every memory cell off the store
+window is unchanged — unconditionally.
+
+The skin's readback leg carries a per-context `WriteInj` antecedent because a
+`GatherMasked2DKernelIO₁` `write` window may in general eat the loaded index
+tile. On this pure-gather side the `write` window is *static*, so `WriteInj` is
+just the old `hOutInj` no-duplicate-destination side condition on
+`i·stride0 + col·stride1` at the write-active lanes — a fact about the strides,
+not about the index data, and it stays inside `⊨` rather than narrowing the
+headline.
+
+`hBC : 0 < BLOCK_SIZE_COL` is genuinely forced: the index-tile load runs over
+the `[BLOCK_SIZE_INDEX]` tile regardless of `BLOCK_SIZE_COL`, so when
+`BLOCK_SIZE_COL = 0` the flattened lane space `Fin (BI * BC)` is empty and
+carries no in-bounds witness for it.
+
+Proof: `GatherMasked2DKernelIO₁.Implements.intro` assembles the region-model
+gather triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification index_select_cat_fwd_kernel_output_summary
+specification index_select_cat_fwd_kernel_correctness
     (output_ptr source_ptr index_ptr : RegionName)
-    (num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
-    (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL] =>
-        outputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)) :
-    (∃ alg, (index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
-        num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX
-        BLOCK_SIZE_COL).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
-        num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (active s num_indices num_cols BLOCK_SIZE_INDEX BLOCK_SIZE_COL)
-        (fun idx => (output_ptr,
-          outputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)))
-      (expected := fun idx =>
-        s.readMem source_ptr
-          (sourceAddr s index_ptr stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx))
+    (num_indices num_cols stride0 stride1
+      BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
+    (hBC : 0 < BLOCK_SIZE_COL) :
+    indexSelectCatIO output_ptr source_ptr index_ptr num_indices num_cols
+      stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL ⊨
+        fun _ _ _ xs j => xs j
 ```
 
 **Assumptions / layout contracts:**
-- `hOutInj : Function.Injective
-      (fun idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL] =>
-        outputAddr s stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL idx)`
+- `hBC : 0 < BLOCK_SIZE_COL`
 
-**Closed-form spec defs (transitive):** `outputAddr`, `index_select_cat_fwd_kernel`, `active`, `sourceAddr`, `indexBase`, `colBase`
+**Closed-form spec defs (transitive):** `indexSelectCatIO`, `index_select_cat_fwd_kernel`
 
-<details><summary><code>outputAddr</code></summary>
+<details><summary><code>indexSelectCatIO</code></summary>
 
+```
+/-- `index_select_cat_fwd_kernel`'s gather **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `inp`/`idxbuf`/`out` — which buffer is which argument (data `source_ptr`,
+  `.nat` row-index channel `index_ptr`, destination `output_ptr`);
+* `B = BLOCK_SIZE_INDEX * BLOCK_SIZE_COL` — the kernel's `[BI, BC]` tile,
+  flattened: lane `j` is tile cell `(j / BC, j % BC)`;
+* `readx` — the **static** index-tile window `pid0 * BI + j / BC`, i.e. the
+  kernel's `indices` (row block of the 2D grid's first axis);
+* `read` — the **data-dependent** gather source
+  `ids j * stride0 + (pid1 * BC + j % BC) * stride1`: the loaded row times
+  `stride0` plus the column offset, exactly the kernel's `source_offsets`;
+* `write` — the **static** contiguous destination
+  `(pid0 * BI + j / BC) * stride0 + (pid1 * BC + j % BC) * stride1`: the
+  kernel's `output_offsets`, which ignores the loaded index tile;
+* `mask` — the index-tile gate `pid0 * BI + j / BC < num_indices`;
+* `readMask`/`writeMask` — the kernel's 2D `mask`, `indices < num_indices ∧
+  cols < num_cols`.
+
+The windows and masks are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing, masking and index-channel plumbing
+match them. Buffer sizes are not signature content: the headline quantifies
+over every allocation whose extents cover the active lanes. -/
+```
 ```lean
-def outputAddr (s : BlockState) (stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
-    (idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL]) : Nat :=
-  indexBase s BLOCK_SIZE_INDEX idx.1 * stride0 +
-    colBase s BLOCK_SIZE_COL idx.2.1 * stride1
+def indexSelectCatIO (output_ptr source_ptr index_ptr : RegionName)
+    (num_indices num_cols stride0 stride1
+      BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat) : GatherMasked2DKernelIO₁ where
+  kernel := index_select_cat_fwd_kernel output_ptr source_ptr index_ptr
+    num_indices num_cols stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL
+  inp := source_ptr
+  idxbuf := index_ptr
+  out := output_ptr
+  B := BLOCK_SIZE_INDEX * BLOCK_SIZE_COL
+  readx := fun p₀ _ j => p₀ * BLOCK_SIZE_INDEX + j.val / BLOCK_SIZE_COL
+  read := fun _ p₁ ids j =>
+    ids j * stride0 + (p₁ * BLOCK_SIZE_COL + j.val % BLOCK_SIZE_COL) * stride1
+  write := fun p₀ p₁ _ j =>
+    (p₀ * BLOCK_SIZE_INDEX + j.val / BLOCK_SIZE_COL) * stride0 +
+      (p₁ * BLOCK_SIZE_COL + j.val % BLOCK_SIZE_COL) * stride1
+  mask := fun p₀ _ j =>
+    p₀ * BLOCK_SIZE_INDEX + j.val / BLOCK_SIZE_COL < num_indices
+  readMask := fun p₀ p₁ _ j =>
+    p₀ * BLOCK_SIZE_INDEX + j.val / BLOCK_SIZE_COL < num_indices ∧
+      p₁ * BLOCK_SIZE_COL + j.val % BLOCK_SIZE_COL < num_cols
+  writeMask := fun p₀ p₁ _ j =>
+    p₀ * BLOCK_SIZE_INDEX + j.val / BLOCK_SIZE_COL < num_indices ∧
+      p₁ * BLOCK_SIZE_COL + j.val % BLOCK_SIZE_COL < num_cols
 ```
 </details>
 
@@ -64,7 +114,9 @@ def outputAddr (s : BlockState) (stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL
 
 Allowed mechanical Lean-syntax-only changes:
 - Python `BLOCK_SIZE_INDEX: tl.constexpr` / `BLOCK_SIZE_COL: tl.constexpr`
-  → Lean `Nat` parameters. -/
+  → Lean `Nat` parameters.
+- `index_ptr` is a typed Lean region so its `tl.load` needs no extra `dtype=`
+  kwarg. -/
 ```
 ```lean
 def index_select_cat_fwd_kernel
@@ -84,44 +136,3 @@ def index_select_cat_fwd_kernel
 }
 ```
 </details>
-
-<details><summary><code>active</code></summary>
-
-```lean
-def active
-    (s : BlockState) (num_indices num_cols BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
-    (idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL]) : Prop :=
-  indexBase s BLOCK_SIZE_INDEX idx.1 < num_indices ∧
-    colBase s BLOCK_SIZE_COL idx.2.1 < num_cols
-```
-</details>
-
-<details><summary><code>sourceAddr</code></summary>
-
-```lean
-def sourceAddr (s : BlockState) (index_ptr : RegionName)
-    (stride0 stride1 BLOCK_SIZE_INDEX BLOCK_SIZE_COL : Nat)
-    (idx : TileIndex [BLOCK_SIZE_INDEX, BLOCK_SIZE_COL]) : Nat :=
-  s.readMemValue .nat index_ptr (indexBase s BLOCK_SIZE_INDEX idx.1) * stride0 +
-    colBase s BLOCK_SIZE_COL idx.2.1 * stride1
-```
-</details>
-
-<details><summary><code>indexBase</code></summary>
-
-```lean
-def indexBase (s : BlockState) (BLOCK_SIZE_INDEX : Nat) (i : Fin BLOCK_SIZE_INDEX) : Nat :=
-  s.pids 0 * BLOCK_SIZE_INDEX + i.val
-```
-</details>
-
-<details><summary><code>colBase</code></summary>
-
-```lean
-def colBase (s : BlockState) (BLOCK_SIZE_COL : Nat) (j : Fin BLOCK_SIZE_COL) : Nat :=
-  s.pids 1 * BLOCK_SIZE_COL + j.val
-```
-</details>
-
-## Also present (pinned special-case summaries)
-- `index_select_cat_fwd_kernel_compute_correct`

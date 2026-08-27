@@ -2,42 +2,82 @@
 
 **Python source:** `bench/tritonbench_g/masked_add_cuda/masked_add_cuda.py`
 
-## Public theorem: `masked_add_kernel_output_summary`
+## Public theorem: `masked_add_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `masked_add_kernel`: the DSL surface lowers to
-the algorithm layer, and the masked in-place store to `grad_ptr` is
-compute-correct — every active lane (in-bounds and `p_mask` false) holds
-`grad + p * alpha`, all other lanes are preserved. -/
+/-- **The headline**: `masked_add_kernel` implements the masked in-place fused
+add on its bool-input IO signature — for every disjoint flat placement of the
+buffers, every program id whose static-mask lanes are in bounds, and every
+launch state whose `p`/`grad`/`p_mask` windows hold `xs`/`ys`/`bs` at the
+static-mask lanes, the translated pointer kernel terminates, every
+write-active lane `j` (in-bounds and `bs j = false`, the kernel's
+`mask & ~p_mask`) of the *same* buffer `grad_ptr` ends up holding
+`ys j + xs j * alpha` (the fused update of the originally-loaded window), and
+every other memory cell — including the in-bounds lanes vetoed by `p_mask` —
+is unchanged. Proof: `BoolMasked2DKernelIO₂.Implements.intro` assembles the
+region-model masked in-place triple with the flat-memory bridge side
+conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification masked_add_kernel_output_summary
+specification masked_add_kernel_correctness
     (grad_ptr p_ptr p_mask_ptr : RegionName)
-    (n_elements : Nat) (alpha : ℝ) (BLOCK_SIZE : Nat)
-    (s : BlockState) :
-    (∃ alg, (masked_add_kernel grad_ptr p_ptr p_mask_ptr
-      n_elements alpha BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := masked_add_kernel grad_ptr p_ptr p_mask_ptr
-        n_elements alpha BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE =>
-          maskedAddActive s p_mask_ptr n_elements BLOCK_SIZE i)
-        (fun i => (grad_ptr, maskedAddOffset s BLOCK_SIZE i)))
-      (expected := fun i => maskedAddSpec s grad_ptr p_ptr alpha BLOCK_SIZE i)
+    (n_elements : Nat) (alpha : ℝ) (BLOCK_SIZE : Nat) :
+    maskedAddIO grad_ptr p_ptr p_mask_ptr n_elements alpha BLOCK_SIZE
+      ⊨ fun _ _ _ xs ys j => ys j + xs j * alpha
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : Fin BLOCK_SIZE =>
-          maskedAddActive s p_mask_ptr n_elements BLOCK_SIZE i`
+**Closed-form spec defs (transitive):** `maskedAddIO`, `masked_add_kernel`
 
-**Closed-form spec defs (transitive):** `masked_add_kernel`, `maskedAddActive`, `maskedAddOffset`, `maskedAddSpec`
+<details><summary><code>maskedAddIO</code></summary>
+
+```
+/-- `masked_add_kernel`'s masked **in-place IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `in1`/`in2`/`mbuf` — which buffer is which argument (data `p_ptr`, running
+  buffer `grad_ptr`, boolean veto `p_mask_ptr`);
+* `out = in2 = grad_ptr` — the update is **in-place** (duplicate-region
+  wiring, the `triton_mul2` precedent): the triple reads the *old* window
+  contents into `ys` and asserts the *new* ones;
+* `B = BLOCK_SIZE`, all four windows at lane `j` = `pid₀ * BLOCK_SIZE + j`
+  (the host-side 1-D `cdiv(n_elements, BLOCK_SIZE)` launch convention; the
+  family's second program id is ignored);
+* `mask` — the **static** bounds lanes `pid₀ * BLOCK_SIZE + j < n_elements`
+  (the trace-safety/input superset);
+* `writeMask` — the **data-dependent** store gate
+  `pid₀ * BLOCK_SIZE + j < n_elements ∧ bs j = false`: exactly the kernel's
+  `mask = mask & ~p_mask` narrowing.
+
+The windows and masks are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing, masking, and `p_mask` narrowing
+match them. Buffer sizes are not signature content: the headline quantifies
+over every allocation whose extents cover the static-mask lanes. -/
+```
+```lean
+def maskedAddIO (grad_ptr p_ptr p_mask_ptr : RegionName)
+    (n_elements : Nat) (alpha : ℝ) (BLOCK_SIZE : Nat) :
+    BoolMasked2DKernelIO₂ where
+  kernel := masked_add_kernel grad_ptr p_ptr p_mask_ptr n_elements alpha
+    BLOCK_SIZE
+  in1 := p_ptr
+  in2 := grad_ptr
+  mbuf := p_mask_ptr
+  out := grad_ptr
+  B := BLOCK_SIZE
+  read1 := fun pid₀ _ j => pid₀ * BLOCK_SIZE + j.val
+  read2 := fun pid₀ _ j => pid₀ * BLOCK_SIZE + j.val
+  readm := fun pid₀ _ j => pid₀ * BLOCK_SIZE + j.val
+  write := fun pid₀ _ j => pid₀ * BLOCK_SIZE + j.val
+  mask := fun pid₀ _ j => pid₀ * BLOCK_SIZE + j.val < n_elements
+  writeMask := fun pid₀ _ bs j =>
+    pid₀ * BLOCK_SIZE + j.val < n_elements ∧ bs j = Bool.false
+```
+</details>
 
 <details><summary><code>masked_add_kernel</code></summary>
 
@@ -65,36 +105,3 @@ def masked_add_kernel
 }
 ```
 </details>
-
-<details><summary><code>maskedAddActive</code></summary>
-
-```lean
-def maskedAddActive
-    (s : BlockState) (p_mask_ptr : RegionName) (n_elements BLOCK_SIZE : Nat)
-    (i : Fin BLOCK_SIZE) : Prop :=
-  maskedAddOffset s BLOCK_SIZE i < n_elements ∧
-    s.readMemValue .bool p_mask_ptr (maskedAddOffset s BLOCK_SIZE i) = Bool.false
-```
-</details>
-
-<details><summary><code>maskedAddOffset</code></summary>
-
-```lean
-def maskedAddOffset (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pid * BLOCK_SIZE + i.val
-```
-</details>
-
-<details><summary><code>maskedAddSpec</code></summary>
-
-```lean
-noncomputable def maskedAddSpec
-    (s : BlockState) (grad_ptr p_ptr : RegionName)
-    (alpha : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  s.readMem grad_ptr (maskedAddOffset s BLOCK_SIZE i) +
-    s.readMem p_ptr (maskedAddOffset s BLOCK_SIZE i) * alpha
-```
-</details>
-
-## Also present (pinned special-case summaries)
-- `masked_add_kernel_compute_correct`

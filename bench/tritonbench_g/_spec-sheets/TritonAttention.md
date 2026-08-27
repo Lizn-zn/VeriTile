@@ -478,10 +478,26 @@ def fwdCausalSetG (s : BlockState) (SEQ BLOCK_M : Nat) (i : Fin BLOCK_M) :
 <details><summary>docstring</summary>
 
 ```
-/-- **★ MAIN (backward gradients, multi-block general).** Public symbolic-dimension
-backward-gradient summary for `triton_attention.py`'s `_bwd_kernel` over a full
-`N_CTX = BLOCK_M · num_block` sequence (the multi-block KV/Q streaming loop).
-For symbolic `num_block`/`N_CTX`/`BLOCK_M`/`BLOCK_DMODEL` with contiguous strides:
+/-- **★ MAIN (backward gradients, multi-block, dimension-general).** Every
+dimension, stride and head count is a free variable — `H`, `stride_qz`,
+`stride_qh`, `BLOCK_M`, `BLOCK_DMODEL`, `D0`, `num_block`, `sm_scale`, the
+program's base offset `base`, and every argument the kernel *ignores* (`Z`, the
+four `_stride_{k,v}{z,h}` slots, `_BLOCK_N`, which the `@triton.jit` body never
+mentions). No literal appears in the statement.
+
+`base` is the program's block-pointer base offset, tied to the launch geometry by
+`hbase`:
+
+    (pids 0 / H) · (stride_qz / BD) + (pids 0 % H) · (stride_qh / BD) = base / BD
+
+i.e. `off_z · stride_qz_2d + off_h · stride_qh_2d`, exactly the 2-D scalars the
+kernel itself computes. *Naming* the base instead of computing it is what makes
+the whole `bwd*G` spec layer stride-agnostic: it previously routed every address
+through a `bwdKBase` that hard-coded `off_z·32768 + off_h·8192`, which pinned the
+head count and the two `Q` strides to the benchmark's shape.
+
+Proves, over a full `N_CTX = BLOCK_M · num_block` sequence (the multi-block KV/Q
+streaming loop), genuinely and end-to-end from `exec`:
 
 * `DQ` (stored `.real`) reads back as a **real** equal to the genuine general
   `bwdKernelDQSpecG` (`priorDQ + Σ_J fp16(ds)·k`, summed over **all** key rows);
@@ -490,9 +506,10 @@ For symbolic `num_block`/`N_CTX`/`BLOCK_M`/`BLOCK_DMODEL` with contiguous stride
   column sums `DV[J,e] = Σ_I fp16(p[I,J])·do[I,e]`,
   `DK[J,e] = Σ_I fp16(ds[I,J])·q[I,e]` over all query rows `I ∈ Fin (BLOCK_M·num_block)`.
 
-Honest side conditions: positive block dims and `num_block`, `BD ∣ bwdKBase`, the
-streaming boundary `bwdKBase/BD + num_block·BLOCK_M ≤ D0`, the index/stride
-arithmetic `hbase`, input/output region disjointness, and the honest pids grid. All
+Honest side conditions: positive block dims and
+`num_block`, `BD ∣ base`, the streaming boundary
+`base/BD + num_block·BLOCK_M ≤ D0`, the base/stride arithmetic `hbase`,
+input/output region disjointness, and the honest pids grid. All
 specs are defined purely over the **input** `Q`/`K`/`V`/`DO`/`M`/`Delta`/`DQ`
 memory — never over the kernel's own `exec` readback. -/
 ```
@@ -500,12 +517,15 @@ memory — never over the kernel's own `exec` readback. -/
 
 **Statement:**
 ```lean
-specification triton_attention_bwd_grads_genuine_output_summary_general
+specification triton_attention_bwd_grads_genuine_output_summary_general (H stride_qz stride_qh : Nat) (base : Nat)
     (Q K V Out DO DQ DK DV L M Delta : RegionName) (s : BlockState) (sc : ℝ)
     (BM BD D0 nb : Nat)
-    (hBM : 0 < BM) (hBD : 0 < BD) (hnb : 0 < nb) (hbdvd : BD ∣ bwdKBase s)
-    (hbound : bwdKBase s / BD + nb * BM ≤ D0)
-    (hbase : (s.pids 0 / 4) * (32768 / BD) + (s.pids 0 % 4) * (8192 / BD) = bwdKBase s / BD)
+    -- slots the kernel ignores (`_Z`, `_stride_k{z,h}`, `_stride_v{z,h}`,
+    -- `_BLOCK_N`): universally quantified, since nothing depends on them
+    (Z skz skh svz svh BN : Nat)
+    (hBM : 0 < BM) (hBD : 0 < BD) (hnb : 0 < nb) (hbdvd : BD ∣ base)
+    (hbound : base / BD + nb * BM ≤ D0)
+    (hbase : (s.pids 0 / H) * (stride_qz / BD) + (s.pids 0 % H) * (stride_qh / BD) = base / BD)
     (hQDQ : Q ≠ DQ) (hKDQ : K ≠ DQ) (hVDQ : V ≠ DQ) (hDODQ : DO ≠ DQ)
     (hMDQ : M ≠ DQ) (hDeDQ : Delta ≠ DQ)
     (hDVDQ : DV ≠ DQ) (hDKDQ : DK ≠ DQ) (hDVDK : DV ≠ DK) (hDKDV : DK ≠ DV)
@@ -513,53 +533,53 @@ specification triton_attention_bwd_grads_genuine_output_summary_general
         R ≠ DV ∧ R ≠ DK ∧ R ≠ DQ)
     (hundef : ∀ rg o, s.undef rg o = 0) :
     (∃ alg, (triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
-        32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
-        2 4 (BM * nb) D0 nb BM BD BM).toAlgorithm? = Except.ok alg) ∧
+        stride_qz stride_qh BD 1 skz skh BD 1 svz svh BD 1
+        Z H (BM * nb) D0 nb BM BD BN).toAlgorithm? = Except.ok alg) ∧
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
-        32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
-        2 4 (BM * nb) D0 nb BM BD BM)
+        stride_qz stride_qh BD 1 skz skh BD 1 svz svh BD 1
+        Z H (BM * nb) D0 nb BM BD BN)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM)
-        (fun idx : TileIndex [BM * nb, BD] => (DQ, bwdKBase s + idx.1.val * BD + idx.2.1.val)))
+        (fun idx : TileIndex [BM * nb, BD] => (DQ, base + idx.1.val * BD + idx.2.1.val)))
       (expected := fun idx : TileIndex [BM * nb, BD] =>
-        bwdKernelDQSpecG s Q K V DO M Delta DQ BD (BM * nb) sc idx.1.val idx.2.1.val)) ∧
+        bwdKernelDQSpecG base s Q K V DO M Delta DQ BD (BM * nb) sc idx.1.val idx.2.1.val)) ∧
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
-        32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
-        2 4 (BM * nb) D0 nb BM BD BM)
+        stride_qz stride_qh BD 1 skz skh BD 1 svz svh BD 1
+        Z H (BM * nb) D0 nb BM BD BN)
       (initialState := s)
       (write := ComputeCorrect.WriteMap.writeIf
         (fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM)
-        (fun idx : TileIndex [BM * nb, BD] => (DV, bwdKBase s + idx.1.val * BD + idx.2.1.val)))
-      (expected := fun idx : TileIndex [BM * nb, BD] =>
-        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
-          (some (∑ I : Fin (BM * nb),
-            bwdFp16 (bwdKernelPG s Q K M BD (BM * nb) sc I.val idx.1.val) *
-              bwdKernelDOG s DO BD I.val idx.2.1.val))))) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
-        32768 8192 BD 1 32768 8192 BD 1 32768 8192 BD 1
-        2 4 (BM * nb) D0 nb BM BD BM)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM)
-        (fun idx : TileIndex [BM * nb, BD] => (DK, bwdKBase s + idx.1.val * BD + idx.2.1.val)))
+        (fun idx : TileIndex [BM * nb, BD] => (DV, base + idx.1.val * BD + idx.2.1.val)))
       (expected := fun idx : TileIndex [BM * nb, BD] =>
         MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
           (some (∑ I : Fin (BM * nb),
-            bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD (BM * nb) sc I.val idx.1.val) *
-              bwdKernelQG s Q BD I.val idx.2.1.val)))))
+            bwdFp16 (bwdKernelPG base s Q K M BD (BM * nb) sc I.val idx.1.val) *
+              bwdKernelDOG base s DO BD I.val idx.2.1.val))))) ∧
+    (ComputeCorrect.Realizes_without_Rounding
+      (kernel := triton_attention_bwd_kernel Q K V Out DO DQ DK DV L M Delta sc
+        stride_qz stride_qh BD 1 skz skh BD 1 svz svh BD 1
+        Z H (BM * nb) D0 nb BM BD BN)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM)
+        (fun idx : TileIndex [BM * nb, BD] => (DK, base + idx.1.val * BD + idx.2.1.val)))
+      (expected := fun idx : TileIndex [BM * nb, BD] =>
+        MemCell.of .fp16 (FloatDType.real.cast FloatDType.fp16
+          (some (∑ I : Fin (BM * nb),
+            bwdFp16 (bwdKernelDSG base s Q K V DO M Delta BD (BM * nb) sc I.val idx.1.val) *
+              bwdKernelQG base s Q BD I.val idx.2.1.val)))))
 ```
 
 **Assumptions / layout contracts:**
 - `hBM : 0 < BM`
 - `hBD : 0 < BD`
 - `hnb : 0 < nb`
-- `hbdvd : BD ∣ bwdKBase s`
-- `hbound : bwdKBase s / BD + nb * BM ≤ D0`
-- `hbase : (s.pids 0 / 4) * (32768 / BD) + (s.pids 0 % 4) * (8192 / BD) = bwdKBase s / BD`
+- `hbdvd : BD ∣ base`
+- `hbound : base / BD + nb * BM ≤ D0`
+- `hbase : (s.pids 0 / H) * (stride_qz / BD) + (s.pids 0 % H) * (stride_qh / BD) = base / BD`
 - `hQDQ : Q ≠ DQ`
 - `hKDQ : K ≠ DQ`
 - `hVDQ : V ≠ DQ`
@@ -574,24 +594,13 @@ specification triton_attention_bwd_grads_genuine_output_summary_general
         R ≠ DV ∧ R ≠ DK ∧ R ≠ DQ`
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
-- `fun idx : TileIndex [BM * nb, BD] => (DQ, bwdKBase s + idx.1.val * BD + idx.2.1.val)`
+- `fun idx : TileIndex [BM * nb, BD] => (DQ, base + idx.1.val * BD + idx.2.1.val)`
 - `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
-- `fun idx : TileIndex [BM * nb, BD] => (DV, bwdKBase s + idx.1.val * BD + idx.2.1.val)`
+- `fun idx : TileIndex [BM * nb, BD] => (DV, base + idx.1.val * BD + idx.2.1.val)`
 - `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
-- `fun idx : TileIndex [BM * nb, BD] => (DK, bwdKBase s + idx.1.val * BD + idx.2.1.val)`
+- `fun idx : TileIndex [BM * nb, BD] => (DK, base + idx.1.val * BD + idx.2.1.val)`
 
-**Closed-form spec defs (transitive):** `bwdKBase`, `triton_attention_bwd_kernel`, `bwdKernelDQSpecG`, `bwdFp16`, `bwdKernelPG`, `bwdKernelDOG`, `bwdKernelDSG`, `bwdKernelQG`, `bwdKernelDQ0G`, `bwdKernelKG`, `storeValue`, `bwdKernelQKG`, `bwdKernelMG`, `bwdKernelDPG`, `active`, `accOffset`, `bwdKernelVG`, `bwdKernelDiG`, `rowIndex`, `dIndex`
-
-<details><summary><code>bwdKBase</code></summary>
-
-```
-/-- Block-ptr base offset for the program: `off_z·32768 + off_h·8192`. -/
-```
-```lean
-def bwdKBase (s : BlockState) : Nat :=
-  s.pids 0 / 4 * 32768 + s.pids 0 % 4 * 8192
-```
-</details>
+**Closed-form spec defs (transitive):** `triton_attention_bwd_kernel`, `bwdKernelDQSpecG`, `bwdFp16`, `bwdKernelPG`, `bwdKernelDOG`, `bwdKernelDSG`, `bwdKernelQG`, `bwdKernelDQ0G`, `bwdKernelKG`, `storeValue`, `bwdKernelQKG`, `bwdKernelMG`, `bwdKernelDPG`, `active`, `accOffset`, `bwdKernelVG`, `bwdKernelDiG`, `rowIndex`, `dIndex`
 
 <details><summary><code>triton_attention_bwd_kernel</code></summary>
 
@@ -726,13 +735,13 @@ summed over **all** global key rows `J ∈ [0, N_CTX)` (causal `p ⇒ ds` zeroes
 `J>I`), stored real (no fp16 cast on the `DQ` store). -/
 ```
 ```lean
-noncomputable def bwdKernelDQSpecG
+noncomputable def bwdKernelDQSpecG (base : Nat)
     (s : BlockState) (Q K V DO M Delta DQ : RegionName) (BD NCTX : Nat) (sc : ℝ)
     (I e : Nat) : ℝ :=
-  bwdKernelDQ0G s DQ BD I e +
+  bwdKernelDQ0G base s DQ BD I e +
     ∑ J : Fin NCTX,
-      bwdFp16 (bwdKernelDSG s Q K V DO M Delta BD NCTX sc I J.val) *
-        bwdKernelKG s K BD J.val e
+      bwdFp16 (bwdKernelDSG base s Q K V DO M Delta BD NCTX sc I J.val) *
+        bwdKernelKG base s K BD J.val e
 ```
 </details>
 
@@ -754,10 +763,10 @@ noncomputable def bwdFp16 (x : ℝ) : ℝ :=
 score, else `0`); mirrors the kernel `tl.where` / `tl.exp`. -/
 ```
 ```lean
-noncomputable def bwdKernelPG (s : BlockState) (Q K M : RegionName) (BD NCTX : Nat)
+noncomputable def bwdKernelPG (base : Nat) (s : BlockState) (Q K M : RegionName) (BD NCTX : Nat)
     (sc : ℝ) (I J : Nat) : ℝ :=
   if J ≤ I then
-    Real.exp (bwdKernelQKG s Q K BD I J * sc - bwdKernelMG s M NCTX I)
+    Real.exp (bwdKernelQKG base s Q K BD I J * sc - bwdKernelMG s M NCTX I)
   else 0
 ```
 </details>
@@ -768,9 +777,9 @@ noncomputable def bwdKernelPG (s : BlockState) (Q K M : RegionName) (BD NCTX : N
 /-- Loaded `do[I,e] = DO[base + I·BD + e]`. -/
 ```
 ```lean
-noncomputable def bwdKernelDOG (s : BlockState) (DO : RegionName) (BD : Nat)
+noncomputable def bwdKernelDOG (base : Nat) (s : BlockState) (DO : RegionName) (BD : Nat)
     (I : Nat) (e : Nat) : ℝ :=
-  s.readMem DO (bwdKBase s + I * BD + e)
+  s.readMem DO (base + I * BD + e)
 ```
 </details>
 
@@ -780,9 +789,9 @@ noncomputable def bwdKernelDOG (s : BlockState) (DO : RegionName) (BD : Nat)
 /-- `ds[I,J] = p[I,J]·dp[I,J]·sm_scale`. -/
 ```
 ```lean
-noncomputable def bwdKernelDSG (s : BlockState) (Q K V DO M Delta : RegionName)
+noncomputable def bwdKernelDSG (base : Nat) (s : BlockState) (Q K V DO M Delta : RegionName)
     (BD NCTX : Nat) (sc : ℝ) (I J : Nat) : ℝ :=
-  bwdKernelPG s Q K M BD NCTX sc I J * bwdKernelDPG s V DO Delta BD NCTX I J * sc
+  bwdKernelPG base s Q K M BD NCTX sc I J * bwdKernelDPG base s V DO Delta BD NCTX I J * sc
 ```
 </details>
 
@@ -792,9 +801,9 @@ noncomputable def bwdKernelDSG (s : BlockState) (Q K V DO M Delta : RegionName)
 /-- Loaded `q[I,e] = Q[base + I·BD + e]` at global query row `I`. -/
 ```
 ```lean
-noncomputable def bwdKernelQG (s : BlockState) (Q : RegionName) (BD : Nat)
+noncomputable def bwdKernelQG (base : Nat) (s : BlockState) (Q : RegionName) (BD : Nat)
     (I : Nat) (e : Nat) : ℝ :=
-  s.readMem Q (bwdKBase s + I * BD + e)
+  s.readMem Q (base + I * BD + e)
 ```
 </details>
 
@@ -805,9 +814,9 @@ noncomputable def bwdKernelQG (s : BlockState) (Q : RegionName) (BD : Nat)
 value the kernel's `+=` accumulates onto (same tile layout as `Q`/`DO`). -/
 ```
 ```lean
-noncomputable def bwdKernelDQ0G (s : BlockState) (DQ : RegionName) (BD : Nat)
+noncomputable def bwdKernelDQ0G (base : Nat) (s : BlockState) (DQ : RegionName) (BD : Nat)
     (I : Nat) (e : Nat) : ℝ :=
-  s.readMem DQ (bwdKBase s + I * BD + e)
+  s.readMem DQ (base + I * BD + e)
 ```
 </details>
 
@@ -817,9 +826,9 @@ noncomputable def bwdKernelDQ0G (s : BlockState) (DQ : RegionName) (BD : Nat)
 /-- Loaded `k[J,e] = K[base + J·BD + e]` at global key row `J`. -/
 ```
 ```lean
-noncomputable def bwdKernelKG (s : BlockState) (K : RegionName) (BD : Nat)
+noncomputable def bwdKernelKG (base : Nat) (s : BlockState) (K : RegionName) (BD : Nat)
     (J : Nat) (e : Nat) : ℝ :=
-  s.readMem K (bwdKBase s + J * BD + e)
+  s.readMem K (base + J * BD + e)
 ```
 </details>
 
@@ -842,9 +851,9 @@ noncomputable def storeValue (s : BlockState) (Acc : RegionName)
 /-- `qk[I,J] = Σ_e q[I,e]·k[J,e]` (the `tl.dot(q, trans(k))` score). -/
 ```
 ```lean
-noncomputable def bwdKernelQKG (s : BlockState) (Q K : RegionName) (BD : Nat)
+noncomputable def bwdKernelQKG (base : Nat) (s : BlockState) (Q K : RegionName) (BD : Nat)
     (I J : Nat) : ℝ :=
-  ∑ e : Fin BD, bwdKernelQG s Q BD I e.val * bwdKernelKG s K BD J e.val
+  ∑ e : Fin BD, bwdKernelQG base s Q BD I e.val * bwdKernelKG base s K BD J e.val
 ```
 </details>
 
@@ -866,9 +875,9 @@ noncomputable def bwdKernelMG (s : BlockState) (M : RegionName) (NCTX : Nat)
 /-- `dp[I,J] = (Σ_e do[I,e]·v[J,e]) − Di[I]`. -/
 ```
 ```lean
-noncomputable def bwdKernelDPG (s : BlockState) (V DO Delta : RegionName) (BD NCTX : Nat)
+noncomputable def bwdKernelDPG (base : Nat) (s : BlockState) (V DO Delta : RegionName) (BD NCTX : Nat)
     (I J : Nat) : ℝ :=
-  (∑ e : Fin BD, bwdKernelDOG s DO BD I e.val * bwdKernelVG s V BD J e.val)
+  (∑ e : Fin BD, bwdKernelDOG base s DO BD I e.val * bwdKernelVG base s V BD J e.val)
     - bwdKernelDiG s Delta NCTX I
 ```
 </details>
@@ -897,9 +906,9 @@ def accOffset (s : BlockState) (BLOCK_M BLOCK_DMODEL : Nat)
 /-- Loaded `v[J,e] = V[base + J·BD + e]`. -/
 ```
 ```lean
-noncomputable def bwdKernelVG (s : BlockState) (V : RegionName) (BD : Nat)
+noncomputable def bwdKernelVG (base : Nat) (s : BlockState) (V : RegionName) (BD : Nat)
     (J : Nat) (e : Nat) : ℝ :=
-  s.readMem V (bwdKBase s + J * BD + e)
+  s.readMem V (base + J * BD + e)
 ```
 </details>
 
@@ -928,6 +937,291 @@ def rowIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
 ```lean
 def dIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
   idx.2.1.val
+```
+</details>
+
+## Public theorem: `triton_attention_forward_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The forward `⊨[R]` io headline.** On its
+`StreamMasked3DKernelIO₃ₓ₃` signature, `_fwd_kernel` implements the genuine
+causal FlashAttention-1 closed-form triple — the normalized attention block
+(`Out`, quantized once at the `.fp16` grid), the m-shifted causal softmax
+normalizer (`L`), and the per-row maximum causal score (`M`) — restated
+over the three streamed inputs, for every rounding model that is trivial on
+the fp16 grid.
+
+Honest boundaries: `hfp16` pins `R.round .fp16 = id` because loop-body
+statement 13 (`p = (p).to(tl.float16)`) is an *in-loop* rounding event
+outside the skin's single-boundary-round shape — exactly the file's declared
+fp16 modeling boundary, now explicit as a headline hypothesis. The skin's
+`pre` launch-legality field carries the exact stack's `hbound` (host grid
+fact), capping the pid-dependent trip count at the pid-free `T = D0/BLOCK_N`;
+`hBNM` is the per-pid divisibility `BLOCK_N ∣ (pid₀+1)·BLOCK_M` made
+pid-free. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification triton_attention_forward_io_correctness (R : RoundingModel)
+    (hfp16 : R.round .fp16 = id)
+    (Q K V L M Out : RegionName) (sc : ℝ)
+    (stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat)
+    (hBM : 0 < BLOCK_M) (hBN : 0 < BLOCK_N) (hBD : 0 < BLOCK_DMODEL)
+    (hBNM : BLOCK_N ∣ BLOCK_M)
+    (hLOut : L ≠ Out) (hMOut : M ≠ Out) (hLM : M ≠ L) :
+    tritonAttentionFwdIO Q K V L M Out sc
+        stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N ⊨[R]
+      fun p₀ p₁ _ xs ys zs =>
+        (fun j : Fin (BLOCK_M * BLOCK_DMODEL) =>
+          attentionRealCausalBlock (p₀ * BLOCK_M)
+            (taIOqT BLOCK_M BLOCK_DMODEL (D0 / BLOCK_N) xs)
+            (taIOkvT BLOCK_N BLOCK_DMODEL (D0 / BLOCK_N) ((p₀ + 1) * BLOCK_M) ys)
+            (taIOkvT BLOCK_N BLOCK_DMODEL (D0 / BLOCK_N) ((p₀ + 1) * BLOCK_M) zs)
+            sc (Lane2D.decode j),
+        fun i : Fin BLOCK_M =>
+          taIOLSpecT p₀ ((p₀ + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc
+            (taIOqT BLOCK_M BLOCK_DMODEL (D0 / BLOCK_N) xs)
+            (taIOkvT BLOCK_N BLOCK_DMODEL (D0 / BLOCK_N) ((p₀ + 1) * BLOCK_M) ys) i,
+        fun i : Fin BLOCK_M =>
+          taIOMSpecT p₀ ((p₀ + 1) * BLOCK_M) BLOCK_M BLOCK_DMODEL sc
+            (taIOqT BLOCK_M BLOCK_DMODEL (D0 / BLOCK_N) xs)
+            (taIOkvT BLOCK_N BLOCK_DMODEL (D0 / BLOCK_N) ((p₀ + 1) * BLOCK_M) ys) i)
+```
+
+**Assumptions / layout contracts:**
+- `hfp16 : R.round .fp16 = id`
+- `hBM : 0 < BLOCK_M`
+- `hBN : 0 < BLOCK_N`
+- `hBD : 0 < BLOCK_DMODEL`
+- `hBNM : BLOCK_N ∣ BLOCK_M`
+- `hLOut : L ≠ Out`
+- `hMOut : M ≠ Out`
+- `hLM : M ≠ L`
+
+**Closed-form spec defs (transitive):** `tritonAttentionFwdIO`, `taIOqT`, `taIOkvT`, `taIOLSpecT`, `taIOMSpecT`, `triton_attention_fwd_kernel`, `taIOCausalSet`
+
+<details><summary><code>tritonAttentionFwdIO</code></summary>
+
+```
+/-- **Streaming IO signature** of `_fwd_kernel` on the three-stream
+three-output attention fold skin. -/
+```
+```lean
+def tritonAttentionFwdIO (Q K V L M Out : RegionName) (sc : ℝ)
+    (stride_qz stride_qh Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
+    StreamMasked3DKernelIO₃ₓ₃ where
+  kernel := triton_attention_fwd_kernel Q K V L M Out sc
+    stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+    stride_qz stride_qh BLOCK_DMODEL 1 stride_qz stride_qh BLOCK_DMODEL 1
+    Z H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N
+  inp1 := Q
+  inp2 := K
+  inp3 := V
+  out1 := Out
+  out2 := L
+  out3 := M
+  T := D0 / BLOCK_N
+  B1 := BLOCK_M * BLOCK_DMODEL
+  B2 := BLOCK_N * BLOCK_DMODEL
+  B3 := BLOCK_N * BLOCK_DMODEL
+  C1 := BLOCK_M * BLOCK_DMODEL
+  C2 := BLOCK_M
+  C3 := BLOCK_M
+  out1DType := .fp16
+  read1 := fun p₀ p₁ _ _ j =>
+    (p₁ * (stride_qh / BLOCK_DMODEL) + p₀ * BLOCK_M + j.val / BLOCK_DMODEL) * BLOCK_DMODEL
+      + j.val % BLOCK_DMODEL
+  read2 := fun _ p₁ _ t j =>
+    (p₁ * (stride_qh / BLOCK_DMODEL) + t.val * BLOCK_N + j.val / BLOCK_DMODEL) * BLOCK_DMODEL
+      + j.val % BLOCK_DMODEL
+  read3 := fun _ p₁ _ t j =>
+    (p₁ * (stride_qh / BLOCK_DMODEL) + t.val * BLOCK_N + j.val / BLOCK_DMODEL) * BLOCK_DMODEL
+      + j.val % BLOCK_DMODEL
+  write1 := fun p₀ p₁ _ j =>
+    (p₁ * (stride_qh / BLOCK_DMODEL) + p₀ * BLOCK_M + j.val / BLOCK_DMODEL) * BLOCK_DMODEL
+      + (j.val % BLOCK_DMODEL) * 1
+  write2 := fun p₀ p₁ _ i => p₁ * N_CTX + (p₀ * BLOCK_M + i.val)
+  write3 := fun p₀ p₁ _ i => p₁ * N_CTX + (p₀ * BLOCK_M + i.val)
+  mask1 := fun _ _ _ _ _ => True
+  mask2 := fun p₀ _ _ t _ => t.val * BLOCK_N < (p₀ + 1) * BLOCK_M
+  mask3 := fun p₀ _ _ t _ => t.val * BLOCK_N < (p₀ + 1) * BLOCK_M
+  writeMask1 := fun _ _ _ _ => True
+  writeMask2 := fun _ _ _ _ => True
+  writeMask3 := fun _ _ _ _ => True
+  pre := fun p₀ p₁ _ =>
+    p₁ * (stride_qh / BLOCK_DMODEL) + (p₀ + 1) * BLOCK_M ≤ D0
+```
+</details>
+
+<details><summary><code>taIOqT</code></summary>
+
+```
+/-- The `Q` tile read off the (static) first stream — the window ignores
+`t`, so the step-`0` slice carries the whole tile (`0` off the empty
+stream when `T = 0`; under `pre` this never happens). -/
+```
+```lean
+noncomputable def taIOqT (BLOCK_M BLOCK_DMODEL T : Nat)
+    (xs : Fin T → Fin (BLOCK_M * BLOCK_DMODEL) → ℝ) :
+    TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ :=
+  fun idx => if h : 0 < T then xs ⟨0, h⟩ (Lane2D.encode idx) else 0
+```
+</details>
+
+<details><summary><code>taIOkvT</code></summary>
+
+```
+/-- The global K/V tile read off a streamed input: global key row `j` lives
+in step `j / BLOCK_N` at block-local row `j % BLOCK_N`. -/
+```
+```lean
+noncomputable def taIOkvT (BLOCK_N BLOCK_DMODEL T SEQ : Nat)
+    (ys : Fin T → Fin (BLOCK_N * BLOCK_DMODEL) → ℝ) :
+    TileIndex [SEQ, BLOCK_DMODEL] → ℝ :=
+  fun idx =>
+    if h : idx.1.val / BLOCK_N < T ∧ 0 < BLOCK_N then
+      ys ⟨idx.1.val / BLOCK_N, h.1⟩
+        (Lane2D.encode (⟨idx.1.val % BLOCK_N, Nat.mod_lt _ h.2⟩, idx.2.1, PUnit.unit))
+    else 0
+```
+</details>
+
+<details><summary><code>taIOLSpecT</code></summary>
+
+```
+/-- Stream-side `L` closed form: the m-shifted causal softmax normalizer
+(the tile-parametric twin of `fwdLSpecG`). -/
+```
+```lean
+noncomputable def taIOLSpecT (p₀ SEQ BLOCK_M BLOCK_DMODEL : Nat) (sc : ℝ)
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ)
+    (kT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ) (i : Fin BLOCK_M) : ℝ :=
+  Finset.univ.sum (fun j : Fin SEQ =>
+    if j.val ≤ p₀ * BLOCK_M + i.val then
+      Real.exp (scaledScore qT kT sc i j
+        - taIOMSpecT p₀ SEQ BLOCK_M BLOCK_DMODEL sc qT kT i)
+    else 0)
+```
+</details>
+
+<details><summary><code>taIOMSpecT</code></summary>
+
+```
+/-- Stream-side `M` closed form: the per-row maximum causal score (the
+tile-parametric twin of `fwdMSpecG`; `0` at the degenerate empty span,
+which `pre` excludes). -/
+```
+```lean
+noncomputable def taIOMSpecT (p₀ SEQ BLOCK_M BLOCK_DMODEL : Nat) (sc : ℝ)
+    (qT : TileIndex [BLOCK_M, BLOCK_DMODEL] → ℝ)
+    (kT : TileIndex [SEQ, BLOCK_DMODEL] → ℝ) (i : Fin BLOCK_M) : ℝ :=
+  if hSEQ : 0 < SEQ then
+    (taIOCausalSet p₀ SEQ BLOCK_M i).sup'
+      (taIOCausalSet_nonempty p₀ SEQ BLOCK_M hSEQ i)
+      (fun j : Fin SEQ => scaledScore qT kT sc i j)
+  else 0
+```
+</details>
+
+<details><summary><code>triton_attention_fwd_kernel</code></summary>
+
+```
+/-- DSL port of `triton_attention.py`'s `_fwd_kernel`. -/
+```
+```lean
+def triton_attention_fwd_kernel
+    (Q K V L M Out : RegionName)
+    (sm_scale : ℝ)
+    (_stride_qz stride_qh stride_qm stride_qk
+      _stride_kz _stride_kh stride_kn stride_kk
+      _stride_vz _stride_vh stride_vk stride_vn
+      _stride_oz _stride_oh stride_om stride_on
+      _Z _H N_CTX D0 BLOCK_M BLOCK_DMODEL BLOCK_N : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
+
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_n = tl.arange(0, $(BLOCK_N))
+  m_prev = tl.zeros([$(BLOCK_M)], dtype=tl.float32) - float("inf")
+  l_prev = tl.zeros([$(BLOCK_M)], dtype=tl.float32)
+  acc = tl.zeros([$(BLOCK_M), $(BLOCK_DMODEL)], dtype=tl.float32)
+
+  stride_qh_2d = $(stride_qh) // $(stride_qm) // $(stride_qk)
+
+  q_tile_ptr = tl.make_block_ptr(base=Q,
+    shape=($(D0), $(BLOCK_DMODEL)),
+    strides=($(stride_qm), $(stride_qk)),
+    offsets=(off_hz * stride_qh_2d + start_m * $(BLOCK_M), 0),
+    block_shape=($(BLOCK_M), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  k_tile_ptr = tl.make_block_ptr(base=K,
+    shape=($(D0), $(BLOCK_DMODEL)),
+    strides=($(stride_kn), $(stride_kk)),
+    offsets=(off_hz * stride_qh_2d, 0),
+    block_shape=($(BLOCK_N), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  v_tile_ptr = tl.make_block_ptr(base=V,
+    shape=($(D0), $(BLOCK_DMODEL)),
+    strides=($(stride_vk), $(stride_vn)),
+    offsets=(off_hz * stride_qh_2d, 0),
+    block_shape=($(BLOCK_N), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  out_tile_ptr = tl.make_block_ptr(base=Out,
+    shape=($(D0), $(BLOCK_DMODEL)),
+    strides=($(stride_om), $(stride_on)),
+    offsets=(off_hz * stride_qh_2d + start_m * $(BLOCK_M), 0),
+    block_shape=($(BLOCK_M), $(BLOCK_DMODEL)),
+    order=(1, 0))
+  q = tl.load(q_tile_ptr)
+
+  for start_n in range($(0), (start_m + $(1)) * $(BLOCK_M), $(BLOCK_N)) {
+    k = tl.load(k_tile_ptr, boundary_check=(0, 1))
+    qk = tl.zeros([$(BLOCK_M), $(BLOCK_N)], dtype=tl.float32)
+    qk += tl.dot(q, tl.trans(k))
+    qk *= $((sm_scale : ℝ))
+    qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, float("-inf"))
+    m_curr = tl.maximum(tl.max(qk, 1), m_prev)
+    l_prev *= tl.exp(m_prev - m_curr)
+    p = tl.exp(qk - m_curr[:, None])
+    l_curr = tl.sum(p, 1) + l_prev
+    l_rcp = 1.0 / l_curr
+    p *= l_rcp[:, None]
+    acc *= (l_prev * l_rcp)[:, None]
+    p = (p).to(tl.float16)
+    v = tl.load(v_tile_ptr, boundary_check=(0, 1))
+    acc += tl.dot(p, v)
+    l_prev = l_curr
+    m_prev = m_curr
+    k_tile_ptr = tl.advance(k_tile_ptr, [$(BLOCK_N), $(0)])
+    v_tile_ptr = tl.advance(v_tile_ptr, [$(BLOCK_N), $(0)])
+  }
+  start_m = tl.program_id(0)
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  l_ptrs = L + off_hz * $(N_CTX) + offs_m
+  m_ptrs = M + off_hz * $(N_CTX) + offs_m
+  tl.store(l_ptrs, l_prev)
+  tl.store(m_ptrs, m_prev)
+
+  acc = (acc).to(tl.float16)
+  tl.store(out_tile_ptr, acc, boundary_check=(0, 1))
+}
+```
+</details>
+
+<details><summary><code>taIOCausalSet</code></summary>
+
+```
+/-- The causal key set of query row `i` (the pure-`Nat` twin of
+`fwdCausalSetG` — `f` cannot mention a `BlockState`). -/
+```
+```lean
+def taIOCausalSet (p₀ SEQ BLOCK_M : Nat) (i : Fin BLOCK_M) : Finset (Fin SEQ) :=
+  Finset.univ.filter (fun j : Fin SEQ => j.val ≤ p₀ * BLOCK_M + i.val)
 ```
 </details>
 

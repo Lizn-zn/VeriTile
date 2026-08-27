@@ -400,6 +400,193 @@ def x1Offset
 ```
 </details>
 
+## Public theorem: `rotary_transform_meta_implements`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨` metadata-grouped headline for `rotary_transform`.** -/
+```
+</details>
+
+**Statement:**
+```lean
+specification rotary_transform_meta_implements
+    (OUT X COS SIN : RegionName) (CU_SEQLENS : Region .nat)
+    (HEAD_IDX SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_M BLOCK_HALF : Nat) (IS_VARLEN : Bool)
+    (hStrideHd : stride_out_headdim ≠ 0)
+    (hHalfBound : BLOCK_HALF ≤ rotary_dim_half) :
+    rotaryMetaIO OUT X COS SIN CU_SEQLENS HEAD_IDX SEQLEN_OFFSETS seqlen rotary_dim_half
+        seqlen_ro stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+        stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim BLOCK_M BLOCK_HALF
+        IS_VARLEN
+      ⊨ fun pid₀ _pid₁ _s1 _s2 xs o j =>
+          rotaryMetaF SEQLEN_OFFSETS seqlen_ro rotary_dim_half BLOCK_M pid₀ xs o j
+```
+
+**Assumptions / layout contracts:**
+- `hStrideHd : stride_out_headdim ≠ 0`
+- `hHalfBound : BLOCK_HALF ≤ rotary_dim_half`
+
+**Closed-form spec defs (transitive):** `rotaryMetaIO`, `rotaryMetaF`, `rotary_meta_row`, `ioXBase`, `ioSeqlen`, `ioOutBase`
+
+<details><summary><code>rotaryMetaIO</code></summary>
+
+```
+/-- The metadata-grouped masked IO signature of `rotary_meta_row`. -/
+```
+```lean
+def rotaryMetaIO
+    (OUT X COS SIN : RegionName) (CU_SEQLENS : Region .nat)
+    (HEAD_IDX SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_M BLOCK_HALF : Nat) (IS_VARLEN : Bool) :
+    MetaGroupedMasked2DKernelIO where
+  kernel := rotary_meta_row OUT X COS SIN CU_SEQLENS HEAD_IDX SEQLEN_OFFSETS seqlen
+    rotary_dim_half seqlen_ro stride_out_batch stride_out_seqlen stride_out_nheads
+    stride_out_headdim stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+    BLOCK_M BLOCK_HALF IS_VARLEN
+  nIn := 4
+  nOut := 2
+  bufs := [X, OUT, COS, SIN, CU_SEQLENS]
+  mbuf1 := CU_SEQLENS
+  mbuf2 := CU_SEQLENS
+  inp := fun i => match i with
+    | ⟨0, _⟩ => X
+    | ⟨1, _⟩ => X
+    | ⟨2, _⟩ => COS
+    | ⟨_ + 3, _⟩ => SIN
+  out := fun _ => OUT
+  B := BLOCK_HALF
+  mwin1 := fun _ pid₁ => pid₁
+  mwin2 := fun _ pid₁ => pid₁ + 1
+  read := fun i pid₀ pid₁ s1 _s2 j => match i with
+    | ⟨0, _⟩ => ioXBase IS_VARLEN pid₁ s1 HEAD_IDX stride_x_batch stride_x_seqlen
+        stride_x_nheads + pid₀ * BLOCK_M * stride_x_seqlen + j.val * stride_x_headdim
+    | ⟨1, _⟩ => ioXBase IS_VARLEN pid₁ s1 HEAD_IDX stride_x_batch stride_x_seqlen
+        stride_x_nheads + pid₀ * BLOCK_M * stride_x_seqlen +
+        (j.val + rotary_dim_half) * stride_x_headdim
+    | ⟨2, _⟩ => (pid₀ * BLOCK_M + SEQLEN_OFFSETS) * rotary_dim_half + j.val
+    | ⟨_ + 3, _⟩ => (pid₀ * BLOCK_M + SEQLEN_OFFSETS) * rotary_dim_half + j.val
+  readMask := fun i pid₀ _pid₁ s1 s2 j => match i with
+    | ⟨0, _⟩ => pid₀ * BLOCK_M < ioSeqlen IS_VARLEN s1 s2 seqlen ∧ j.val < rotary_dim_half
+    | ⟨1, _⟩ => pid₀ * BLOCK_M < ioSeqlen IS_VARLEN s1 s2 seqlen ∧ j.val < rotary_dim_half
+    | ⟨2, _⟩ => pid₀ * BLOCK_M + SEQLEN_OFFSETS < seqlen_ro ∧ j.val < rotary_dim_half
+    | ⟨_ + 3, _⟩ => pid₀ * BLOCK_M + SEQLEN_OFFSETS < seqlen_ro ∧ j.val < rotary_dim_half
+  write := fun o pid₀ pid₁ s1 _s2 j =>
+    ioOutBase IS_VARLEN pid₁ s1 HEAD_IDX stride_out_batch stride_out_seqlen
+        stride_out_nheads + pid₀ * BLOCK_M * stride_out_seqlen +
+      (j.val + (match o with | ⟨0, _⟩ => 0 | ⟨_ + 1, _⟩ => rotary_dim_half)) *
+        stride_out_headdim
+  writeMask := fun _ pid₀ _pid₁ s1 s2 j =>
+    pid₀ * BLOCK_M < ioSeqlen IS_VARLEN s1 s2 seqlen ∧ j.val < rotary_dim_half
+```
+</details>
+
+<details><summary><code>rotaryMetaF</code></summary>
+
+```
+/-- The `⊨` value function: both rotary output halves over the loaded inputs. -/
+```
+```lean
+noncomputable def rotaryMetaF (SEQLEN_OFFSETS seqlen_ro rotary_dim_half BLOCK_M : Nat)
+    (pid₀ : Nat) (xs : Fin 4 → Fin BLOCK_HALF → ℝ) (o : Fin 2) (j : Fin BLOCK_HALF) : ℝ :=
+  let c := if pid₀ * BLOCK_M + SEQLEN_OFFSETS < seqlen_ro ∧ j.val < rotary_dim_half then
+      xs 2 j else 1.0
+  let sn := if pid₀ * BLOCK_M + SEQLEN_OFFSETS < seqlen_ro ∧ j.val < rotary_dim_half then
+      xs 3 j else 0.0
+  match o with
+  | ⟨0, _⟩ => xs 0 j * c - xs 1 j * sn
+  | ⟨1, _⟩ => xs 0 j * sn + xs 1 j * c
+```
+</details>
+
+<details><summary><code>rotary_meta_row</code></summary>
+
+```
+/-- Faithful per-row, per-head companion for `rotary_transform.py`'s
+`rotary_kernel`, parametric in `IS_VARLEN`: the varlen prologue genuinely loads
+`start_idx`/`seqlen_hi` from `CU_SEQLENS` and folds `start_idx` into the X/OUT
+base offsets and `seqlen_hi - start_idx` into every mask. -/
+```
+```lean
+def rotary_meta_row
+    (OUT X COS SIN : RegionName) (CU_SEQLENS : Region .nat)
+    (HEAD_IDX SEQLEN_OFFSETS seqlen rotary_dim_half seqlen_ro
+      stride_out_batch stride_out_seqlen stride_out_nheads stride_out_headdim
+      stride_x_batch stride_x_seqlen stride_x_nheads stride_x_headdim
+      BLOCK_M BLOCK_HALF : Nat) (IS_VARLEN : Bool) :
+    ComputeKernel := triton {
+  pid_m = tl.program_id(0)
+  pid_batch = tl.program_id(1)
+  rm = pid_m * $(BLOCK_M)
+  rm_cs = rm + $(SEQLEN_OFFSETS)
+  rk_half = tl.arange(0, $(BLOCK_HALF))
+  x_base = X + pid_batch * $(stride_x_batch) + $(HEAD_IDX) * $(stride_x_nheads)
+  out_base = OUT + pid_batch * $(stride_out_batch) + $(HEAD_IDX) * $(stride_out_nheads)
+  seqlen_v = $(seqlen)
+  if IS_VARLEN {
+    start_idx = tl.load(CU_SEQLENS + pid_batch)
+    seqlen_hi = tl.load(CU_SEQLENS + pid_batch + $(1))
+    x_base = X + start_idx * $(stride_x_seqlen) + $(HEAD_IDX) * $(stride_x_nheads)
+    out_base = OUT + start_idx * $(stride_out_seqlen) + $(HEAD_IDX) * $(stride_out_nheads)
+    seqlen_v = seqlen_hi - start_idx
+  }
+  cos = tl.load(COS + rm_cs * $(rotary_dim_half) + rk_half,
+    mask=(rm_cs < $(seqlen_ro)) and (rk_half < $(rotary_dim_half)), other=1.0)
+  sin = tl.load(SIN + rm_cs * $(rotary_dim_half) + rk_half,
+    mask=(rm_cs < $(seqlen_ro)) and (rk_half < $(rotary_dim_half)), other=0.0)
+  x0 = tl.load(x_base + rm * $(stride_x_seqlen) + rk_half * $(stride_x_headdim),
+    mask=(rm < seqlen_v) and (rk_half < $(rotary_dim_half)), other=0.0)
+  x1 = tl.load(x_base + rm * $(stride_x_seqlen) +
+      (rk_half + $(rotary_dim_half)) * $(stride_x_headdim),
+    mask=(rm < seqlen_v) and (rk_half < $(rotary_dim_half)), other=0.0)
+  o0 = x0 * cos - x1 * sin
+  o1 = x0 * sin + x1 * cos
+  tl.store(out_base + rm * $(stride_out_seqlen) + rk_half * $(stride_out_headdim),
+    o0, mask=(rm < seqlen_v) and (rk_half < $(rotary_dim_half)))
+  tl.store(out_base + rm * $(stride_out_seqlen) +
+      (rk_half + $(rotary_dim_half)) * $(stride_out_headdim),
+    o1, mask=(rm < seqlen_v) and (rk_half < $(rotary_dim_half)))
+}
+```
+</details>
+
+<details><summary><code>ioXBase</code></summary>
+
+```
+/-- Pure X base offset (region-relative), casing on IS_VARLEN, for the IO. -/
+```
+```lean
+def ioXBase (IS_VARLEN : Bool) (pid₁ s1 HEAD_IDX
+    stride_x_batch stride_x_seqlen stride_x_nheads : Nat) : Nat :=
+  (if IS_VARLEN then s1 * stride_x_seqlen else pid₁ * stride_x_batch)
+    + HEAD_IDX * stride_x_nheads
+```
+</details>
+
+<details><summary><code>ioSeqlen</code></summary>
+
+```lean
+def ioSeqlen (IS_VARLEN : Bool) (s1 s2 seqlen : Nat) : Nat :=
+  if IS_VARLEN then s2 - s1 else seqlen
+```
+</details>
+
+<details><summary><code>ioOutBase</code></summary>
+
+```lean
+def ioOutBase (IS_VARLEN : Bool) (pid₁ s1 HEAD_IDX
+    stride_out_batch stride_out_seqlen stride_out_nheads : Nat) : Nat :=
+  (if IS_VARLEN then s1 * stride_out_seqlen else pid₁ * stride_out_batch)
+    + HEAD_IDX * stride_out_nheads
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `rotary_kernel_o0o1_row_o0_compute_correct`
 - `rotary_kernel_o0o1_row_o1_compute_correct`

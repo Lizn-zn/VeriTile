@@ -2,56 +2,58 @@
 
 **Python source:** `bench/tritonbench_g/triton_mul2/triton_mul2.py`
 
-## Public theorem: `mul2_kernel_output_summary`
+## Public theorem: `mul2_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `triton_mul2`'s two programs: both DSL surfaces
-lower to the algorithm layer, and both masked stores are compute-correct — every
-active lane holds `2 * xs i`, out-of-bounds lanes are preserved. The first
-conjunct covers the out-of-place `mul2_kernel` store to `out_ptr`; the second
-covers the in-place `mul2_inplace_kernel` store to `ptr`. -/
+/-- **The headline**: `mul2_kernel` implements lane-wise doubling on its masked
+IO signature — for every flat placement of the two buffers, every program id
+whose active lanes are in bounds, and every launch state whose input window
+holds `xs` at the active lanes, the translated pointer kernel terminates,
+every active output lane holds `2 * xs i`, and every other memory cell is
+unchanged. Proof: `MaskedKernelIO₁.Implements.intro` assembles the
+region-model masked triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification mul2_kernel_output_summary
-    (in_ptr0 out_ptr ptr : RegionName)
-    (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
-    (s : BlockState) (xs xsInplace : Fin BLOCK_SIZE → ℝ)
-    (h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs)
-    (h_xInplace : InputLoadedAt s ptr BLOCK_SIZE xsInplace) :
-    ((∃ alg, (mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-      ComputeCorrect.Realizes_without_Rounding
-        (kernel := mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE)
-        (initialState := s)
-        (write := ComputeCorrect.WriteMap.writeIf
-            (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
-            (fun i => (out_ptr, s.pid * BLOCK_SIZE + i.val)))
-        (expected := fun i => 2 * xs i)) ∧
-    ((∃ alg, (mul2_inplace_kernel ptr n_elements BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-      ComputeCorrect.Realizes_without_Rounding
-        (kernel := mul2_inplace_kernel ptr n_elements BLOCK_SIZE)
-        (initialState := s)
-        (write := ComputeCorrect.WriteMap.writeIf
-            (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
-            (fun i => (ptr, s.pid * BLOCK_SIZE + i.val)))
-        (expected := fun i => 2 * xsInplace i))
+specification mul2_kernel_correctness
+    (in_ptr0 out_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) :
+    mul2IO in_ptr0 out_ptr n_elements BLOCK_SIZE
+      ⊨ fun xs i => 2 * xs i
 ```
 
-**Assumptions / layout contracts:**
-- `hBlockSize : 0 < BLOCK_SIZE`
-- `xs xsInplace : Fin BLOCK_SIZE → ℝ`
-- `h_x : InputLoadedAt s in_ptr0 BLOCK_SIZE xs`
-- `h_xInplace : InputLoadedAt s ptr BLOCK_SIZE xsInplace`
-- `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements`
-- `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements`
+**Closed-form spec defs (transitive):** `mul2IO`, `mul2_kernel`
 
-**Closed-form spec defs (transitive):** `mul2_kernel`, `mul2_inplace_kernel`
+<details><summary><code>mul2IO</code></summary>
+
+```
+/-- `mul2_kernel`'s masked **IO signature** — the whole kernel-specific audit
+surface of the headline: which buffer is which argument (the wiring), where
+program `pid` reads its input tile / writes its output tile, and the
+active-lane predicate `pid * BLOCK_SIZE + j < n_elements`. The windows and
+mask are declared, not parsed from the kernel: they formalize the host-side
+launch convention (`offsets = pid * BLOCK_SIZE + arange;
+mask = offsets < n_elements`), and the headline **proves** the kernel's actual
+addressing and masking match them. Buffer sizes are not signature content: the
+headline quantifies over every allocation whose extents cover the active
+lanes. -/
+```
+```lean
+def mul2IO (in_ptr0 out_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) : MaskedKernelIO₁ where
+  kernel := mul2_kernel in_ptr0 out_ptr n_elements BLOCK_SIZE
+  inp := in_ptr0
+  out := out_ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * BLOCK_SIZE
+  write := fun pid => pid * BLOCK_SIZE
+  mask := fun pid j => pid * BLOCK_SIZE + j.val < n_elements
+```
+</details>
 
 <details><summary><code>mul2_kernel</code></summary>
 
@@ -77,6 +79,55 @@ def mul2_kernel
 ```
 </details>
 
+## Public theorem: `mul2_inplace_kernel_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline**: `mul2_inplace_kernel` implements lane-wise doubling on
+its masked in-place IO signature — for every flat placement of the buffer,
+every program id whose active lanes are in bounds, and every launch state
+whose window holds `xs` at the active lanes, the translated pointer kernel
+terminates, every active lane of the *same* buffer ends up holding
+`2 * xs i` (the doubled originally-loaded value), and every other memory cell
+is unchanged. Proof: `MaskedKernelIO₁.Implements.intro` assembles the
+region-model masked triple with the flat-memory bridge side conditions. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification mul2_inplace_kernel_correctness
+    (ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) :
+    mul2InplaceIO ptr n_elements BLOCK_SIZE
+      ⊨ fun xs i => 2 * xs i
+```
+
+**Closed-form spec defs (transitive):** `mul2InplaceIO`, `mul2_inplace_kernel`
+
+<details><summary><code>mul2InplaceIO</code></summary>
+
+```
+/-- `mul2_inplace_kernel`'s masked **in-place IO signature**: both argument
+roles are wired to the same buffer (`inp = out = ptr`) — the kernel rewrites
+the window it read. Windows and mask are the standard launch convention
+(`offsets = pid * BLOCK_SIZE + arange; mask = offsets < n_elements`); the
+headline **proves** the kernel's actual addressing and masking match them. -/
+```
+```lean
+def mul2InplaceIO (ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) : MaskedKernelIO₁ where
+  kernel := mul2_inplace_kernel ptr n_elements BLOCK_SIZE
+  inp := ptr
+  out := ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * BLOCK_SIZE
+  write := fun pid => pid * BLOCK_SIZE
+  mask := fun pid j => pid * BLOCK_SIZE + j.val < n_elements
+```
+</details>
+
 <details><summary><code>mul2_inplace_kernel</code></summary>
 
 ```
@@ -99,7 +150,3 @@ def mul2_inplace_kernel
 }
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `mul2_kernel_compute_correct`
-- `mul2_inplace_kernel_compute_correct`

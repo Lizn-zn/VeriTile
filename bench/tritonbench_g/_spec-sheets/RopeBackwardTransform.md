@@ -20,7 +20,17 @@ a conjunction of one `Realizes_without_Rounding` per stored output half. Each `R
 the projection-succeeds and per-run `exec` quantification internally; the
 `WriteMap.writeIf` masks the store to exactly its active lanes and the
 `expected` map is the genuine rotary-backward closed form over INPUT memory.
-Concrete Python benchmark shapes are instantiations of this. -/
+Concrete Python benchmark shapes are instantiations of this.
+
+The final four conjuncts add the **`⊨` (`GroupedMasked2DKernelIO.Implements`)**
+face of the same four stores: each per-head backward slice, as one masked Hoare
+triple over **flat** pointer memory — termination, the in-place rotary-backward
+value on every write-active lane computed from the *old* window contents, and a
+frame asserting every cell outside the write window is untouched. The four read
+channels are the kernel's four `tl.load`s and the single output channel points
+back at the data buffer. `HEAD_IDX`, `COS_ROW_IDX`, `HEAD_HALF` and `BLOCK_HALF`
+are free `Nat` parameters, so the `⊨` face is dimension-general too; it needs no
+extra hypotheses (the write windows are injective in the lane index outright). -/
 ```
 </details>
 
@@ -30,6 +40,7 @@ specification rope_backward_python_backward_output_summary_general
     (Q K COS SIN : RegionName)
     (q_row_stride k_row_stride cos_row_stride sin_row_stride
       sl bs n_qh n_kh hd pad_n_qh pad_n_kh pad_hd BLOCK_SIZE : Nat)
+    (HEAD_IDX COS_ROW_IDX HEAD_HALF BLOCK_HALF : Nat)
     (s : BlockState) (hundef : ∀ rg o, s.undef rg o = 0) (hqk : Q ≠ K) :
     ComputeCorrect.Realizes_without_Rounding
       (kernel := triton_rope_surface Q K COS SIN q_row_stride k_row_stride
@@ -74,7 +85,39 @@ specification rope_backward_python_backward_output_summary_general
           activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx)
         (fun idx => (K, kFullSecondOffset (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s k_row_stride hd idx)))
       (expected := fun idx =>
-        ropeBackwardKernelK1Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx)
+        ropeBackwardKernelK1Spec (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) s K COS SIN k_row_stride sl cos_row_stride sin_row_stride hd idx) ∧
+    (ropeBackwardQ0HeadIO Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+        cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let q0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let q1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          q0 * c + q1 * sn) ∧
+    (ropeBackwardQ1HeadIO Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+        cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let q0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let q1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          q1 * c - q0 * sn) ∧
+    (ropeBackwardK0HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride
+        cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let k0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let k1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          k0 * c + k1 * sn) ∧
+    (ropeBackwardK1HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride
+        cos_row_stride sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let k0 := xs (⟨0, by decide⟩ : Fin 4) j
+          let k1 := xs (⟨1, by decide⟩ : Fin 4) j
+          let c := xs (⟨2, by decide⟩ : Fin 4) j
+          let sn := xs (⟨3, by decide⟩ : Fin 4) j
+          k1 * c - k0 * sn)
 ```
 
 **Assumptions / layout contracts:**
@@ -89,7 +132,7 @@ specification rope_backward_python_backward_output_summary_general
 - `fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
           activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx`
 
-**Closed-form spec defs (transitive):** `triton_rope_surface`, `activeQFull`, `qFullFirstOffset`, `ropeBackwardKernelQ0Spec`, `qFullSecondOffset`, `ropeBackwardKernelQ1Spec`, `activeKFull`, `kFullFirstOffset`, `ropeBackwardKernelK0Spec`, `kFullSecondOffset`, `ropeBackwardKernelK1Spec`, `cosFullFirstOffset`, `sinFullFirstOffset`
+**Closed-form spec defs (transitive):** `triton_rope_surface`, `activeQFull`, `qFullFirstOffset`, `ropeBackwardKernelQ0Spec`, `qFullSecondOffset`, `ropeBackwardKernelQ1Spec`, `activeKFull`, `kFullFirstOffset`, `ropeBackwardKernelK0Spec`, `kFullSecondOffset`, `ropeBackwardKernelK1Spec`, `ropeBackwardQ0HeadIO`, `ropeBackwardQ1HeadIO`, `ropeBackwardK0HeadIO`, `ropeBackwardK1HeadIO`, `cosFullFirstOffset`, `sinFullFirstOffset`, `ropeBackwardHeadIO`, `rope_backward_q0_head`, `rope_backward_q1_head`
 
 <details><summary><code>triton_rope_surface</code></summary>
 
@@ -305,6 +348,66 @@ noncomputable def ropeBackwardKernelK1Spec
 ```
 </details>
 
+<details><summary><code>ropeBackwardQ0HeadIO</code></summary>
+
+```
+/-- The per-head first-half store's IO signature (`writeShift = 0`). -/
+```
+```lean
+def ropeBackwardQ0HeadIO (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd n_qh
+      HEAD_HALF BLOCK_HALF : Nat) : GroupedMasked2DKernelIO :=
+  ropeBackwardHeadIO (rope_backward_q0_head Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+      cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF)
+    Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+    n_qh HEAD_HALF BLOCK_HALF 0
+```
+</details>
+
+<details><summary><code>ropeBackwardQ1HeadIO</code></summary>
+
+```
+/-- The per-head second-half store's IO signature (`writeShift = HEAD_HALF`). -/
+```
+```lean
+def ropeBackwardQ1HeadIO (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd n_qh
+      HEAD_HALF BLOCK_HALF : Nat) : GroupedMasked2DKernelIO :=
+  ropeBackwardHeadIO (rope_backward_q1_head Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride
+      cos_row_stride sin_row_stride hd n_qh HEAD_HALF BLOCK_HALF)
+    Q COS SIN HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+    n_qh HEAD_HALF BLOCK_HALF HEAD_HALF
+```
+</details>
+
+<details><summary><code>ropeBackwardK0HeadIO</code></summary>
+
+```
+/-- K-side first-half store's IO signature. -/
+```
+```lean
+abbrev ropeBackwardK0HeadIO (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd n_kh
+      HEAD_HALF BLOCK_HALF : Nat) : GroupedMasked2DKernelIO :=
+  ropeBackwardQ0HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride
+    sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+```
+</details>
+
+<details><summary><code>ropeBackwardK1HeadIO</code></summary>
+
+```
+/-- K-side second-half store's IO signature. -/
+```
+```lean
+abbrev ropeBackwardK1HeadIO (K COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride sin_row_stride hd n_kh
+      HEAD_HALF BLOCK_HALF : Nat) : GroupedMasked2DKernelIO :=
+  ropeBackwardQ1HeadIO K COS SIN HEAD_IDX COS_ROW_IDX k_row_stride cos_row_stride
+    sin_row_stride hd n_kh HEAD_HALF BLOCK_HALF
+```
+</details>
+
 <details><summary><code>cosFullFirstOffset</code></summary>
 
 ```
@@ -328,6 +431,124 @@ def sinFullFirstOffset
     (s : BlockState) (sl sin_row_stride : Nat)
     (idx : TileIndex [pad_hd_half]) : Nat :=
   s.pids 0 % sl * sin_row_stride + idx.1.val
+```
+</details>
+
+<details><summary><code>ropeBackwardHeadIO</code></summary>
+
+```
+/-- The shared **IO signature** of one in-place per-head RoPE store — the whole
+kernel-specific audit surface of the four `⊨` headlines below.
+
+* `bufs = [Buf, COS, SIN]`; the single output channel points **back at**
+  `Buf` (`out 0 = Buf`), the in-place rotary update.
+* `nIn = 4`, `nOut = 1`, `B = BLOCK_HALF`.
+* read channel `0` — `Buf` at the first-half address
+  `pid₀·row_stride + HEAD_IDX·hd + j`;
+  read channel `1` — `Buf` at the second-half address `… + HEAD_HALF`;
+  read channels `2`/`3` — `COS`/`SIN` at `COS_ROW_IDX·cos_row_stride + j`
+  resp. `COS_ROW_IDX·sin_row_stride + j`.
+* `readMask` — `HEAD_IDX < n_h ∧ j < HEAD_HALF` on the two data channels
+  (the kernel's `mask=(HEAD_IDX < n_qh) and (dim < HEAD_HALF)`) and
+  `j < HEAD_HALF` on `COS`/`SIN` (the kernel's `mask=dim < HEAD_HALF`).
+* `write` — `writeShift` is `0` for the first-half store and `HEAD_HALF`
+  for the second-half one; `writeMask` is the store's own
+  `(HEAD_IDX < n_h) and (dim < HEAD_HALF)`.
+
+The windows and masks are *declared*, not parsed from the kernel; the headlines
+**prove** the kernel's actual addressing and masking match them. -/
+```
+```lean
+def ropeBackwardHeadIO (kernel : ComputeKernel) (Buf COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX row_stride cos_row_stride sin_row_stride hd n_h
+      HEAD_HALF BLOCK_HALF writeShift : Nat) : GroupedMasked2DKernelIO where
+  kernel := kernel
+  nIn := 4
+  nOut := 1
+  bufs := [Buf, COS, SIN]
+  inp := fun i => match i with
+    | ⟨0, _⟩ => Buf
+    | ⟨1, _⟩ => Buf
+    | ⟨2, _⟩ => COS
+    | ⟨_ + 3, _⟩ => SIN
+  out := fun _ => Buf
+  B := BLOCK_HALF
+  read := fun i pid₀ _pid₁ j => match i with
+    | ⟨0, _⟩ => pid₀ * row_stride + HEAD_IDX * hd + j.val
+    | ⟨1, _⟩ => pid₀ * row_stride + HEAD_IDX * hd + j.val + HEAD_HALF
+    | ⟨2, _⟩ => COS_ROW_IDX * cos_row_stride + j.val
+    | ⟨_ + 3, _⟩ => COS_ROW_IDX * sin_row_stride + j.val
+  readMask := fun i _pid₀ _pid₁ j => match i with
+    | ⟨0, _⟩ => HEAD_IDX < n_h ∧ j.val < HEAD_HALF
+    | ⟨1, _⟩ => HEAD_IDX < n_h ∧ j.val < HEAD_HALF
+    | ⟨2, _⟩ => j.val < HEAD_HALF
+    | ⟨_ + 3, _⟩ => j.val < HEAD_HALF
+  write := fun _ pid₀ _pid₁ j =>
+    pid₀ * row_stride + HEAD_IDX * hd + j.val + writeShift
+  writeMask := fun _ _pid₀ _pid₁ j => HEAD_IDX < n_h ∧ j.val < HEAD_HALF
+```
+</details>
+
+<details><summary><code>rope_backward_q0_head</code></summary>
+
+```
+/-- Proof-oriented one-Q-head first-half backward slice of
+`rope_backward_transform.py`'s `_triton_rope`.
+
+This fixes one Q head and one row in the `BACKWARD_PASS=True` branch and proves
+the first-half store: `q0' = q0 * cos + q1 * sin`. -/
+```
+```lean
+def rope_backward_q0_head
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  q_base = Q + pid * $(q_row_stride) + $(HEAD_IDX) * $(hd)
+  cos_base = COS + $(COS_ROW_IDX) * $(cos_row_stride)
+  sin_base = SIN + $(COS_ROW_IDX) * $(sin_row_stride)
+  q0 = tl.load(q_base + dim,
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(sin_row.dtype)
+  q1 = tl.load(q_base + dim + $(HEAD_HALF),
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(sin_row.dtype)
+  cos_row = tl.load(cos_base + dim, mask=dim < $(HEAD_HALF), other=0)
+  sin_row = tl.load(sin_base + dim, mask=dim < $(HEAD_HALF), other=0)
+  out = q0 * cos_row + q1 * sin_row
+  tl.store(q_base + dim, out,
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)))
+}
+```
+</details>
+
+<details><summary><code>rope_backward_q1_head</code></summary>
+
+```
+/-- Slice for the backward second-half Q store:
+`q1' = q1 * cos - q0 * sin` at `second_half_q_offsets`. -/
+```
+```lean
+def rope_backward_q1_head
+    (Q COS SIN : RegionName)
+    (HEAD_IDX COS_ROW_IDX q_row_stride cos_row_stride sin_row_stride hd
+      n_qh HEAD_HALF BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  q_base = Q + pid * $(q_row_stride) + $(HEAD_IDX) * $(hd)
+  cos_base = COS + $(COS_ROW_IDX) * $(cos_row_stride)
+  sin_base = SIN + $(COS_ROW_IDX) * $(sin_row_stride)
+  q0 = tl.load(q_base + dim,
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(sin_row.dtype)
+  q1 = tl.load(q_base + dim + $(HEAD_HALF),
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)), other=0).to(sin_row.dtype)
+  cos_row = tl.load(cos_base + dim, mask=dim < $(HEAD_HALF), other=0)
+  sin_row = tl.load(sin_base + dim, mask=dim < $(HEAD_HALF), other=0)
+  out = q1 * cos_row - q0 * sin_row
+  tl.store(q_base + dim + $(HEAD_HALF), out,
+    mask=($(HEAD_IDX) < $(n_qh)) and (dim < $(HEAD_HALF)))
+}
 ```
 </details>
 

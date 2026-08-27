@@ -310,6 +310,102 @@ def dimIndex (_s : BlockState) (j : Fin BLOCK_D) : Nat :=
 ```
 </details>
 
+## Public theorem: `fill_quant_meta_store_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `_fwd_kernel_quant_meta`'s store: for
+every disjoint flat placement of `BlockOffsets` / `MetaPre` / `MetaOut`, every
+program id whose metadata cell and active lanes are in bounds, every page index
+`m` that cell may hold, and every launch state whose `MetaPre` row holds `xs` on
+the `h < num_heads` lanes, the kernel terminates, lane `h` of the selected page's
+metadata row holds `xs h`, and every other memory cell is unchanged.
+
+The page-table cell is a **channel**, universally quantified and pinned by the
+launch state — the face says nothing about what value it holds, only that the
+store lands at the page it names. Dimension-general in `num_heads`, `BLOCK_H` and
+all five strides. Honest side-condition: destination-address injectivity, the
+same hypothesis the per-write-map summary takes. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification fill_quant_meta_store_io_correctness
+    (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat)
+    (hOutInj : ∀ m : Nat, Function.Injective
+      (fun i : Fin BLOCK_H =>
+        m * stride_mn + BIDX * stride_mb + i.val * stride_mh
+          + SZD * stride_md)) :
+    metaStoreIO MetaPre MetaOut BlockOffsets BIDX KV_BLOCK_IDX SZD stride_mn
+        stride_mb stride_mh stride_md stride_boff num_heads BLOCK_H
+      ⊨ fun _pid _m xs i => xs i
+```
+
+**Assumptions / layout contracts:**
+- `hOutInj : ∀ m : Nat, Function.Injective
+      (fun i : Fin BLOCK_H =>
+        m * stride_mn + BIDX * stride_mb + i.val * stride_mh
+          + SZD * stride_md)`
+
+**Closed-form spec defs (transitive):** `metaStoreIO`, `fill_quant_meta_store_slice`
+
+<details><summary><code>metaStoreIO</code></summary>
+
+```
+/-- IO signature of the metadata store: the page-table cell is a `.nat` channel,
+not an assumption. -/
+```
+```lean
+noncomputable def metaStoreIO (MetaPre MetaOut BlockOffsets : RegionName)
+    (BIDX KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) : Meta1MaskedTileKernelIO₁ where
+  kernel := fill_quant_meta_store_slice MetaPre MetaOut BlockOffsets BIDX
+    KV_BLOCK_IDX SZD stride_mn stride_mb stride_mh stride_md stride_boff
+    num_heads BLOCK_H
+  mbuf := BlockOffsets
+  inp := MetaPre
+  out := MetaOut
+  shape := [BLOCK_H]
+  mwin := fun pid => pid * stride_boff + KV_BLOCK_IDX
+  read := fun _pid _m i => i.1.val
+  write := fun _pid m i =>
+    m * stride_mn + BIDX * stride_mb + i.1.val * stride_mh + SZD * stride_md
+  mask := fun _pid _m i => i.1.val < num_heads
+```
+</details>
+
+<details><summary><code>fill_quant_meta_store_slice</code></summary>
+
+```
+/-- Proof-oriented metadata store slice for `_fill_kv_cache_quant_kernel`.
+
+The Python quantized path writes per-head scale values at `szd = 0` and zero
+points at `szd = 1` for both K and V metadata regions. This generic slice fixes
+one slot (`SZD = 0` or `SZD = 1`) and proves the masked writeback from a
+precomputed per-head metadata vector. -/
+```
+```lean
+def fill_quant_meta_store_slice
+    (MetaPre MetaOut : RegionName) (BlockOffsets : Region .nat)
+    (BIDX KV_BLOCK_IDX SZD
+      stride_mn stride_mb stride_mh stride_md stride_boff
+      num_heads BLOCK_H : Nat) :
+    ComputeKernel := triton {
+  batch_id = tl.program_id(0)
+  h_off = tl.arange(0, $(BLOCK_H))
+  block_off = tl.load(BlockOffsets + batch_id * $(stride_boff) + $(KV_BLOCK_IDX))
+  mask = h_off < $(num_heads)
+  meta_val = tl.load(MetaPre + h_off, mask=mask, other=0.0)
+  tl.store(MetaOut + block_off * $(stride_mn) + $(BIDX) * $(stride_mb) +
+      h_off * $(stride_mh) + $(SZD) * $(stride_md), meta_val, mask=mask)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `fill_k_cache_tile_compute_correct`
 - `fill_v_cache_tile_compute_correct`

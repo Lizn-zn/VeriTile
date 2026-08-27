@@ -2,81 +2,105 @@
 
 **Python source:** `bench/tritonbench_g/swiglu_backward/swiglu_backward.py`
 
-## Public theorem: `swiglu_bwd_kernel_output_summary`
+## Public theorem: `swiglu_bwd_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `_swiglu_bwd_kernel`: the DSL surface lowers to
-the algorithm layer, and the (up to three) masked stores are compute-correct —
-every active lane writes `swigluBwdA` to `DX`, `swigluBwdB` to `DY`, and, when
-`RECOMPUTE_OUTPUT`, the forward `swiglu` to `OUT`; channels are indexed by `Sum`
-and out-of-bounds / disabled lanes are preserved. Assumes the three output
-regions are pairwise distinct. -/
+/-- **The headline**: `_swiglu_bwd_kernel` implements the SwiGLU backward
+oracles on its masked three-input / three-output IO signature — for every
+disjoint flat placement of the six buffers, every program id whose active
+lanes are in bounds, and every launch state whose active input lanes hold
+`xs` (the gate), `ys` (the value) and `douts` (the upstream gradient), the
+translated pointer kernel terminates, every active `DX` lane `j` holds
+`TiledActivation.swigluBwdA (douts j) (xs j) (ys j)`, every active `DY` lane
+holds `TiledActivation.swigluBwdB (douts j) (xs j)`, every `OUT` lane that is
+active **and** `RECOMPUTE_OUTPUT`-gated holds the recomputed forward
+`TiledActivation.swiglu (xs j) (ys j)`, and every other memory cell is
+unchanged — one statement covering both heuristic outcomes of the constexpr
+flag. The output buffers must be pairwise distinct (`DX ≠ DY`, `OUT ≠ DX`,
+`OUT ≠ DY`) so each readback sees through the later stores. Proof:
+`Masked2DKernelIO₃ₓ₃.Implements.intro` assembles the region-model masked
+triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification swiglu_bwd_kernel_output_summary
+specification swiglu_bwd_kernel_correctness
     (X Y DOUT OUT DX DY : RegionName)
     (stride_x_row stride_y_row stride_dout_row stride_out_row
       stride_dx_row stride_dy_row ncols BLOCK_N : Nat)
     (RECOMPUTE_OUTPUT : Bool)
-    (s : BlockState)
-    (xs ys douts : Fin BLOCK_N → ℝ)
-    (hDXDY : DX ≠ DY) (hOUTDX : OUT ≠ DX) (hOUTDY : OUT ≠ DY)
-    (h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i)
-    (h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i)
-    (h_dout : ∀ i : Fin BLOCK_N, s.readMem DOUT (swigluOffset s stride_dout_row BLOCK_N i) = douts i) :
-    (∃ alg, (swiglu_bwd_kernel X Y DOUT OUT DX DY
-        stride_x_row stride_y_row stride_dout_row stride_out_row
-        stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT).toAlgorithm? =
-        Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := swiglu_bwd_kernel X Y DOUT OUT DX DY
-        stride_x_row stride_y_row stride_dout_row stride_out_row
-        stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT)
-      (initialState := s)
-      (write := fun i : Sum (Sum (Fin BLOCK_N) (Fin BLOCK_N)) (Fin BLOCK_N) =>
-        match i with
-        | .inl (.inl lane) =>
-            if s.pids 1 * BLOCK_N + lane.val < ncols then
-              some (DX, swigluOffset s stride_dx_row BLOCK_N lane)
-            else none
-        | .inl (.inr lane) =>
-            if s.pids 1 * BLOCK_N + lane.val < ncols then
-              some (DY, swigluOffset s stride_dy_row BLOCK_N lane)
-            else none
-        | .inr lane =>
-            if RECOMPUTE_OUTPUT then
-              if s.pids 1 * BLOCK_N + lane.val < ncols then
-                some (OUT, swigluOffset s stride_out_row BLOCK_N lane)
-              else none
-            else none)
-      (expected := fun i =>
-        match i with
-        | .inl (.inl lane) => TiledActivation.swigluBwdA (douts lane) (xs lane) (ys lane)
-        | .inl (.inr lane) => TiledActivation.swigluBwdB (douts lane) (xs lane)
-        | .inr lane => TiledActivation.swiglu (xs lane) (ys lane))
+    (hDXDY : DX ≠ DY) (hOUTDX : OUT ≠ DX) (hOUTDY : OUT ≠ DY) :
+    swigluBackwardIO X Y DOUT OUT DX DY stride_x_row stride_y_row
+        stride_dout_row stride_out_row stride_dx_row stride_dy_row ncols
+        BLOCK_N RECOMPUTE_OUTPUT ⊨
+      fun _ _ xs ys douts =>
+        (fun j => TiledActivation.swigluBwdA (douts j) (xs j) (ys j),
+         fun j => TiledActivation.swigluBwdB (douts j) (xs j),
+         fun j => TiledActivation.swiglu (xs j) (ys j))
 ```
 
 **Assumptions / layout contracts:**
-- `xs ys douts : Fin BLOCK_N → ℝ`
 - `hDXDY : DX ≠ DY`
 - `hOUTDX : OUT ≠ DX`
 - `hOUTDY : OUT ≠ DY`
-- `h_x : ∀ i : Fin BLOCK_N, s.readMem X (swigluOffset s stride_x_row BLOCK_N i) = xs i`
-- `h_y : ∀ i : Fin BLOCK_N, s.readMem Y (swigluOffset s stride_y_row BLOCK_N i) = ys i`
-- `h_dout : ∀ i : Fin BLOCK_N, s.readMem DOUT (swigluOffset s stride_dout_row BLOCK_N i) = douts i`
 
-**Closed-form spec defs (transitive):** `swigluOffset`, `swiglu_bwd_kernel`
+**Closed-form spec defs (transitive):** `swigluBackwardIO`, `swiglu_bwd_kernel`
 
-<details><summary><code>swigluOffset</code></summary>
+<details><summary><code>swigluBackwardIO</code></summary>
 
+```
+/-- `_swiglu_bwd_kernel`'s masked three-input / three-output **IO signature** —
+the whole kernel-specific audit surface of the `⊨` headline:
+
+* `in1`/`in2`/`in3` — the gate `X`, value `Y`, upstream gradient `DOUT`;
+* `out1`/`out2`/`out3` — the input gradients `DX`, `DY`, and the optionally
+  recomputed forward output `OUT`;
+* `B = BLOCK_N` — the column window each program owns;
+* `read1..3`/`write1..3` — **per-lane 2-D windows**: program `(pid₀, pid₁)`
+  touches buffer `P` at `pid₀ · stride_p_row + pid₁ · BLOCK_N + j` (the
+  host-side `(M, cdiv(N, BLOCK_N))` launch convention: `pid₀` picks the row,
+  `pid₁` the column block, each buffer with its own row stride);
+* `mask` — the active lanes `pid₁ · BLOCK_N + j < ncols`, shared by all three
+  loads and the `DX`/`DY` stores (`read2Mask`/`read3Mask`/`writeMask1`/
+  `writeMask2` keep their defaults);
+* `writeMask3` — the **constexpr-gated** `OUT` store:
+  `RECOMPUTE_OUTPUT = Bool.true ∧ pid₁ · BLOCK_N + j < ncols`. When the heuristic
+  flag is off, the `OUT` channel has no write-active lanes, so it carries no
+  value, bounds, or frame obligations — exactly the kernel's dead
+  `if RECOMPUTE_OUTPUT` branch.
+
+The windows and masks are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing, masking, and constexpr gating match
+them. Buffer sizes are not signature content: the headline quantifies over
+every allocation whose extents cover the write-active lanes. -/
+```
 ```lean
-def swigluOffset (s : BlockState) (stride : Nat) (BLOCK_N : Nat) (i : Fin BLOCK_N) : Nat :=
-  s.pids 0 * stride + s.pids 1 * BLOCK_N + i.val
+def swigluBackwardIO (X Y DOUT OUT DX DY : RegionName)
+    (stride_x_row stride_y_row stride_dout_row stride_out_row
+      stride_dx_row stride_dy_row ncols BLOCK_N : Nat)
+    (RECOMPUTE_OUTPUT : Bool) : Masked2DKernelIO₃ₓ₃ where
+  kernel := swiglu_bwd_kernel X Y DOUT OUT DX DY
+    stride_x_row stride_y_row stride_dout_row stride_out_row
+    stride_dx_row stride_dy_row ncols BLOCK_N RECOMPUTE_OUTPUT
+  in1 := X
+  in2 := Y
+  in3 := DOUT
+  out1 := DX
+  out2 := DY
+  out3 := OUT
+  B := BLOCK_N
+  read1 := fun pid₀ pid₁ j => pid₀ * stride_x_row + (pid₁ * BLOCK_N + j.val)
+  read2 := fun pid₀ pid₁ j => pid₀ * stride_y_row + (pid₁ * BLOCK_N + j.val)
+  read3 := fun pid₀ pid₁ j => pid₀ * stride_dout_row + (pid₁ * BLOCK_N + j.val)
+  write1 := fun pid₀ pid₁ j => pid₀ * stride_dx_row + (pid₁ * BLOCK_N + j.val)
+  write2 := fun pid₀ pid₁ j => pid₀ * stride_dy_row + (pid₁ * BLOCK_N + j.val)
+  write3 := fun pid₀ pid₁ j => pid₀ * stride_out_row + (pid₁ * BLOCK_N + j.val)
+  mask := fun _ pid₁ j => pid₁ * BLOCK_N + j.val < ncols
+  writeMask3 := fun _ pid₁ j =>
+    RECOMPUTE_OUTPUT = Bool.true ∧ pid₁ * BLOCK_N + j.val < ncols
 ```
 </details>
 
@@ -122,6 +146,3 @@ def swiglu_bwd_kernel
 }
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `swiglu_bwd_kernel_compute_correct`

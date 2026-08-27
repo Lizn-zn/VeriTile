@@ -1301,6 +1301,194 @@ def bwdDResidualOffset (s : BlockState) (stride_dres_row : Nat)
 ```
 </details>
 
+## Public theorem: `layer_norm_ops_scalar_stores_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `layer_norm_ops.py`'s two forward scalar
+row stores: for every disjoint flat placement of the source and destination row
+buffers, every program id whose row cell is in bounds, and every launch state whose
+source cell holds `xs`, each slice terminates, the destination row cell holds `xs`,
+and every other memory cell is unchanged.
+
+Both are the tile skin at `shape := []` — a single-cell copy is the degenerate
+masked tile copy — so no new library surface was needed. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification layer_norm_ops_scalar_stores_io_correctness
+    (MeanPre Mean RstdPre Rstd : RegionName) :
+    (fwd_mean_storeIO MeanPre Mean ⊨ fun _pid xs _ => xs PUnit.unit) ∧
+    (fwd_rstd_storeIO RstdPre Rstd ⊨ fun _pid xs _ => xs PUnit.unit)
+```
+
+**Closed-form spec defs (transitive):** `fwd_mean_storeIO`, `fwd_rstd_storeIO`, `layer_norm_ops_fwd_mean_store_slice`, `layer_norm_ops_fwd_rstd_store_slice`
+
+<details><summary><code>fwd_mean_storeIO</code></summary>
+
+```
+/-- IO signature of `layer_norm_ops_fwd_mean_store_slice` at `shape := []`. -/
+```
+```lean
+def fwd_mean_storeIO (MeanPre Mean : RegionName) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean
+  inp := MeanPre
+  out := Mean
+  shape := []
+  read := fun pid _ => pid
+  write := fun pid _ => pid
+  mask := fun _pid _ => True
+```
+</details>
+
+<details><summary><code>fwd_rstd_storeIO</code></summary>
+
+```
+/-- IO signature of `layer_norm_ops_fwd_rstd_store_slice` at `shape := []`. -/
+```
+```lean
+def fwd_rstd_storeIO (RstdPre Rstd : RegionName) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd
+  inp := RstdPre
+  out := Rstd
+  shape := []
+  read := fun pid _ => pid
+  write := fun pid _ => pid
+  mask := fun _pid _ => True
+```
+</details>
+
+<details><summary><code>layer_norm_ops_fwd_mean_store_slice</code></summary>
+
+```
+/-- Proof-oriented Mean store slice of `layer_norm_ops.py`'s
+`_layer_norm_fwd_1pass_kernel`. Takes a precomputed `MeanPre` scalar (per row)
+and proves the unmasked scalar writeback into `Mean` at row offset. -/
+```
+```lean
+def layer_norm_ops_fwd_mean_store_slice
+    (MeanPre Mean : RegionName) : ComputeKernel := triton {
+  row = tl.program_id(0)
+  mean = tl.load(MeanPre + row)
+  tl.store(Mean + row, mean)
+}
+```
+</details>
+
+<details><summary><code>layer_norm_ops_fwd_rstd_store_slice</code></summary>
+
+```
+/-- Proof-oriented Rstd store slice. Same scalar-copy pattern. -/
+```
+```lean
+def layer_norm_ops_fwd_rstd_store_slice
+    (RstdPre Rstd : RegionName) : ComputeKernel := triton {
+  row = tl.program_id(0)
+  rstd = tl.load(RstdPre + row)
+  tl.store(Rstd + row, rstd)
+}
+```
+</details>
+
+## Public theorem: `layer_norm_ops_scalar_stores_io_correctnessR`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` headline** for `layer_norm_ops.py`'s two forward scalar row
+stores: for **every** rounding model `R`, the same pair of Hoare triples as
+`layer_norm_ops_scalar_stores_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs PUnit.unit)`.
+
+Both are single-cell copies carrying no `.to(...)`, so both slices are cast-free
+and the exact runs transport verbatim. The content of the rounding face here is
+exactly that: *neither store introduces a rounding event of its own*, at any `R`
+— the `Mean` / `Rstd` values the backward pass reads back are bit-for-bit the
+ones the forward reduction produced. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification layer_norm_ops_scalar_stores_io_correctnessR (R : RoundingModel)
+    (MeanPre Mean RstdPre Rstd : RegionName) :
+    (fwd_mean_storeIO MeanPre Mean
+      ⊨[R, FloatDType.real] fun _pid xs _ => xs PUnit.unit) ∧
+    (fwd_rstd_storeIO RstdPre Rstd
+      ⊨[R, FloatDType.real] fun _pid xs _ => xs PUnit.unit)
+```
+
+**Closed-form spec defs (transitive):** `fwd_mean_storeIO`, `fwd_rstd_storeIO`, `layer_norm_ops_fwd_mean_store_slice`, `layer_norm_ops_fwd_rstd_store_slice`
+
+<details><summary><code>fwd_mean_storeIO</code></summary>
+
+```
+/-- IO signature of `layer_norm_ops_fwd_mean_store_slice` at `shape := []`. -/
+```
+```lean
+def fwd_mean_storeIO (MeanPre Mean : RegionName) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_ops_fwd_mean_store_slice MeanPre Mean
+  inp := MeanPre
+  out := Mean
+  shape := []
+  read := fun pid _ => pid
+  write := fun pid _ => pid
+  mask := fun _pid _ => True
+```
+</details>
+
+<details><summary><code>fwd_rstd_storeIO</code></summary>
+
+```
+/-- IO signature of `layer_norm_ops_fwd_rstd_store_slice` at `shape := []`. -/
+```
+```lean
+def fwd_rstd_storeIO (RstdPre Rstd : RegionName) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_ops_fwd_rstd_store_slice RstdPre Rstd
+  inp := RstdPre
+  out := Rstd
+  shape := []
+  read := fun pid _ => pid
+  write := fun pid _ => pid
+  mask := fun _pid _ => True
+```
+</details>
+
+<details><summary><code>layer_norm_ops_fwd_mean_store_slice</code></summary>
+
+```
+/-- Proof-oriented Mean store slice of `layer_norm_ops.py`'s
+`_layer_norm_fwd_1pass_kernel`. Takes a precomputed `MeanPre` scalar (per row)
+and proves the unmasked scalar writeback into `Mean` at row offset. -/
+```
+```lean
+def layer_norm_ops_fwd_mean_store_slice
+    (MeanPre Mean : RegionName) : ComputeKernel := triton {
+  row = tl.program_id(0)
+  mean = tl.load(MeanPre + row)
+  tl.store(Mean + row, mean)
+}
+```
+</details>
+
+<details><summary><code>layer_norm_ops_fwd_rstd_store_slice</code></summary>
+
+```
+/-- Proof-oriented Rstd store slice. Same scalar-copy pattern. -/
+```
+```lean
+def layer_norm_ops_fwd_rstd_store_slice
+    (RstdPre Rstd : RegionName) : ComputeKernel := triton {
+  row = tl.program_id(0)
+  rstd = tl.load(RstdPre + row)
+  tl.store(Rstd + row, rstd)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `layer_norm_fwd_rms_one_block_y_compute_correct`
 - `layer_norm_fwd_rms_bias_one_block_y_compute_correct`

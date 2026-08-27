@@ -2,42 +2,60 @@
 
 **Python source:** `bench/tritonbench_g/sin_kernel/sin_kernel.py`
 
-## Public theorem: `kernel_function_output_summary`
+## Public theorem: `kernel_function_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `kernel_function`: the DSL surface lowers to
-the algorithm layer, and the masked store to `output_ptr` is compute-correct —
-every active lane holds `Real.sin (xs i)`, out-of-bounds lanes are preserved. -/
+/-- **The headline**: `kernel_function` implements lane-wise `Real.sin` on its
+masked IO signature — for every disjoint flat placement of the two buffers,
+every program id whose active lanes are in bounds, and every launch state
+whose input window holds `xs` at the active lanes, the translated pointer
+kernel terminates, every active output lane holds `Real.sin (xs i)`, and
+every other memory cell is unchanged. Proof:
+`MaskedKernelIO₁.Implements.intro` assembles the region-model masked triple
+with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification kernel_function_output_summary
+specification kernel_function_correctness
     (x_ptr output_ptr : RegionName)
-    (n_elements BLOCK_SIZE : Nat) (hBlockSize : 0 < BLOCK_SIZE)
-    (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
-    (h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs) :
-    (∃ alg, (kernel_function x_ptr output_ptr n_elements BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := kernel_function x_ptr output_ptr n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements)
-          (fun i => (output_ptr, s.pid * BLOCK_SIZE + i.val)))
-      (expected := fun i => Real.sin (xs i))
+    (n_elements BLOCK_SIZE : Nat) :
+    sinIO x_ptr output_ptr n_elements BLOCK_SIZE
+      ⊨ fun xs i => Real.sin (xs i)
 ```
 
-**Assumptions / layout contracts:**
-- `hBlockSize : 0 < BLOCK_SIZE`
-- `xs : Fin BLOCK_SIZE → ℝ`
-- `h_x : InputLoadedAt s x_ptr BLOCK_SIZE xs`
-- `fun i : Fin BLOCK_SIZE => s.pid * BLOCK_SIZE + i.val < n_elements`
+**Closed-form spec defs (transitive):** `sinIO`, `kernel_function`
 
-**Closed-form spec defs (transitive):** `kernel_function`
+<details><summary><code>sinIO</code></summary>
+
+```
+/-- `kernel_function`'s masked **IO signature** — the whole kernel-specific
+audit surface of the headline: which buffer is which argument (the wiring),
+where program `pid` reads its input tile / writes its output tile, and the
+active-lane predicate `pid * BLOCK_SIZE + j < n_elements` (the shared
+load/store mask; the write side defaults to it). The windows and mask are
+declared, not parsed from the kernel: they formalize the host-side launch
+convention (`offsets = pid * BLOCK_SIZE + arange;
+mask = offsets < n_elements`), and the headline **proves** the kernel's actual
+addressing and masking match them. Buffer sizes are not signature content: the
+headline quantifies over every allocation whose extents cover the active
+lanes. -/
+```
+```lean
+def sinIO (x_ptr output_ptr : RegionName)
+    (n_elements BLOCK_SIZE : Nat) : MaskedKernelIO₁ where
+  kernel := kernel_function x_ptr output_ptr n_elements BLOCK_SIZE
+  inp := x_ptr
+  out := output_ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * BLOCK_SIZE
+  write := fun pid => pid * BLOCK_SIZE
+  mask := fun pid j => pid * BLOCK_SIZE + j.val < n_elements
+```
+</details>
 
 <details><summary><code>kernel_function</code></summary>
 
@@ -62,6 +80,3 @@ def kernel_function
 }
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `kernel_function_compute_correct`

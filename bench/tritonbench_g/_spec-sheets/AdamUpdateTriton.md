@@ -2,72 +2,86 @@
 
 **Python source:** `bench/tritonbench_g/adam_update_triton/adam_update_triton.py`
 
-## Public theorem: `update_fn_kernel_output_summary`
+## Public theorem: `update_fn_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Single-program output summary for Python `update_fn`.
-
-This is a local, per-`BlockState` correctness statement, not the whole-grid
-launch theorem.  It says three things about executing one Triton program/block:
-
-* the DSL surface for `update_fn_kernel` successfully lowers to the algorithm
-  layer (`toAlgorithm? = Except.ok alg`);
-* for every active lane `i : Fin BLOCK_SIZE`, where
-  `linearOffset s BLOCK_SIZE i < n_elements` is the kernel mask
-  `offsets < n_elements`, the store to
-  `(p_ptr, linearOffset s BLOCK_SIZE i)` realizes `pFullSpec`, i.e. the reusable
-  Lion parameter-update oracle applied to the values loaded by that lane;
-* for the same active lanes, the store to
-  `(exp_avg_ptr, linearOffset s BLOCK_SIZE i)` realizes `expAvgFullSpec`, i.e.
-  the reusable Lion momentum oracle.
-
-The side condition `p_ptr ≠ exp_avg_ptr` rules out aliasing between the two
-output regions, so the second masked store cannot overwrite the first output.
-Grid coverage, `cdiv n_elements BLOCK_SIZE`, and cross-program disjointness are
-separate whole-grid obligations handled by the worked example
-`VeriTile.Examples.AdamUpdateGridLaunch`, outside the scope of this per-kernel
-theorem. -/
+/-- **The headline**: `update_fn_kernel` implements the Lion step on its
+masked in-place IO signature — for every disjoint flat placement of the
+three buffers, every program id whose active lanes are in bounds, and every
+launch state whose input windows are loaded at the active lanes, the
+translated pointer kernel terminates, every active lane of the parameter
+buffer ends up holding `lionParam` and of the momentum buffer
+`lionMomentum`, applied to the *originally loaded* windows; every other
+flat cell is untouched. The side condition `p_ptr ≠ exp_avg_ptr` rules out
+aliasing between the two output buffers (the second masked store would
+otherwise clobber the first output). Proof:
+`MaskedKernelIO₃ₓ₂.Implements.intro` assembles the region-model triple with
+the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification update_fn_kernel_output_summary
+specification update_fn_kernel_correctness
     (p_ptr grad_ptr exp_avg_ptr : RegionName)
     (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat)
-    (s : BlockState)
     (hRegions : p_ptr ≠ exp_avg_ptr) :
-    (∃ alg, (update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-      lr wd beta1 beta2 n_elements BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ((ComputeCorrect.Realizes_without_Rounding
-      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (p_ptr, linearOffset s BLOCK_SIZE i)))
-      (expected := fun i =>
-        pFullSpec s p_ptr grad_ptr exp_avg_ptr lr wd beta1 BLOCK_SIZE i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
-        lr wd beta1 beta2 n_elements BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements)
-        (fun i => (exp_avg_ptr, linearOffset s BLOCK_SIZE i)))
-      (expected := fun i =>
-        expAvgFullSpec s grad_ptr exp_avg_ptr beta2 BLOCK_SIZE i)))
+    adamIO p_ptr grad_ptr exp_avg_ptr lr wd beta1 beta2 n_elements BLOCK_SIZE
+      ⊨ fun p grad expAvg =>
+        (fun i => TiledOptimizer.lionParam (p i) (expAvg i) (grad i) lr wd beta1,
+         fun i => TiledOptimizer.lionMomentum (expAvg i) (grad i) beta2)
 ```
 
 **Assumptions / layout contracts:**
 - `hRegions : p_ptr ≠ exp_avg_ptr`
-- `fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements`
-- `fun i : Fin BLOCK_SIZE => linearOffset s BLOCK_SIZE i < n_elements`
 
-**Closed-form spec defs (transitive):** `update_fn_kernel`, `pFullSpec`, `expAvgFullSpec`
+**Closed-form spec defs (transitive):** `adamIO`, `update_fn_kernel`
+
+<details><summary><code>adamIO</code></summary>
+
+```
+/-- `update_fn_kernel`'s masked in-place **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `bufs` — the allocation list: three buffers, each exactly once;
+* `in1`/`in2`/`in3` — parameters, gradient, momentum (the wiring);
+* `out1 = in1`, `out2 = in3` — the **in-place** roles: the kernel rewrites
+  the parameter and momentum buffers it read;
+* `read1..3`/`write1..2` — every window is the same block
+  `[pid·BLOCK_SIZE, pid·BLOCK_SIZE + BLOCK_SIZE)` (the launch convention
+  `offsets = pid * BLOCK_SIZE + arange`);
+* `mask` — program `pid`'s active lanes, `pid * BLOCK_SIZE + j < n_elements`.
+  Inactive lanes (the overhang of the last partial block) carry no
+  obligations.
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer
+sizes are not signature content: the headline quantifies over every
+allocation whose extents cover the active lanes. -/
+```
+```lean
+def adamIO (p_ptr grad_ptr exp_avg_ptr : RegionName)
+    (lr wd beta1 beta2 : ℝ) (n_elements BLOCK_SIZE : Nat) :
+    MaskedKernelIO₃ₓ₂ where
+  kernel := update_fn_kernel p_ptr grad_ptr exp_avg_ptr
+    lr wd beta1 beta2 n_elements BLOCK_SIZE
+  bufs := [p_ptr, grad_ptr, exp_avg_ptr]  -- p and exp_avg are updated in place
+  in1 := p_ptr
+  in2 := grad_ptr
+  in3 := exp_avg_ptr
+  out1 := p_ptr          -- = in1: in-place parameter update
+  out2 := exp_avg_ptr    -- = in3: in-place momentum update
+  B := BLOCK_SIZE
+  read1 := fun pid => pid * BLOCK_SIZE
+  read2 := fun pid => pid * BLOCK_SIZE
+  read3 := fun pid => pid * BLOCK_SIZE
+  write1 := fun pid => pid * BLOCK_SIZE
+  write2 := fun pid => pid * BLOCK_SIZE
+  mask := fun pid j => pid * BLOCK_SIZE + j.val < n_elements
+```
+</details>
 
 <details><summary><code>update_fn_kernel</code></summary>
 
@@ -101,42 +115,3 @@ def update_fn_kernel
 }
 ```
 </details>
-
-<details><summary><code>pFullSpec</code></summary>
-
-```
-/-- Per-lane `p` output spec: the reusable Lion parameter-update oracle applied
-to the values this lane loads. -/
-```
-```lean
-noncomputable def pFullSpec
-    (s : BlockState) (p_ptr grad_ptr exp_avg_ptr : RegionName)
-    (lr wd beta1 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  TiledOptimizer.lionParam
-    (s.readMem p_ptr (linearOffset s BLOCK_SIZE i))
-    (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i))
-    (s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) lr wd beta1
-```
-</details>
-
-<details><summary><code>expAvgFullSpec</code></summary>
-
-```
-/-- Per-lane `exp_avg` output spec: the reusable Lion momentum oracle applied
-to the values this lane loads. The math lives once in `Math.Optimizer`; this
-only names the memory reads. -/
-```
-```lean
-noncomputable def expAvgFullSpec
-    (s : BlockState) (grad_ptr exp_avg_ptr : RegionName)
-    (beta2 : ℝ) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : ℝ :=
-  TiledOptimizer.lionMomentum
-    (s.readMem exp_avg_ptr (linearOffset s BLOCK_SIZE i))
-    (s.readMem grad_ptr (linearOffset s BLOCK_SIZE i)) beta2
-```
-</details>
-
-## Also present (pinned special-case summaries)
-- `update_fn_kernel_exp_avg_compute_correct`
-- `update_fn_kernel_p_compute_correct`
-- `update_fn_kernel_all_outputs_compute_correct`

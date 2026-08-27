@@ -2,62 +2,125 @@
 
 **Python source:** `bench/tritonbench_g/fast_rms_layernorm/fast_rms_layernorm.py`
 
-## Public theorem: `rms_layernorm_forward_output_summary`
+## Public theorem: `rms_layernorm_forward_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Public forward summary for regular RMS layernorm: the full Python forward
-surface lowers, and the checked forward kernel characterizes both
-Python-observable outputs `Y` and `r`. -/
+/-- **The headline (plain forward)**: `_rms_layernorm_forward` implements the
+exact RMS normalization pair on its masked two-output IO signature — for every
+disjoint flat placement of the four buffers, every program id whose active
+lanes and scalar rstd cell are in bounds, and every launch state whose active
+input lanes hold `xs` (the `X` row) and `ws` (the weights), the translated
+pointer kernel terminates, every active `Y` lane `j` holds
+`rmsFwdYSpec … = (xs j · inv_var) · ws j`, the rstd cell holds
+`rmsFwdInvVarSpec … = rsqrt(sum(x²)/n_cols + eps)`, and every other memory cell
+is unchanged. Side conditions, both genuinely forced: `Y ≠ r` (the
+unconditional scalar rstd store must not alias the masked row store) and
+`0 < BLOCK_SIZE` (the `r` store is unmasked in the kernel, so its safety bound
+and frame exclusion are carried by the lane-0 gate `writeMask2`, which needs a
+lane). Proof: `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
+masked triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification rms_layernorm_forward_output_summary
+specification rms_layernorm_forward_correctness
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hYr : Y ≠ r) (hrY : r ≠ Y)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    (∃ alg, (rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-      W_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ((ComputeCorrect.Realizes_without_Rounding
-      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        rmsLayernormYSpec s X W X_row_stride W_row_stride n_cols
-          BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
-        W_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
-      (expected := fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps)))
+    (eps : ℝ) (hYr : Y ≠ r) (hB : 0 < BLOCK_SIZE) :
+    rmsLayernormFwdIO Y X W r Y_row_stride X_row_stride W_row_stride
+        r_row_stride n_cols eps BLOCK_SIZE ⊨
+      fun _ _ xs ws =>
+        (fun i => rmsFwdYSpec n_cols BLOCK_SIZE eps xs ws i,
+         fun _ => rmsFwdInvVarSpec n_cols BLOCK_SIZE eps xs)
 ```
 
 **Assumptions / layout contracts:**
 - `hYr : Y ≠ r`
-- `hrY : r ≠ Y`
-- `hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
+- `hB : 0 < BLOCK_SIZE`
 
-**Closed-form spec defs (transitive):** `yOutOffset`, `rms_layernorm_forward`, `rmsLayernormYSpec`, `rOutOffset`, `rmsInvVarSpec`, `rowElem`, `rmsInvVarCarrier`, `rmsSumCarrier`, `rmsInputTile`
+**Closed-form spec defs (transitive):** `rmsLayernormFwdIO`, `rmsFwdYSpec`, `rmsFwdInvVarSpec`, `rms_layernorm_forward`, `rmsFwdInvVarCarrier`, `rmsFwdSumCarrier`, `rmsFwdInputTile`
 
-<details><summary><code>yOutOffset</code></summary>
+<details><summary><code>rmsLayernormFwdIO</code></summary>
 
+```
+/-- `_rms_layernorm_forward`'s masked two-output **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `in1`/`in2`/`out1`/`out2` — which buffer is which argument (the wiring): the
+  input matrix `X`, the per-column weights `W`, the output matrix `Y`, the
+  per-row rstd vector `r`;
+* `B = BLOCK_SIZE` — the row window each program owns;
+* `read1`/`write1` — **strided row windows**: program `row_idx` reads its `X`
+  row at `row_idx · X_row_stride + j` and writes its `Y` row at
+  `row_idx · Y_row_stride + j` (the host-side one-program-per-row launch);
+* `read2` — the weight window is **pid-independent and column-strided**: every
+  program reads `W[j · W_row_stride]` (the Python kernel scales the offsets by
+  `W_row_stride`);
+* `write2` — the **scalar** rstd cell `r[row_idx · r_row_stride]`, the same
+  for every lane;
+* `mask` — the active lanes `j < n_cols`, the same for every program; the
+  load masks and the `Y` store mask coincide, so `read2Mask`/`writeMask1` keep
+  their `mask` default;
+* `writeMask2` — lane `0` carries the scalar rstd; the other lanes are
+  write-inactive and carry no obligations on either side.
+
+The grid is 1-D, so the second program-id axis is an unused parameter: windows
+and masks are constant in `pid₁` (the headline's `∀ pid₁` quantification is
+vacuous but honest). The windows and masks are declared, not parsed from the
+kernel; the headline **proves** the kernel's actual addressing and masking
+match them. Buffer sizes are not signature content: the headline quantifies
+over every allocation whose extents cover the active lanes. -/
+```
 ```lean
-def yOutOffset (s : BlockState) (Y_row_stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pid * Y_row_stride + i.val
+def rmsLayernormFwdIO (Y X W r : RegionName)
+    (Y_row_stride X_row_stride W_row_stride r_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) : Masked2DKernelIO₂ₓ₂ where
+  kernel := rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+    W_row_stride r_row_stride n_cols eps BLOCK_SIZE
+  in1 := X
+  in2 := W
+  out1 := Y
+  out2 := r
+  B := BLOCK_SIZE
+  read1 := fun row_idx _ j => row_idx * X_row_stride + j.val
+  read2 := fun _ _ j => j.val * W_row_stride
+  write1 := fun row_idx _ j => row_idx * Y_row_stride + j.val
+  write2 := fun row_idx _ _ => row_idx * r_row_stride
+  mask := fun _ _ j => j.val < n_cols
+  writeMask2 := fun _ _ j => j.val = 0
+```
+</details>
+
+<details><summary><code>rmsFwdYSpec</code></summary>
+
+```
+/-- Pure per-lane `Y` value of the plain forward: `(x · inv_var) · w`. -/
+```
+```lean
+noncomputable def rmsFwdYSpec (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs ws : Fin BLOCK_SIZE → ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
+  WithBot.unbotD 0
+    (Option.map₂ (fun x w => x * w)
+      (Option.map₂ (fun x inv => x * inv)
+        (some (xs i))
+        (rmsFwdInvVarCarrier n_cols BLOCK_SIZE eps xs))
+      (some (ws i)))
+```
+</details>
+
+<details><summary><code>rmsFwdInvVarSpec</code></summary>
+
+```
+/-- Pure per-row rstd value stored to `r`: `WithBot.unbotD 0` of the
+`rsqrt` carrier. -/
+```
+```lean
+noncomputable def rmsFwdInvVarSpec (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs : Fin BLOCK_SIZE → ℝ) : ℝ :=
+  WithBot.unbotD 0 (rmsFwdInvVarCarrier n_cols BLOCK_SIZE eps xs)
 ```
 </details>
 
@@ -98,146 +161,138 @@ def rms_layernorm_forward
 ```
 </details>
 
-<details><summary><code>rmsLayernormYSpec</code></summary>
-
-```lean
-noncomputable def rmsLayernormYSpec
-    (s : BlockState) (X W : RegionName)
-    (X_row_stride W_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
-    (idx : Fin BLOCK_SIZE) : ℝ :=
-  WithBot.unbotD 0
-    (Option.map₂ (fun x w => x * w)
-      (Option.map₂ (fun x inv => x * inv)
-        (some (rowElem s X X_row_stride idx.val))
-        (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
-      (some (s.readMem W (idx.val * W_row_stride))))
-```
-</details>
-
-<details><summary><code>rOutOffset</code></summary>
-
-```lean
-def rOutOffset (s : BlockState) (r_row_stride : Nat) : Nat :=
-  s.pid * r_row_stride
-```
-</details>
-
-<details><summary><code>rmsInvVarSpec</code></summary>
-
-```lean
-noncomputable def rmsInvVarSpec
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) : ℝ :=
-  WithBot.unbotD 0 (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)
-```
-</details>
-
-<details><summary><code>rowElem</code></summary>
+<details><summary><code>rmsFwdInvVarCarrier</code></summary>
 
 ```
-/-- Element `j` of **this program's row** of a row-major matrix region `R`
-(row = `pid`, row stride `row_stride`): `R[pid·row_stride + j]`. The `X` and
-`dY` row loads all use this layout. -/
+/-- Pure `inv_var = rsqrt(sum(x*x)/n_cols + eps)` carrier. -/
 ```
 ```lean
-noncomputable def rowElem (s : BlockState) (R : RegionName)
-    (row_stride j : Nat) : ℝ :=
-  s.readMem R (s.pid * row_stride + j)
-```
-</details>
-
-<details><summary><code>rmsInvVarCarrier</code></summary>
-
-```lean
-noncomputable def rmsInvVarCarrier
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) : WithBot ℝ :=
+noncomputable def rmsFwdInvVarCarrier (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs : Fin BLOCK_SIZE → ℝ) : WithBot ℝ :=
   WithBot.realRsqrt
     (Option.map ((fun a => a + eps) ∘ fun a => a / (n_cols : ℝ))
-      (rmsSumCarrier s X X_row_stride n_cols BLOCK_SIZE))
+      (rmsFwdSumCarrier n_cols BLOCK_SIZE xs))
 ```
 </details>
 
-<details><summary><code>rmsSumCarrier</code></summary>
+<details><summary><code>rmsFwdSumCarrier</code></summary>
 
+```
+/-- Pure `sum(X_row * X_row)` over the masked row (masked lanes enter as `0`,
+neutral for the sum). -/
+```
 ```lean
-noncomputable def rmsSumCarrier
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
-    WithBot ℝ :=
+noncomputable def rmsFwdSumCarrier (n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) : WithBot ℝ :=
   (Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
     (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
-      (rmsInputTile s X X_row_stride n_cols BLOCK_SIZE)
-      (rmsInputTile s X X_row_stride n_cols BLOCK_SIZE))).data PUnit.unit
+      (rmsFwdInputTile n_cols BLOCK_SIZE xs)
+      (rmsFwdInputTile n_cols BLOCK_SIZE xs))).data PUnit.unit
 ```
 </details>
 
-<details><summary><code>rmsInputTile</code></summary>
+<details><summary><code>rmsFwdInputTile</code></summary>
 
+```
+/-- Pure masked input row tile: lane `j < n_cols` holds `xs j`, masked lanes
+are `0` (matching `mask=…, other=0`). The `xs`-reparametrized form of
+`rmsInputTile`. -/
+```
 ```lean
-noncomputable def rmsInputTile
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
-    Tile .real [BLOCK_SIZE] :=
+noncomputable def rmsFwdInputTile (n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) : Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      if idx.1.val < n_cols then some (rowElem s X X_row_stride idx.1.val)
-      else some (0 : ℝ) }
+      if idx.1.val < n_cols then some (xs idx.1) else some (0 : ℝ) }
 ```
 </details>
 
-## Public theorem: `gemma_rms_layernorm_forward_output_summary`
+## Public theorem: `gemma_rms_layernorm_forward_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Public forward summary for Gemma RMS layernorm: the full Python forward
-surface lowers, and the checked forward kernel characterizes both
-Python-observable outputs `Y` and `r`. -/
+/-- **The headline (Gemma forward)**: `_gemma_rms_layernorm_forward` implements
+the Gemma-scaled RMS normalization pair on its masked two-output IO signature —
+as the plain headline, with every active `Y` lane `j` holding
+`gemmaRmsFwdYSpec … = (xs j · inv_var) · (ws j + 1)` over the contiguous weight
+window. Same genuinely-forced side conditions (`Y ≠ r`, `0 < BLOCK_SIZE`). -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification gemma_rms_layernorm_forward_output_summary
+specification gemma_rms_layernorm_forward_correctness
     (Y X W r : RegionName)
     (Y_row_stride X_row_stride r_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) (s : BlockState)
-    (hYr : Y ≠ r) (hrY : r ≠ Y)
-    (hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)) :
-    (∃ alg, (gemma_rms_layernorm_forward Y X W r Y_row_stride
-      X_row_stride r_row_stride n_cols eps BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ((ComputeCorrect.Realizes_without_Rounding
-      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
-        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (Y, yOutOffset s Y_row_stride i)))
-      (expected := fun i =>
-        gemmaRmsLayernormYSpec s X W X_row_stride n_cols BLOCK_SIZE eps i)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride
-        X_row_stride r_row_stride n_cols eps BLOCK_SIZE)
-      (initialState := s)
-      (write := fun _ : PUnit => some (r, rOutOffset s r_row_stride))
-      (expected := fun _ =>
-        rmsInvVarSpec s X X_row_stride n_cols BLOCK_SIZE eps)))
+    (eps : ℝ) (hYr : Y ≠ r) (hB : 0 < BLOCK_SIZE) :
+    gemmaRmsLayernormFwdIO Y X W r Y_row_stride X_row_stride r_row_stride
+        n_cols eps BLOCK_SIZE ⊨
+      fun _ _ xs ws =>
+        (fun i => gemmaRmsFwdYSpec n_cols BLOCK_SIZE eps xs ws i,
+         fun _ => rmsFwdInvVarSpec n_cols BLOCK_SIZE eps xs)
 ```
 
 **Assumptions / layout contracts:**
 - `hYr : Y ≠ r`
-- `hrY : r ≠ Y`
-- `hOutInj : Function.Injective
-      (fun i : Fin BLOCK_SIZE => yOutOffset s Y_row_stride i)`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
+- `hB : 0 < BLOCK_SIZE`
 
-**Closed-form spec defs (transitive):** `yOutOffset`, `gemma_rms_layernorm_forward`, `gemmaRmsLayernormYSpec`, `rOutOffset`, `rmsInvVarSpec`, `rowElem`, `rmsInvVarCarrier`, `rmsSumCarrier`, `rmsInputTile`
+**Closed-form spec defs (transitive):** `gemmaRmsLayernormFwdIO`, `gemmaRmsFwdYSpec`, `rmsFwdInvVarSpec`, `gemma_rms_layernorm_forward`, `rmsFwdInvVarCarrier`, `rmsFwdSumCarrier`, `rmsFwdInputTile`
 
-<details><summary><code>yOutOffset</code></summary>
+<details><summary><code>gemmaRmsLayernormFwdIO</code></summary>
 
+```
+/-- `_gemma_rms_layernorm_forward`'s masked two-output **IO signature** — as
+`rmsLayernormFwdIO`, except the weight window is **contiguous**: the Python
+kernel accepts `W_row_stride` but loads `W + col_offsets`, and this signature
+preserves that stride-free weight access (`read2 = j`). -/
+```
 ```lean
-def yOutOffset (s : BlockState) (Y_row_stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pid * Y_row_stride + i.val
+def gemmaRmsLayernormFwdIO (Y X W r : RegionName)
+    (Y_row_stride X_row_stride r_row_stride n_cols : Nat)
+    (eps : ℝ) (BLOCK_SIZE : Nat) : Masked2DKernelIO₂ₓ₂ where
+  kernel := gemma_rms_layernorm_forward Y X W r Y_row_stride X_row_stride
+    r_row_stride n_cols eps BLOCK_SIZE
+  in1 := X
+  in2 := W
+  out1 := Y
+  out2 := r
+  B := BLOCK_SIZE
+  read1 := fun row_idx _ j => row_idx * X_row_stride + j.val
+  read2 := fun _ _ j => j.val
+  write1 := fun row_idx _ j => row_idx * Y_row_stride + j.val
+  write2 := fun row_idx _ _ => row_idx * r_row_stride
+  mask := fun _ _ j => j.val < n_cols
+  writeMask2 := fun _ _ j => j.val = 0
+```
+</details>
+
+<details><summary><code>gemmaRmsFwdYSpec</code></summary>
+
+```
+/-- Pure per-lane `Y` value of the Gemma forward: `(x · inv_var) · (w + 1)`. -/
+```
+```lean
+noncomputable def gemmaRmsFwdYSpec (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs ws : Fin BLOCK_SIZE → ℝ) (i : Fin BLOCK_SIZE) : ℝ :=
+  WithBot.unbotD 0
+    (Option.map₂ (fun scaled w => scaled * (w + 1.0))
+      (Option.map₂ (fun x inv => x * inv)
+        (some (xs i))
+        (rmsFwdInvVarCarrier n_cols BLOCK_SIZE eps xs))
+      (some (ws i)))
+```
+</details>
+
+<details><summary><code>rmsFwdInvVarSpec</code></summary>
+
+```
+/-- Pure per-row rstd value stored to `r`: `WithBot.unbotD 0` of the
+`rsqrt` carrier. -/
+```
+```lean
+noncomputable def rmsFwdInvVarSpec (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs : Fin BLOCK_SIZE → ℝ) : ℝ :=
+  WithBot.unbotD 0 (rmsFwdInvVarCarrier n_cols BLOCK_SIZE eps xs)
 ```
 </details>
 
@@ -278,98 +333,52 @@ def gemma_rms_layernorm_forward
 ```
 </details>
 
-<details><summary><code>gemmaRmsLayernormYSpec</code></summary>
-
-```lean
-noncomputable def gemmaRmsLayernormYSpec
-    (s : BlockState) (X W : RegionName)
-    (X_row_stride n_cols BLOCK_SIZE : Nat) (eps : ℝ)
-    (idx : Fin BLOCK_SIZE) : ℝ :=
-  WithBot.unbotD 0
-    (Option.map₂ (fun scaled w => scaled * (w + 1.0))
-      (Option.map₂ (fun x inv => x * inv)
-        (some (rowElem s X X_row_stride idx.val))
-        (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps))
-      (some (s.readMem W idx.val)))
-```
-</details>
-
-<details><summary><code>rOutOffset</code></summary>
-
-```lean
-def rOutOffset (s : BlockState) (r_row_stride : Nat) : Nat :=
-  s.pid * r_row_stride
-```
-</details>
-
-<details><summary><code>rmsInvVarSpec</code></summary>
-
-```lean
-noncomputable def rmsInvVarSpec
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) : ℝ :=
-  WithBot.unbotD 0 (rmsInvVarCarrier s X X_row_stride n_cols BLOCK_SIZE eps)
-```
-</details>
-
-<details><summary><code>rowElem</code></summary>
+<details><summary><code>rmsFwdInvVarCarrier</code></summary>
 
 ```
-/-- Element `j` of **this program's row** of a row-major matrix region `R`
-(row = `pid`, row stride `row_stride`): `R[pid·row_stride + j]`. The `X` and
-`dY` row loads all use this layout. -/
+/-- Pure `inv_var = rsqrt(sum(x*x)/n_cols + eps)` carrier. -/
 ```
 ```lean
-noncomputable def rowElem (s : BlockState) (R : RegionName)
-    (row_stride j : Nat) : ℝ :=
-  s.readMem R (s.pid * row_stride + j)
-```
-</details>
-
-<details><summary><code>rmsInvVarCarrier</code></summary>
-
-```lean
-noncomputable def rmsInvVarCarrier
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat)
-    (eps : ℝ) : WithBot ℝ :=
+noncomputable def rmsFwdInvVarCarrier (n_cols BLOCK_SIZE : Nat) (eps : ℝ)
+    (xs : Fin BLOCK_SIZE → ℝ) : WithBot ℝ :=
   WithBot.realRsqrt
     (Option.map ((fun a => a + eps) ∘ fun a => a / (n_cols : ℝ))
-      (rmsSumCarrier s X X_row_stride n_cols BLOCK_SIZE))
+      (rmsFwdSumCarrier n_cols BLOCK_SIZE xs))
 ```
 </details>
 
-<details><summary><code>rmsSumCarrier</code></summary>
+<details><summary><code>rmsFwdSumCarrier</code></summary>
 
+```
+/-- Pure `sum(X_row * X_row)` over the masked row (masked lanes enter as `0`,
+neutral for the sum). -/
+```
 ```lean
-noncomputable def rmsSumCarrier
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
-    WithBot ℝ :=
+noncomputable def rmsFwdSumCarrier (n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) : WithBot ℝ :=
   (Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
     (Tile.bop (NumericDType.mul .real) (Broadcast.consSame Broadcast.nil)
-      (rmsInputTile s X X_row_stride n_cols BLOCK_SIZE)
-      (rmsInputTile s X X_row_stride n_cols BLOCK_SIZE))).data PUnit.unit
+      (rmsFwdInputTile n_cols BLOCK_SIZE xs)
+      (rmsFwdInputTile n_cols BLOCK_SIZE xs))).data PUnit.unit
 ```
 </details>
 
-<details><summary><code>rmsInputTile</code></summary>
+<details><summary><code>rmsFwdInputTile</code></summary>
 
+```
+/-- Pure masked input row tile: lane `j < n_cols` holds `xs j`, masked lanes
+are `0` (matching `mask=…, other=0`). The `xs`-reparametrized form of
+`rmsInputTile`. -/
+```
 ```lean
-noncomputable def rmsInputTile
-    (s : BlockState) (X : RegionName) (X_row_stride n_cols BLOCK_SIZE : Nat) :
-    Tile .real [BLOCK_SIZE] :=
+noncomputable def rmsFwdInputTile (n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) : Tile .real [BLOCK_SIZE] :=
   { data := fun idx =>
-      if idx.1.val < n_cols then some (rowElem s X X_row_stride idx.1.val)
-      else some (0 : ℝ) }
+      if idx.1.val < n_cols then some (xs idx.1) else some (0 : ℝ) }
 ```
 </details>
 
 ## Also present (pinned special-case summaries)
-- `rms_layernorm_forward_y_compute_correct`
-- `gemma_rms_layernorm_forward_y_compute_correct`
 - `rms_layernorm_backward_dy_compute_correct`
 - `gemma_rms_layernorm_backward_dy_compute_correct`
 - `rms_layernorm_forward_inv_var_store_slice_compute_correct`
-- `rms_layernorm_forward_inv_var_compute_correct`
-- `gemma_rms_layernorm_forward_inv_var_compute_correct`
-- `rms_layernorm_forward_all_outputs_compute_correct`
-- `gemma_rms_layernorm_forward_all_outputs_compute_correct`

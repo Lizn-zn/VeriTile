@@ -154,6 +154,110 @@ noncomputable def maxInpElem (s : BlockState) (inp : RegionName)
 ```
 </details>
 
+## Public theorem: `max_kernel_1_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `max_reduction.py`'s `max_kernel_1`:
+for every disjoint flat placement of the two buffers, every program id whose
+active lanes are in bounds, and every launch state whose input window holds `xs`
+at the active lanes, the translated pointer kernel terminates, `mid[pid]` holds
+the genuine block max — `Tile.reduceMax` of `xs` over the active lanes, with the
+`other=-float("inf")` padding modeled as `⊥` — and every other memory cell is
+unchanged.
+
+This is the first *reduction* on an `io ⊨ f` face, and it is what the spec `f`'s
+program-id argument is for: the reduced index set is `{i | pid·BLOCK_SIZE + i < M}`,
+so the value is irreducibly pid-dependent (the tail block reduces fewer lanes
+than a full block) and a pid-independent spec would be falsifiable.
+
+Dimension-general in `M` and `BLOCK_SIZE`. Honest side-condition:
+`0 < BLOCK_SIZE` — with an empty tile `tl.max` has no axis to reduce and the
+kernel faults, so termination genuinely fails there. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification max_kernel_1_io_correctness
+    (inp mid : RegionName) (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE) :
+    maxKernel1IO inp mid M BLOCK_SIZE
+      ⊨ fun pid xs _ => maxTileSpecOf M BLOCK_SIZE pid xs
+```
+
+**Assumptions / layout contracts:**
+- `hB : 0 < BLOCK_SIZE`
+
+**Closed-form spec defs (transitive):** `maxKernel1IO`, `maxTileSpecOf`, `max_kernel_1`
+
+<details><summary><code>maxKernel1IO</code></summary>
+
+```
+/-- IO signature of `max_kernel_1` on the tile-indexed surface: every lane of
+the `BLOCK_SIZE` window reads `inp` at `pid·BLOCK_SIZE + i` and is read-active on
+the `< M` guard, while **only lane 0** is write-active and it writes the single
+cell `mid[pid]` — the block's max. A single-cell store expressed as a one-lane
+write mask over the read tile is exactly what a reduction's IO signature is. -/
+```
+```lean
+def maxKernel1IO (inp mid : RegionName) (M BLOCK_SIZE : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := max_kernel_1 inp mid M BLOCK_SIZE
+  inp := inp
+  out := mid
+  shape := [BLOCK_SIZE]
+  read := fun pid idx => pid * BLOCK_SIZE + idx.1.val
+  write := fun pid _ => pid
+  mask := fun pid idx => pid * BLOCK_SIZE + idx.1.val < M
+  writeMask := fun _ idx => idx.1.val = 0
+```
+</details>
+
+<details><summary><code>maxTileSpecOf</code></summary>
+
+```
+/-- Value-level first-stage max spec: the `Tile.reduceMax` of the tile that holds
+`xs` on the active lanes (`pid·BLOCK_SIZE + i < M`) and `⊥` elsewhere — the
+`other=-float("inf")` padding. Written over the *loaded values* rather than over
+memory, which is what the IO surface quantifies. -/
+```
+```lean
+noncomputable def maxTileSpecOf (M BLOCK_SIZE pid : Nat)
+    (xs : TileIndex [BLOCK_SIZE] → ℝ) : ℝ :=
+  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+      ⟨fun idx =>
+        if pid * BLOCK_SIZE + idx.1.val < M then some (xs idx) else none⟩ with
+  | some out => WithBot.unbotD 0 (out.data PUnit.unit)
+  | none => 0
+```
+</details>
+
+<details><summary><code>max_kernel_1</code></summary>
+
+```
+/-- Faithful 1:1 transcription of `max_reduction.py`'s `max_kernel_1`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `BLOCK_SIZE: tl.constexpr` → Lean `Nat` parameter. -/
+```
+```lean
+def max_kernel_1
+    (inp mid : RegionName)
+    (M BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  offset = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
+  inp_ptrs = inp + offset
+  mask = offset < $(M)
+  inp_val = tl.load(inp_ptrs, mask=mask, other=-float("inf"))
+  max_val = tl.max(inp_val)
+  mid_ptr = mid + pid
+  tl.store(mid_ptr, max_val)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `max_kernel_1_compute_correct`
 - `max_kernel_2_compute_correct`

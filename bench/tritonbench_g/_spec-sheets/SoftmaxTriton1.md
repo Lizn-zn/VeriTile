@@ -2,40 +2,97 @@
 
 **Python source:** `bench/tritonbench_g/softmax_triton1/softmax_triton1.py`
 
-## Public theorem: `softmax_kernel_output_summary`
+## Public theorem: `softmax_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `softmax_kernel`: the DSL surface lowers to the
-algorithm layer, and the masked store to `output_ptr` is compute-correct — every
-in-bounds lane holds `softmaxSpec`, out-of-bounds lanes are preserved. -/
+/-- **The headline**: `softmax_kernel` implements the exact stable softmax
+over the active row prefix on its masked IO signature — for every disjoint
+flat placement of the two buffers, every program id whose active lanes are in
+bounds, and every launch state whose active input-row lanes hold `xs`, the
+translated pointer kernel terminates, every active output-row lane `j` holds
+`softmaxSpec n_cols BLOCK_SIZE xs j`, and every other memory cell is
+unchanged. `0 < BLOCK_SIZE` is required: the kernel's `max` reduce (like
+`Finset.sup'`) is only defined on non-empty tiles. Proof: `Implements.intro`
+assembles the region-model masked triple with the bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification softmax_kernel_output_summary
+specification softmax_kernel_correctness
     (output_ptr input_ptr : RegionName)
     (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat)
-    (s : BlockState) :
-    (∃ alg, (softmax_kernel output_ptr input_ptr input_row_stride output_row_stride
-        n_cols BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := softmax_kernel output_ptr input_ptr input_row_stride output_row_stride
-        n_cols BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-          (fun i => (output_ptr, s.pid * output_row_stride + i.val)))
-      (expected := fun i =>
-        softmaxSpec s input_ptr input_row_stride n_cols BLOCK_SIZE i)
+    (hB : 0 < BLOCK_SIZE) :
+    softmaxIO output_ptr input_ptr input_row_stride output_row_stride
+        n_cols BLOCK_SIZE ⊨
+      fun xs i => softmaxSpec n_cols BLOCK_SIZE xs i
 ```
 
 **Assumptions / layout contracts:**
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
+- `hB : 0 < BLOCK_SIZE`
 
-**Closed-form spec defs (transitive):** `softmax_kernel`, `softmaxSpec`, `softmaxInputTile`
+**Closed-form spec defs (transitive):** `softmaxIO`, `softmaxSpec`, `softmax_kernel`, `softmaxInputTile`
+
+<details><summary><code>softmaxIO</code></summary>
+
+```
+/-- `softmax_kernel`'s masked **IO signature** — the whole kernel-specific
+audit surface of the `⊨` headline:
+
+* `inp`/`out` — which buffer is which argument (the wiring);
+* `B = BLOCK_SIZE` — the row window each program owns;
+* `read`/`write` — program `pid` reads its row at `pid * input_row_stride` and
+  writes it at `pid * output_row_stride` (the host-side one-program-per-row
+  launch convention);
+* `mask` — the active lanes `j < n_cols`, **the same for every program**: the
+  row prefix that actually exists in the matrix. Inactive lanes (the padding
+  of `BLOCK_SIZE = next_power_of_2(n_cols)`) carry no obligations on either
+  side.
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer sizes
+are not signature content: the headline quantifies over every allocation whose
+extents cover the active lanes. -/
+```
+```lean
+def softmaxIO (output_ptr input_ptr : RegionName)
+    (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat) :
+    MaskedKernelIO₁ where
+  kernel := softmax_kernel output_ptr input_ptr input_row_stride
+    output_row_stride n_cols BLOCK_SIZE
+  inp := input_ptr
+  out := output_ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * input_row_stride
+  write := fun pid => pid * output_row_stride
+  mask := fun _ j => j.val < n_cols
+```
+</details>
+
+<details><summary><code>softmaxSpec</code></summary>
+
+```
+/-- Exact stable-softmax value computed by the kernel at lane `idx`, as a pure
+function of the active row prefix `xs j`, `j < n_cols` (masked lanes enter the
+reductions as `⊥`, neutral for both `max` and the `exp`-sum). -/
+```
+```lean
+noncomputable def softmaxSpec (n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) (idx : Fin BLOCK_SIZE) : ℝ :=
+  let row := softmaxInputTile n_cols BLOCK_SIZE xs
+  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false row with
+  | some rowMax =>
+      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
+      let numerator := Tile.uop WithBot.realExp shifted
+      let denominator := Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false numerator
+      WithBot.unbotD 0
+        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR numerator denominator).data
+          (idx, PUnit.unit))
+  | none => 0
+```
+</details>
 
 <details><summary><code>softmax_kernel</code></summary>
 
@@ -66,44 +123,15 @@ def softmax_kernel
 ```
 </details>
 
-<details><summary><code>softmaxSpec</code></summary>
-
-```
-/-- Exact stable-softmax value computed by the kernel at lane `idx`. -/
-```
-```lean
-noncomputable def softmaxSpec
-    (s : BlockState) (input_ptr : RegionName)
-    (input_row_stride n_cols BLOCK_SIZE : Nat) (idx : Fin BLOCK_SIZE) : ℝ :=
-  let row := softmaxInputTile s input_ptr input_row_stride n_cols BLOCK_SIZE
-  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false row with
-  | some rowMax =>
-      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
-      let numerator := Tile.uop WithBot.realExp shifted
-      let denominator := Tile.reduceSum (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false numerator
-      WithBot.unbotD 0
-        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR numerator denominator).data
-          (idx, PUnit.unit))
-  | none => 0
-```
-</details>
-
 <details><summary><code>softmaxInputTile</code></summary>
 
 ```
-/-- Masked input row tile used by `softmax_kernel`. Masked lanes are `⊥`,
-matching `other=-float("inf")`. -/
+/-- Masked input row tile used by `softmax_kernel`: lane `j < n_cols` holds
+`xs j`, masked lanes are `⊥`, matching `other=-float("inf")`. -/
 ```
 ```lean
-noncomputable def softmaxInputTile
-    (s : BlockState) (input_ptr : RegionName)
-    (input_row_stride n_cols BLOCK_SIZE : Nat) :
-    Tile .real [BLOCK_SIZE] :=
-  { data := fun idx =>
-      let off := s.pid * input_row_stride + idx.1.val
-      if idx.1.val < n_cols then some (s.readMem input_ptr off) else none }
+noncomputable def softmaxInputTile (n_cols BLOCK_SIZE : Nat)
+    (xs : Fin BLOCK_SIZE → ℝ) : Tile .real [BLOCK_SIZE] :=
+  { data := fun idx => if idx.1.val < n_cols then some (xs idx.1) else none }
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `softmax_kernel_compute_correct`

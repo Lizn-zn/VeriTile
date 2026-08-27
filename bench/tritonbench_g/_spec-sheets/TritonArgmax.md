@@ -443,3 +443,133 @@ noncomputable def argmaxKernelInputTile
       if mOff < M ∧ n < N then some (s.readMem inp off) else none }
 ```
 </details>
+
+## Public theorem: `argmax_kernel_1_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `triton_argmax.py`'s
+`argmax_kernel_1` (`INT64_INDEX = false`): for every disjoint flat placement of
+`inp` / `mid_value` / `mid_index`, every program id whose active lanes are in
+bounds, and every launch state whose input window holds `xs`, the translated
+pointer kernel terminates, `mid_value[pid]` holds the genuine block max and
+`mid_index[pid]` the genuine block argmax (after the `+ pid · BLOCK_SIZE` shift,
+with `other=-float("inf")` modeled as `⊥`), and every other memory cell is
+unchanged.
+
+This is the first **value + index pair** on an `io ⊨ f` face: two outputs of
+*different channel types* — `.float` and `.nat` — pinned by one relation.
+
+Dimension-general in `M` and `BLOCK_SIZE`. Honest side-conditions:
+`0 < BLOCK_SIZE` (an empty reduction axis makes `tl.max` fault, and it is the
+write-active lane witness) and `mid_value ≠ mid_index` (the nat index store must
+not clobber the real value store) — the same pair the per-write-map summaries
+carry. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification argmax_kernel_1_io_correctness (inp mid_value : RegionName)
+    (mid_index : Region .int) (M BLOCK_SIZE : Nat) (hB : 0 < BLOCK_SIZE)
+    (hRegions : mid_value ≠ (Region.cast mid_index : RegionName)) :
+    ValueIndexTileKernelIO.Implements
+      (argmax1IO inp mid_value mid_index M BLOCK_SIZE)
+      (fun pid xs _ => argmaxValueSpecOf M BLOCK_SIZE pid xs)
+      (fun pid xs _ => argmaxIndexSpecOf M BLOCK_SIZE pid xs)
+```
+
+**Assumptions / layout contracts:**
+- `hB : 0 < BLOCK_SIZE`
+- `hRegions : mid_value ≠ (Region.cast mid_index : RegionName)`
+
+**Closed-form spec defs (transitive):** `argmax1IO`, `argmaxValueSpecOf`, `argmaxIndexSpecOf`, `argmax_kernel_1`
+
+<details><summary><code>argmax1IO</code></summary>
+
+```
+/-- IO signature of the first stage on the **value + index** surface: the
+`BLOCK_SIZE` read window is active on `< M`, and only lane `0` is write-active,
+writing `mid_value[pid]` and `mid_index[pid]`. -/
+```
+```lean
+def argmax1IO (inp mid_value : RegionName) (mid_index : Region .int)
+    (M BLOCK_SIZE : Nat) : ValueIndexTileKernelIO where
+  kernel := argmax_kernel_1 inp mid_value mid_index M BLOCK_SIZE Bool.false
+  inp := inp
+  outVal := mid_value
+  outIdx := mid_index
+  shape := [BLOCK_SIZE]
+  read := fun pid idx => pid * BLOCK_SIZE + idx.1.val
+  writeVal := fun pid _ => pid
+  writeIdx := fun pid _ => pid
+  mask := fun pid idx => pid * BLOCK_SIZE + idx.1.val < M
+  writeMask := fun _pid idx => idx.1.val = 0
+```
+</details>
+
+<details><summary><code>argmaxValueSpecOf</code></summary>
+
+```
+/-- Value-level first-stage max, over the loaded values. -/
+```
+```lean
+noncomputable def argmaxValueSpecOf (M BLOCK_SIZE pid : Nat)
+    (xs : TileIndex [BLOCK_SIZE] → ℝ) : ℝ :=
+  match Tile.reduceMax (shape := [BLOCK_SIZE]) ⟨0, by simp⟩ Bool.false
+      ⟨fun idx =>
+        if pid * BLOCK_SIZE + idx.1.val < M then some (xs idx) else none⟩ with
+  | some out => WithBot.unbotD 0 (out.data PUnit.unit)
+  | none => 0
+```
+</details>
+
+<details><summary><code>argmaxIndexSpecOf</code></summary>
+
+```
+/-- Value-level first-stage argmax (after the `+ pid · BLOCK_SIZE` shift). -/
+```
+```lean
+noncomputable def argmaxIndexSpecOf (M BLOCK_SIZE pid : Nat)
+    (xs : TileIndex [BLOCK_SIZE] → ℝ) : Nat :=
+  (Tile.argMaxDrop (shape := [BLOCK_SIZE]) ⟨0, by simp⟩
+    ⟨fun idx =>
+      if pid * BLOCK_SIZE + idx.1.val < M then some (xs idx) else none⟩).data
+      PUnit.unit
+    + pid * BLOCK_SIZE
+```
+</details>
+
+<details><summary><code>argmax_kernel_1</code></summary>
+
+```
+/-- Faithful transcription of `triton_argmax.py`'s first-stage
+`argmax_kernel_1`.
+
+Allowed mechanical Lean-syntax-only changes:
+- Python `BLOCK_SIZE: tl.constexpr` / `INT64_INDEX: tl.constexpr` -> Lean
+  parameters. -/
+```
+```lean
+def argmax_kernel_1
+    (inp mid_value : RegionName) (mid_index : Region .int)
+    (M BLOCK_SIZE : Nat) (INT64_INDEX : Bool := Bool.false) :
+    ComputeKernel := triton {
+  pid = tl.program_id(0)
+  if INT64_INDEX {
+    pid = (pid).to(tl.int64)
+  }
+  offset = pid * $(BLOCK_SIZE) + tl.arange(0, $(BLOCK_SIZE))
+  inp_ptrs = inp + offset
+  mask = offset < $(M)
+  inp_val = tl.load(inp_ptrs, mask=mask, other=-float("inf"))
+  max_val, max_index = tl.max(inp_val, axis=0, return_indices=True)
+  max_index = max_index + pid * $(BLOCK_SIZE)
+  mid_value_ptr = mid_value + pid
+  max_index_ptr = mid_index + pid
+  tl.store(mid_value_ptr, max_val)
+  tl.store(max_index_ptr, max_index)
+}
+```
+</details>

@@ -250,6 +250,208 @@ noncomputable def layernormCenteredTile
 ```
 </details>
 
+## Public theorem: `layer_norm_liger_scalar_stores_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `layer_norm_liger.py`'s two scalar row
+stores: for every disjoint flat placement of the source and destination row
+buffers, every program id whose row cell is in bounds, and every launch state whose
+source cell holds `xs`, each slice terminates, the destination row cell holds `xs`,
+and every other memory cell is unchanged.
+
+Both are the tile skin at `shape := []` — a single-cell copy is the degenerate
+masked tile copy — so no new library surface was needed. Dimension-general in the
+row stride, with no side-condition. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification layer_norm_liger_scalar_stores_io_correctness
+    (MeanPre Mean RSTDPre RSTD : RegionName)
+    (Mean_row_stride RSTD_row_stride : Nat) :
+    (mean_storeIO MeanPre Mean Mean_row_stride
+      ⊨ fun _pid xs _ => xs PUnit.unit) ∧
+    (rstd_storeIO RSTDPre RSTD RSTD_row_stride
+      ⊨ fun _pid xs _ => xs PUnit.unit)
+```
+
+**Closed-form spec defs (transitive):** `mean_storeIO`, `rstd_storeIO`, `layer_norm_liger_forward_mean_store_slice`, `layer_norm_liger_forward_rstd_store_slice`
+
+<details><summary><code>mean_storeIO</code></summary>
+
+```
+/-- IO signature of `layer_norm_liger_forward_mean_store_slice` at `shape := []`: the single lane owns the one row
+cell this program copies. -/
+```
+```lean
+def mean_storeIO (MeanPre Mean : RegionName) (Mean_row_stride : Nat) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride
+  inp := MeanPre
+  out := Mean
+  shape := []
+  read := fun pid _ => pid * Mean_row_stride
+  write := fun pid _ => pid * Mean_row_stride
+  mask := fun _pid _ => True
+```
+</details>
+
+<details><summary><code>rstd_storeIO</code></summary>
+
+```
+/-- IO signature of `layer_norm_liger_forward_rstd_store_slice` at `shape := []`: the single lane owns the one row
+cell this program copies. -/
+```
+```lean
+def rstd_storeIO (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride
+  inp := RSTDPre
+  out := RSTD
+  shape := []
+  read := fun pid _ => pid * RSTD_row_stride
+  write := fun pid _ => pid * RSTD_row_stride
+  mask := fun _pid _ => True
+```
+</details>
+
+<details><summary><code>layer_norm_liger_forward_mean_store_slice</code></summary>
+
+```
+/-- Proof-oriented Mean store slice of `layer_norm_liger.py`'s
+`_layer_norm_forward_kernel`. Takes a precomputed `MeanPre` scalar (per row)
+and proves the scalar writeback into Mean. -/
+```
+```lean
+def layer_norm_liger_forward_mean_store_slice
+    (MeanPre Mean : RegionName) (Mean_row_stride : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(0)
+  mean = tl.load(MeanPre + row * $(Mean_row_stride))
+  tl.store(Mean + row * $(Mean_row_stride), mean)
+}
+```
+</details>
+
+<details><summary><code>layer_norm_liger_forward_rstd_store_slice</code></summary>
+
+```
+/-- Proof-oriented RSTD store slice of `layer_norm_liger.py`'s
+`_layer_norm_forward_kernel`. Same scalar-copy pattern. -/
+```
+```lean
+def layer_norm_liger_forward_rstd_store_slice
+    (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(0)
+  rstd = tl.load(RSTDPre + row * $(RSTD_row_stride))
+  tl.store(RSTD + row * $(RSTD_row_stride), rstd)
+}
+```
+</details>
+
+## Public theorem: `layer_norm_liger_scalar_stores_io_correctnessR`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` headline** for `layer_norm_liger.py`'s two scalar row stores: for
+**every** rounding model `R`, the same pair of Hoare triples as
+`layer_norm_liger_scalar_stores_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs PUnit.unit)`.
+
+Both are single-cell copies carrying no `.to(...)`, so both slices are cast-free
+and the exact runs transport verbatim. The content of the rounding face here is
+exactly that: *neither store introduces a rounding event of its own*, at any
+`R`. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification layer_norm_liger_scalar_stores_io_correctnessR (R : RoundingModel)
+    (MeanPre Mean RSTDPre RSTD : RegionName)
+    (Mean_row_stride RSTD_row_stride : Nat) :
+    (mean_storeIO MeanPre Mean Mean_row_stride
+      ⊨[R, FloatDType.real] fun _pid xs _ => xs PUnit.unit) ∧
+    (rstd_storeIO RSTDPre RSTD RSTD_row_stride
+      ⊨[R, FloatDType.real] fun _pid xs _ => xs PUnit.unit)
+```
+
+**Closed-form spec defs (transitive):** `mean_storeIO`, `rstd_storeIO`, `layer_norm_liger_forward_mean_store_slice`, `layer_norm_liger_forward_rstd_store_slice`
+
+<details><summary><code>mean_storeIO</code></summary>
+
+```
+/-- IO signature of `layer_norm_liger_forward_mean_store_slice` at `shape := []`: the single lane owns the one row
+cell this program copies. -/
+```
+```lean
+def mean_storeIO (MeanPre Mean : RegionName) (Mean_row_stride : Nat) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_liger_forward_mean_store_slice MeanPre Mean Mean_row_stride
+  inp := MeanPre
+  out := Mean
+  shape := []
+  read := fun pid _ => pid * Mean_row_stride
+  write := fun pid _ => pid * Mean_row_stride
+  mask := fun _pid _ => True
+```
+</details>
+
+<details><summary><code>rstd_storeIO</code></summary>
+
+```
+/-- IO signature of `layer_norm_liger_forward_rstd_store_slice` at `shape := []`: the single lane owns the one row
+cell this program copies. -/
+```
+```lean
+def rstd_storeIO (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) : MaskedTileKernelIO₁ where
+  kernel := layer_norm_liger_forward_rstd_store_slice RSTDPre RSTD RSTD_row_stride
+  inp := RSTDPre
+  out := RSTD
+  shape := []
+  read := fun pid _ => pid * RSTD_row_stride
+  write := fun pid _ => pid * RSTD_row_stride
+  mask := fun _pid _ => True
+```
+</details>
+
+<details><summary><code>layer_norm_liger_forward_mean_store_slice</code></summary>
+
+```
+/-- Proof-oriented Mean store slice of `layer_norm_liger.py`'s
+`_layer_norm_forward_kernel`. Takes a precomputed `MeanPre` scalar (per row)
+and proves the scalar writeback into Mean. -/
+```
+```lean
+def layer_norm_liger_forward_mean_store_slice
+    (MeanPre Mean : RegionName) (Mean_row_stride : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(0)
+  mean = tl.load(MeanPre + row * $(Mean_row_stride))
+  tl.store(Mean + row * $(Mean_row_stride), mean)
+}
+```
+</details>
+
+<details><summary><code>layer_norm_liger_forward_rstd_store_slice</code></summary>
+
+```
+/-- Proof-oriented RSTD store slice of `layer_norm_liger.py`'s
+`_layer_norm_forward_kernel`. Same scalar-copy pattern. -/
+```
+```lean
+def layer_norm_liger_forward_rstd_store_slice
+    (RSTDPre RSTD : RegionName) (RSTD_row_stride : Nat) :
+    ComputeKernel := triton {
+  row = tl.program_id(0)
+  rstd = tl.load(RSTDPre + row * $(RSTD_row_stride))
+  tl.store(RSTD + row * $(RSTD_row_stride), rstd)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `layer_norm_liger_forward_y_compute_correct`
 - `layer_norm_liger_forward_mean_store_slice_compute_correct`

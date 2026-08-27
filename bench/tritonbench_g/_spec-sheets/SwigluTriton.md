@@ -2,51 +2,67 @@
 
 **Python source:** `bench/tritonbench_g/swiglu_triton/swiglu_triton.py`
 
-## Public theorem: `swiglu_forward_kernel_output_summary`
+## Public theorem: `swiglu_forward_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `_swiglu_forward_kernel`: the DSL surface lowers
-to the algorithm layer, and the masked store to `C` is compute-correct — every
-active lane holds `TiledActivation.swiglu (as i) (bs i)`, out-of-bounds lanes are
-preserved. -/
+/-- **The headline (forward)**: `_swiglu_forward_kernel` implements the SwiGLU
+oracle `TiledActivation.swiglu` (i.e. `silu(a) · b`) lane-wise on its masked IO
+signature — for every disjoint flat placement of the three buffers, every
+program id whose active lanes are in bounds, and every launch state whose
+active input-row lanes hold `as`/`bs`, the translated pointer kernel
+terminates, every active output-row lane `j` holds
+`TiledActivation.swiglu (as j) (bs j)`, and every other memory cell is
+unchanged. Proof: `MaskedKernelIO₂.Implements.intro` assembles the region-model
+masked triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification swiglu_forward_kernel_output_summary
+specification swiglu_forward_kernel_correctness
     (A B C : RegionName)
-    (stride n_cols BLOCK_SIZE : Nat)
-    (s : BlockState)
-    (as bs : Fin BLOCK_SIZE → ℝ)
-    (h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (swigluOffset s stride i) = as i)
-    (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (swigluOffset s stride i) = bs i) :
-    (∃ alg, (swiglu_forward_kernel A B C stride n_cols BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := swiglu_forward_kernel A B C stride n_cols BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-        (fun i => (C, swigluOffset s stride i)))
-      (expected := fun i => TiledActivation.swiglu (as i) (bs i))
+    (stride n_cols BLOCK_SIZE : Nat) :
+    swigluFwdIO A B C stride n_cols BLOCK_SIZE
+      ⊨ fun as bs i => TiledActivation.swiglu (as i) (bs i)
 ```
 
-**Assumptions / layout contracts:**
-- `as bs : Fin BLOCK_SIZE → ℝ`
-- `h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (swigluOffset s stride i) = as i`
-- `h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (swigluOffset s stride i) = bs i`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
+**Closed-form spec defs (transitive):** `swigluFwdIO`, `swiglu_forward_kernel`
 
-**Closed-form spec defs (transitive):** `swigluOffset`, `swiglu_forward_kernel`
+<details><summary><code>swigluFwdIO</code></summary>
 
-<details><summary><code>swigluOffset</code></summary>
+```
+/-- `_swiglu_forward_kernel`'s masked **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
 
+* `in1`/`in2`/`out` — which buffer is which argument (the wiring: gate `A`,
+  value `B`, output `C`);
+* `B = BLOCK_SIZE` — the row window each program owns;
+* `read1`/`read2`/`write` — program `pid` (the row) reads and writes its row at
+  `pid * stride` in all three buffers (the host-side one-program-per-row launch
+  convention `x_ptr += program_id * stride`);
+* `mask` — the active lanes `j < n_cols`, **the same for every program**: the
+  row prefix that actually exists in the matrix. Inactive lanes (the padding of
+  `BLOCK_SIZE = next_power_of_2(n_cols)`) carry no obligations on either side.
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer sizes
+are not signature content: the headline quantifies over every allocation whose
+extents cover the active lanes. -/
+```
 ```lean
-def swigluOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pids 0 * stride + i.val
+def swigluFwdIO (A B C : RegionName)
+    (stride n_cols BLOCK_SIZE : Nat) : MaskedKernelIO₂ where
+  kernel := swiglu_forward_kernel A B C stride n_cols BLOCK_SIZE
+  in1 := A
+  in2 := B
+  out := C
+  B := BLOCK_SIZE
+  read1 := fun pid => pid * stride
+  read2 := fun pid => pid * stride
+  write := fun pid => pid * stride
+  mask := fun _ j => j.val < n_cols
 ```
 </details>
 
@@ -77,61 +93,81 @@ def swiglu_forward_kernel
 ```
 </details>
 
-## Public theorem: `swiglu_backward_kernel_output_summary`
+## Public theorem: `swiglu_backward_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `_swiglu_backward_kernel`: the DSL surface
-lowers to the algorithm layer, and the two masked stores are compute-correct —
-every active lane writes `swigluBwdA` to `A` and `swigluBwdB` to `B`, with the two
-output channels indexed by `Sum`; out-of-bounds lanes are preserved. Assumes the
-two output regions are distinct (`A ≠ B`). -/
+/-- **The headline (backward)**: `_swiglu_backward_kernel` implements the
+SwiGLU backward oracles on its masked in-place IO signature — for every
+disjoint flat placement of the three buffers, every program id whose active
+lanes are in bounds, and every launch state whose active input-row lanes hold
+`dcs`/`as`/`bs`, the translated pointer kernel terminates, every active lane
+of the gate buffer ends up holding `swigluBwdA` and of the value buffer
+`swigluBwdB`, applied to the *originally loaded* windows; every other flat
+cell is untouched. The side condition `A ≠ B` rules out aliasing between the
+two output buffers (the second masked store would otherwise clobber the first
+output). Proof: `MaskedKernelIO₃ₓ₂.Implements.intro` assembles the
+region-model triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification swiglu_backward_kernel_output_summary
+specification swiglu_backward_kernel_correctness
     (DC A B : RegionName)
     (stride n_cols BLOCK_SIZE : Nat)
-    (s : BlockState)
-    (dcs as bs : Fin BLOCK_SIZE → ℝ)
-    (hAB : A ≠ B)
-    (h_dc : ∀ i : Fin BLOCK_SIZE, s.readMem DC (swigluOffset s stride i) = dcs i)
-    (h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (swigluOffset s stride i) = as i)
-    (h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (swigluOffset s stride i) = bs i) :
-    (∃ alg, (swiglu_backward_kernel DC A B stride n_cols BLOCK_SIZE).toAlgorithm? =
-        Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := swiglu_backward_kernel DC A B stride n_cols BLOCK_SIZE)
-      (initialState := s)
-      (write := fun i : Sum (Fin BLOCK_SIZE) (Fin BLOCK_SIZE) =>
-        match i with
-        | .inl lane =>
-            if lane.val < n_cols then some (A, swigluOffset s stride lane) else none
-        | .inr lane =>
-            if lane.val < n_cols then some (B, swigluOffset s stride lane) else none)
-      (expected := fun i =>
-        match i with
-        | .inl lane => TiledActivation.swigluBwdA (dcs lane) (as lane) (bs lane)
-        | .inr lane => TiledActivation.swigluBwdB (dcs lane) (as lane))
+    (hAB : A ≠ B) :
+    swigluBwdIO DC A B stride n_cols BLOCK_SIZE
+      ⊨ fun dcs as bs =>
+        (fun i => TiledActivation.swigluBwdA (dcs i) (as i) (bs i),
+         fun i => TiledActivation.swigluBwdB (dcs i) (as i))
 ```
 
 **Assumptions / layout contracts:**
-- `dcs as bs : Fin BLOCK_SIZE → ℝ`
 - `hAB : A ≠ B`
-- `h_dc : ∀ i : Fin BLOCK_SIZE, s.readMem DC (swigluOffset s stride i) = dcs i`
-- `h_a : ∀ i : Fin BLOCK_SIZE, s.readMem A (swigluOffset s stride i) = as i`
-- `h_b : ∀ i : Fin BLOCK_SIZE, s.readMem B (swigluOffset s stride i) = bs i`
 
-**Closed-form spec defs (transitive):** `swigluOffset`, `swiglu_backward_kernel`
+**Closed-form spec defs (transitive):** `swigluBwdIO`, `swiglu_backward_kernel`
 
-<details><summary><code>swigluOffset</code></summary>
+<details><summary><code>swigluBwdIO</code></summary>
 
+```
+/-- `_swiglu_backward_kernel`'s masked in-place **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `bufs` — the allocation list: three buffers, each exactly once;
+* `in1`/`in2`/`in3` — upstream gradient `DC`, gate `A`, value `B` (the wiring);
+* `out1 = in2`, `out2 = in3` — the **in-place** roles: the kernel overwrites
+  the gate and value buffers it read with `da` and `db`;
+* `read1..3`/`write1..2` — every window is the same row `pid * stride` (the
+  host-side one-program-per-row launch convention
+  `x_ptr += program_id * stride`);
+* `mask` — the active lanes `j < n_cols`, **the same for every program**: the
+  row prefix that actually exists in the matrix. Inactive lanes (the padding of
+  `BLOCK_SIZE = next_power_of_2(n_cols)`) carry no obligations on either side.
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer sizes
+are not signature content: the headline quantifies over every allocation whose
+extents cover the active lanes. -/
+```
 ```lean
-def swigluOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pids 0 * stride + i.val
+def swigluBwdIO (DC A B : RegionName)
+    (stride n_cols BLOCK_SIZE : Nat) : MaskedKernelIO₃ₓ₂ where
+  kernel := swiglu_backward_kernel DC A B stride n_cols BLOCK_SIZE
+  bufs := [DC, A, B]  -- A and B are updated in place
+  in1 := DC
+  in2 := A
+  in3 := B
+  out1 := A    -- = in2: `da` overwrites the gate input in place
+  out2 := B    -- = in3: `db` overwrites the value input in place
+  B := BLOCK_SIZE
+  read1 := fun pid => pid * stride
+  read2 := fun pid => pid * stride
+  read3 := fun pid => pid * stride
+  write1 := fun pid => pid * stride
+  write2 := fun pid => pid * stride
+  mask := fun _ j => j.val < n_cols
 ```
 </details>
 
@@ -164,7 +200,3 @@ def swiglu_backward_kernel
 }
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `swiglu_forward_kernel_compute_correct`
-- `swiglu_backward_kernel_compute_correct`

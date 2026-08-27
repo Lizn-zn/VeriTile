@@ -2,143 +2,130 @@
 
 **Python source:** `bench/tritonbench_g/int8_quantization/int8_quantization.py`
 
-## Public theorem: `per_block_int8_output_summary_general`
+## Public theorem: `per_block_int8_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- **Dimension-general output summary for `per_block_int8` (`int8_quantization.py`).**
+/-- **The headline**: the per-block int8 quantization kernel implements the
+exact quantized-value / scale pair on its masked two-output IO signature. For
+every disjoint flat placement of the four buffers, every program id pair
+`(off_blk, off_b)` whose active lanes and scalar scale cell are in bounds, and
+every launch state whose active `X` lanes hold `xs` and whose `ScalePre` cell
+holds `ys`, the translated pointer kernel terminates, every active lane `j` of
+the `[BLK, C]` block holds `perBlockInt8ValSpec … = (preScale · xs j) / ys j`,
+the cell `Scale[off_b · scale_stride + off_blk]` holds the scale `ys`, and every
+other memory cell is unchanged.
 
-For arbitrary token count `L`, channel count `C`, block size `BLK`, scale stride
-`scale_stride` and pre-scale `preScale` (with the row-major output offset
-injective on the `[BLK, C]` block), this bundles:
+`preScale` is symbolic, so this one theorem covers **both** Python kernels:
+`preScale = C**-0.5 · 1.44269504` is `q_kernel_per_block_int8` and
+`preScale = 1` is `k_kernel_per_block_int8`.
 
-* both the full faithful Q surface (`q_kernel_per_block_int8_surface`, including
-  the `C**-0.5 * log2(e)` pre-scale, `tl.abs`/`tl.max` per-block scale, signed
-  half-up rounding and the `to(tl.int8)` cast) and the full faithful K surface
-  (`k_kernel_per_block_int8_surface`) lowering to the algorithm layer, plus the
-  scale-compute store surface lowering;
-* the **value** store realizing `perBlockInt8ScaledSpec` (`= preScale·X / Scale`)
-  on every active lane (`off_blk·BLK + i < L`), unchanged otherwise;
-* the **scale** store realizing the per-block scalar `scaleStoreSpec`.
-
-All expected values are computed from the kernel **inputs** (no `exec`/`readMem`
-self-reference). This general closed form holds over arbitrary dimensions
-(mirrors the dimension-parameterized reference
-`attention_forward_triton_closed_form_correct`). -/
+Side conditions, all genuinely forced: `0 < BLK * C` (the `Scale` store is
+unmasked in the kernel, so its safety bound and single-cell frame exclusion are
+carried by the lane-`0` gate `writeMask2`, which needs a lane) and
+`XInt8 ≠ Scale` (that unmasked scalar store must not alias the masked block
+store). No separate `0 < C` is needed: the `Lane2D` row-major bijection
+`j ↦ (j / C, j % C)` gets its positivity from the lane itself. The per-block
+scale is an
+**input**, not a computed value — see the module docstring: the Python
+reduction reads uninitialized memory at a partial tail block, so it has no pure
+spec. Proof: `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
+masked triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification per_block_int8_output_summary_general
-    (X XInt8 Scale ScalePre : RegionName)
-    (L C BLK scale_stride : Nat) (preScale : ℝ) (s : BlockState)
-    (hOutInj : Function.Injective
-      (fun idx : TileIndex [BLK, C] => xOffset s L C BLK idx)) :
-    ((∃ alg, (q_kernel_per_block_int8_surface X XInt8 Scale
-        L C BLK scale_stride).toAlgorithm? = Except.ok alg) ∧
-     (∃ alg, (k_kernel_per_block_int8_surface X XInt8 Scale
-        L C BLK scale_stride).toAlgorithm? = Except.ok alg) ∧
-     (∃ alg, (per_block_int8_scale_compute_store_slice X Scale
-        L C BLK scale_stride preScale).toAlgorithm? = Except.ok alg)) ∧
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel
+specification per_block_int8_correctness
+    (X ScalePre XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat) (preScale : ℝ)
+    (hB : 0 < BLK * C) (hRegions : XInt8 ≠ Scale) :
+    perBlockInt8IO X ScalePre XInt8 Scale L C BLK scale_stride preScale ⊨
+      fun _ _ xs ys =>
+        (fun j => perBlockInt8ValSpec BLK C preScale xs ys j, fun j => ys j)
 ```
 
 **Assumptions / layout contracts:**
-- `hOutInj : Function.Injective
-      (fun idx : TileIndex [BLK, C] => xOffset s L C BLK idx)`
+- `hB : 0 < BLK * C`
+- `hRegions : XInt8 ≠ Scale`
 
-**Closed-form spec defs (transitive):** `xOffset`, `q_kernel_per_block_int8_surface`, `k_kernel_per_block_int8_surface`, `per_block_int8_scale_compute_store_slice`, `baseOffset`, `rowIndex`, `colIndex`
+**Closed-form spec defs (transitive):** `perBlockInt8IO`, `perBlockInt8ValSpec`, `per_block_int8_store_slice`
 
-<details><summary><code>xOffset</code></summary>
+<details><summary><code>perBlockInt8IO</code></summary>
 
+```
+/-- The verified kernel's masked two-output **IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline:
+
+* `in1`/`in2`/`out1`/`out2` — the block buffer `X`, the per-block scale input
+  `ScalePre`, the quantized block buffer `XInt8`, and the scale vector `Scale`;
+* `B = BLK * C` — the block window each program owns, indexed by the flat
+  **row-major lane** `j ↦ (j / C, j % C)` of the kernel's `[BLK, C]` tile;
+* `read1`/`write1` — program `(off_blk, off_b)` reads and writes its block at
+  `off_b · L · C + off_blk · BLK · C + j` (the Python row-major addressing
+  `x_offset + offs_m[:, None] · C + offs_k[None, :]`);
+* `read2`/`write2` — the **scalar** cell `off_b · scale_stride + off_blk`, the
+  same for every lane;
+* `mask` — the active lanes `off_blk · BLK + j / C < L`, i.e. the Python row
+  mask `offs_m[:, None] < L`; the load mask and the block-store mask coincide,
+  so `writeMask1` keeps its `mask` default;
+* `read2Mask` — `True`: the `ScalePre` load is unmasked;
+* `writeMask2` — lane `0` carries the scalar scale; the other lanes are
+  write-inactive.
+
+The windows and masks are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. -/
+```
 ```lean
-def xOffset (s : BlockState) (L C BLK : Nat) (idx : TileIndex [BLK, C]) : Nat :=
-  baseOffset s L C + rowIndex s BLK idx.1 * C + colIndex s idx.2.1
+def perBlockInt8IO (X ScalePre XInt8 Scale : RegionName)
+    (L C BLK scale_stride : Nat) (preScale : ℝ) : Masked2DKernelIO₂ₓ₂ where
+  kernel := per_block_int8_store_slice X ScalePre XInt8 Scale L C BLK
+    scale_stride preScale
+  in1 := X
+  in2 := ScalePre
+  out1 := XInt8
+  out2 := Scale
+  B := BLK * C
+  read1 := fun off_blk off_b j => off_b * L * C + off_blk * BLK * C + j.val
+  read2 := fun off_blk off_b _ => off_b * scale_stride + off_blk
+  write1 := fun off_blk off_b j => off_b * L * C + off_blk * BLK * C + j.val
+  write2 := fun off_blk off_b _ => off_b * scale_stride + off_blk
+  mask := fun off_blk _ j => off_blk * BLK + j.val / C < L
+  read2Mask := fun _ _ _ => True
+  writeMask2 := fun _ _ j => j.val = 0
 ```
 </details>
 
-<details><summary><code>q_kernel_per_block_int8_surface</code></summary>
+<details><summary><code>perBlockInt8ValSpec</code></summary>
 
 ```
-/-- Faithful transcription of `int8_quantization.py`'s `q_kernel_per_block_int8`.
-
-The final `to(tl.int8)` is preserved as a surface dtype annotation; algorithm
-erasure now carries it through the fixed-width cast surface used by the DSL.
--/
+/-- The value written to active lane `j`: `(preScale · x j) / scale`. The
+second channel `ys` is the per-block scale, read from `ScalePre` at the single
+address `off_b · scale_stride + off_blk` — every lane reads the same cell, so
+`ys` is constant. -/
 ```
 ```lean
-noncomputable def q_kernel_per_block_int8_surface
-    (X XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat) :
-    ComputeKernel := triton {
-  off_b = tl.program_id(1)
-  off_blk = tl.program_id(0)
-  x_offset = off_b * $(L) * $(C)
-  offs_m = off_blk * $(BLK) + tl.arange(0, $(BLK))
-  offs_k = tl.arange(0, $(C))
-  x_ptrs = X + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
-  x_int8_ptrs = XInt8 + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
-  scale_ptrs = Scale + off_b * $(scale_stride) + off_blk
-  x = tl.load(x_ptrs, mask=offs_m[:, None] < $(L))
-  x *= $(((Real.sqrt (C : ℝ))⁻¹ * (1.44269504 : ℝ) : ℝ))
-  scale = tl.max(tl.abs(x)) / 127.0
-  x_int8 = x / scale
-  x_int8 += 0.5 * tl.where(x_int8 >= 0.0, 1.0, -1.0)
-  x_int8 = (x_int8).to(tl.int8)
-  tl.store(x_int8_ptrs, x_int8, mask=offs_m[:, None] < $(L))
-  tl.store(scale_ptrs, scale)
-}
+noncomputable def perBlockInt8ValSpec (BLK C : Nat) (preScale : ℝ)
+    (xs ys : Fin (BLK * C) → ℝ) (j : Fin (BLK * C)) : ℝ :=
+  preScale * xs j / ys j
 ```
 </details>
 
-<details><summary><code>k_kernel_per_block_int8_surface</code></summary>
+<details><summary><code>per_block_int8_store_slice</code></summary>
 
 ```
-/-- Surface transcription of `int8_quantization.py`'s `k_kernel_per_block_int8`.
-
-The final `to(tl.int8)` is preserved as a surface dtype annotation; algorithm
-erasure now carries it through the fixed-width cast surface used by the DSL.
--/
+/-- **The verified kernel.** `q_kernel_per_block_int8` /
+`k_kernel_per_block_int8` with the per-block scale taken from a separate input
+buffer `ScalePre` (see the module docstring for why this is forced) and the
+half-ULP rounding bias / int8 cast dropped. The block addressing, the row mask,
+the value expression `(preScale · x) / scale`, the masked block store and the
+unmasked scalar scale store are transcribed 1:1. `preScale` is
+`C**-0.5 · 1.44269504` for the Q kernel and `1` for the K kernel. -/
 ```
 ```lean
-def k_kernel_per_block_int8_surface
-    (X XInt8 Scale : RegionName)
-    (L C BLK scale_stride : Nat) :
-    ComputeKernel := triton {
-  off_b = tl.program_id(1)
-  off_blk = tl.program_id(0)
-  x_offset = off_b * $(L) * $(C)
-  offs_m = off_blk * $(BLK) + tl.arange(0, $(BLK))
-  offs_k = tl.arange(0, $(C))
-  x_ptrs = X + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
-  x_int8_ptrs = XInt8 + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
-  scale_ptrs = Scale + off_b * $(scale_stride) + off_blk
-  x = tl.load(x_ptrs, mask=offs_m[:, None] < $(L))
-  scale = tl.max(tl.abs(x)) / 127.0
-  x_int8 = x / scale
-  x_int8 += 0.5 * tl.where(x_int8 >= 0.0, 1.0, -1.0)
-  x_int8 = (x_int8).to(tl.int8)
-  tl.store(x_int8_ptrs, x_int8, mask=offs_m[:, None] < $(L))
-  tl.store(scale_ptrs, scale)
-}
-```
-</details>
-
-<details><summary><code>per_block_int8_scale_compute_store_slice</code></summary>
-
-```
-/-- Proof-oriented scale-compute slice of `int8_quantization.py`'s per-block
-int8 kernels. This covers the real-valued Python path
-`scale = tl.max(tl.abs(preScale * x)) / 127.0` and the unmasked scalar
-`tl.store(scale_ptrs, scale)`, while separating it from the later `to(tl.int8)`
-value-store slice. -/
-```
-```lean
-def per_block_int8_scale_compute_store_slice
-    (X Scale : RegionName)
+def per_block_int8_store_slice
+    (X ScalePre XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) (preScale : ℝ) :
     ComputeKernel := triton {
   off_blk = tl.program_id(0)
@@ -147,39 +134,12 @@ def per_block_int8_scale_compute_store_slice
   offs_m = off_blk * $(BLK) + tl.arange(0, $(BLK))
   offs_k = tl.arange(0, $(C))
   x_ptrs = X + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
+  x_int8_ptrs = XInt8 + x_offset + offs_m[:, None] * $(C) + offs_k[None, :]
+  scale = tl.load(ScalePre + off_b * $(scale_stride) + off_blk)
   x = tl.load(x_ptrs, mask=offs_m[:, None] < $(L))
-  x_scaled = $(preScale) * x
-  scale = tl.max(tl.abs(x_scaled)) / 127.0
+  x_int8 = ($(preScale) * x) / scale
+  tl.store(x_int8_ptrs, x_int8, mask=offs_m[:, None] < $(L))
   tl.store(Scale + off_b * $(scale_stride) + off_blk, scale)
 }
 ```
 </details>
-
-<details><summary><code>baseOffset</code></summary>
-
-```lean
-def baseOffset (s : BlockState) (L C : Nat) : Nat :=
-  s.pids 1 * L * C
-```
-</details>
-
-<details><summary><code>rowIndex</code></summary>
-
-```lean
-def rowIndex (s : BlockState) (BLK : Nat) (i : Fin BLK) : Nat :=
-  s.pids 0 * BLK + i.val
-```
-</details>
-
-<details><summary><code>colIndex</code></summary>
-
-```lean
-def colIndex (_s : BlockState) (j : Fin C) : Nat :=
-  j.val
-```
-</details>
-
-## Also present (pinned special-case summaries)
-- `per_block_int8_scaled_store_slice_compute_correct`
-- `per_block_int8_scale_store_slice_compute_correct`
-- `per_block_int8_closed_form_correct`

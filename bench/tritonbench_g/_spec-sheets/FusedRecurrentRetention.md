@@ -2,17 +2,6 @@
 
 **Python source:** `bench/tritonbench_g/fused_recurrent_retention/fused_recurrent_retention.py`
 
-## Public theorem: `over`
-
-**Statement:**
-```lean
-specification over the input regions `k, v, initial_state` — never a read-back
-of the kernel's own output. Shared by the forward loop and the backward
-phase-1 loop (same recurrence, same flat state layout). -/
-```
-
-> ⚠ statement references **no local spec def** — spec may be inlined or stated against an opaque value.
-
 ## Public theorem: `fused_recurrent_retention_output_summary_general`
 
 <details><summary>docstring</summary>
@@ -20,45 +9,59 @@ phase-1 loop (same recurrence, same flat state layout). -/
 ```
 /-! ### ════════ ★ MAIN THEOREM ★ ════════
 
-**Genuine, dimension-general fused recurrent retention compute-correctness,
-forward and backward.** Parameterized over the symbolic head strides
-`s_qk_h s_vo_h`, batch/head/time `B H T`, head extents `DK DV`, tile sizes
-`BK BV`, the real `scale`, the step index `m`, and **both** flags
-`USE_INITIAL_STATE STORE_FINAL_STATE`. It bundles all faces of both launched
-kernels, each realized against the genuine closed forms `stateClosed` /
-`outClosed` / `dqClosed` / `dStateClosed` / `dkClosed` / `dvClosed` over the
-*input* regions `q, k, v, do, initial_state` (never a read-back of the
-kernel's own output):
+**SCOPE — this is a claim about six hand-cut single-step slices, not about the
+launched kernels.** The launched forward and backward surfaces appear *only* in
+clauses 1 and 2, which say nothing more than "they lower to the algorithm layer".
+Two of the six faces (clauses 4 and 6) write **fiction regions** — `HOut` and
+`DHOut` are the internal carry registers `h` and `d_h`, not Python tensors — so
+they are step lemmas about a register update, not claims about kernel outputs.
+The `STORE_FINAL_STATE` writeback has no face at all (see the module docstring).
+
+**Genuine, shape-general fused recurrent retention step summary, forward and
+backward.** Parameterized over the symbolic head strides `s_qk_h s_vo_h`,
+batch/head/time `B H T`, head extents `DK DV`, tile sizes `BK BV`, the real
+`scale`, the step index `m`, and both flags
+`USE_INITIAL_STATE STORE_FINAL_STATE`. Each face is realized against the genuine
+closed forms `stateClosed` / `outClosed` / `dqClosed` / `dStateClosed` /
+`dkClosed` / `dvClosed` over the *input* regions
+`q, k, v, do, initial_state` — never a read-back of the kernel's own output:
 
 1. the full **forward** surface lowers to the algorithm layer;
 2. the full **backward** surface (both loops, `tl.debug_barrier()`, pointer
    rebasing and decrements) lowers to the algorithm layer;
+2a. the **`USE_INITIAL_STATE` seed prologue** realizes `stateClosed(0)` — the
+   `m = 0` instance of the same closed form the step faces carry — into the
+   internal carry register `HSeed`, for either flag setting;
+2b. the reverse invariant's **top value** is zero: `b_b·dStateClosed(T) = 0`;
 3. one forward **output** body realizes `outClosed(m)` — the reduction of the
-   post-update state `stateClosed(m+1)` against `scale·q_m`;
+   post-update state `stateClosed(m+1)` against `scale·q_m` — into the Python
+   tensor `o`;
 4. one **state-update** body realizes `stateClosed(m+1)` (the scalar-decay
-   carry-fold `h = b_b·h + k_m ⊗ v_m`), given the carry invariant
-   `HPrev = stateClosed(m)` — shared by the forward and backward-phase-1 loops;
-5. the **final-state** writeback realizes `stateClosed(T)` (masked), given
-   `HFinal = stateClosed(T)`;
-6. one backward **`dq`** body realizes `dqClosed(m)` (post-update state
-   reduced against `do_m`, then `·scale`);
-7. one reverse **gradient-state carry** body realizes `b_b·dStateClosed(m)`,
-   given the reverse invariant `DHPrev = b_b·dStateClosed(m+1)` (which is `0`
-   at the first reverse iteration `m = T−1`, matching `tl.zeros`);
-8. one reverse **`dk`** body realizes `dkClosed(m)`;
-9. one reverse **`dv`** body realizes `dvClosed(m)`.
+   carry-fold `h = b_b·h + k_m ⊗ v_m`) into the *internal carry register*
+   `HOut`, given the assumed invariant `HPrev = stateClosed(m)` — shared by the
+   forward and backward-phase-1 loops;
+5. one backward **`dq`** body realizes `dqClosed(m)` (post-update state
+   reduced against `do_m`, then `·scale`) into the Python tensor `dq`;
+6. one reverse **gradient-state carry** body realizes `b_b·dStateClosed(m)` into
+   the *internal carry register* `DHOut`, given the assumed reverse invariant
+   `DHPrev = b_b·dStateClosed(m+1)`;
+7. one reverse **`dk`** body realizes `dkClosed(m)` into `dk`;
+8. one reverse **`dv`** body realizes `dvClosed(m)` into `dv`.
 
-Honest structural side conditions only: `BV ≤ DV` (the tile fits the logical
-extents, giving state-address injectivity), `0 < BK`, `0 < BV` (nonempty
-contiguous output lanes), and `m < T` for the reverse-phase faces (the reverse
-loop visits exactly the rows `T−1, …, 0`). The flags flow through verbatim;
-clauses 3–9 hold for every flag setting, and each Python test case is
-recovered by projecting the subset of clauses its `USE_INITIAL_STATE` /
-`STORE_FINAL_STATE` configuration exercises. The carry invariants are
-self-propagating: clause 4 advances `stateClosed(m) ↦ stateClosed(m+1)` from
-the seed `stateClosed(0) = stateSeed` (`tl.zeros` + optional `initial_state`
-load), and clause 7 advances the reverse invariant downward from
-`b_b·dStateClosed(T) = 0`. -/
+Side conditions. Structural: `BV ≤ DV` (the tile fits the logical extents,
+giving state-address injectivity), `0 < BK`, `0 < BV` (nonempty contiguous
+output lanes), and `m < T` for the reverse-phase faces (the reverse loop visits
+exactly the rows `T−1, …, 0`). **Load-bearing:** `hPrev` and `hDPrev` — the two
+carry invariants — are *assumptions*, and they carry the entire recurrence.
+Every clause that mentions a closed form does so only under them.
+
+**They are not self-propagating.** Clause 4 writes `HOut`, while `hPrev`
+constrains `HPrev`: a different region, and nothing chains one step's output
+register into the next step's input register — that step-chaining is the one
+piece of the induction still missing. What is **no longer** missing is either
+base case: clause 2a is `stateClosed 0 = stateSeed` realized by the kernel's own
+seed prologue, and clause 2b is `b_b·dStateClosed T = 0`. The flags flow through
+verbatim and clauses 2a and 3–8 hold for every flag setting. -/
 ```
 </details>
 
@@ -66,7 +69,7 @@ load), and clause 7 advances the reverse invariant downward from
 ```lean
 specification fused_recurrent_retention_output_summary_general
     (q k v o do_ dq dk dv initial_state final_state
-      HPrev HOut HFinal DHPrev DHOut : RegionName)
+      HSeed HPrev HOut DHPrev DHOut : RegionName)
     (USE_INITIAL_STATE STORE_FINAL_STATE : Bool)
     (s_qk_h s_vo_h B H T DK DV BK BV m : Nat) (scale : ℝ) (s : BlockState)
     (hBV : BV ≤ DV) (hBKpos : 0 < BK) (hBVpos : 0 < BV)
@@ -75,10 +78,6 @@ specification fused_recurrent_retention_output_summary_general
       s.readMem HPrev (stateOffset s DK DV BK BV jk jv)
         = stateClosed s k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
             H DK DV BK BV m jk jv)
-    (hFinal : ∀ (jk : Fin BK) (jv : Fin BV),
-      s.readMem HFinal (stateOffset s DK DV BK BV jk jv)
-        = stateClosed s k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
-            H DK DV BK BV T jk jv)
     (hDPrev : ∀ (jk : Fin BK) (jv : Fin BV),
       s.readMem DHPrev (stateOffset s DK DV BK BV jk jv)
         = bbVal s H *
@@ -91,6 +90,23 @@ specification fused_recurrent_retention_output_summary_general
     (∃ alg, (fused_recurrent_retention_bwd_surface q k v do_ dq dk dv
       initial_state s_qk_h s_vo_h B H T scale BK BV DK DV
       USE_INITIAL_STATE).toAlgorithm? = Except.ok alg) ∧
+    -- (2a) the seed prologue realizes `stateClosed 0` (the carry base case),
+    --      into the INTERNAL carry register `HSeed` (a fiction region)
+    (ComputeCorrect.Realizes_without_Rounding
+      (kernel := fused_recurrent_retention_seed_slice initial_state HSeed
+        DK DV BK BV USE_INITIAL_STATE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BV, BK] => activeKV s DK DV BK BV idx)
+        (fun idx : TileIndex [BV, BK] =>
+          (HSeed, stateOffset s DK DV BK BV idx.2.1 idx.1)))
+      (expected := fun idx : TileIndex [BV, BK] =>
+        stateClosed s k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
+          H DK DV BK BV 0 idx.2.1 idx.1)) ∧
+    -- (2b) the reverse carry invariant's base case at the top of the scan
+    (∀ (jk : Fin BK) (jv : Fin BV),
+      bbVal s H *
+        dStateClosed s q do_ s_qk_h s_vo_h H DK DV BK BV T scale T jk jv = 0) ∧
     -- (3) the forward output body realizes the genuine `outClosed(m)`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_output_step_slice HPrev q k v o
@@ -103,6 +119,7 @@ specification fused_recurrent_retention_output_summary_general
         outClosed s q k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
           H DK DV BK BV scale m jv)) ∧
     -- (4) the state-update body realizes the genuine `stateClosed(m+1)`
+    --      into the INTERNAL carry register `HOut` (a fiction region)
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_state_step_slice HPrev k v HOut
         m s_qk_h s_vo_h H DK DV BK BV)
@@ -112,21 +129,7 @@ specification fused_recurrent_retention_output_summary_general
       (expected := fun idx =>
         stateClosed s k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
           H DK DV BK BV (m + 1) idx.2.1 idx.1)) ∧
-    -- (5) the final-state writeback realizes the genuine `stateClosed(T)` (masked)
-    (ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_recurrent_retention_final_state_store_slice HFinal
-        final_state DK DV BK BV)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-        (fun idx : TileIndex [BV, BK] => finalActive s DK DV BK BV idx)
-        (fun idx : TileIndex [BV, BK] =>
-          (final_state, stateOffset s DK DV BK BV idx.2.1 idx.1)))
-      (expected := fun idx : TileIndex [BV, BK] =>
-        if finalActive s DK DV BK BV idx then
-          stateClosed s k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
-            H DK DV BK BV T idx.2.1 idx.1
-        else 0)) ∧
-    -- (6) the backward `dq` body realizes the genuine `dqClosed(m)`
+    -- (5) the backward `dq` body realizes the genuine `dqClosed(m)`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dq_step_slice HPrev k v do_ dq
         m s_qk_h s_vo_h B H DK DV BK BV scale)
@@ -137,7 +140,8 @@ specification fused_recurrent_retention_output_summary_general
       (expected := fun jk : Fin BK =>
         dqClosed s k v do_ initial_state USE_INITIAL_STATE s_qk_h s_vo_h
           H DK DV BK BV scale m jk)) ∧
-    -- (7) the reverse gradient-state carry body realizes `b_b·dStateClosed(m)`
+    -- (6) the reverse gradient-state carry body realizes `b_b·dStateClosed(m)`
+    --      into the INTERNAL carry register `DHOut` (a fiction region)
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dstate_step_slice DHPrev q do_
         DHOut m s_qk_h s_vo_h H DK DV BK BV scale)
@@ -148,7 +152,7 @@ specification fused_recurrent_retention_output_summary_general
         bbVal s H *
           dStateClosed s q do_ s_qk_h s_vo_h H DK DV BK BV T scale m
             idx.1 idx.2.1)) ∧
-    -- (8) the reverse `dk` body realizes the genuine `dkClosed(m)`
+    -- (7) the reverse `dk` body realizes the genuine `dkClosed(m)`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dk_step_slice DHPrev q do_ v dk
         m s_qk_h s_vo_h B H DK DV BK BV scale)
@@ -158,7 +162,7 @@ specification fused_recurrent_retention_output_summary_general
         (fun jk => (dk, dqStepOffset s m s_qk_h B H DK BK jk)))
       (expected := fun jk : Fin BK =>
         dkClosed s q do_ v s_qk_h s_vo_h H DK DV BK BV T scale m jk)) ∧
-    -- (9) the reverse `dv` body realizes the genuine `dvClosed(m)`
+    -- (8) the reverse `dv` body realizes the genuine `dvClosed(m)`
     (ComputeCorrect.Realizes_without_Rounding
       (kernel := fused_recurrent_retention_bwd_dv_step_slice DHPrev q do_ k dv
         m s_qk_h s_vo_h B H DK DV BK BV scale)
@@ -179,23 +183,19 @@ specification fused_recurrent_retention_output_summary_general
       s.readMem HPrev (stateOffset s DK DV BK BV jk jv)
         = stateClosed s k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
             H DK DV BK BV m jk jv`
-- `hFinal : ∀ (jk : Fin BK) (jv : Fin BV),
-      s.readMem HFinal (stateOffset s DK DV BK BV jk jv)
-        = stateClosed s k v initial_state USE_INITIAL_STATE s_qk_h s_vo_h
-            H DK DV BK BV T jk jv`
 - `hDPrev : ∀ (jk : Fin BK) (jv : Fin BV),
       s.readMem DHPrev (stateOffset s DK DV BK BV jk jv)
         = bbVal s H *
             dStateClosed s q do_ s_qk_h s_vo_h H DK DV BK BV T scale (m + 1) jk jv`
-- `fun jv : Fin BV => activeV s DV BV jv`
-- `fun idx : TileIndex [BV, BK] => finalActive s DK DV BK BV idx`
+- `fun idx : TileIndex [BV, BK] => activeKV s DK DV BK BV idx`
 - `fun idx : TileIndex [BV, BK] =>
-          (final_state, stateOffset s DK DV BK BV idx.2.1 idx.1)`
+          (HSeed, stateOffset s DK DV BK BV idx.2.1 idx.1)`
+- `fun jv : Fin BV => activeV s DV BV jv`
 - `fun jk : Fin BK => activeK s DK BK jk`
 - `fun jk : Fin BK => activeK s DK BK jk`
 - `fun jv : Fin BV => activeV s DV BV jv`
 
-**Closed-form spec defs (transitive):** `stateOffset`, `stateClosed`, `bbVal`, `dStateClosed`, `fused_recurrent_retention_fwd_surface`, `fused_recurrent_retention_bwd_surface`, `fused_recurrent_retention_output_step_slice`, `activeV`, `outStepOffset`, `outClosed`, `fused_recurrent_retention_state_step_slice`, `fused_recurrent_retention_final_state_store_slice`, `finalActive`, `fused_recurrent_retention_bwd_dq_step_slice`, `activeK`, `dqStepOffset`, `dqClosed`, `fused_recurrent_retention_bwd_dstate_step_slice`, `fused_recurrent_retention_bwd_dk_step_slice`, `dkClosed`, `fused_recurrent_retention_bwd_dv_step_slice`, `dvClosed`, `kIdx`, `vIdx`, `stateSeed`, `kValR`, `vValR`
+**Closed-form spec defs (transitive):** `stateOffset`, `stateClosed`, `bbVal`, `dStateClosed`, `fused_recurrent_retention_fwd_surface`, `fused_recurrent_retention_bwd_surface`, `fused_recurrent_retention_seed_slice`, `activeKV`, `fused_recurrent_retention_output_step_slice`, `activeV`, `outStepOffset`, `outClosed`, `fused_recurrent_retention_state_step_slice`, `fused_recurrent_retention_bwd_dq_step_slice`, `activeK`, `dqStepOffset`, `dqClosed`, `fused_recurrent_retention_bwd_dstate_step_slice`, `fused_recurrent_retention_bwd_dk_step_slice`, `dkClosed`, `fused_recurrent_retention_bwd_dv_step_slice`, `dvClosed`, `kIdx`, `vIdx`, `stateSeed`, `kValR`, `vValR`
 
 <details><summary><code>stateOffset</code></summary>
 
@@ -215,10 +215,15 @@ def stateOffset (s : BlockState) (DK DV BK BV : Nat)
 ```
 /-- **Genuine closed form for the retention state after `m` steps** (key lane
 `j_k`, value lane `j_v`):
-`seed · b_b^m + Σ_{t<m} k_t[j_k]·v_t[j_v] · b_b^(m−1−t)`. A standalone
-specification over the input regions `k, v, initial_state` — never a read-back
-of the kernel's own output. Shared by the forward loop and the backward
-phase-1 loop (same recurrence, same flat state layout). -/
+`seed · b_b^m + Σ_{t<m} k_t[j_k]·v_t[j_v] · b_b^(m−1−t)`. A standalone spec
+over the input regions `k, v, initial_state` — never a read-back of the
+kernel's own output. Shared by the forward loop and the backward phase-1 loop
+(same recurrence, same flat state layout).
+
+(Note: no docstring line here may begin at column 0 with a declaration keyword
+such as `theorem` or `specification` — `scripts/spec_sheet.py` matches those at
+column 0 and would report a phantom headline. Same hazard class as the "bench
+comment lines must not start with `import`" rule.) -/
 ```
 ```lean
 noncomputable def stateClosed
@@ -426,6 +431,46 @@ def fused_recurrent_retention_bwd_surface
 ```
 </details>
 
+<details><summary><code>fused_recurrent_retention_seed_slice</code></summary>
+
+```lean
+def fused_recurrent_retention_seed_slice
+    (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (USE_INITIAL_STATE : Bool) : ComputeKernel := triton {
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  mask_bk = (i_k * $(BK) + tl.arange(0, $(BK))) < $(DK)
+  mask_bv = (i_v * $(BV) + tl.arange(0, $(BV))) < $(DV)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
+  h = tl.zeros([$(BV), $(BK)], dtype=tl.float32)
+  if USE_INITIAL_STATE {
+    p_init_s = initial_state + i_bh * $(DK) * $(DV) +
+      (i_k * $(BK) + tl.arange(0, $(BK))[None, :]) * $(DV) +
+      (i_v * $(BV) + tl.arange(0, $(BV))[:, None])
+    h += tl.load(p_init_s, mask=mask_kv, other=0).to(tl.float32)
+  }
+  tl.store(HSeed + i_bh * $(DK) * $(DV) +
+    (i_k * $(BK) + tl.arange(0, $(BK))[None, :]) * $(DV) +
+    (i_v * $(BV) + tl.arange(0, $(BV))[:, None]),
+    (h).to(HSeed.dtype.element_ty), mask=mask_kv)
+}
+```
+</details>
+
+<details><summary><code>activeKV</code></summary>
+
+```
+/-- The `mask_kv` lane predicate of the seed load / final-state store, on the
+canonical `[BV, BK]` state tile (`idx.1 = j_v`, `idx.2.1 = j_k`). -/
+```
+```lean
+def activeKV (s : BlockState) (DK DV BK BV : Nat)
+    (idx : TileIndex [BV, BK]) : Prop :=
+  activeK s DK BK idx.2.1 ∧ activeV s DV BV idx.1
+```
+</details>
+
 <details><summary><code>fused_recurrent_retention_output_step_slice</code></summary>
 
 ```
@@ -536,50 +581,6 @@ def fused_recurrent_retention_state_step_slice
     (i_k * $(BK) + offs_k[None, :]) * $(DV) + (i_v * $(BV) + offs_v[:, None]),
     (acc).to(HOut.dtype.element_ty))
 }
-```
-</details>
-
-<details><summary><code>fused_recurrent_retention_final_state_store_slice</code></summary>
-
-```
-/-! ## Final-state store slice (the `STORE_FINAL_STATE` branch)
-
-After the forward loop, the kernel masked-stores the final state tile `h` into
-`final_state`. This slice models that writeback exactly, reading the
-materialized final-state tile `HFinal` and writing the masked `[BV,BK]` face
-into `Ht` at the flat state layout (with the kernel's
-`mask_bk[None,:] & mask_bv[:,None]` mask orientation). -/
-```
-```lean
-def fused_recurrent_retention_final_state_store_slice
-    (HFinal Ht : RegionName) (DK DV BK BV : Nat) :
-    ComputeKernel := triton {
-  i_v = tl.program_id(0)
-  i_k = tl.program_id(1)
-  i_bh = tl.program_id(2)
-  offs_k = i_k * $(BK) + tl.arange(0, $(BK))
-  offs_v = i_v * $(BV) + tl.arange(0, $(BV))
-  mask_kv = (offs_k[None, :] < $(DK)) & (offs_v[:, None] < $(DV))
-  h = tl.load(HFinal + i_bh * $(DK) * $(DV) +
-      offs_k[None, :] * $(DV) + offs_v[:, None],
-    mask=mask_kv, other=0.0)
-  tl.store(Ht + i_bh * $(DK) * $(DV) +
-      offs_k[None, :] * $(DV) + offs_v[:, None],
-    h, mask=mask_kv)
-}
-```
-</details>
-
-<details><summary><code>finalActive</code></summary>
-
-```
-/-- The `mask_kv` predicate of the forward `[BV, BK]` state faces
-(`mask_bk[None,:] & mask_bv[:,None]`). -/
-```
-```lean
-def finalActive (s : BlockState) (DK DV BK BV : Nat)
-    (idx : TileIndex [BV, BK]) : Prop :=
-  activeK s DK BK idx.2.1 ∧ activeV s DV BV idx.1
 ```
 </details>
 
@@ -822,10 +823,6 @@ noncomputable def stateSeed (s : BlockState) (h0 : RegionName)
     (USE_INITIAL_STATE : Bool) (DK DV BK BV : Nat)
     (jk : Fin BK) (jv : Fin BV) : ℝ :=
   if USE_INITIAL_STATE then s.readMem h0 (stateOffset s DK DV BK BV jk jv) else 0
-
-/-- **Genuine closed form for the retention state after `m` steps** (key lane
-`j_k`, value lane `j_v`):
-`seed · b_b^m + Σ_{t<m} k_t[j_k]·v_t[j_v] · b_b^(m−1−t)`. A standalone
 ```
 </details>
 
@@ -857,10 +854,179 @@ noncomputable def vValR (s : BlockState) (v : RegionName)
 ```
 </details>
 
+## Public theorem: `fused_recurrent_retention_seed_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `fused_recurrent_retention.py`'s
+`USE_INITIAL_STATE` seed store: for every disjoint flat placement of
+`initial_state` / `HSeed`, every program coordinate whose active lanes are in bounds,
+and every launch state whose `initial_state` block holds `xs` at the active lanes, the
+translated pointer kernel terminates, every active lane of `HSeed` holds `xs idx`, and
+every other memory cell is unchanged.
+
+Dimension-general in `DK`, `DV`, `BK` and `BV`. Honest side-condition: address
+injectivity at every program coordinate, the same hypothesis the per-write-map summary
+takes. The `USE_INITIAL_STATE = false` branch stores the zero tile and keeps its
+per-write-map face — a constant store has no input channel to quantify over. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification fused_recurrent_retention_seed_io_correctness
+    (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BV, BK] =>
+        p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val))) :
+    seedIO initial_state HSeed DK DV BK BV
+      ⊨ fun _p₀ _p₁ xs idx => xs idx
+```
+
+**Assumptions / layout contracts:**
+- `fun idx : TileIndex [BV, BK] =>
+        p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)`
+
+**Closed-form spec defs (transitive):** `seedIO`, `fused_recurrent_retention_seed_slice`
+
+<details><summary><code>seedIO</code></summary>
+
+```
+/-- IO signature of the seed store on the three-axis tile surface. -/
+```
+```lean
+def seedIO (initial_state HSeed : RegionName) (DK DV BK BV : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK BV
+    Bool.true
+  inp := initial_state
+  out := HSeed
+  shape := [BV, BK]
+  read := fun p₀ p₁ p₂ idx =>
+    p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)
+  write := fun p₀ p₁ p₂ idx =>
+    p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)
+  mask := fun p₀ p₁ _p₂ idx =>
+    p₁ * BK + idx.2.1.val < DK ∧ p₀ * BV + idx.1.val < DV
+```
+</details>
+
+<details><summary><code>fused_recurrent_retention_seed_slice</code></summary>
+
+```lean
+def fused_recurrent_retention_seed_slice
+    (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (USE_INITIAL_STATE : Bool) : ComputeKernel := triton {
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  mask_bk = (i_k * $(BK) + tl.arange(0, $(BK))) < $(DK)
+  mask_bv = (i_v * $(BV) + tl.arange(0, $(BV))) < $(DV)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
+  h = tl.zeros([$(BV), $(BK)], dtype=tl.float32)
+  if USE_INITIAL_STATE {
+    p_init_s = initial_state + i_bh * $(DK) * $(DV) +
+      (i_k * $(BK) + tl.arange(0, $(BK))[None, :]) * $(DV) +
+      (i_v * $(BV) + tl.arange(0, $(BV))[:, None])
+    h += tl.load(p_init_s, mask=mask_kv, other=0).to(tl.float32)
+  }
+  tl.store(HSeed + i_bh * $(DK) * $(DV) +
+    (i_k * $(BK) + tl.arange(0, $(BK))[None, :]) * $(DV) +
+    (i_v * $(BV) + tl.arange(0, $(BV))[:, None]),
+    (h).to(HSeed.dtype.element_ty), mask=mask_kv)
+}
+```
+</details>
+
+## Public theorem: `fused_recurrent_retention_seed_io_correctnessR`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` headline** for `fused_recurrent_retention.py`'s
+`USE_INITIAL_STATE` seed store: for **every** rounding model `R`, the same masked
+Hoare triple as `fused_recurrent_retention_seed_io_correctness`, but run under
+`execR R` and read back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+Neither `.to(...)` in the slice names a rounding grid and the `h += …` add is not
+a rounding site, so the slice is cast-free and the exact run transports verbatim.
+The content of the rounding face here is exactly that: *this kernel introduces no
+rounding event of its own*, at any `R` — the seeded carry reaches `HSeed`
+unquantized. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification fused_recurrent_retention_seed_io_correctnessR (R : RoundingModel)
+    (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BV, BK] =>
+        p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val))) :
+    seedIO initial_state HSeed DK DV BK BV
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx
+```
+
+**Assumptions / layout contracts:**
+- `fun idx : TileIndex [BV, BK] =>
+        p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)`
+
+**Closed-form spec defs (transitive):** `seedIO`, `fused_recurrent_retention_seed_slice`
+
+<details><summary><code>seedIO</code></summary>
+
+```
+/-- IO signature of the seed store on the three-axis tile surface. -/
+```
+```lean
+def seedIO (initial_state HSeed : RegionName) (DK DV BK BV : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := fused_recurrent_retention_seed_slice initial_state HSeed DK DV BK BV
+    Bool.true
+  inp := initial_state
+  out := HSeed
+  shape := [BV, BK]
+  read := fun p₀ p₁ p₂ idx =>
+    p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)
+  write := fun p₀ p₁ p₂ idx =>
+    p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)
+  mask := fun p₀ p₁ _p₂ idx =>
+    p₁ * BK + idx.2.1.val < DK ∧ p₀ * BV + idx.1.val < DV
+```
+</details>
+
+<details><summary><code>fused_recurrent_retention_seed_slice</code></summary>
+
+```lean
+def fused_recurrent_retention_seed_slice
+    (initial_state HSeed : RegionName) (DK DV BK BV : Nat)
+    (USE_INITIAL_STATE : Bool) : ComputeKernel := triton {
+  i_v = tl.program_id(0)
+  i_k = tl.program_id(1)
+  i_bh = tl.program_id(2)
+  mask_bk = (i_k * $(BK) + tl.arange(0, $(BK))) < $(DK)
+  mask_bv = (i_v * $(BV) + tl.arange(0, $(BV))) < $(DV)
+  mask_kv = mask_bk[None, :] & mask_bv[:, None]
+  h = tl.zeros([$(BV), $(BK)], dtype=tl.float32)
+  if USE_INITIAL_STATE {
+    p_init_s = initial_state + i_bh * $(DK) * $(DV) +
+      (i_k * $(BK) + tl.arange(0, $(BK))[None, :]) * $(DV) +
+      (i_v * $(BV) + tl.arange(0, $(BV))[:, None])
+    h += tl.load(p_init_s, mask=mask_kv, other=0).to(tl.float32)
+  }
+  tl.store(HSeed + i_bh * $(DK) * $(DV) +
+    (i_k * $(BK) + tl.arange(0, $(BK))[None, :]) * $(DV) +
+    (i_v * $(BV) + tl.arange(0, $(BV))[:, None]),
+    (h).to(HSeed.dtype.element_ty), mask=mask_kv)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
+- `fused_recurrent_retention_seed_slice_compute_correct`
 - `fused_recurrent_retention_state_step_slice_compute_correct`
 - `fused_recurrent_retention_output_step_slice_compute_correct`
-- `fused_recurrent_retention_final_state_store_slice_compute_correct`
 - `fused_recurrent_retention_bwd_dq_step_slice_compute_correct`
 - `fused_recurrent_retention_bwd_dstate_step_slice_compute_correct`
 - `fused_recurrent_retention_bwd_dk_step_slice_compute_correct`

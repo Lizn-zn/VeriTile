@@ -665,3 +665,117 @@ noncomputable def msaColLaneBGS (Cols : Region .nat) (ColCounts : Region .nat)
   else 0
 ```
 </details>
+
+## Public theorem: `mixed_sparse_attention_epilogue_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for the epilogue of
+`_triton_mixed_sparse_attn_fwd_kernel`: for every disjoint flat placement of
+`Seqlens` / `AccPre` / `LPre` / `Out`, every program coordinate whose windows are
+in bounds, every sequence length `m` the `Seqlens` cell may hold, and every launch
+state whose accumulator and denominator windows hold `xs` and `ys`, the epilogue
+terminates, every row below `m` of the output tile holds `xs[i, e] / ys[i]`, and
+every other memory cell is unchanged.
+
+**Scope.** This is the writeback only. `AccPre` / `LPre` are **fiction regions**:
+they stand for the kernel's `acc` / `l_i` registers, not for Python tensors — the
+same idiom as `fused_recurrent_retention`'s `HSeed`. The twenty-loop online
+softmax that produces them keeps its own closed-form summary
+(`mixed_sparse_attention_output_closed_form_summary_general`), which is where the
+attention math is proved; the two faces meet at the accumulator.
+
+What this face does add is the writeback's own contract, stated over channels
+rather than over memory: the sequence length is *loaded*, and both the row mask
+and the destination page are built from that loaded value. Dimension-general in
+`H`, `BLOCK_M`, `BLOCK_DMODEL` and all four strides. Honest side-condition:
+destination injectivity at every program coordinate. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification mixed_sparse_attention_epilogue_io_correctness
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat)
+    (hOutInj : ∀ p₀ p₁ : Nat, Function.Injective
+      (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        p₁ / H * stride_qz + p₁ % H * stride_qh +
+          (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_ok)) :
+    epilogueIO AccPre LPre Seqlens Out H stride_qz stride_qh stride_om stride_ok
+        BLOCK_M BLOCK_DMODEL
+      ⊨ fun _p₀ _p₁ _m xs ys idx => xs idx / ys (idx.1, PUnit.unit)
+```
+
+**Assumptions / layout contracts:**
+- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        p₁ / H * stride_qz + p₁ % H * stride_qh +
+          (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_ok`
+
+**Closed-form spec defs (transitive):** `epilogueIO`, `mixed_sparse_attention_epilogue_slice`
+
+<details><summary><code>epilogueIO</code></summary>
+
+```
+/-- IO signature of the epilogue: the loaded sequence length is a `.nat`
+channel, the accumulator and the row denominators are the two float channels. -/
+```
+```lean
+def epilogueIO (AccPre LPre : RegionName) (Seqlens : Region .nat)
+    (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat) :
+    Meta1MaskedTileShapedKernelIO₂ where
+  kernel := mixed_sparse_attention_epilogue_slice AccPre LPre Seqlens Out H
+    stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL
+  mbuf := Region.cast Seqlens
+  in1 := AccPre
+  in2 := LPre
+  out := Out
+  shape1 := [BLOCK_M, BLOCK_DMODEL]
+  shape2 := [BLOCK_M]
+  shapeOut := [BLOCK_M, BLOCK_DMODEL]
+  mwin := fun _p₀ p₁ => p₁ / H
+  read1 := fun p₀ p₁ _m idx =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh +
+      (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_ok
+  read2 := fun p₀ _p₁ _m i => p₀ * BLOCK_M + i.1.val
+  write := fun p₀ p₁ _m idx =>
+    p₁ / H * stride_qz + p₁ % H * stride_qh +
+      (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_ok
+  mask1 := fun _p₀ _p₁ _m _idx => True
+  mask2 := fun _p₀ _p₁ _m _i => True
+  writeMask := fun p₀ _p₁ m idx => p₀ * BLOCK_M + idx.1.val < m
+```
+</details>
+
+<details><summary><code>mixed_sparse_attention_epilogue_slice</code></summary>
+
+```
+/-- The epilogue of `_triton_mixed_sparse_attn_fwd_kernel`, with the accumulator
+and the row denominators materialized into `AccPre` / `LPre`. Statement for
+statement `acc /= l_i[:, None]` followed by the masked `tl.store(o_ptrs, ...)`,
+including the `seqlen` load that both the destination page and the row mask are
+built from. -/
+```
+```lean
+def mixed_sparse_attention_epilogue_slice
+    (AccPre LPre : RegionName) (Seqlens : Region .nat) (Out : RegionName)
+    (H stride_qz stride_qh stride_om stride_ok BLOCK_M BLOCK_DMODEL : Nat) :
+    ComputeKernel := triton {
+  start_m = tl.program_id(0)
+  off_hz = tl.program_id(1)
+  seqlen = tl.load(Seqlens + off_hz // $(H))
+  offs_m = start_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  qo_offset = (off_hz // $(H)) * $(stride_qz) + (off_hz % $(H)) * $(stride_qh)
+  m_mask = offs_m[:, None] < seqlen
+  acc = tl.load(AccPre + qo_offset + offs_m[:, None] * $(stride_om) +
+    offs_d[None, :] * $(stride_ok))
+  l_i = tl.load(LPre + offs_m)
+  acc = acc / l_i[:, None]
+  tl.store(Out + qo_offset + offs_m[:, None] * $(stride_om) +
+    offs_d[None, :] * $(stride_ok), (acc).to(Out.dtype.element_ty), mask=m_mask)
+}
+```
+</details>

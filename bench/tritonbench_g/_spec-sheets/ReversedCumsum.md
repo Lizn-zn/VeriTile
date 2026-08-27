@@ -174,6 +174,181 @@ def sIndex (s : BlockState) (BS : Nat) (j : Fin BS) : Nat :=
 ```
 </details>
 
+## Public theorem: `reversed_cumsum_block_store_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `reversed_cumsum.py`'s masked block
+store: for every disjoint flat placement of `BC` / `Z`, every program coordinate
+whose active lanes are in bounds, and every launch state whose `BC` block holds `xs`
+at the active lanes, the translated pointer kernel terminates, every active lane of
+the `Z` block holds `xs idx`, and every other memory cell is unchanged.
+
+The block address is built from **all three** program axes (`i_s`, `i_bh`, `i_t`) —
+the shape the three-axis tile skin exists for. Dimension-general in the three
+strides, `T`, `S`, `BT`, `BS`. Honest side-condition: output-address injectivity at
+every program coordinate, the same hypothesis the per-write-map summary takes. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification reversed_cumsum_block_store_io_correctness (BC Z : RegionName)
+    (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BT, BS] =>
+        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
+          + (p₀ * BS + idx.2.1.val) * s_s_d)) :
+    blockStoreIO BC Z s_s_h s_s_t s_s_d T S BT BS
+      ⊨ fun _p₀ _p₁ xs idx => xs idx
+```
+
+**Assumptions / layout contracts:**
+- `fun idx : TileIndex [BT, BS] =>
+        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
+          + (p₀ * BS + idx.2.1.val) * s_s_d`
+
+**Closed-form spec defs (transitive):** `blockStoreIO`, `reversed_cumsum_store_slice`
+
+<details><summary><code>blockStoreIO</code></summary>
+
+```
+/-- IO signature of the masked block store on the three-axis tile surface: the
+`[BT, BS]` block's one address is built from all three program axes, and the same
+address serves the read and the write. -/
+```
+```lean
+def blockStoreIO (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := reversed_cumsum_store_slice BC Z s_s_h s_s_t s_s_d T S BT BS
+  inp := BC
+  out := Z
+  shape := [BT, BS]
+  read := fun p₀ p₁ p₂ idx =>
+    p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t + (p₀ * BS + idx.2.1.val) * s_s_d
+  write := fun p₀ p₁ p₂ idx =>
+    p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t + (p₀ * BS + idx.2.1.val) * s_s_d
+  mask := fun p₀ _p₁ p₂ idx =>
+    p₂ * BT + idx.1.val < T ∧ p₀ * BS + idx.2.1.val < S
+```
+</details>
+
+<details><summary><code>reversed_cumsum_store_slice</code></summary>
+
+```
+/-- Proof-oriented block store surface slice of `reversed_cumsum.py`'s
+`chunk_global_reversed_cumsum_vector_kernel`.
+
+The full kernel computes a per-feature reversed chunk cumsum tile. This slice
+starts from a precomputed `BC` tile for one `(i_s, i_bh, i_t)` block and proves
+the boundary-checked writeback into `Z`. -/
+```
+```lean
+def reversed_cumsum_store_slice
+    (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    ComputeKernel := triton {
+  i_s = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  i_t = tl.program_id(2)
+  offs_t = i_t * $(BT) + tl.arange(0, $(BT))
+  offs_s = i_s * $(BS) + tl.arange(0, $(BS))
+  mask = (offs_t[:, None] < $(T)) & (offs_s[None, :] < $(S))
+  b_c = tl.load(BC + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
+      offs_s[None, :] * $(s_s_d), mask=mask, other=0.0)
+  tl.store(Z + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
+      offs_s[None, :] * $(s_s_d), (b_c).to(Z.dtype.element_ty), mask=mask)
+}
+```
+</details>
+
+## Public theorem: `reversed_cumsum_block_store_io_correctnessR`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` headline** for `reversed_cumsum.py`'s masked block store: for
+**every** rounding model `R`, the same masked Hoare triple as
+`reversed_cumsum_block_store_io_correctness`, but run under `execR R` and read
+back as `.real`-typed cells holding `R.round .real (xs idx)`.
+
+The store is a pure copy — no arithmetic, and the `.to(Z.dtype.element_ty)`
+erases to `.real` — so the slice is cast-free and the exact run transports
+verbatim. The content of the rounding face here is exactly that: *this kernel
+introduces no rounding event of its own*, at any `R`. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification reversed_cumsum_block_store_io_correctnessR (R : RoundingModel)
+    (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat)
+    (hOutInj : ∀ p₀ p₁ p₂ : Nat, Function.Injective
+      (fun idx : TileIndex [BT, BS] =>
+        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
+          + (p₀ * BS + idx.2.1.val) * s_s_d)) :
+    blockStoreIO BC Z s_s_h s_s_t s_s_d T S BT BS
+      ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx
+```
+
+**Assumptions / layout contracts:**
+- `fun idx : TileIndex [BT, BS] =>
+        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
+          + (p₀ * BS + idx.2.1.val) * s_s_d`
+
+**Closed-form spec defs (transitive):** `blockStoreIO`, `reversed_cumsum_store_slice`
+
+<details><summary><code>blockStoreIO</code></summary>
+
+```
+/-- IO signature of the masked block store on the three-axis tile surface: the
+`[BT, BS]` block's one address is built from all three program axes, and the same
+address serves the read and the write. -/
+```
+```lean
+def blockStoreIO (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    Masked3DTileKernelIO₁ where
+  kernel := reversed_cumsum_store_slice BC Z s_s_h s_s_t s_s_d T S BT BS
+  inp := BC
+  out := Z
+  shape := [BT, BS]
+  read := fun p₀ p₁ p₂ idx =>
+    p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t + (p₀ * BS + idx.2.1.val) * s_s_d
+  write := fun p₀ p₁ p₂ idx =>
+    p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t + (p₀ * BS + idx.2.1.val) * s_s_d
+  mask := fun p₀ _p₁ p₂ idx =>
+    p₂ * BT + idx.1.val < T ∧ p₀ * BS + idx.2.1.val < S
+```
+</details>
+
+<details><summary><code>reversed_cumsum_store_slice</code></summary>
+
+```
+/-- Proof-oriented block store surface slice of `reversed_cumsum.py`'s
+`chunk_global_reversed_cumsum_vector_kernel`.
+
+The full kernel computes a per-feature reversed chunk cumsum tile. This slice
+starts from a precomputed `BC` tile for one `(i_s, i_bh, i_t)` block and proves
+the boundary-checked writeback into `Z`. -/
+```
+```lean
+def reversed_cumsum_store_slice
+    (BC Z : RegionName) (s_s_h s_s_t s_s_d T S BT BS : Nat) :
+    ComputeKernel := triton {
+  i_s = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  i_t = tl.program_id(2)
+  offs_t = i_t * $(BT) + tl.arange(0, $(BT))
+  offs_s = i_s * $(BS) + tl.arange(0, $(BS))
+  mask = (offs_t[:, None] < $(T)) & (offs_s[None, :] < $(S))
+  b_c = tl.load(BC + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
+      offs_s[None, :] * $(s_s_d), mask=mask, other=0.0)
+  tl.store(Z + i_bh * $(s_s_h) + offs_t[:, None] * $(s_s_t) +
+      offs_s[None, :] * $(s_s_d), (b_c).to(Z.dtype.element_ty), mask=mask)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `reversed_cumsum_store_slice_compute_correct`
 - `reversed_cumsum_single_block_surface_compute_correct`

@@ -259,6 +259,227 @@ def kLoc
 ```
 </details>
 
+## Public theorem: `token_attn_llama2_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The `⊨[R]` gather-skin headline** — `token_attn_llama2` on
+`StreamMetaGatherMasked3DKernelIO₂`, at fully symbolic per-axis strides. For
+every rounding model `R`, the faithful surface implements, on its gather-indexed
+signature, the streamed closed form `llama2IOSpec`: every store-active output
+lane `i` holds `(Σ_d q[d] · k[i, d]) · sm_scale`, read off the two pinned
+streams. The kernel has **zero rounding events** (two `.nat` slot loads, a `.nat`
+page-table gather, an unmasked `.real` `Q` load, an `other = 0.0`-defaulted
+`.real` `K` load, `.real` dot arithmetic and an untyped `.real` store — no
+`.to(...)` cast, no `Op.castFloat`), so the skin's boundary quantization
+degenerates: the readback's `R.round .real` is the identity by the model's
+defining `round_real`.
+
+**The gather channel.** `B_Loc` enters as the skin's index channel
+(`gty = .nat`, `gother = 0`), and the `K` window `read2` eats the gathered tile:
+`G t jL · stride_kbs + …`. Like the `token_attn_mistral` sibling — and unlike the
+softmax_reducev exemplar — the Python `K` load carries **the gather's own mask**
+(`mask2 = gmask` on the row coordinate), so a masked-off lane never dereferences
+the substituted `other=` address and this port needs **no hypothesis at all** on
+`gother`; only the gather pin's *active* leg is used.
+
+**The guard loop and `writeMask`.** The kernel's `for start_mark in range(0,
+block_mask, 1)` has trip count `block_mask ∈ {0, 1}`, so `T = 1` and the store —
+though syntactically inside the loop — executes at most once. The `block_mask = 0`
+launches are handled **without any launch restriction**: `writeMask` carries the
+`block_mask = 1` conjunct `pid₂ · BN < m 0`, so an inactive block claims no cell
+and the skin's frame (everything outside the write-active window is untouched) is
+exactly the "nothing was stored" fact. `pre ≡ True`.
+
+**Hypothesis provenance**: `hOutInj` restates the exact headline's **open**
+output-offset injectivity side condition in ∀-pids form (per-axis strides are
+symbolic, so no contiguity discharge is available; it is what makes the masked
+scatter's readback well-defined). The exact headline's `hundef` is **not** a
+hypothesis: the skin's Hoare triple carries the `undef` pin itself, and this
+kernel's only unmasked load never consults it.
+
+Relation to the exact surface: the `Realizes_without_Rounding` headline above is
+retained unchanged; this `⊨[R]` face restates the same genuine closed form on the
+gather skin, for every `R` at once. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification token_attn_llama2_io_correctness (R : RoundingModel)
+    (Q K : RegionName) (sm_scale : ℝ) (B_Loc B_Start_Loc B_Seqlen : Region .nat)
+    (Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat)
+    (hOutInj : ∀ (pid₁ pid₂ base : Nat), Function.Injective
+      (fun i : Fin BN => pid₁ * ash + (base + (pid₂ * BN + i.val)) * asbs)) :
+    llama2IO Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out mil sblb sbls sqbs sqh sqd
+        skbs skh skd ash asbs kvg BD BN ⊨[R]
+      fun _ _ _ _ xs ys i => llama2IOSpec BD BN sm_scale xs ys i
+```
+
+**Closed-form spec defs (transitive):** `llama2IO`, `llama2IOSpec`, `token_attn_llama2_surface`, `llama2IOMetaBuf`, `llama2IOStep`
+
+<details><summary><code>llama2IO</code></summary>
+
+```
+/-- **Gather-indexed IO signature** of `token_attn_llama2` on the gather-indexed
+two-stream fold skin (S1: one-step QK fold + masked store, 3-D pid grid), at
+fully **symbolic per-axis strides**.
+
+Windows transcribe the kernel's pointer arithmetic VERBATIM, with the loaded
+slot vector `m` in place of the in-state metadata reads:
+
+* `gread` (`B_Loc`, the page table): lane `j` reads
+  `sblb · pid₀ + sbls · ((mil − m 0) + (pid₂ · BN + j))`; `gmask` is
+  `(mil − m 0) + (pid₂ · BN + j) < mil` and `gother = 0`.
+* `read1` (`Q`, the query row): lane `d` of step `t` reads
+  `pid₀ · sqbs + pid₁ · sqh + d · sqd + t` (the `+ start_mark` the kernel
+  spells; at the single live step it is `+ 0`). The load is **unmasked**, so
+  `mask1 ≡ True`.
+* `read2` (`K`, the **gather-addressed** cache rows, lane `j = (jL, d)`
+  row-major over `[BLOCK_N, BLOCK_DMODEL]`) reads
+  `G t jL · skbs + (pid₁ / kvg) · skh + d · skd`. `mask2` repeats `gmask`'s
+  predicate on the row coordinate.
+* `write` (`Att_Out`): lane `i` writes `pid₁ · ash + (m 1 + (pid₂ · BN + i)) · asbs`,
+  with `writeMask` = `block_mask = 1` **and** the store's own lane mask.
+
+`outDType` is the `.real` default: the terminal `tl.store` lowers to
+`Stmt.store .real` (no `.to(...)` cast anywhere in this kernel), so there is no
+quantization event. -/
+```
+```lean
+def llama2IO (Q K : RegionName) (sm_scale : ℝ)
+    (B_Loc B_Start_Loc B_Seqlen : Region .nat) (Att_Out : RegionName)
+    (mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN : Nat) :
+    StreamMetaGatherMasked3DKernelIO₂ where
+  kernel := token_attn_llama2_surface Q K sm_scale B_Loc B_Start_Loc B_Seqlen Att_Out
+    mil sblb sbls sqbs sqh sqd skbs skh skd ash asbs kvg BD BN
+  inp1 := Q
+  inp2 := K
+  out := Att_Out
+  nMeta := 2
+  sty := fun _ => ChanTy.nat
+  mbuf := llama2IOMetaBuf B_Start_Loc B_Seqlen
+  mwin := fun _ pid₀ _ _ => pid₀
+  gbuf := B_Loc.cast
+  gty := ChanTy.nat
+  Bg := BN
+  gother := 0
+  T := 1
+  B1 := BD
+  B2 := BN * BD
+  C := BN
+  outDType := .real
+  pre := fun _ _ _ _ => True
+  gread := fun pid₀ _ pid₂ m _ j =>
+    sblb * pid₀ + sbls * ((mil - m (⟨0, by omega⟩ : Fin 2)) + (pid₂ * BN + j.val))
+  gmask := fun _ _ pid₂ m _ j =>
+    (mil - m (⟨0, by omega⟩ : Fin 2)) + (pid₂ * BN + j.val) < mil
+  read1 := fun pid₀ pid₁ _ _ t d => pid₀ * sqbs + pid₁ * sqh + d.val * sqd + t.val
+  mask1 := fun _ _ _ _ _ _ => True
+  read2 := fun _ pid₁ _ _ G t j =>
+    G t (Lane2D.decode j).1 * skbs + (pid₁ / kvg) * skh + (Lane2D.decode j).2.1.val * skd
+  mask2 := fun _ _ pid₂ m _ j =>
+    (mil - m (⟨0, by omega⟩ : Fin 2)) + (pid₂ * BN + (Lane2D.decode j).1.val) < mil
+  write := fun _ pid₁ pid₂ m i =>
+    pid₁ * ash + (m (⟨1, by omega⟩ : Fin 2) + (pid₂ * BN + i.val)) * asbs
+  writeMask := fun _ _ pid₂ m i =>
+    pid₂ * BN < m (⟨0, by omega⟩ : Fin 2) ∧
+      (mil - m (⟨0, by omega⟩ : Fin 2)) + (pid₂ * BN + i.val) < mil
+```
+</details>
+
+<details><summary><code>llama2IOSpec</code></summary>
+
+```
+/-- **The streamed closed form**: `tokenAttnLlama2DotScore` restated over the two
+pinned streams — `att_out[i] = (Σ_d q[d] · k[i, d]) · sm_scale`, where the page
+indirection lives in the *window* (`read2` eats `G`), so the second stream cell
+is already the gathered cache row at flat lane `(i, d)`. -/
+```
+```lean
+noncomputable def llama2IOSpec (BD BN : Nat) (sm_scale : ℝ)
+    (xs : Fin 1 → Fin BD → ℝ) (ys : Fin 1 → Fin (BN * BD) → ℝ) (i : Fin BN) : ℝ :=
+  (∑ d : Fin BD,
+      xs llama2IOStep d *
+        ys llama2IOStep
+          (Lane2D.encode ((i, d, PUnit.unit) : TileIndex [BN, BD]))) * sm_scale
+```
+</details>
+
+<details><summary><code>token_attn_llama2_surface</code></summary>
+
+```
+/-- Faithful transcription of `token_attn_llama2.py`'s
+`_fwd_kernel_token_att1`.
+
+Typed-region note: metadata/gather buffers are `Region .nat`, matching their
+index role without adding source-level `dtype=` kwargs. -/
+```
+```lean
+def token_attn_llama2_surface
+    (Q K : RegionName) (sm_scale : ℝ) (B_Loc B_Start_Loc B_Seqlen : Region .nat)
+    (Att_Out : RegionName)
+    (max_input_len stride_b_loc_b stride_b_loc_s stride_qbs stride_qh stride_qd
+      stride_kbs stride_kh stride_kd att_stride_h att_stride_bs kv_group_num
+      BLOCK_DMODEL BLOCK_N : Nat) : ComputeKernel := triton {
+  cur_batch = tl.program_id(0)
+  cur_head = tl.program_id(1)
+  start_n = tl.program_id(2)
+  cur_kv_head = cur_head // $(kv_group_num)
+  offs_d = tl.arange(0, $(BLOCK_DMODEL))
+  cur_batch_seq_len = tl.load(B_Seqlen + cur_batch)
+  cur_batch_in_all_start_index = tl.load(B_Start_Loc + cur_batch)
+  cur_batch_start_index = $(max_input_len) - cur_batch_seq_len
+  cur_batch_end_index = $(max_input_len)
+  off_q = cur_batch * $(stride_qbs) + cur_head * $(stride_qh) + offs_d * $(stride_qd)
+  offs_n = start_n * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
+  block_stard_index = start_n * $(BLOCK_N)
+  block_mask = tl.where(block_stard_index < cur_batch_seq_len, $(1), $(0))
+  for start_mark in range($(0), block_mask, $(1)) {
+    q = tl.load(Q + off_q + start_mark)
+    offs_n_new = cur_batch_start_index + offs_n
+    k_loc = tl.load(B_Loc + $(stride_b_loc_b) * cur_batch +
+      $(stride_b_loc_s) * offs_n_new,
+      mask=offs_n_new < cur_batch_end_index, other=$(0))
+    off_k = k_loc[:, None] * $(stride_kbs) + cur_kv_head * $(stride_kh) +
+      offs_d[None, :] * $(stride_kd)
+    k = tl.load(K + off_k, mask=offs_n_new[:, None] < cur_batch_end_index, other=0.0)
+    att_value = tl.sum(q[None, :] * k, 1)
+    att_value *= $((sm_scale : ℝ))
+    off_o = cur_head * $(att_stride_h) +
+      (cur_batch_in_all_start_index + offs_n) * $(att_stride_bs)
+    tl.store(Att_Out + off_o, att_value, mask=offs_n_new < cur_batch_end_index)
+  }
+}
+```
+</details>
+
+<details><summary><code>llama2IOMetaBuf</code></summary>
+
+```
+/-- Slot-region table of the two per-batch metadata slots, in the kernel's own
+load order (`B_Seqlen`, `B_Start_Loc`). A shared def, never an inline `match` in
+a window position. -/
+```
+```lean
+def llama2IOMetaBuf (B_Start_Loc B_Seqlen : Region .nat) : Fin 2 → RegionName
+  | ⟨0, _⟩ => B_Seqlen.cast
+  | ⟨_ + 1, _⟩ => B_Start_Loc.cast
+```
+</details>
+
+<details><summary><code>llama2IOStep</code></summary>
+
+```
+/-- The kernel's single streaming step (`T = 1`). -/
+```
+```lean
+def llama2IOStep : Fin 1 := ⟨0, by omega⟩
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `token_attn_llama2_score_store_slice_compute_correct`
 - `token_attn_llama2_closed_form_correct`

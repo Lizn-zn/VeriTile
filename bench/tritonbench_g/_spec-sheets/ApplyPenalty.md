@@ -2,68 +2,121 @@
 
 **Python source:** `bench/tritonbench_g/apply_penalty/apply_penalty.py`
 
-## Public theorem: `apply_penalty_output_summary`
+## Public theorem: `apply_penalty_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- **Per-kernel output summary for `apply_penalty`.** The DSL surface lowers to
-the algorithm layer, and (under distinct active token ids) the masked in-place
-`Logits` store is compute-correct against the Lion penalty value. -/
+/-- **The headline**: `apply_penalty` implements the pure Lion penalty on
+its penalty gather–scatter IO signature — for every disjoint flat placement
+of the buffers, every program `cur_batch = pid₀` whose slot cells and
+active lanes are in bounds, and every launch state whose penalty slots hold
+`g₁`/`g₂`/`g₃`, whose cumsum cells hold `m₁`/`m₂`, whose token-id/count
+windows hold `ids`/`cnts`, and whose gathered `Logits` window holds `xs`,
+the translated pointer kernel terminates, every active (`m₁ + j < m₂`)
+scatter lane `pid₀ * stride_logit_b + ids j` of `Logits` holds
+`penaltyValuePure g₁ g₂ g₃ cnts xs j` — **guarded by the skin's `WriteInj`
+antecedent** (distinct active token ids over the pinned values: the
+write-map injectivity the pre-`⊨` summary carried as its `hUniq`
+hypothesis) — and every other memory cell is unchanged. Proof:
+`MetaScatterMasked2DKernelIO₁.Implements.intro` assembles the region-model
+triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification apply_penalty_output_summary
+specification apply_penalty_correctness
     (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
     (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b stride_logit_s BLOCK_P : Nat) (s : BlockState)
-    (hUniq : ∀ i j : Fin BLOCK_P,
-      active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
-      tokenId s p_token_ids p_cumsum_seq_len i =
-        tokenId s p_token_ids p_cumsum_seq_len j → i = j) :
-    (∃ alg, (apply_penalty Logits presence_penalty freqency_penalty
-      repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-      stride_logit_b stride_logit_s BLOCK_P).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := apply_penalty Logits presence_penalty freqency_penalty
+    (stride_logit_b stride_logit_s BLOCK_P : Nat) :
+    applyPenaltyIO Logits presence_penalty freqency_penalty
         repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
-        stride_logit_b stride_logit_s BLOCK_P)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin BLOCK_P => active s p_cumsum_seq_len i)
-          (fun i => ((Logits : RegionName),
-            activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i)))
-      (expected := fun i => penaltyValue s Logits presence_penalty
-        freqency_penalty repetition_penalty p_token_ids p_token_counts
-        p_cumsum_seq_len stride_logit_b i)
+        stride_logit_b stride_logit_s BLOCK_P
+      ⊨ fun _ _ g₁ g₂ g₃ _ _ _ cnts xs j =>
+          penaltyValuePure g₁ g₂ g₃ cnts xs j
 ```
 
-**Assumptions / layout contracts:**
-- `hUniq : ∀ i j : Fin BLOCK_P,
-      active s p_cumsum_seq_len i → active s p_cumsum_seq_len j →
-      tokenId s p_token_ids p_cumsum_seq_len i =
-        tokenId s p_token_ids p_cumsum_seq_len j → i = j`
-- `fun i : Fin BLOCK_P => active s p_cumsum_seq_len i`
+**Closed-form spec defs (transitive):** `applyPenaltyIO`, `penaltyValuePure`, `apply_penalty`
 
-**Closed-form spec defs (transitive):** `active`, `tokenId`, `apply_penalty`, `activeStoreAddr`, `penaltyValue`, `tokenOffset`, `batchEnd`, `batchStart`
+<details><summary><code>applyPenaltyIO</code></summary>
 
-<details><summary><code>active</code></summary>
+```
+/-- `apply_penalty`'s **penalty gather–scatter IO signature** — the whole
+kernel-specific audit surface of the `⊨` headline
+(`MetaScatterMasked2DKernelIO₁`, the metadata genre's `Meta` slots +
+`Scatter` writes skin):
 
+* `fbuf1`/`fbuf2`/`fbuf3` — the three per-batch float penalty slots
+  (`presence_penalty`/`freqency_penalty`/`repetition_penalty`), all read at
+  cell `pid₀` (`fwin1 = fwin2 = fwin3 = pid₀`), yielding the named scalars
+  `g₁ = cur_presence`, `g₂ = cur_freqency`, `g₃ = cur_repetition`;
+* `mbuf = p_cumsum_seq_len` — the `.nat` metadata buffer carrying both
+  cumsum slots: `mwin1 = pid₀` and `mwin2 = pid₀ + 1`, yielding
+  `m₁ = cur_batch_start_index` and `m₂ = cur_batch_end_index`;
+* `idbuf = p_token_ids`, `cntbuf = p_token_counts` — the `.nat` tiles, lane
+  `j` at the batch-window cell `m₁ + j` (`readi = readc`), yielding the
+  index tile `ids` (= `batch_ids`) and the counts `cnts`;
+* `inp = out = Logits` — the float data channel is gather-read **and**
+  scatter-written **in place** (duplicate-region wiring), lane `j` at the
+  data-dependent address `pid₀ * stride_logit_b + ids j` (`read = write`);
+  `B = BLOCK_P`;
+* `mask` — the active lanes `m₁ + j < m₂`
+  (`cur_batch_id_offset < cur_batch_end_index`), shared by all masked
+  accesses (`writeMask` defaults to `mask`).
+
+`stride_logit_s` is unused by the kernel body (rows are contiguous), and
+the 1-D launch ignores the family's second program id. The slot cells,
+windows, and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual slot loads, addressing, and masking match
+them. Buffer sizes are not signature content: the headline quantifies over
+every allocation whose extents cover the slot cells and the active lanes. -/
+```
 ```lean
-def active (s : BlockState) (p_cumsum_seq_len : RegionName)
-    (i : Fin BLOCK_P) : Prop :=
-  tokenOffset s p_cumsum_seq_len i < batchEnd s p_cumsum_seq_len
+def applyPenaltyIO
+    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
+    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
+    (stride_logit_b stride_logit_s BLOCK_P : Nat) :
+    MetaScatterMasked2DKernelIO₁ where
+  kernel := apply_penalty Logits presence_penalty freqency_penalty
+    repetition_penalty p_token_ids p_token_counts p_cumsum_seq_len
+    stride_logit_b stride_logit_s BLOCK_P
+  fbuf1 := presence_penalty
+  fbuf2 := freqency_penalty
+  fbuf3 := repetition_penalty
+  mbuf := p_cumsum_seq_len
+  idbuf := p_token_ids
+  cntbuf := p_token_counts
+  inp := Logits
+  out := Logits
+  B := BLOCK_P
+  fwin1 := fun pid₀ _ => pid₀
+  fwin2 := fun pid₀ _ => pid₀
+  fwin3 := fun pid₀ _ => pid₀
+  mwin1 := fun pid₀ _ => pid₀
+  mwin2 := fun pid₀ _ => pid₀ + 1
+  readi := fun _ _ m₁ _ j => m₁ + j.val
+  readc := fun _ _ m₁ _ j => m₁ + j.val
+  read := fun pid₀ _ _ _ ids j => pid₀ * stride_logit_b + ids j
+  mask := fun _ _ m₁ m₂ j => m₁ + j.val < m₂
+  write := fun pid₀ _ _ _ ids j => pid₀ * stride_logit_b + ids j
 ```
 </details>
 
-<details><summary><code>tokenId</code></summary>
+<details><summary><code>penaltyValuePure</code></summary>
 
+```
+/-- Per-lane `Logits` output spec as a **pure** function of the pinned values
+of the `⊨` headline: the reusable Lion penalty oracle
+(`VeriTile.Triton.Math.Optimizer.lionPenalty`) applied to the gathered logit
+`xs j`, its count `cnts j`, and the three loaded penalty scalars —
+repetition `g₃`, frequency `g₂`, presence `g₁`. This is `penaltyValue` with
+the state-coupled reads replaced by the named binders of the headline. -/
+```
 ```lean
-def tokenId (s : BlockState) (p_token_ids p_cumsum_seq_len : RegionName)
-    (i : Fin BLOCK_P) : Nat :=
-  s.readMemValue .nat p_token_ids (tokenOffset s p_cumsum_seq_len i)
+noncomputable def penaltyValuePure (g₁ g₂ g₃ : ℝ)
+    (cnts : Fin BLOCK_P → Nat) (xs : Fin BLOCK_P → ℝ) (j : Fin BLOCK_P) : ℝ :=
+  TiledOptimizer.lionPenalty (xs j) (cnts j : ℝ) g₃ g₂ g₁
 ```
 </details>
 
@@ -108,68 +161,3 @@ def apply_penalty
 }
 ```
 </details>
-
-<details><summary><code>activeStoreAddr</code></summary>
-
-```
-/-- The "active" store address (no mask conditional) used for the readback
-spec. When `active s i` holds, this equals `storeOffset s ... i`. -/
-```
-```lean
-def activeStoreAddr
-    (s : BlockState) (p_token_ids p_cumsum_seq_len : RegionName)
-    (stride_logit_b : Nat) (i : Fin BLOCK_P) : Nat :=
-  s.pids 0 * stride_logit_b + tokenId s p_token_ids p_cumsum_seq_len i
-```
-</details>
-
-<details><summary><code>penaltyValue</code></summary>
-
-```
-/-- Per-lane `Logits` output spec: the reusable Lion penalty oracle
-(`VeriTile.Triton.Math.Optimizer.lionPenalty`) applied to the values this lane
-loads — the logit at the gathered token, its count, and the three penalties. -/
-```
-```lean
-noncomputable def penaltyValue
-    (s : BlockState)
-    (Logits presence_penalty freqency_penalty repetition_penalty : Region .real)
-    (p_token_ids p_token_counts p_cumsum_seq_len : Region .nat)
-    (stride_logit_b : Nat) (i : Fin BLOCK_P) : ℝ :=
-  TiledOptimizer.lionPenalty
-    (s.readMem Logits
-      (activeStoreAddr s p_token_ids p_cumsum_seq_len stride_logit_b i))
-    (s.readMemValue .nat p_token_counts (tokenOffset s p_cumsum_seq_len i) : ℝ)
-    (s.readMem repetition_penalty (s.pids 0))
-    (s.readMem freqency_penalty (s.pids 0))
-    (s.readMem presence_penalty (s.pids 0))
-```
-</details>
-
-<details><summary><code>tokenOffset</code></summary>
-
-```lean
-def tokenOffset (s : BlockState) (p_cumsum_seq_len : RegionName)
-    (i : Fin BLOCK_P) : Nat :=
-  batchStart s p_cumsum_seq_len + i.val
-```
-</details>
-
-<details><summary><code>batchEnd</code></summary>
-
-```lean
-def batchEnd (s : BlockState) (p_cumsum_seq_len : RegionName) : Nat :=
-  s.readMemValue .nat p_cumsum_seq_len (s.pids 0 + 1)
-```
-</details>
-
-<details><summary><code>batchStart</code></summary>
-
-```lean
-def batchStart (s : BlockState) (p_cumsum_seq_len : RegionName) : Nat :=
-  s.readMemValue .nat p_cumsum_seq_len (s.pids 0)
-```
-</details>
-
-## Also present (pinned special-case summaries)
-- `apply_penalty_compute_correct`

@@ -2,44 +2,69 @@
 
 **Python source:** `bench/tritonbench_g/square_matrix/square_matrix.py`
 
-## Public theorem: `square_kernel_output_summary`
+## Public theorem: `square_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `square_kernel`: the DSL surface lowers to the
-algorithm layer, and the masked store to `output_ptr` is compute-correct — every
-active column holds `xs i * xs i`, out-of-bounds columns are preserved. -/
+/-- **The headline**: `square_kernel` implements the lane-wise square
+`xs i * xs i` on its masked IO signature — for every disjoint flat placement
+of the two buffers, every program id whose active lanes are in bounds, and
+every launch state whose active input-row lanes hold `xs`, the translated
+pointer kernel terminates, every active output-row lane holds `xs i * xs i`,
+and every other memory cell is unchanged. Proof:
+`MaskedKernelIO₁.Implements.intro` assembles the region-model masked triple
+with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification square_kernel_output_summary
+specification square_kernel_correctness
     (output_ptr input_ptr : RegionName)
-    (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat)
-    (hBlockSize : 0 < BLOCK_SIZE)
-    (s : BlockState) (xs : Fin BLOCK_SIZE → ℝ)
-    (h_x : InputRowLoadedAt s input_ptr input_row_stride BLOCK_SIZE xs) :
-    (∃ alg, (square_kernel output_ptr input_ptr input_row_stride output_row_stride
-        n_cols BLOCK_SIZE).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := square_kernel output_ptr input_ptr input_row_stride output_row_stride
-        n_cols BLOCK_SIZE)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin BLOCK_SIZE => i.val < n_cols)
-          (fun i => (output_ptr, s.pid * output_row_stride + i.val)))
-      (expected := fun i => xs i * xs i)
+    (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat) :
+    squareIO output_ptr input_ptr input_row_stride output_row_stride
+        n_cols BLOCK_SIZE ⊨
+      fun xs i => xs i * xs i
 ```
 
-**Assumptions / layout contracts:**
-- `hBlockSize : 0 < BLOCK_SIZE`
-- `xs : Fin BLOCK_SIZE → ℝ`
-- `h_x : InputRowLoadedAt s input_ptr input_row_stride BLOCK_SIZE xs`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
+**Closed-form spec defs (transitive):** `squareIO`, `square_kernel`
 
-**Closed-form spec defs (transitive):** `square_kernel`
+<details><summary><code>squareIO</code></summary>
+
+```
+/-- `square_kernel`'s masked **IO signature** — the whole kernel-specific
+audit surface of the `⊨` headline:
+
+* `inp`/`out` — which buffer is which argument (the wiring);
+* `B = BLOCK_SIZE` — the row window each program owns;
+* `read`/`write` — program `pid` reads its row at `pid * input_row_stride` and
+  writes it at `pid * output_row_stride` (the host-side one-program-per-row
+  launch convention);
+* `mask` — the active lanes `j < n_cols`, **the same for every program**: the
+  row prefix that actually exists in the matrix. Inactive lanes (the padding
+  of `BLOCK_SIZE = next_power_of_2(n_cols)`) carry no obligations on either
+  side.
+
+The windows and mask are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer sizes
+are not signature content: the headline quantifies over every allocation whose
+extents cover the active lanes. -/
+```
+```lean
+def squareIO (output_ptr input_ptr : RegionName)
+    (input_row_stride output_row_stride n_cols BLOCK_SIZE : Nat) :
+    MaskedKernelIO₁ where
+  kernel := square_kernel output_ptr input_ptr input_row_stride
+    output_row_stride n_cols BLOCK_SIZE
+  inp := input_ptr
+  out := output_ptr
+  B := BLOCK_SIZE
+  read := fun pid => pid * input_row_stride
+  write := fun pid => pid * output_row_stride
+  mask := fun _ j => j.val < n_cols
+```
+</details>
 
 <details><summary><code>square_kernel</code></summary>
 
@@ -66,6 +91,3 @@ def square_kernel
 }
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `square_kernel_compute_correct`

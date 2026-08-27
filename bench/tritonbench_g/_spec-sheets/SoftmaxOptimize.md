@@ -236,5 +236,116 @@ noncomputable def softmaxOptimizeRow
 ```
 </details>
 
+## Public theorem: `softmax_kernel_online_v2_one_tile_io_correctness`
+
+<details><summary>docstring</summary>
+
+```
+/-- **The headline on the IO surface** for `softmax_optimize.py`'s one-tile path:
+for every disjoint flat placement of `input_ptr` / `output_ptr`, every program id
+whose active lanes are in bounds, and every launch state whose input row holds
+`xs` on the `i < N` lanes, the kernel terminates, every active lane of the output
+row holds `softmaxTileSpec N TILE_N xs i`, and every other memory cell is
+unchanged.
+
+`softmaxTileSpec` is the port's own reduction chain — running max, shift,
+`exp`, running sum, divide — read over the **loaded lane values** instead of over
+memory, so this is a genuine input/output statement rather than a read-back of
+the kernel's own buffer. Masked-out lanes stay `⊥`, exactly as the kernel's
+`other = -float("inf")` load leaves them, which is what makes the face true for a
+partial tile (`N < TILE_N`, the case the one-tile path is *for*) and not only for
+a full one.
+
+Dimension-general in `N` and `TILE_N`. **Zero side-conditions on addresses**: the
+window is `pid·N + i`, so injectivity is discharged inline. The one honest
+hypothesis is `0 < TILE_N` — an empty tile makes `tl.max` fault, exactly as in
+Python. -/
+```
+</details>
+
+**Statement:**
+```lean
+specification softmax_kernel_online_v2_one_tile_io_correctness
+    (output_ptr input_ptr : RegionName) (N TILE_N : Nat) (hT : 0 < TILE_N) :
+    oneTileIO output_ptr input_ptr N TILE_N
+      ⊨ fun _pid xs idx => softmaxTileSpec N TILE_N xs idx.1
+```
+
+**Assumptions / layout contracts:**
+- `hT : 0 < TILE_N`
+
+**Closed-form spec defs (transitive):** `oneTileIO`, `softmaxTileSpec`, `softmax_kernel_online_v2_one_tile`
+
+<details><summary><code>oneTileIO</code></summary>
+
+```
+/-- IO signature of the one-tile softmax. -/
+```
+```lean
+def oneTileIO (output_ptr input_ptr : RegionName) (N TILE_N : Nat) :
+    MaskedTileKernelIO₁ where
+  kernel := softmax_kernel_online_v2_one_tile output_ptr input_ptr N TILE_N
+  inp := input_ptr
+  out := output_ptr
+  shape := [TILE_N]
+  read := fun pid idx => pid * N + idx.1.val
+  write := fun pid idx => pid * N + idx.1.val
+  mask := fun _pid idx => idx.1.val < N
+```
+</details>
+
+<details><summary><code>softmaxTileSpec</code></summary>
+
+```
+/-- `softmaxOptimizeSpec`'s reduction chain, read over the **loaded lane values**
+instead of over memory. Masked-out lanes are `⊥`, exactly as the kernel's
+`other = -float("inf")` load leaves them. -/
+```
+```lean
+noncomputable def softmaxTileSpec (N TILE_N : Nat)
+    (xs : TileIndex [TILE_N] → ℝ) (idx : Fin TILE_N) : ℝ :=
+  let row : Tile .real [TILE_N] :=
+    { data := fun j => if j.1.val < N then some (xs j) else none }
+  match Tile.reduceMax (shape := [TILE_N]) ⟨0, by simp⟩ Bool.false row with
+  | some rowMax =>
+      let shifted := Tile.bop (NumericDType.sub .real) Broadcast.scalarR row rowMax
+      let e := Tile.uop WithBot.realExp shifted
+      let z := Tile.reduceSum (shape := [TILE_N]) ⟨0, by simp⟩ Bool.false e
+      WithBot.unbotD 0
+        ((Tile.bop (NumericDType.div .real) Broadcast.scalarR e z).data
+          (idx, PUnit.unit))
+  | none => 0
+```
+</details>
+
+<details><summary><code>softmax_kernel_online_v2_one_tile</code></summary>
+
+```
+/-- Proof-oriented one-tile specialization of `softmax_kernel_online_v2`.
+
+When `N <= TILE_N`, the online loops collapse to one masked row tile. This kernel
+is kept as the small executable target for the existing algorithm proof. -/
+```
+```lean
+def softmax_kernel_online_v2_one_tile
+    (output_ptr input_ptr : RegionName)
+    (N TILE_N : Nat) :
+    ComputeKernel := triton {
+  pid_m = tl.program_id(0)
+  n_offsets = tl.arange(0, $(TILE_N))
+  offset = pid_m * $(N) + n_offsets
+  mask = n_offsets < $(N)
+  input_ptrs = input_ptr + offset
+  inp = (tl.load(input_ptrs, mask=mask, other=-float("inf"))).to(output_ptr.dtype.element_ty)
+  m = tl.max(inp, 0)
+  e = tl.exp(inp - m)
+  z = tl.sum(e, 0)
+  out = e / z
+  output_ptrs = output_ptr + offset
+  tl.store(output_ptrs, out, mask=mask)
+}
+```
+</details>
+
 ## Also present (pinned special-case summaries)
 - `softmax_kernel_online_v2_one_tile_compute_correct`

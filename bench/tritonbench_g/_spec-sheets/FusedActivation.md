@@ -2,64 +2,113 @@
 
 **Python source:** `bench/tritonbench_g/fused_activation/fused_activation.py`
 
-## Public theorem: `fused_add_mul_activation_kernel_output_summary`
+## Public theorem: `fused_add_mul_activation_kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `fused_add_mul_activation_kernel`: the DSL
-surface lowers to the algorithm layer, and the in-place masked store to `x_ptr`
-is compute-correct — every active lane holds `fusedActivationSpec` (the selected
-activation of `multiplier · input + x + bias`), out-of-bounds lanes are
-preserved. -/
+/-- **The headline**: `fused_add_mul_activation_kernel` implements the fused
+biased combine + activation on its grouped IO signature — for every disjoint
+flat placement of the three buffers, every program id whose masked lanes are in
+bounds, and every launch state whose three read windows (including the
+broadcast bias window at `index % num_weights`) hold `xs`, the translated
+pointer kernel terminates, every active lane `j` (`pid₀·BLOCK_SIZE + j <
+xnumel`) of the *same* buffer `x_ptr` ends up holding
+`fusedActivationSpec` — the selected activation of
+`multiplier·in + x + bias` on the originally-loaded values — and every other
+memory cell, including the out-of-bounds lanes of the window, is unchanged.
+Both activation branches (`true` = `tl.sigmoid`, `false` = `tl.maximum(0, ·)`)
+are covered: `ACTIVATION_SIGMOID` is a free parameter. Proof:
+`GroupedMasked2DKernelIO.Implements.intro` assembles the region-model grouped
+triple with the flat-memory bridge side conditions. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification fused_add_mul_activation_kernel_output_summary
+specification fused_add_mul_activation_kernel_correctness
     (x_ptr bias_ptr in_ptr : RegionName)
     (num_weights xnumel BLOCK_SIZE : Nat)
-    (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool)
-    (s : BlockState)
-    (xs inputs : Fin BLOCK_SIZE → ℝ)
-    (biases : Fin BLOCK_SIZE → ℝ)
-    (h_x : ∀ i : Fin BLOCK_SIZE,
-      s.readMem x_ptr (fusedActivationOffset s BLOCK_SIZE i) = xs i)
-    (h_in : ∀ i : Fin BLOCK_SIZE,
-      s.readMem in_ptr (fusedActivationOffset s BLOCK_SIZE i) = inputs i)
-    (h_bias : ∀ i : Fin BLOCK_SIZE,
-      s.readMem bias_ptr ((fusedActivationOffset s BLOCK_SIZE i) % num_weights) = biases i) :
-    (∃ alg, (fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
-        num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID).toAlgorithm? =
-          Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr
-        num_weights xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID)
-      (initialState := s)
-      (write := ComputeCorrect.WriteMap.writeIf
-          (fun i : Fin BLOCK_SIZE => fusedActivationOffset s BLOCK_SIZE i < xnumel)
-          (fun i => (x_ptr, fusedActivationOffset s BLOCK_SIZE i)))
-      (expected := fun i =>
-        fusedActivationSpec ACTIVATION_SIGMOID (xs i) (biases i) (inputs i) multiplier)
+    (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool) :
+    fusedActivationIO x_ptr bias_ptr in_ptr num_weights xnumel BLOCK_SIZE
+        multiplier ACTIVATION_SIGMOID
+      ⊨ fun _ _ xs _ j =>
+          fusedActivationSpec ACTIVATION_SIGMOID
+            (xs (⟨0, by decide⟩ : Fin 3) j)
+            (xs (⟨1, by decide⟩ : Fin 3) j)
+            (xs (⟨2, by decide⟩ : Fin 3) j) multiplier
 ```
 
-**Assumptions / layout contracts:**
-- `xs inputs : Fin BLOCK_SIZE → ℝ`
-- `biases : Fin BLOCK_SIZE → ℝ`
-- `h_x : ∀ i : Fin BLOCK_SIZE,
-      s.readMem x_ptr (fusedActivationOffset s BLOCK_SIZE i) = xs i`
-- `h_in : ∀ i : Fin BLOCK_SIZE,
-      s.readMem in_ptr (fusedActivationOffset s BLOCK_SIZE i) = inputs i`
-- `fun i : Fin BLOCK_SIZE => fusedActivationOffset s BLOCK_SIZE i < xnumel`
+**Closed-form spec defs (transitive):** `fusedActivationIO`, `fusedActivationSpec`, `fused_add_mul_activation_kernel`, `fusedActivationInput`
 
-**Closed-form spec defs (transitive):** `fusedActivationOffset`, `fused_add_mul_activation_kernel`, `fusedActivationSpec`, `fusedActivationInput`
+<details><summary><code>fusedActivationIO</code></summary>
 
-<details><summary><code>fusedActivationOffset</code></summary>
+```
+/-- `fused_add_mul_activation_kernel`'s grouped masked **IO signature** — the
+whole kernel-specific audit surface of the `⊨` headline
+(`GroupedMasked2DKernelIO`, the vector-channel genre; the general per-lane
+windows are what the broadcast bias read needs):
 
+* `bufs = [x_ptr, bias_ptr, in_ptr]` — every buffer once; the output channel
+  names `x_ptr` again, i.e. the update is **in place**;
+* `nIn = 3` — channel 0 = `x_ptr` at `pid₀·BLOCK_SIZE + j`, channel 1 =
+  `bias_ptr` at `(pid₀·BLOCK_SIZE + j) % num_weights` (the broadcast bias),
+  channel 2 = `in_ptr` at `pid₀·BLOCK_SIZE + j`;
+* `nOut = 1` — `x_ptr` at `pid₀·BLOCK_SIZE + j`;
+* every read/write gate is the kernel's single mask `pid₀·BLOCK_SIZE + j <
+  xnumel`;
+* `B = BLOCK_SIZE`; the kernel is a 1-D launch, so the family's second program
+  id is ignored by every field.
+
+The windows and masks are declared, not parsed from the kernel; the headline
+**proves** the kernel's actual addressing and masking match them. Buffer sizes
+are not signature content: the headline quantifies over every allocation whose
+extents cover the declared lanes. -/
+```
 ```lean
-def fusedActivationOffset (s : BlockState) (BLOCK_SIZE : Nat) (i : Fin BLOCK_SIZE) : Nat :=
-  s.pid * BLOCK_SIZE + i.val
+def fusedActivationIO
+    (x_ptr bias_ptr in_ptr : RegionName)
+    (num_weights xnumel BLOCK_SIZE : Nat)
+    (multiplier : ℝ) (ACTIVATION_SIGMOID : Bool) : GroupedMasked2DKernelIO where
+  kernel := fused_add_mul_activation_kernel x_ptr bias_ptr in_ptr num_weights
+    xnumel BLOCK_SIZE multiplier ACTIVATION_SIGMOID
+  nIn := 3
+  nOut := 1
+  bufs := [x_ptr, bias_ptr, in_ptr]
+  inp := fun i => match i with
+    | ⟨0, _⟩ => x_ptr
+    | ⟨1, _⟩ => bias_ptr
+    | ⟨_ + 2, _⟩ => in_ptr
+  out := fun _ => x_ptr
+  B := BLOCK_SIZE
+  read := fun i pid₀ _ j => match i with
+    | ⟨0, _⟩ => pid₀ * BLOCK_SIZE + j.val
+    | ⟨1, _⟩ => (pid₀ * BLOCK_SIZE + j.val) % num_weights
+    | ⟨_ + 2, _⟩ => pid₀ * BLOCK_SIZE + j.val
+  readMask := fun _ pid₀ _ j => pid₀ * BLOCK_SIZE + j.val < xnumel
+  write := fun _ pid₀ _ j => pid₀ * BLOCK_SIZE + j.val
+  writeMask := fun _ pid₀ _ j => pid₀ * BLOCK_SIZE + j.val < xnumel
+```
+</details>
+
+<details><summary><code>fusedActivationSpec</code></summary>
+
+```
+/-- Algorithm-layer branch form of the activation selector. `false` is the
+`tl.maximum(0, x)` ReLU branch. -/
+```
+```lean
+noncomputable def fusedActivationSpec
+    (ACTIVATION_SIGMOID : Bool) (x bias input multiplier : ℝ) : ℝ :=
+  let z := fusedActivationInput x bias input multiplier
+  if ACTIVATION_SIGMOID then
+    Real.sigmoid z
+  else
+    WithBot.unbotD 0
+      (if ComparableDType.real.gt (some 0) (some z) then
+        (some 0 : WithBot ℝ)
+      else
+        (some z : WithBot ℝ))
 ```
 </details>
 
@@ -99,27 +148,6 @@ def fused_add_mul_activation_kernel
 ```
 </details>
 
-<details><summary><code>fusedActivationSpec</code></summary>
-
-```
-/-- Algorithm-layer branch form of the activation selector. `false` is the
-`tl.maximum(0, x)` ReLU branch. -/
-```
-```lean
-noncomputable def fusedActivationSpec
-    (ACTIVATION_SIGMOID : Bool) (x bias input multiplier : ℝ) : ℝ :=
-  let z := fusedActivationInput x bias input multiplier
-  if ACTIVATION_SIGMOID then
-    Real.sigmoid z
-  else
-    WithBot.unbotD 0
-      (if ComparableDType.real.gt (some 0) (some z) then
-        (some 0 : WithBot ℝ)
-      else
-        (some z : WithBot ℝ))
-```
-</details>
-
 <details><summary><code>fusedActivationInput</code></summary>
 
 ```lean
@@ -128,6 +156,3 @@ noncomputable def fusedActivationInput
   multiplier * input + x + bias
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `fused_add_mul_activation_kernel_compute_correct`

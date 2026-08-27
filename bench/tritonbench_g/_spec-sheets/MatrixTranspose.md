@@ -2,43 +2,47 @@
 
 **Python source:** `bench/tritonbench_g/matrix_transpose/matrix_transpose.py`
 
-## Public theorem: `kernel_output_summary`
+## Public theorem: `kernel_correctness`
 
 <details><summary>docstring</summary>
 
 ```
-/-- Per-kernel output summary for `kernel`: the DSL surface lowers to the
-algorithm layer, and the cellwise store to `Out` is compute-correct — every
-output cell `idx` holds the transposed matrix cell, under the no-alias side
-condition `hOutInj`. -/
+/-- **The headline**: `kernel` implements the matrix transpose on its IO
+signature — for every disjoint flat placement of `M`/`Out`, every program id
+whose lanes are in bounds, and every launch state whose transposed source
+window holds the tile `xs`, the translated pointer kernel terminates, output
+lane `j` holds `xs j` (i.e. the output cell `(d, m)` holds the source cell
+`(m, d)` — the transposition lives in the signature's windows, which this
+theorem proves the kernel actually uses), and every other memory cell is
+unchanged.
+
+`hOutInj` is an honest, **truth-required** side condition: two distinct output
+lanes must not alias the same memory cell, otherwise only the last store
+survives and the per-lane claim is false. The host's contiguous `out` buffer
+satisfies it. -/
 ```
 </details>
 
 **Statement:**
 ```lean
-specification kernel_output_summary
+specification kernel_correctness
     (M Out : RegionName)
     (matrix_stridex matrix_stridey out_stridex out_stridey
       SIZE_M D_HEAD : Nat)
-    (s : BlockState)
     (hOutInj : Function.Injective
-      (fun idx : TileIndex [D_HEAD, SIZE_M] => outAddr out_stridex out_stridey idx)) :
-    (∃ alg, (kernel M Out matrix_stridex matrix_stridey out_stridex out_stridey
-        SIZE_M D_HEAD).toAlgorithm? = Except.ok alg) ∧
-    ComputeCorrect.Realizes_without_Rounding
-      (kernel := kernel M Out matrix_stridex matrix_stridey out_stridex out_stridey
-        SIZE_M D_HEAD)
-      (initialState := s)
-      (write := fun idx : TileIndex [D_HEAD, SIZE_M] =>
-          some (Out, outAddr out_stridex out_stridey idx))
-      (expected := fun idx => s.readMem M (matrixAddr matrix_stridex matrix_stridey idx))
+      (fun idx : TileIndex [D_HEAD, SIZE_M] =>
+        outAddr out_stridex out_stridey idx)) :
+    transposeIO M Out matrix_stridex matrix_stridey out_stridex out_stridey
+        SIZE_M D_HEAD
+      ⊨ fun _ _ xs j => xs j
 ```
 
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
-      (fun idx : TileIndex [D_HEAD, SIZE_M] => outAddr out_stridex out_stridey idx)`
+      (fun idx : TileIndex [D_HEAD, SIZE_M] =>
+        outAddr out_stridex out_stridey idx)`
 
-**Closed-form spec defs (transitive):** `outAddr`, `kernel`, `matrixAddr`
+**Closed-form spec defs (transitive):** `outAddr`, `transposeIO`, `kernel`, `matrixAddr`
 
 <details><summary><code>outAddr</code></summary>
 
@@ -49,6 +53,48 @@ specification kernel_output_summary
 def outAddr (out_stridex out_stridey : Nat)
     (idx : TileIndex [D_HEAD, SIZE_M]) : Nat :=
   idx.1.val * out_stridex + idx.2.1.val * out_stridey
+```
+</details>
+
+<details><summary><code>transposeIO</code></summary>
+
+```
+/-- `kernel`'s **IO signature** — the whole kernel-specific audit surface of
+the `⊨` headline:
+
+* `inp`/`out` — which buffer is which argument (`M`, `Out`);
+* `B = D_HEAD * SIZE_M` — the output tile flattened row-major into lanes,
+  lane `j` = logical output cell `(j / SIZE_M, j % SIZE_M)` (`laneIdx`);
+* `read` — lane `j`'s **transposed** source address
+  `m * matrix_stridex + d * matrix_stridey`;
+* `write` — lane `j`'s output address `d * out_stridex + m * out_stridey`;
+* `mask` — every lane (the kernel's load and store are both unmasked), so
+  `writeMask` keeps the struct default.
+
+The grid is `(1,)`, so no field depends on either program id. -/
+```
+```lean
+def transposeIO (M Out : RegionName)
+    (matrix_stridex matrix_stridey out_stridex out_stridey
+      SIZE_M D_HEAD : Nat) :
+    Masked2DKernelIO₁ where
+  kernel := kernel M Out matrix_stridex matrix_stridey out_stridex out_stridey
+    SIZE_M D_HEAD
+  inp := M
+  out := Out
+  B := D_HEAD * SIZE_M
+  read := fun _ _ j =>
+    matrixAddr matrix_stridex matrix_stridey (Lane2D.decode j)
+  write := fun _ _ j =>
+    outAddr out_stridex out_stridey (Lane2D.decode j)
+  mask := fun _ _ _ => True
+
+/-- **The headline**: `kernel` implements the matrix transpose on its IO
+signature — for every disjoint flat placement of `M`/`Out`, every program id
+whose lanes are in bounds, and every launch state whose transposed source
+window holds the tile `xs`, the translated pointer kernel terminates, output
+lane `j` holds `xs j` (i.e. the output cell `(d, m)` holds the source cell
+`(m, d)` — the transposition lives in the signature's windows, which this
 ```
 </details>
 
@@ -90,6 +136,3 @@ def matrixAddr (matrix_stridex matrix_stridey : Nat)
   idx.2.1.val * matrix_stridex + idx.1.val * matrix_stridey
 ```
 </details>
-
-## Also present (pinned special-case summaries)
-- `kernel_compute_correct`
