@@ -159,9 +159,21 @@ headline on a named surface.
 Reconnaissance (2026-08-27), so the debt is planned rather than guessed. The
 16 split into two families, and the blocker is different in each.
 
+**All 16 loop, and that fixes the face.** Every streaming skin in
+`KernelSpec.lean` carries only `ImplementsR` — the `⊨[R]` face, which runs
+under `execR`. Measured across the corpus: all 19 streaming skins are invoked
+with `ImplementsR.intro` and none has ever been used with the exact
+`Implements.intro` (the 33 exact-only skins are all non-streaming). So lifting
+any of these 16 is not "fit a skin and add a frame" on top of the existing
+proof — the existing stacks are all built on the exact `exec` side, and they
+have to be **mirrored onto `execR`**: the prologue run, the loop step and
+`forRangeTraceSafeR_inv` invariant, and the terminal store with the
+`writeMemAsR` readback/frame family. That mirror is the bulk of the cost, in
+every one of the 16.
+
 **Family 1 — three program axes, all-float channels (8 ports).** Seven of the
-eight already have an arity-matching skin in `KernelSpec.lean`; the work is the
-per-port fit and the frame proof, not new library surface.
+eight already have an arity-matching skin, so at least no new library surface
+is needed for the signature.
 
 | Port | channels in/out | arity-matching skin |
 |---|---|---|
@@ -179,10 +191,15 @@ today). The rest are **arity matches read off the surface signatures**; the
 in/out split for the `chunk_*` trio is inferred from the stored pointer names
 (`p_h`, `p_ht`), not from a checked store map. Confirm before building.
 
-`bmm_optimized` is the cheapest entry point but not a free one: `bmm_chunk_fwd`
-runs `mask1 = mask2 = writeMask = True`, whereas `bmm_optimized` is ported at
-`DIVISIBLE_M = DIVISIBLE_N = DIVISIBLE_K = False` with real masks, and carries
-both `GROUP_M` CTA-reorder arms. Its template's `⊨` section is ~1100 lines.
+`bmm_optimized` is the cheapest entry point but not a free one. In its favour,
+its existing invariant `bmmInv` already carries `s.mem = s0.mem`, so prologue
+and K-loop touch no memory and the whole-kernel frame reduces to the frame of
+the single terminal masked scatter store. Against it: `bmm_chunk_fwd` runs
+`mask1 = mask2 = writeMask = True`, whereas `bmm_optimized` is ported at
+`DIVISIBLE_M = DIVISIBLE_N = DIVISIBLE_K = False` with real masks and carries
+both `GROUP_M` CTA-reorder arms; its template's `⊨` section is ~1100 lines; and
+per the paragraph above its ~600-line exec-side stack (`bmmPrologue_run`,
+`bmmLoop_step`, `bmmLoop_run`, `bmmStores_run`) needs an `execR` mirror first.
 
 **Family 2 — typed `.int` / `.nat` data channels (8 ports).** `int4_matmul`,
 `int8_dequant_matmul`, `int8_matmul_kernel`, `int8_matmul_quantization`,
