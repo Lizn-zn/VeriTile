@@ -117,9 +117,8 @@ correctness as an inline exec-existential
 ```
 
 which proves termination and every stored output cell but **omits the frame** —
-"no cell outside the write set changed" is not part of the statement. Of the 24
-headlines across these files, 23 carry no frame conjunct (the exception is
-`int8_matmul_quantization_quantize_exec_genuine`). Lifting one of these to `⊨`
+"no cell outside the write set changed" is not part of the statement. **None**
+of the 25 headlines across these files carries a frame conjunct. Lifting one to `⊨`
 is therefore a *proof* obligation (fit an IO skin, discharge `FlattenOk` /
 `TraceSafeR`, prove the frame), not a rename — which is why they are registered
 here rather than silently accepted.
@@ -143,7 +142,7 @@ and the audit rejects both an unregistered offender and a stale entry here.
 | `int4_matmul` | `int4_matmul_exec_genuine` | no |
 | `int8_dequant_matmul` | `int8_dequant_matmul_exec_genuine` | no |
 | `int8_matmul_kernel` | `int8_matmul_kernel_exec_genuine` | no |
-| `int8_matmul_quantization` | `int8_matmul_quantization_quantize_exec_genuine`, `int8_matmul_quantization_matmul_exec_genuine` | quantize: **yes**; matmul: no |
+| `int8_matmul_quantization` | `int8_matmul_quantization_quantize_exec_genuine`, `int8_matmul_quantization_matmul_exec_genuine` | no |
 | `int_scaled_matmul` | `int_scaled_matmul_matmul_exec_genuine`, `int_scaled_matmul_scaled_exec_genuine` | no |
 | `matmul_dequant_int4` | `matmul_dequant_int4_exec_genuine` | no |
 | `matmul_dequantize` | `matmul_dequantize_matmul4_exec_genuine`, `matmul_dequantize_matmul_exec_genuine`, `matmul_dequantize_dequantize_exec_genuine` | no |
