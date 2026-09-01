@@ -154,6 +154,51 @@ These are the 16 ports added between 2026-08-10 and 2026-08-25 (ports 156–173:
 the descending-lever, fp8 and integer families). Every other port states its
 headline on a named surface.
 
+### What each of these is actually blocked on
+
+Reconnaissance (2026-08-27), so the debt is planned rather than guessed. The
+16 split into two families, and the blocker is different in each.
+
+**Family 1 — three program axes, all-float channels (8 ports).** Seven of the
+eight already have an arity-matching skin in `KernelSpec.lean`; the work is the
+per-port fit and the frame proof, not new library surface.
+
+| Port | channels in/out | arity-matching skin |
+|---|---|---|
+| `bmm_optimized` | `A`,`B` / `O` (2/1) | `StreamMetaMasked3DKernelIO₂` at `nMeta := 0` — **verified fit**: `bmm_chunk_fwd` already states its batched-matmul headline on exactly this skin and degeneracy |
+| `chunk_gla_fwd` | `q`,`v`,`g`,`h`,`A` / `o` (5/1) | `StreamMasked3DKernelIO₅` |
+| `chunk_linear_attn` | `k`,`v`,`h0` / `h`,`ht` (3/2) | `StreamMasked3DKernelIO₃ₓ₂` |
+| `chunk_retention` | `k`,`v`,`h0` / `h`,`ht` (3/2) | `StreamMasked3DKernelIO₃ₓ₂` |
+| `chunk_retention_ops` | `k`,`v`,`h0` / `h`,`ht` (3/2) | `StreamMasked3DKernelIO₃ₓ₂` |
+| `parallel_attention` | `q`,`k`,`v` / `o`,`z` (3/2) | `StreamMasked3DKernelIO₃ₓ₂` |
+| `parallel_retention_attention` | `q`,`k`,`v` / `o` (3/1) | `StreamMasked3DKernelIO₃` |
+| `chunk_bwd_dqkg` | 7 in / 3 out | none — would need a `₇ₓ₃`-shaped skin |
+
+Only the `bmm_optimized` row is a verified fit (a sibling port uses that skin
+today). The rest are **arity matches read off the surface signatures**; the
+in/out split for the `chunk_*` trio is inferred from the stored pointer names
+(`p_h`, `p_ht`), not from a checked store map. Confirm before building.
+
+`bmm_optimized` is the cheapest entry point but not a free one: `bmm_chunk_fwd`
+runs `mask1 = mask2 = writeMask = True`, whereas `bmm_optimized` is ported at
+`DIVISIBLE_M = DIVISIBLE_N = DIVISIBLE_K = False` with real masks, and carries
+both `GROUP_M` CTA-reorder arms. Its template's `⊨` section is ~1100 lines.
+
+**Family 2 — typed `.int` / `.nat` data channels (8 ports).** `int4_matmul`,
+`int8_dequant_matmul`, `int8_matmul_kernel`, `int8_matmul_quantization`,
+`int_scaled_matmul`, `matmul_dequant_int4`, `matmul_dequantize`,
+`matmul_dequantize_int4`.
+
+These are blocked on missing library surface, not on proof effort: **every one
+of the 61 skins declares its streamed inputs and its terminal output as a plain
+`RegionName`** — the `.real` channel. The only typed field anywhere in the skin
+family is `sty : Fin nMeta → ChanTy`, and that types the *metadata scalar
+slots*, never the data. A port whose GEMM operands or output ride a
+`Region .int` / `Region .nat` channel therefore has no skin to fit, at any
+arity. Unlocking this family means a typed-channel streaming skin — one lever
+that would move all eight, and the highest-leverage item on this list.
+
+
 ## Translation-Surface Blockers
 
 A port whose Lean `triton { }` surface deliberately deviates from a literal
