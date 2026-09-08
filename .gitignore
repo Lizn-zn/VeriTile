@@ -27,3 +27,6 @@
 /site/node_modules/
 /site/dist/
 /site/.astro/
+
+# Python bytecode caches (py_compile / import of the bench ports)
+__pycache__/
