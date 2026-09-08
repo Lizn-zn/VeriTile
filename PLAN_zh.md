@@ -97,14 +97,14 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
 
 ## 状态(2026-05-09)
 
-### Tier 1 — Loop-free kernel pairs ✅(`v0.1-tier1`)
+### Tier 1 — Loop-free kernel pairs ✅
 
 - `softmax_kernels_refinement` —— naive ↔ 数值稳定 softmax
 - `log_sum_exp_refinement` —— direct LSE ↔ shift-trick LSE
 - `softmax_reciprocal_refinement` —— `y = e/s` 逐元素除法 ↔ `inv_s = 1/s; y = e * inv_s`
 - math 引理 `welford_eq_two_pass`(为 Tier 2 Welford 准备)
 
-### Tier 2 — Streaming reductions ✅(`v0.2-tier2`)
+### Tier 2 — Streaming reductions ✅
 
 - `welford_kernels_refinement` —— Welford ↔ two-pass variance
 - `online_softmax_recurrence_eq_batch` —— FlashAttention 算法核心
@@ -117,7 +117,7 @@ Real 算法正确性到 floating computation 的 trusted bridge **是 external g
   `(dtype, shape, name)` 索引)、`WithBot ℝ` 通道载体(`Op.negInf` 求值为真正的 `⊥`
   而非 `-1e38` stand-in)
 
-### Tier 3-A — FA-1 forward 全套 ✅(`v0.3-tier3a`)
+### Tier 3-A — FA-1 forward 全套 ✅
 
 - `fa1_forward_correct`(non-causal,single-block 推理)
 - `fa1_forward_correct_strided`(任意 stride layout)
@@ -269,7 +269,7 @@ block-local 任意 mask `_block_*` 对偶;
 
 ### 近期 — Tier 3 release 与 Tier 4 prerequisite
 
-- 切 `v0.3-tier3` release,覆盖 FA-1 forward(3-A)、FA-2 forward + headline
+- 切第一个 release(至今未打过任何 tag),覆盖 FA-1 forward(3-A)、FA-2 forward + headline
   推论 `fa1_eq_fa2_two_block_forward4D`(3-B)、FA-1/FA-2 backward + headline
   推论 `fa1_backward_eq_fa2_backward(_4D)`(3-C)
 - Pre-Tier-4 cleanup checklist(已闭合:见 issue #108)
@@ -409,8 +409,8 @@ PyTorch 量级)。
 
 - 主仓库:`github.com/Lizn-zn/VeriTile`(已公开)
 - 主分支恒可构建
-- Tier 完成时打 tag(已有 `v0.1-tier1`、`v0.2-tier2`;`v0.3-tier3a`,
-  之后随路线图增长)
+- Tier 完成时打 tag。**至今没有打过任何 release tag**(这里曾计划的
+  `v0.1-tier1` / `v0.2-tier2` / `v0.3-tier3a` 从未创建);第一个 tag 仍待定
 - 每个 release 配 release notes(新定理、新语义、benchmark 数据、scope 变化)
 - README 持续维护双语(英 + 中)
 - `CONTRIBUTING.md`,加 kernel-pair 的 tutorial(以 Tier 1 log-sum-exp 作为

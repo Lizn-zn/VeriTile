@@ -110,7 +110,7 @@ The trusted bridge from Real-algorithm correctness to floating computation
 
 ## Status (2026-05-09)
 
-### Tier 1 — Loop-free kernel pairs ✅ (`v0.1-tier1`)
+### Tier 1 — Loop-free kernel pairs ✅
 
 - `softmax_kernels_refinement` — naive ↔ numerically stable softmax
 - `log_sum_exp_refinement` — direct LSE ↔ shift-trick LSE
@@ -118,7 +118,7 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `inv_s = 1/s; y = e * inv_s`
 - math lemma `welford_eq_two_pass` (prep for Tier 2 Welford)
 
-### Tier 2 — Streaming reductions ✅ (`v0.2-tier2`)
+### Tier 2 — Streaming reductions ✅
 
 - `welford_kernels_refinement` — Welford ↔ two-pass variance
 - `online_softmax_recurrence_eq_batch` — FlashAttention algorithmic core
@@ -133,7 +133,7 @@ The trusted bridge from Real-algorithm correctness to floating computation
   `(dtype, shape, name)`); `WithBot ℝ` carrier (`Op.negInf` lowers to true
   `⊥` rather than `-1e38` stand-in)
 
-### Tier 3-A — FA-1 forward full coverage ✅ (`v0.3-tier3a`)
+### Tier 3-A — FA-1 forward full coverage ✅
 
 - `fa1_forward_correct` (non-causal, single-block reasoning)
 - `fa1_forward_correct_strided` (arbitrary stride layout)
@@ -299,7 +299,7 @@ ergonomic, not functional:
 
 ### Near-term — Tier 3 release + Tier 4 prerequisites
 
-- Cut `v0.3-tier3` release covering FA-1 forward (3-A), FA-2 forward + the
+- Cut a first release (no tag has been cut yet) covering FA-1 forward (3-A), FA-2 forward + the
   `fa1_eq_fa2_two_block_forward4D` headline corollary (3-B), and FA-1/FA-2
   backward + `fa1_backward_eq_fa2_backward(_4D)` headline corollary (3-C)
 - Pre-Tier-4 cleanup checklist (closed: see issue #108)
@@ -465,8 +465,9 @@ To make the close-rate metric reproducible:
 
 - Main repo: `github.com/Lizn-zn/VeriTile` (already public)
 - Main branch always builds
-- Tag on Tier closure (already: `v0.1-tier1`, `v0.2-tier2`; pending:
-  `v0.3-tier3a`, plus more as the roadmap grows)
+- Tag on Tier closure. **No release tag has been cut to date** (the
+  `v0.1-tier1` / `v0.2-tier2` / `v0.3-tier3a` names once planned here were
+  never created); the first tag is still pending
 - Each release ships with release notes (new theorems, new semantics,
   benchmark data, scope changes)
 - Bilingual README (English + Chinese) maintained
