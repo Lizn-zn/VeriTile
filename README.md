@@ -48,8 +48,8 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   `VeriTile.Meta.TrustReport`, and over the standalone bench corpus via
   `bench/audit_trust.sh`). `.github/workflows/artifact.yml` runs `lake build` +
   `scripts/check-artifact.sh` (no `sorry`, axiom whitelist, manifest schema,
-  doc-drift checks); that workflow is currently disabled in repository settings
-  (`gh workflow enable artifact.yml` re-enables it).
+  doc-drift checks). `.github/workflows/site.yml` builds and deploys the docs
+  site to GitHub Pages on every push touching `site/`.
 
 Out of scope: IEEE-754 floating-point semantics, PTX-level codegen,
 detailed concurrency (atomics / async-copy serialization, beyond the

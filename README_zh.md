@@ -42,8 +42,8 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
   (库侧 `VeriTile.Meta.TrustReport`、独立语料侧 `bench/audit_trust.sh` 的
   `#axiomsClean`)。`.github/workflows/artifact.yml` 跑 `lake build` +
   `scripts/check-artifact.sh`(无 `sorry`、公理白名单、manifest schema、
-  文档漂移检查);该 workflow 目前在仓库设置里处于 disabled 状态
-  (`gh workflow enable artifact.yml` 可重新启用)。
+  文档漂移检查)。`.github/workflows/site.yml` 在每次触及 `site/` 的 push 上
+  构建并把文档站部署到 GitHub Pages。
 
 不在范围内:IEEE-754 浮点语义、PTX 级 codegen、详细并发(原子操作 /
 async-copy 序列化,投影边界以外)、Python wrapper 执行。
