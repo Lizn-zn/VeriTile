@@ -131,6 +131,8 @@ Once translation is settled, pick a theorem surface. The chooser is in
 
 | Goal | Surface |
 |---|---|
+| Bench / showcase headline | `KernelIO` `⊨` / `⊨[R]`, declared with `specification` |
+| Output spec for every rounding model | `ComputeRefine.Realizes` |
 | One kernel matches an output spec | `ComputeCorrect.Realizes_without_Rounding` |
 | Two kernels satisfy an output relation | `ComputeRefine.Refines_without_Rounding` |
 | Value + index output (e.g. `return_indices=True`) | `ComputeCorrect.OutputPairWhere` |

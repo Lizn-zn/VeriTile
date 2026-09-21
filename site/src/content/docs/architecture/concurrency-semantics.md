@@ -10,10 +10,10 @@ It is the design entry point for issue #12.
 The proof-facing algorithm semantics is still deterministic:
 
 ```lean
-Kernel.exec : Kernel -> BlockState -> Option BlockState
+exec : Kernel -> BlockState -> Option BlockState
 ```
 
-`Kernel.exec` executes one symbolic program instance by stepping statements in
+`exec` executes one symbolic program instance by stepping statements in
 order. It has no scheduler, no trace of interleavings, no in-flight operations,
 and no separate shared-memory or barrier state.
 
@@ -26,8 +26,9 @@ The deterministic memory stack is implemented through:
 - #62 unrelated-frame helpers.
 
 That stack supports deterministic, disjoint, sequential memory reasoning. It
-does not model overlapping writes, atomics, barriers, shared memory, async/TMA,
-WGMMA dispatch/wait, warp specialization, or scheduling/interleavings.
+does not model general overlapping writes, barriers, shared memory, async/TMA,
+WGMMA dispatch/wait, warp specialization, or scheduling/interleavings. The
+limited atomic-add and return-valued xchg/cas slices are described below.
 
 ## Two-Layer Architecture
 
@@ -185,12 +186,12 @@ inductive MemoryEvent where
 Commutative atomics use `input` as their contribution and leave the optional
 fields empty. Order-sensitive atomics such as xchg/cas can fill `extraInput`,
 `observed`, and `result` without introducing a second event type. The trace
-module is not a scheduler and does not change `Kernel.exec`.
+module is not a scheduler and does not change `exec`.
 
-## #82 PR0 Audit Result
+## Historical #82 PR0 Design Check
 
-#82's first implementation step is an ownership/API audit before adding
-`atomic_xchg` / `atomic_cas` semantics. The current result is:
+The initial ownership/API audit preceded the implemented `atomic_xchg` /
+`atomic_cas` slice described below. Its result at that stage was:
 
 ```text
 API ready; proceed to PR1.
@@ -295,13 +296,13 @@ scope-tagged footprints remain #65 triggers.
 
 This boundary document does not implement:
 
-- executable `tl.atomic_*` beyond the limited `tl.atomic_add` proof-facing slice;
+- full hardware atomic semantics beyond the modeled add/xchg/cas slices;
 - async copy or TMA;
 - WGMMA or warp specialization;
 - shared memory or barriers;
 - Iris-style or separation-logic infrastructure;
 - a scheduler or interleaving semantics;
-- any change to `Kernel.exec`.
+- any change to `exec`.
 
 The purpose is to keep the current deterministic `ComputeCorrect` /
 `ProjectedCorrect` story stable while defining where future non-sequential

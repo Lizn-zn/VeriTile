@@ -1,5 +1,10 @@
 # ApproxGeLU 中段策略:Phi / 临界点证明
 
+> **研究策略记录。** 下文包含候选方法与数值探索，不代表所有步骤已经证明。
+> 当前 `scripts/artifact-axiom-whitelist.txt` 仍列出
+> `VeriTile/Math/GeluTaylor20Cert.lean:geluError_mid_taylor20_approx`。
+> 判断具体结果时，应查看定理的传递公理依赖和 [信任审计](./TrustAudit_zh.md)。
+
 目标:
 
 ```text

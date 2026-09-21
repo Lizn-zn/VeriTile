@@ -291,3 +291,49 @@ aside.starlight-aside--tip     { border-left-color: var(--vt-verified); }
 
 /* Hide the splash hero's default decorative svg if any */
 .hero > img, .hero > svg { display: none; }
+
+/* Give the project homepage its own wider canvas while retaining docs widths. */
+html[data-has-hero]:not([data-has-sidebar]) {
+  --sl-content-width: 78rem;
+}
+
+/* Project homepage: warm paper, quiet ink, and a restrained amber accent. */
+html[data-has-hero][data-theme='light'] {
+  --vt-paper: #F5F2EB;
+  --vt-paper-2: #EDE9E0;
+  --vt-paper-3: #DCD6CA;
+  --vt-ink: #34332E;
+  --vt-ink-2: #57554E;
+  --vt-ink-3: #716C61;
+  --vt-rule: #DFD9CD;
+  --vt-rule-2: #CDC5B7;
+  --vt-seal: #936126;
+  --vt-seal-ink: #7C501B;
+  --vt-seal-soft: rgba(147, 97, 38, .09);
+  --vt-verified: #3B6E48;
+  --vt-success-soft: rgba(59, 110, 72, .07);
+  --vt-error: #AC4437;
+  --vt-error-soft: rgba(172, 68, 55, .07);
+}
+
+html[data-has-hero][data-theme='dark'] {
+  --vt-paper: #1B1C19;
+  --vt-paper-2: #252620;
+  --vt-paper-3: #36382F;
+  --vt-ink: #EAE5DA;
+  --vt-ink-2: #C0BCB1;
+  --vt-ink-3: #A09C90;
+  --vt-rule: #373A31;
+  --vt-rule-2: #505347;
+  --vt-seal: #D5AD72;
+  --vt-seal-ink: #E2BE87;
+  --vt-seal-soft: rgba(213, 173, 114, .09);
+  --vt-verified: #92BF95;
+  --vt-success-soft: rgba(146, 191, 149, .07);
+  --vt-error: #E69A8F;
+  --vt-error-soft: rgba(230, 154, 143, .07);
+}
+
+html[data-has-hero] body {
+  font-family: 'IBM Plex Mono', 'Noto Sans CJK SC', 'Microsoft YaHei', monospace;
+}

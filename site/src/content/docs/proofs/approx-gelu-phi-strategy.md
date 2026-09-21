@@ -2,6 +2,13 @@
 title: "ApproxGeLU Midrange Strategy: Phi / Critical-Point Proof"
 ---
 
+> **Research strategy note.** The candidate methods and numerical explorations
+> below do not establish that every step has been proved. The current
+> `scripts/artifact-axiom-whitelist.txt` includes
+> `VeriTile/Math/GeluTaylor20Cert.lean:geluError_mid_taylor20_approx`.
+> Inspect a theorem's transitive axiom dependencies and the
+> [trust audit](/VeriTile/proofs/trust-audit/) when interpreting a result.
+
 Goal:
 
 ```text

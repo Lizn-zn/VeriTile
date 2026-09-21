@@ -328,8 +328,10 @@ b * stride_b + h * stride_h + i * stride_s + d * stride_d
 - store 会把 `⊥` 用默认值降回内存;well-formed kernel 不应该 store `⊥`。
 
 含义是:当前 theorem 证明的是实数数学正确性,不是 IEEE-754 bit-level 等价。
-rounding、NaN、signed zero、overflow、underflow、denormal、exception flag、
-硬件 dot precision、fast-math rewrite 都未建模。关于 partial math function、
+IEEE-754 的具体舍入、NaN、signed zero、overflow、underflow、denormal、
+exception flag、硬件 dot precision 和 fast-math rewrite 未被完整建模。
+额外的 `RoundingModel` 层在显式浮点 cast 与 store 处应用抽象舍入，
+要求 `round_real` 与 `round_idem`；这些契约不提供硬件数值误差界。关于 partial math function、
 fixed-width integer、pointer offset 和 total memory read 的 review checklist,
 见 [`SemanticCaveats_zh.md`](./SemanticCaveats_zh.md)。
 
@@ -348,15 +350,15 @@ Stmt.store : TileDType → MemAccess shape → Op ... → MaskOpt dtype shape �
 bit-width 或 overflow 语义。`tl.store` 从写入的 value 推断 dtype,也支持可选的、
 必须匹配 value dtype 的 `dtype=` surface spelling。
 
-Float theorem policy: 算法正确性 / refinement theorem 证明在擦除后的 `.real`
-kernel 上。面向 DSL 的 compute surface 是 `ComputeKernel`;
+Float theorem policy: 精确算法契约使用数学值；舍入契约使用 `execR`，
+保留投影中可表示的 cast 与 store 舍入事件。面向 DSL 的 compute surface 是 `ComputeKernel`;
 `ComputeKernel.ComputeCorrect` 和 `ComputeKernel.ComputeRefine` 通过
 `toAlgorithm?` 把可擦除的 compute kernel 投影到算法层,并可用可选的
 `GapPolicy` 记录外部检查过的 compute-to-algorithm gap contract。已有
 float-facing theorem 仍可使用 `k.eraseDType = realK` 这类 erasure 等式,为带 dtype
 标注的 algorithm kernel 复用 Real proof。数值 compute correctness/refinement 仍由
 外部 gap contract 和 differential tests 单独支撑,不是 IEEE-754 proof。这些定义放在
-`VeriTile.Triton.Float`;compute / algorithm split 和 bitcast policy 见
+`VeriTile.Triton.Correctness` 与 `VeriTile.Triton.Float`;compute / algorithm split 和 bitcast policy 见
 `documents/EraseDType.md`。
 
 ## Operator / syntax 覆盖 checklist
@@ -400,7 +402,7 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | indirection | Limited | typed index load 可以参与 pointer arithmetic,表达 gather / paged-KV 风格 data-dependent address (#42);还没有 alias/bounds/page-ownership proof layer |
 | block pointer | Limited | `tl.make_block_ptr`、`tl.advance`、带 checked-axis zero padding / store skip 的 block-pointer load/store;没有硬件/TMA 行为 |
 | atomic / async / barrier | Limited | `tl.atomic_add` 已有 AlgKernel `Stmt.atomicAdd` marker、单程序顺序语义、trace payload 词汇和 Real grid-merge sum theorem;`tl.atomic_xchg` / `tl.atomic_cas` 现在会 project 到 return-valued `Stmt.atomicRMW` marker,并已有 single-cell RMW fold 语义、可执行 statement 语义、stateful trace emission 和带 explicit linearization witness 的 single-cell grid launcher relation;其他 `tl.atomic_*`、`tl.async_copy`、`tl.async_wait`、`tl.debug_barrier` 目前只会 lowering 到 compute-facing failure marker;async/TMA discipline 仍只是文档 contract,没有实现;还没有完整 scheduler、可执行 barrier、可执行 async copy 语义、TMA AST 或 IEEE atomic 语义 (#12/#67/#68/#69/#71/#72/#76/#82) |
-| floating-point fidelity | Gap | 只有 real-valued model;没有 IEEE-754 或 mixed-precision hardware semantics (#11) |
+| floating-point fidelity | Limited | 数学实数语义与抽象 cast/store 舍入模型；无完整 IEEE-754 硬件语义 (#11) |
 
 ## 表达力矩阵
 

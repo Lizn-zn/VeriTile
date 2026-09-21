@@ -1,0 +1,18 @@
+---
+import { corpus } from '../lib/project-data';
+const rows = [
+  ['Paired Python / Lean ports', corpus.pairedPorts],
+  ['Directories without a port', corpus.scaffolds],
+  ['Total TritonBench-G directories', corpus.totalDirectories],
+];
+---
+
+<table>
+  <caption>Counted from the repository at site build time. Port counts do not imply complete hardware correctness proofs.</caption>
+  <thead><tr><th scope="col">Metric</th><th scope="col">Count</th></tr></thead>
+  <tbody>{rows.map(([label, count]) => <tr><th scope="row">{label}</th><td>{count}</td></tr>)}</tbody>
+</table>
+
+<style>
+  caption { text-align: start; caption-side: bottom; font-size: .85rem; padding-top: .75rem; color: var(--vt-ink-2); }
+</style>

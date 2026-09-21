@@ -6,14 +6,12 @@ description: Standard 1D scatter, dual-channel store, single-step loops, the hel
 By now the proof patterns for the bench corpus have stabilized into a
 handful of templates. This page maps each pattern to the helpers in
 `Semantics/Scalar.lean`, `Semantics/State.lean`, and
-`VeriTile/Triton/LoopInvariant.lean`, and gives a skeleton you can copy.
+`VeriTile/Triton/KernelLemmas/LoopInvariant.lean`, and gives a skeleton you can copy.
 
-:::caution[Currency]
-The named helpers below were last surveyed 2026-05-17. Specific lemma
-names are stable but **issue numbers and progress lists are not** —
-this page is about the patterns, not the bench-wide closure state. See
-[Project status](/VeriTile/status/) for current coverage.
-:::
+These blocks are proof skeletons: supply the kernel, state, hypotheses, and
+placeholders before compiling. See [VectorAdd.lean](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd.lean)
+for a complete example. Loop helpers live in `KernelLemmas/LoopInvariant.lean`;
+offset-injectivity helpers live in `Semantics/Offset.lean`.
 
 ## Standard 1D scatter proof
 
@@ -42,7 +40,7 @@ The injectivity-witness comes from one of the standard injection helpers:
 | Bare `fun idx => idx.1.val` | `tileIndex1d_offset_injective` |
 | 2D row-major: `+ idx.1.val * Nstride + idx.2.1.val` (needs `N ≤ Nstride`) | `tileIndex2d_base_row_major_injective` |
 | 2D fully strided: `+ idx.1.val * Mstride + idx.2.1.val * Nstride` | `tileIndex2d_base_strided_injective` |
-| 2D non-inner softmax-style | `nonInnerOffset_injective` |
+| 2D non-inner softmax-style | `nonInnerOffset_injective` (`softmax_flaggems/SoftmaxFlaggems.lean`) |
 
 ### Explicit-trace variant
 
@@ -82,7 +80,7 @@ this clean — a typed nat/int write doesn't disturb the real-channel
 ## Loop-invariant proofs
 
 The kernel's body is wrapped in a `for` / `tl.for`. Use
-[`forLoop_inv`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/LoopInvariant.lean)
+[`forLoop_inv`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/KernelLemmas/LoopInvariant.lean)
 or its siblings.
 
 ### DSL → AST → helper map
@@ -112,7 +110,7 @@ inductive proof needs to handle a sub-range.
 ### Spec document
 
 Detailed semantics in
-[`documents/ForLoopInvDesign.md`](https://github.com/Lizn-zn/VeriTile/blob/main/documents/ForLoopInvDesign.md)
+[`documents/archive/ForLoopInvDesign.md`](https://github.com/Lizn-zn/VeriTile/blob/main/documents/archive/ForLoopInvDesign.md)
 §4.1 / §4.2 / §4.3. The bench files
 [`DiagSsmTriton`](https://github.com/Lizn-zn/VeriTile/tree/main/bench/tritonbench_g/diag_ssm_triton),
 [`MeanReduction`](https://github.com/Lizn-zn/VeriTile/tree/main/bench/tritonbench_g/mean_reduction),
@@ -125,7 +123,7 @@ all use the API in production and are good worked references.
 When the Python test only drives a single step-aligned chunk
 (`start < stop ≤ start + step`), use
 `forRange_single_step` / `forRangeDyn_single_step` from
-`LoopInvariant.lean`. These collapse the loop to a single body execution
+`KernelLemmas/LoopInvariant.lean`. These collapse the loop to a single body execution
 without needing an inductive `P`.
 
 Applies to:
@@ -176,10 +174,14 @@ worked reference.
 `tl.maximum` and `tl.where(cond, a, b)` with a Bool condition need Bool↔Prop
 plumbing. Standard helpers in `Semantics/Scalar.lean`:
 
-- `ComparableDType.{gt,lt,ge,le,eq,ne}_eq_true` — Bool↔Prop bridge.
+- `ComparableDType.real_{gt,lt,ge,le,eq,ne}_eq_true` — Bool↔Prop bridge.
 - `ComparableDType.real_gt_some_some_eq_true_iff` (kldiv_ops) — keeps
   Bool-form decode tractable when classical `Decidable` would otherwise
   bake in.
 
 The next page, [`forLoop_inv` pitfalls](/VeriTile/cookbook/forloop-pitfalls/),
 collects the tactical traps that recur when applying these templates.
+
+`ComparableDType.real_gt_some_some_eq_true_iff` is defined in the standalone
+`bench/tritonbench_g/kldiv_ops/KldivOps.lean` file; it is not exported by the
+library umbrella import.

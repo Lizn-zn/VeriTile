@@ -231,11 +231,20 @@ check_documentation_terms() {
   fi
 }
 
+check_documented_api() {
+  if python3 site/scripts/check-doc-api.py; then
+    ok "documented public API references resolve"
+  else
+    fail "documentation references an unavailable public API"
+  fi
+}
+
 run_build_no_sorry
 check_axioms
 check_kernel_manifest
 check_readme_example_links
 check_documentation_terms
+check_documented_api
 
 if [[ "${failures}" -eq 0 ]]; then
   printf '[ok] artifact checks passed\n'

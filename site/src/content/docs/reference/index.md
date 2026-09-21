@@ -8,11 +8,33 @@ since they describe the build and tooling rather than the design.
 
 ## Build & toolchain
 
+### Setup
+
+Install Git and follow the [official elan installation instructions](https://github.com/leanprover/elan#installation).
+Open a fresh terminal so that `lake` is available on your PATH. Elan selects
+the Lean version pinned by this checkout's `lean-toolchain` file.
+
+```bash
+git clone https://github.com/Lizn-zn/VeriTile.git
+cd VeriTile
+lake build
+lake env lean bench/examples/VectorAdd.lean
+```
+
+The first build needs network access to fetch the toolchain and dependencies.
+The final command should exit with code 0 and report that the example's axiom
+and statement-surface checks pass. Existing linter warnings may still appear.
+
+### Build targets
+
 - **Lean toolchain**: `v4.29.0`. Pinned in
   [`lean-toolchain`](https://github.com/Lizn-zn/VeriTile/blob/main/lean-toolchain).
-- **Build**: `lake build` from the repo root.
+- **Routine build**: `lake build` from the repo root (the default `VeriTile` target).
+- **Full build**: `lake build VeriTile VeriTileFull`, including the GeLU analysis and library trust report.
+- **Standalone example**: `lake env lean bench/examples/VectorAdd.lean` after the library build.
 - **Manifest + sorry check**: `scripts/check-artifact.sh`.
 - **Bench port check**: `bench/check_ports.sh`.
+- **Trust checks**: see the [trust audit guide](/VeriTile/proofs/trust-audit/).
 
 ## Sub-project READMEs
 

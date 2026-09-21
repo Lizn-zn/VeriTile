@@ -85,7 +85,7 @@ Unrelated-memory preservation helper 放在同一个 frame stack 上(#62)。
 
 ## 示例
 
-`VeriTile/Examples/MemorySafety.lean` 包含若干代表性证明:
+`bench/tests/MemorySafety.lean` 包含若干代表性证明:
 
 - `straightLineCopy_memorySafe`:直接 region+offset load/store。
 - `maskedTailAdd_memorySafe`:masked inactive lane 平凡安全。

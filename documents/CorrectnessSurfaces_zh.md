@@ -1,34 +1,34 @@
 # 正确性 surface
 
 本文档说明在证明 `ComputeKernel` 的性质时,应当选用哪个公开 theorem surface。
-所有 surface 定义在
-[`VeriTile.Triton.Correctness`](../VeriTile/Triton/Correctness.lean)。
+精确 surface 定义在
+[`VeriTile.Triton.Correctness`](../VeriTile/Triton/Correctness.lean)，舍入 surface 定义在
+[`Float.Refine`](../VeriTile/Triton/Float/Refine.lean)。
 
-## 舍入默认
+## 舍入模型与精确实数接口
 
-先读这一节 —— 它固定了下面每个 surface 名字的含义。**不带限定词**的 surface
-名字(`Realizes`、`Refines`、`RefinesAt`、`Correct`)是**舍入模型** surface:
-它们接受一个 `RoundingModel R`,在 R-threaded 语义 `execR` 下执行。**精确实数
-理想化** —— 也就是旧的"一切都是实数算术、没有量化"的读法 —— 是显式带限定词的
-`*_without_Rounding` surface(`Realizes_without_Rounding`、
-`Refines_without_Rounding`、`RefinesAt_without_Rounding`、
-`Correct_without_Rounding`)。
+接口由 `VeriTile/Triton/Correctness.lean`（精确语义）与
+`VeriTile/Triton/Float/Refine.lean`（舍入模型）提供：
 
-经验法则:不带限定词的名字是 kernel 在硬件上*实际*做的(带舍入);
-`*_without_Rounding` 是当舍入与结论无关时可退回的数学家理想化。精确 surface
-在 trivial model `.triv` 处(此时 `execR` 退化为 `exec`)**从**舍入 surface
-**退化出来**,反方向从不成立。173 个 ported kernel 大多在 `*_without_Rounding`
-上证明(它们的输出是精确实数 spec);`bench/examples/` 下带 bf16 边界 store 的
-showcase pair 落在舍入 surface `Refines R` 上。
+- `ComputeCorrect.Realizes_without_Rounding kernel s write expected`：
+  精确语义下的输出契约，`expected : ι → α`。
+- `ComputeRefine.Realizes kernel s write expected`：对所有 `RoundingModel`
+  量化，`expected : RoundingModel → ι → α`。
+- `ComputeRefine.Refines R lhs rhs s scratch` 与 `RefinesAt R ...`：
+  在给定模型 `R` 下比较两个 kernel。精确版本带 `_without_Rounding` 后缀。
+- `ComputeCorrect.Post`、`General` 和 `Output*` wrapper 仍使用精确语义。
+
+`RoundingModel` 要求实数通道恒等（`round_real`）与幂等性（`round_idem`）。
+单调性、奇对称和网格嵌套是可选的额外假设。模型在显式浮点 cast 与 store 处
+记录舍入，不等于逐算术操作的 IEEE-754 硬件执行模型，也不提供数值误差界。
+在 `R := .triv` 处，`execR` 退化为 `exec`；有关桥接引理见后文。
 
 ## KernelIO `⊨` —— 逐 kernel 头条 surface
 
 上面/下面这些 surface(`Realizes`、`Refines` …)是**库**的词汇。bench 语料实际
 用来陈述头条的,是 **KernelIO `⊨` 三元组**,定义在
-[`VeriTile/Triton/Memory/KernelSpec.lean`](../VeriTile/Triton/Memory/KernelSpec.lean)
-(61 个 IO 签名 structure、41 个 scoped notation)。目前 **173 个 TritonBench-G
-端口中的 153 个、以及 `bench/examples/` 全部 17 个 showcase** 都有 `⊨` 面;
-其中 68 个端口另有舍入面 `⊨[R]`。
+[`VeriTile/Triton/Memory/KernelSpec.lean`](../VeriTile/Triton/Memory/KernelSpec.lean)。不同签名覆盖输入输出数量、mask、索引与流式窗口等情形。
+具体端口的覆盖情况见 [proof-gap manifest](../bench/tritonbench_g/proof_gap_manifest.tsv)。
 
 ### `KernelIO` 是什么
 
@@ -64,10 +64,9 @@ specification my_kernel_correctness … :
 | `io ⊨[R, dtype] f` | 同上但把 `outDType` 写出来 —— 只要一个文件陈述了多于一条输出通道就该用它,因为三洞形式会把 `.fp16` 面和 `.real` 面印成一样 |
 | `io₁ ≡[R] io₂` | kernel 对 kernel 的 refinement,即 `Refines` 的 `⊨` 对应物 |
 
-`⊨[R]` 对**所有**舍入模型全称量化,所以在 `R := .triv` 处退化成 `⊨` ——
-舍入面是严格更强的陈述。但它只有在签名把 `outDType` 钉成窄类型时才带有浮点
-窄化的*实质内容*:13 个端口钉了 `.fp16`/`.fp32`/`.f8e4`;其余的 `outDType = .real`
-而 `R.round .real = id`。
+`io ⊨[R] f` 使用给定的模型 `R`；对所有模型量化必须由定理显式给出。
+如果定理对所有 `R` 都成立，可以实例化到 `.triv`。只有输出类型为窄浮点时，
+边界量化才具有实质内容；`.real` 通道满足 `R.round .real = id`。
 
 ### 怎么证
 
@@ -86,7 +85,7 @@ specification my_kernel_correctness … :
 |---|---|
 | **bench 端口 / showcase 的头条** | 某张 `KernelIO` 皮的 `⊨`(精确)或 `⊨[R]`(舍入)—— 见上一节 |
 | …… kernel 对 kernel,同一 surface | `io₁ ≡[R] io₂` |
-| 一个 kernel realize 某个输出规范(带舍入)| `ComputeCorrect.Realizes` |
+| 一个 kernel realize 某个输出规范(带舍入)| `ComputeRefine.Realizes` |
 | …… 该规范的精确实数理想化 | `ComputeCorrect.Realizes_without_Rounding` |
 | 一个 kernel refine 另一个,writes-equality(带舍入)| `ComputeRefine.Refines` |
 | …… 精确实数理想化 | `ComputeRefine.Refines_without_Rounding` |
@@ -101,6 +100,14 @@ specification my_kernel_correctness … :
 底层的 `ComputeKernel.ComputeCorrect` 和 `ComputeKernel.ComputeRefine` 定义仍是
 实现层。新示例 theorem 一般不应直接暴露这两个名字。
 
+## 执行、终止与 frame
+
+`Realizes_without_Rounding` 与 `ComputeRefine.Realizes` 描述成功执行后的输出，
+不单独保证执行成功或终止。`Refines` 也是在两侧执行成功时比较结果。
+`RealizesFrame_without_Rounding` 增加输出范围之外的内存保持条件。
+需要同时陈述终止、输出和 frame 的 bench 头条时，优先使用合适的 `KernelIO`
+`⊨` / `⊨[R]` 接口，并检查该签名的具体前提。
+
 ## 输出 write map
 
 最通用的输出 surface 把实际写入 map 和期望值 map 分开:
@@ -108,7 +115,7 @@ specification my_kernel_correctness … :
 ```lean
 abbrev ComputeCorrect.WriteMap (ι : Type) := ι → Option MemCellAddr
 
-ComputeCorrect.Realizes
+ComputeCorrect.Realizes_without_Rounding
   (kernel := k)
   (initialState := s)
   (write := write)
@@ -154,7 +161,7 @@ VeriTile 暂未提供 whole-grid `launchExec : ComputeKernel → Grid → BlockS
 `Kernel.ForAllProgramsSome`,即:对每个 typed grid index,从
 `s.withGridIndex idx` 出发跑 kernel,得到的 state 满足 per-`idx` 的后置
 条件。规范例子见 `logsumexp_fwd_kernel_grid_blockLSE_correct`。等
-launcher 落地后,grid 定理会迁移到 `ComputeCorrect.Realizes`(以 launch
+launcher 落地后,grid 定理会迁移到 `ComputeCorrect.Realizes_without_Rounding`(以 launch
 作为额外参数),用户面向的定理形态保持一致。
 
 ## 单 kernel 正确性
@@ -216,7 +223,7 @@ VeriTile 用命名区分两个验证问题(每个名字都是舍入 surface;加
 `_without_Rounding` 后缀得到精确实数理想化):
 
 - **`Realizes`** —— *一个 kernel realize 某个 spec*(单 kernel 对照期望输出)。
-  `ComputeCorrect.Realizes` 是舍入形式;`ComputeCorrect.Realizes_without_Rounding`
+  `ComputeRefine.Realizes` 是舍入形式;`ComputeCorrect.Realizes_without_Rounding`
   是大多数 ported kernel 使用的精确单 kernel 主力。
 - **`Refines`** —— *一个 kernel refine 另一个 kernel*(两个 kernel 互相对照)。
   `ComputeRefine.Refines`(writes-equality)、`ComputeRefine.RefinesAt`
@@ -248,7 +255,7 @@ pair 的 `[S]`,或 `FusedSiLU` 里的 `zReg`/`siluReg` 临时区)。当两个 ke
 它通过两张独立的 `WriteMap` 关联两个 kernel 的输出:
 
 ```lean
-ComputeRefine.RefinesAt lhs rhs s lhsWrite rhsWrite relation
+ComputeRefine.RefinesAt R lhs rhs s lhsWrite rhsWrite relation
 -- post: ∀ i, match lhsWrite i, rhsWrite i with
 --   | some la, some ra => relation i (read lhs' la) (read rhs' ra)
 --   | _, _ => True
@@ -260,7 +267,7 @@ ComputeRefine.RefinesAt lhs rhs s lhsWrite rhsWrite relation
 
 ### 舍入模型 surface(窄浮点,#447)
 
-不带限定词的 surface 就是舍入 surface:每个都对一个 `RoundingModel R`
+不带限定词的 surface 就是舍入 surface:每个都对一个 `R : RoundingModel`
 (`round : FloatDType → ℝ → ℝ`,幂等性是它的一个 defining field)parametric,
 并在 R-threaded 语义 `execR` 下执行。它们定义在
 [`VeriTile.Triton.Float.Refine`](../VeriTile/Triton/Float/Refine.lean):
@@ -276,7 +283,7 @@ ComputeRefine.RefinesAt lhs rhs s lhsWrite rhsWrite relation
 
 精确实数理想化是 `*_without_Rounding` 镜像,它们在 trivial model `.triv` 处
 (此时 `execR` 退化为 `exec`)**从**舍入 surface **退化出来**:桥
-`ComputeRefine.Realizes.toRealizes`("舍入断言蕴含理想 correctness")把任何
+`ComputeRefine.Realizes.toRealizes_without_Rounding`("舍入断言蕴含理想 correctness")把任何
 `Realizes` 变成关于 `expected .triv` 的普通
 `ComputeCorrect.Realizes_without_Rounding`。退化引理 `refines_triv_iff` /
 `refinesAt_triv_iff` 以同样方式恢复 `Refines_without_Rounding` /

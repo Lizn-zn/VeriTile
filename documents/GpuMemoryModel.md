@@ -121,7 +121,7 @@ The current model is intentionally small. The landed memory-proof layers are:
   explicit per-program `Kernel.ExecFrame`s when their write footprints are
   pairwise disjoint.
 
-The next proof-ergonomics layer is:
+Additional implemented proof helpers include:
 
 - **Structured footprint extraction (#61):** `WriteFootprint.tileImage`,
   `activeTileImage`, and address-image helpers derive predicate footprints from
@@ -129,47 +129,23 @@ The next proof-ergonomics layer is:
 - **Unrelated-frame helpers (#62):** convenience lemmas prove that cells or
   whole regions outside a single-program or grid footprint are preserved.
 
-### Address-layout realism roadmap
+### Layout and flat memory: current implementation
 
-Today each tensor lives in its own `RegionName` and the showcase kernels bake
-the addressing into the kernel AST (`pid * N + i` for row tiles, `i` for
-feature vectors): the layout is implicitly fixed to contiguous row-major, and
-non-aliasing between tensors holds *by construction* because distinct regions
-never overlap. The plan is to close the gap to real pointer-passing kernels in
-three stages, each building on — not replacing — the previous one:
+`TensorView` expresses base/stride layouts. `KernelIO` signatures record
+input/output windows, masks, and their relationship to program ids. The
+specific layouts supported by a kernel are determined by its signature.
 
-1. **Layout as an explicit parameter (near-term).** Kernels take stride/base
-   arguments the way real Triton kernels do (`stride_row`, …); input/output
-   contracts are stated through `TensorView.loaded`; the per-kernel stride
-   plumbing is bundled into a layout structure with a validity field,
-   following the existing `FA1Layout4D` precedent (16 Q/K/V/O strides +
-   `Offset.StridesValid`, derived `qView/kView/vView`, and a layout-level
-   headline wrapper). This matches the real kernel signature shape — a
-   "pointer" is a `(region, base)` pair — and aligns the showcases with the
-   bench ports, many of which already take stride arguments. The remaining
-   idealization is only that distinct tensors cannot alias.
+The flat-memory bridge is implemented in `Memory/Flatten.lean` and
+`Memory/FlattenR.lean`. `FlatAlloc` allocation ranges and disjointness
+hypotheses transport region-model proofs into flat pointer memory.
+`Kernel.TraceSafe` / `TraceSafeR` provide per-execution safety obligations,
+including register-indirect addressing. The `⊨` / `⊨[R]` surfaces in
+`Memory/KernelSpec.lean` assemble the bridge conditions, termination, outputs,
+and frame. See the [vector-add example](../bench/examples/VectorAdd.lean).
 
-2. **Flat-memory bridge (mid-term).** Do *not* re-prove kernels over a single
-   flat address space — that would put pairwise range-disjointness obligations
-   into every proof. Instead pay the aliasing cost once: an allocation map
-   `RegionName → Nat` (base of each region in one flat region) plus pairwise
-   range-disjointness hypotheses, and a single bridge theorem that `exec`
-   commutes with the flattening. Every region-model theorem then transports to
-   a flat-memory corollary for free; the region model becomes a
-   separation-logic-style intermediate layer rather than a simplifying
-   assumption. The layout structures from stage 1 are where the disjointness
-   clauses slot in (the validity field grows; statement shapes stay). A finding from instantiating the bridge: the #48 contracts quantify
-   over all states, so they are dischargeable for kernels whose masks and
-   addresses are *visibly coupled* (inline addressing, block pointers) but
-   not for the register-indirect `offs := ...; tl.load(x + offs, ...)` style
-   — covering those needs a per-execution (trace-level) safety variant of
-   the bridge.
-
-3. **Byte-granularity (long-term).** Current offsets are element-indexed and
-   cells are dtype-tagged `MemCell`s. A byte-level model scales offsets by
-   dtype size and adds alignment constraints, enabling reinterpret-cast and
-   mixed-dtype aliasing reasoning. Element-granularity strides from stages 1–2
-   carry over by a `sizeof` scaling.
+Flat memory still uses typed, element-sized cells. Byte addressing,
+mixed-dtype overlapping allocations, and full hardware alias behavior need
+further modeling. Each theorem retains its allocation and safety assumptions.
 
 Longer-term extension points remain:
 

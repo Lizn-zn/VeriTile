@@ -1,7 +1,8 @@
-# VeriTile docs site
+# VeriTile project website
 
-Astro + [Starlight](https://starlight.astro.build/) docs site for VeriTile.
-Bilingual (English root, `/zh-cn/` Chinese mirror), deployed to
+Public project homepage and documentation, built with Astro +
+[Starlight](https://starlight.astro.build/).
+Published in English, deployed to
 [lizn-zn.github.io/VeriTile/](https://lizn-zn.github.io/VeriTile/) via the
 `Deploy docs site` GitHub Actions workflow.
 
@@ -13,27 +14,134 @@ Bilingual (English root, `/zh-cn/` Chinese mirror), deployed to
 ./site/scripts/dev.sh preview   # build + serve the production output
 ```
 
-Requires [Bun](https://bun.sh). No Node / npm needed.
+Requires [Bun](https://bun.sh) for dependency installation and Node.js 22.12+
+for Astro 6. Run from a complete repository checkout: the homepage reads
+the benchmark inventory and vector-add example at build time.
 
 ## Layout
 
 ```text
 site/
-├── astro.config.mjs            ← site URL, base path, sidebar, i18n
+├── astro.config.mjs            ← site URL, base path, sidebar, language
 ├── package.json                ← dev / build / preview / astro scripts
 ├── public/                     ← static files copied as-is
 ├── scripts/
 │   ├── dev.sh                  ← one-touch dev server (entry point)
-│   └── migrate-docs.sh         ← re-sync content from ../documents/
+│   ├── migrate-docs.sh         ← re-sync content from ../documents/
+│   ├── sync-docs.py            ← generation and --check for stale copies
+│   ├── check-site.py           ← built-page links and repository paths
+│   ├── check-doc-api.py        ← Lean resolution of documented public names
+│   └── record-home-demo.py     ← real Lean records for the interactive example
 └── src/
-    ├── components/Hero.astro   ← custom homepage hero
+    ├── components/Hero.astro   ← project homepage
+    ├── components/ProjectStory.astro ← project contributions and their evidence
+    ├── components/KernelDemo.astro ← fixed kernel variants, sample values, proof records
+    ├── components/Header.astro ← homepage navigation; standard header on docs
+    ├── components/Footer.astro ← homepage footer; standard footer on docs
+    ├── components/CorpusStats.astro ← build-time inventory table
+    ├── lib/project-data.ts     ← counts and code excerpts from the repository
     ├── styles/theme.css        ← engineering-notebook theme tokens
-    └── content/docs/
-        ├── (root)              ← English (no locale prefix)
-        └── zh-cn/              ← Chinese mirror
+    └── content/docs/           ← English pages (no locale prefix)
 ```
 
 ## Authoring
+
+Homepage copy is maintained in `src/lib/home-story.ts` and
+`src/lib/home-copy.ts`; `src/components/Hero.astro`
+renders the shared layout and `ProjectStory.astro` renders the contributions.
+Write all website content in English, using descriptive headings and factual prose. Name the
+feature, theorem, workflow, or result directly; avoid slogans, rhetorical
+questions, and paired promotional sentences.
+The displayed port count comes from directories containing both Python and
+Lean files; it is an inventory count, not a claim that all hardware behavior
+is verified. The vector-add excerpt is read directly from its Lean source.
+The status pages use the same inventory and link to the full audit records.
+
+### Homepage structure and sources
+
+The homepage uses warm paper colors, an amber accent, restrained monospace
+typography, and a narrower reading column. Its three main topics follow the
+original deck: Triton embedded in Lean without requiring Lean knowledge to write
+kernels, mathematical correctness and optimization equivalence, and a lemma
+library with agent proof tooling. Each has an accompanying source example or
+workflow; detailed semantics and assumptions live in the documentation.
+FlashAttention and the benchmark audit provide concrete results.
+Copyable build commands close the page.
+`src/lib/home-story.ts` contains this narrative; `home-copy.ts`
+contains the interactive example and shared actions.
+
+The Python and DSL excerpts come from `bench/examples/VectorAdd.lean`.
+The language comparison shows only the kernel bodies, with corresponding names
+matched for readability and the aligned, unmasked scope stated in the caption.
+The interactive demo retains the exact verified kernel text.
+The View proof links open the full Lean contracts and proofs in
+`bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean` and
+`bench/examples/StableLogSumExpEquiv.lean`.
+Both cards use log-sum-exp. The correctness formula is explicitly the unscaled,
+per-block active-lane case. The equivalence example compares direct and
+maximum-shifted LSE, with real intermediate arithmetic and a shared rounded bf16
+output store; it has no private scratch.
+The Correctness and Equivalence cards share one template and matching
+Computation / Memory rows. Their short relations use explicitly schematic names:
+`lse_kernel ⊨ lse_spec` on the left and `direct_lse ≡ stable_lse` on the right.
+These are presentation labels, not aliases defined in Lean. Both LSE examples
+have matching Proof details and View proof controls. Example
+visuals, model assumptions, and preconditions are inside the details; full Lean
+statements are available through the source links. The LSE equivalence contract compares output values
+at the shared output address and preserves every other cell; it does not require
+identical intermediate operations.
+The featured FlashAttention link covers the forward causal/non-causal
+reference contracts with their boundary/D-tail conditions.
+The benchmark shows paired-port inventory and unique theorem statements from
+`proof_gap_manifest.tsv`, with prominent links to the recorded completion
+audit and per-kernel scope. Counts do not label every statement fully proved.
+
+The agent section uses two panels: reusable lemmas on the left, proof generation
+on the right. Four lemma groups link directly to the loop-invariant, matrix
+multiplication, masked-store, and address-injectivity modules. The workflow
+starts with a kernel and specification, shows the agent / Lean feedback cycle,
+and labels the checked proof as the successful outcome. Running instructions,
+retry limits, logs, and separately invoked artifact audits live behind the
+Proving guide and Proof audits links. The diagram describes the workflow; it
+does not display a live run or claim a particular generated proof.
+VectorAdd is available in an expandable example under the two proof surfaces.
+
+The demo switches between the original `x + y` and a fixed `x - y` mutation.
+It displays **recorded** Lean results, not an in-browser Lean execution. The
+original complete example must pass; the unchanged proof of the mutated
+kernel must fail with unsolved goals. Two additional proofs establish the
+displayed four-lane outputs directly from the DSL semantics. Sample values
+illustrate one input; the original theorem quantifies over all inputs allowed
+by its preconditions. Both results include the raw Lean diagnostics.
+
+To regenerate the committed record after changing the Lean sources:
+
+```bash
+lake build
+python3 site/scripts/record-home-demo.py
+python3 site/scripts/record-home-demo.py --check
+```
+
+`src/lib/vector-add-record.json` stores these results. Its fingerprint covers
+the example, library Lean sources, toolchain, dependency manifest, lakefile,
+and recorder. The homepage build refuses a stale record. Failed variants are
+created in a temporary directory; the canonical example is never mutated.
+Regeneration requires Python 3 and the Lean dependencies; building the site
+from a current record does not require Lean.
+
+The variant selector supports keyboard navigation and announces changes to
+screen readers. With JavaScript disabled, the original example and proof
+remain readable; source and reproduction links remain available.
+
+`../VeriTile-Deck.pptx` informs the positioning and examples. Its slide sequence
+is not the website structure: proof automation and semantic boundaries live
+in the overview and architecture docs, upstream bug reports live in project
+status, and development plans are linked from the roadmap.
+
+Corpus counts are derived from source rather than the deck's old snapshot.
+Log-sum-exp is scoped to its per-block contracts, and LSE/FlashAttention link
+to their current proofs. Audit records document axiom dependencies and
+rounding assumptions; the homepage does not claim full hardware verification.
 
 Each page in `src/content/docs/` is a Markdown / MDX file with frontmatter:
 
@@ -62,7 +170,7 @@ Bench / scripts links should point to GitHub:
 
 ## Re-syncing from `documents/`
 
-`documents/*.md` is the source of truth for the design notes; the
+The English files in `documents/` are the source of truth for the design notes; the
 architecture & proofs sections of this site are copies. To re-sync after
 upstream edits:
 
@@ -71,11 +179,28 @@ cd site && ./scripts/migrate-docs.sh
 ```
 
 The script extracts the H1 as `title:`, drops the bilingual switcher line,
-and re-rewrites cross-doc links to site paths. Idempotent — safe to re-run.
+and resolves relative links against the original document. Published design
+notes link to their English site pages with the `/VeriTile/` prefix; other
+repository files link to GitHub. Fenced code is preserved. It covers 13 design
+notes in English, including semantic caveats and trust audits.
+
+Checks:
+
+```bash
+./site/scripts/migrate-docs.sh --check  # generated pages match their sources
+python3 site/scripts/check-site.py     # after building site/dist
+python3 site/scripts/check-doc-api.py  # after lake build
+```
+
+The site workflow checks synchronization and built links. The existing artifact
+gate checks that documented public API names resolve in Lean. These checks do
+not establish the truth of every prose claim or compile schematic proof
+fragments; changes to theorem meanings still require documentation review.
 
 ## Deployment
 
-Pushing to `main` with changes under `site/**` triggers
+Pushing to `main` with changes under `site/**`, `documents/**`,
+`bench/tritonbench_g/**`, the Lean toolchain, or the vector-add showcase triggers
 `.github/workflows/site.yml`, which runs `bun install` + `bun run build`
 and uploads `site/dist/` as a Pages artifact. First-time setup needs the
 repo's **Settings → Pages → Source** set to **"GitHub Actions"**; after

@@ -40,8 +40,9 @@ proven projected test-gap blocked smoke
 
 新增公开 example 或 benchmark 定理时:
 
-1. 普通 example 用公开的 `ComputeCorrect.*` 或 `ComputeRefine.*` 定理
-   surface 增加 Lean 定理。详见
+1. Bench/showcase 头条使用 `specification`，优先选择合适的 `KernelIO`
+   `⊨` / `⊨[R]` 或等价性契约。库内示例可以使用
+   公开的 `ComputeCorrect.*` 或 `ComputeRefine.*` 定理 surface。详见
    [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md)。
 2. 在 `scripts/kernel-manifest.tsv` 增加一行。
 3. 把 source 和静态 config 记录得足够精确,使该 port 可复现。

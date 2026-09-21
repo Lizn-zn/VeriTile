@@ -24,3 +24,5 @@ proofs commit to.
   serialized projection model, and what's deliberately *not* claimed.
 - [Memory safety](/VeriTile/architecture/memory-safety/) — the safety side of
   `tl.load` / `tl.store`, masks, and bounds.
+
+- [Semantic caveats](/VeriTile/architecture/semantic-caveats/) — model assumptions to check when interpreting a theorem.

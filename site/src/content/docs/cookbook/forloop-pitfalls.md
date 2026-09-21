@@ -11,7 +11,7 @@ specific ways. Subagents will rediscover these unless warned.
 Apply these as known hazards whenever you dispatch a kernel proof that
 wraps a loop with pre/post statements.
 
-## 1. `forLoop_unfold` is too eager for outer `simp only`
+## 1. `stepStmt` is too eager for outer `simp only`
 
 A naïve
 

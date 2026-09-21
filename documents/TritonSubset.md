@@ -368,9 +368,12 @@ Arithmetic is currently an `ℝ` abstraction:
   store `⊥`.
 
 What this means: theorems prove real-valued mathematical correctness, not
-bit-level IEEE-754 equivalence. Rounding, NaNs, signed zeros, overflow,
-underflow, denormals, exception flags, hardware dot precision, and fast-math
-rewrites are not modeled. See
+bit-level IEEE-754 equivalence. Concrete IEEE rounding, NaNs, signed zeros,
+overflow, underflow, denormals, exception flags, hardware dot precision, and
+fast-math rewrites are not fully modeled. The separate `RoundingModel` layer
+applies abstract rounding at explicit float casts and stores, with real-channel
+identity (`round_real`) and idempotence (`round_idem`). These contracts do not
+establish hardware numerical error bounds. See
 [`SemanticCaveats.md`](./SemanticCaveats.md) for the review checklist around
 partial math functions, fixed-width integers, pointer offsets, and total
 memory reads.
@@ -393,8 +396,9 @@ overflow semantics. `tl.store`
 infers its dtype from the value being stored, with optional matching `dtype=`
 syntax for Triton-like surface spelling.
 
-Float theorem policy: algorithmic correctness/refinement theorems are proved
-over erased `.real` kernels. The compute-facing DSL surface is
+Float theorem policy: exact algorithm contracts use mathematical values.
+Rounding contracts use `execR` and retain representable cast/store events in
+the projected kernel. The compute-facing DSL surface is
 `ComputeKernel`; `ComputeKernel.ComputeCorrect` and
 `ComputeKernel.ComputeRefine` project successful compute kernels to the
 algorithm layer through `toAlgorithm?`, with an optional `GapPolicy` for
@@ -403,7 +407,7 @@ float-facing theorems can still use erasure equations such as
 `k.eraseDType = realK` to reuse Real proofs for dtype-annotated algorithm
 kernels. Numeric compute correctness/refinement is represented separately by
 external gap contracts and differential tests rather than IEEE-754 proof. These
-definitions live in `VeriTile.Triton.Float`; see `documents/EraseDType.md` for
+definitions live in `VeriTile.Triton.Correctness` and `VeriTile.Triton.Float`; see `documents/EraseDType.md` for
 the compute/algorithm split and bitcast
 policy.
 
@@ -450,7 +454,7 @@ current semantic contract.
 | Indirection | Limited | Typed index loads can feed pointer arithmetic for gather/paged-KV style data-dependent addresses (#42); no alias/bounds/page-ownership proof layer yet |
 | Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |
 | Atomics / async / barriers | Limited | `tl.atomic_add` has an AlgKernel `Stmt.atomicAdd` marker, sequential single-program semantics, trace payload vocabulary, and a Real grid-merge sum theorem. `tl.atomic_xchg` / `tl.atomic_cas` now project to return-valued `Stmt.atomicRMW` markers and have single-cell RMW fold semantics, executable statement semantics, stateful trace emission, and a single-cell grid launcher relation with an explicit linearization witness. Other `tl.atomic_*`, `tl.async_copy`, `tl.async_wait`, and `tl.debug_barrier` lower to compute-facing failure markers only; async/TMA discipline remains documented but not implemented; no full scheduler, executable barriers, executable async copy semantics, TMA AST, or IEEE atomic semantics (#12/#67/#68/#69/#71/#72/#76/#82) |
-| Floating point fidelity | Gap | Real-valued model only; no IEEE-754 or mixed-precision hardware semantics (#11) |
+| Floating point fidelity | Limited | Mathematical values and abstract cast/store rounding models; no full IEEE-754 hardware semantics (#11) |
 
 ## Expressiveness Matrix
 

@@ -19,17 +19,17 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
 
 - **DSL**:typed Triton 子集,带 `triton { ... }` 宏、ND tile shape、reduction、
   mask(`mask=`/`other=`)、block-pointer 操作、`if`/`for` 控制流。
-- **定理 surface**:`ComputeCorrect.Realizes`(*单个 kernel 对照数学规范*)和
+- **定理 surface**:`ComputeCorrect.Realizes_without_Rounding`(*单个 kernel 对照数学规范*)和
   `ComputeRefine.Refines`(*一个 kernel refine 另一个* —— writes-equality:两个
   终态 memory 在所有非 scratch cell 上逐格相等)。两者都通过 `toAlgorithm?`
   投影,底层走 `Kernel.Correct_without_Rounding` / `Kernel.Refine`。
 - **窄浮点 / rounding-model 层**(#447):抽象的 `RoundingModel`
-  (`round : FloatDType → ℝ → ℝ`,唯一公理 `round_real = id`)把一个 black-box
+  (`round : FloatDType → ℝ → ℝ`,约束 `round_real`（实数通道恒等）与 `round_idem`（幂等性）)把一个 black-box
   rounding 函数穿过语义(`evalOpR` / `stepStmtR` / `execR`)。unqualified surface
   就是 rounding-parametric 的那些 —— `ComputeRefine.Realizes`(单 kernel 对照
   R-annotated spec)和 `Refines` / `RefinesAt`(双 kernel)在某个 `RoundingModel R`
   下运行;exact-ℝ 理想化是带限定的 `*_without_Rounding` 名字,桥
-  `Realizes.toRealizes` 在 trivial model 处把它退化出来(作为
+  `Realizes.toRealizes_without_Rounding` 在 trivial model 处把它退化出来(作为
   `ComputeCorrect.Realizes_without_Rounding`)。见 fused-vs-unfused SwiGLU showcase
   [`bench/examples/FusedSwigluEquiv.lean`](./bench/examples/FusedSwigluEquiv.lean)。
 - **示例**:173 个 TritonBench-G 端口及其证明(真值来源:
@@ -69,7 +69,7 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 
 | 目标 | 用 |
 |---|---|
-| 一个 kernel realize 某个输出规范 | `ComputeCorrect.Realizes` |
+| 一个 kernel realize 某个输出规范 | `ComputeCorrect.Realizes_without_Rounding` |
 | 一个 kernel refine 另一个(writes-equality)| `ComputeRefine.Refines` |
 | 两个 kernel 逐地址 pointwise 相符 | `ComputeRefine.RefinesAt` |
 | 单 kernel / 双 kernel 在某个 rounding model 下(窄浮点)| `ComputeRefine.Realizes` / `Refines` / `RefinesAt` |

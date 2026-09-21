@@ -1,0 +1,184 @@
+---
+import { Code } from 'astro:components';
+import { homeCopy } from '../lib/home-copy';
+import { vectorAddDemo as demo, vectorAddContract, vectorAddProof, leanToolchain } from '../lib/project-data';
+
+const { docsBase, github } = Astro.props;
+const copy = homeCopy;
+const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
+---
+
+<section class="vt-demo" id="example" aria-labelledby="demo-title" data-kernel-demo>
+  <div class="vt-demo-heading">
+    <h2 id="demo-title">{copy.demoTitle}</h2>
+    <p>{copy.demoIntro}</p>
+    <p class="vt-demo-generality">{copy.sampleNote}</p>
+  </div>
+  <div class="vt-demo-frame">
+    <div class="vt-demo-toolbar">
+      <span class="vt-demo-filename"><span aria-hidden="true">λ</span> VectorAdd.lean</span>
+      <div class="vt-demo-switch" role="tablist" aria-label={copy.variantLabel} data-demo-controls hidden>
+        {demo.variants.map((variant, i) => (
+          <button type="button" id={`variant-${variant.id}`} role="tab" aria-controls={`demo-${variant.id}`} aria-selected={String(i === 0)} tabindex={i === 0 ? 0 : -1}>
+            {i === 0 ? copy.original : copy.mutated}
+          </button>
+        ))}
+      </div>
+    </div>
+    {demo.variants.map((variant, i) => (
+      <div id={`demo-${variant.id}`} role="tabpanel" aria-labelledby={`variant-${variant.id}`} tabindex="0" hidden={i !== 0} data-variant={variant.id}>
+        <div class="vt-demo-body">
+          <div class="vt-demo-code">
+            <Code code={variant.kernel} lang="lean" themes={themes} wrap={true} tabindex="0" aria-label="Kernel source" />
+          </div>
+          <div class="vt-sample">
+            <table>
+              <caption>{copy.sampleLabel}</caption>
+              <thead><tr><th scope="col">Values</th>{demo.x.map((_, lane) => <th scope="col">{lane}</th>)}</tr></thead>
+              <tbody>
+                <tr><th scope="row">x</th>{demo.x.map((value) => <td>{value}</td>)}</tr>
+                <tr><th scope="row">y</th>{demo.y.map((value) => <td>{value}</td>)}</tr>
+                <tr class="vt-actual"><th scope="row">{copy.actual}</th>{variant.actual.map((value) => <td>{value}</td>)}</tr>
+                <tr class="vt-expected"><th scope="row">{copy.expected}</th>{demo.expected.map((value) => <td>{value}</td>)}</tr>
+              </tbody>
+            </table>
+            <p class="vt-sample-result"><span aria-hidden="true">{i === 0 ? '=' : '≠'}</span>{i === 0 ? copy.match : copy.mismatch}</p>
+          </div>
+        </div>
+        <div class="vt-demo-contract">
+          <span>{copy.contractLabel}</span>
+          <Code code={vectorAddContract} lang="lean" themes={themes} wrap={true} />
+        </div>
+        <div class="vt-demo-verdict">
+          <span class="vt-verdict-icon" aria-hidden="true">{i === 0 ? '✓' : '×'}</span>
+          <div><h3>{i === 0 ? copy.verified : copy.rejected}</h3><p>{i === 0 ? copy.verifiedText : copy.rejectedText}</p></div>
+          <span class="vt-record-label"><span>Lean {leanToolchain}</span><span>{copy.recorded}</span></span>
+        </div>
+        <details class="vt-proof-details">
+          <summary>{copy.proofDetails}</summary>
+          <div class="vt-proof-content">
+            <p>{copy.sampleNote}</p>
+            <p>{copy.exampleScope}</p>
+            {i === 0 && <ul>{copy.guarantees.map((guarantee) => <li>{guarantee}</li>)}</ul>}
+            <Code code={vectorAddProof} lang="lean" themes={themes} tabindex="0" aria-label={copy.proofTab} />
+            <h4>{copy.diagnosticLabel} · exit {variant.exitCode}</h4>
+            <pre class="vt-diagnostics" tabindex="0">{variant.diagnostics}</pre>
+            <p>{copy.recordNote}</p>
+            <a href={`${github}/blob/main/site/scripts/record-home-demo.py`}>{copy.reproduction} ↗</a>
+          </div>
+        </details>
+      </div>
+    ))}
+    <noscript><p class="vt-no-script">{copy.demoNoScript}</p></noscript>
+  </div>
+  <div class="vt-demo-links">
+    <a href={`${github}/blob/main/bench/examples/VectorAdd.lean`}>{copy.sourceLink} ↗</a>
+    <a href={`${docsBase}/architecture/triton-subset/`}>{copy.scopeLink} →</a>
+  </div>
+  <span class="vt-sr-only" aria-live="polite" aria-atomic="true" data-demo-announcement data-add={copy.verified + '. ' + copy.match} data-subtract={copy.rejected + '. ' + copy.mismatch}></span>
+</section>
+
+<script>
+  document.querySelectorAll<HTMLElement>('[data-kernel-demo]').forEach((demo) => {
+    const tabs = [...demo.querySelectorAll<HTMLButtonElement>('[role="tab"]')];
+    const panels = [...demo.querySelectorAll<HTMLElement>('[role="tabpanel"]')];
+    const announcement = demo.querySelector<HTMLElement>('[data-demo-announcement]')!;
+    demo.querySelector<HTMLElement>('[data-demo-controls]')!.hidden = false;
+    const select = (index: number) => {
+      tabs.forEach((tab, i) => {
+        tab.setAttribute('aria-selected', String(index === i));
+        tab.tabIndex = index === i ? 0 : -1;
+        panels[i].hidden = index !== i;
+      });
+      announcement.textContent = index === 0 ? announcement.dataset.add! : announcement.dataset.subtract!;
+    };
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => select(index));
+      tab.addEventListener('keydown', (event) => {
+        let next: number;
+        if (event.key === 'ArrowRight' || event.key === 'ArrowLeft') next = (index + 1) % tabs.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        select(next);
+        tabs[next].focus();
+      });
+    });
+  });
+</script>
+
+<style>
+  .vt-demo { margin-bottom: 3.6rem; }
+  .vt-demo-heading { margin-bottom: 1.4rem; }
+  .vt-demo-heading h2 { margin: 0; font: 500 clamp(1.1rem, 2.5vw, 1.35rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
+  .vt-demo-heading p { margin: .5rem 0 0; color: var(--vt-ink-2); font-size: .82rem; line-height: 1.7; }
+  .vt-demo-heading .vt-demo-generality { color: var(--vt-ink-3); font-size: .72rem; }
+  .vt-demo-frame { border: 1px solid var(--vt-rule-2); border-radius: 4px; overflow: hidden; }
+  .vt-demo [hidden] { display: none !important; }
+  .vt-demo a { color: var(--vt-seal-ink); text-decoration: none; }
+  .vt-demo a:hover { text-decoration: underline; text-underline-offset: .2em; }
+  .vt-demo :is(a, button, summary, [tabindex]):focus-visible, .vt-demo :global(pre:focus-visible) { outline: 2px solid var(--vt-seal); outline-offset: -3px; }
+  .vt-demo-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .65rem 1rem; border-bottom: 1px solid var(--vt-rule); background: var(--vt-paper-2); }
+  .vt-demo-filename { font-size: .72rem; white-space: nowrap; }
+  .vt-demo-filename > span { color: var(--vt-seal); margin-right: .3rem; }
+  .vt-demo-switch { display: flex; gap: .25rem; }
+  .vt-demo-switch button { min-height: 2.35rem; padding: .4rem .7rem; border: 1px solid transparent; border-radius: 3px; color: var(--vt-ink-2); background: transparent; font: 500 .71rem/1.5 'IBM Plex Mono', monospace; cursor: pointer; }
+  .vt-demo-switch button[aria-selected='true'] { background: var(--vt-paper); border-color: var(--vt-rule-2); color: var(--vt-ink); }
+  .vt-demo-switch button:hover { color: var(--vt-seal-ink); border-color: var(--vt-rule-2); }
+  .vt-demo-body { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
+  .vt-demo-code { min-width: 0; align-self: center; }
+  .vt-demo :global(pre) { margin: 0; background: transparent !important; border: 0; border-radius: 0; font: .75rem/1.95 'IBM Plex Mono', monospace; }
+  .vt-demo :global(code) { font: inherit; }
+  .vt-demo-code :global(pre) { padding: 1.5rem 1rem; }
+  .vt-demo-code :global(.line:nth-child(6)) { display: inline-block; width: 100%; background: var(--vt-seal-soft); }
+  :global(html[data-theme='dark']) .vt-demo :global(.astro-code),
+  :global(html[data-theme='dark']) .vt-demo :global(.astro-code span) { color: var(--shiki-dark) !important; }
+  .vt-sample { border-left: 1px solid var(--vt-rule); padding: 1.4rem 1rem; }
+  .vt-sample table { width: 100%; border-collapse: collapse; font: .8rem/1.6 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+  .vt-sample caption { text-align: left; margin-bottom: .9rem; color: var(--vt-ink-3); font-size: .6rem; letter-spacing: .025em; }
+  .vt-sample thead { color: var(--vt-ink-3); font-size: .59rem; }
+  .vt-sample th { font-weight: 400; text-align: left; white-space: nowrap; }
+  .vt-sample th, .vt-sample td { padding: .4rem .2rem; }
+  .vt-sample td, .vt-sample thead th:not(:first-child) { text-align: center; }
+  .vt-actual { border-top: 1px solid var(--vt-rule); }
+  .vt-actual td { color: var(--vt-verified); font-weight: 500; background: var(--vt-success-soft); }
+  .vt-expected { color: var(--vt-ink-3); }
+  .vt-sample-result { display: flex; gap: .5rem; margin: .8rem 0 0; color: var(--vt-verified); font-size: .66rem; line-height: 1.7; }
+  .vt-sample-result > span { font-size: 1rem; line-height: 1.1; }
+  .vt-demo-contract { display: flex; gap: 1rem; align-items: baseline; padding: .8rem 1rem; border-block: 1px solid var(--vt-rule); }
+  .vt-demo-contract > span { color: var(--vt-ink-3); font-size: .58rem; white-space: nowrap; }
+  .vt-demo-contract :global(pre) { min-width: 0; font-size: .72rem; }
+  .vt-demo-verdict { display: flex; align-items: flex-start; gap: .7rem; padding: 1.15rem 1rem; }
+  .vt-verdict-icon { color: var(--vt-verified); font-size: 1.1rem; }
+  .vt-demo-verdict h3 { margin: 0; color: var(--vt-verified); font-size: .85rem; font-weight: 500; line-height: 1.6; }
+  .vt-demo-verdict p { margin: .3rem 0 0; font-size: .77rem; color: var(--vt-ink-2); line-height: 1.7; }
+  .vt-record-label { display: flex; flex-direction: column; gap: .15rem; margin-left: auto; flex-shrink: 0; text-align: right; color: var(--vt-ink-3); font-size: .61rem; line-height: 1.8; }
+  [data-variant='subtract'] :is(.vt-demo-verdict h3, .vt-verdict-icon, .vt-sample-result, .vt-actual td) { color: var(--vt-error); }
+  [data-variant='subtract'] .vt-actual td { background: var(--vt-error-soft); }
+  [data-variant='subtract'] .vt-demo-code :global(.line:nth-child(6)) { background: var(--vt-error-soft); }
+  .vt-proof-details { border-top: 1px solid var(--vt-rule); font-size: .75rem; }
+  .vt-proof-details summary { cursor: pointer; padding: .85rem 1rem; color: var(--vt-ink-2); }
+  .vt-proof-details summary:hover { color: var(--vt-seal-ink); }
+  .vt-proof-content { padding: 0 1rem 1rem; line-height: 1.8; color: var(--vt-ink-2); }
+  .vt-proof-content :global(pre) { padding: .8rem; background: var(--vt-paper-2) !important; overflow-x: auto; }
+  .vt-proof-content h4 { margin: 1rem 0 .5rem; font-size: .75rem; font-weight: 500; }
+  .vt-diagnostics { max-height: 17rem; white-space: pre; }
+  .vt-demo-links { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .7rem; margin-top: .9rem; font-size: .7rem; }
+  .vt-no-script { padding: 1rem; font-size: .75rem; }
+  .vt-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
+  @media (max-width: 48rem) {
+    .vt-demo-body { grid-template-columns: 1fr; }
+    .vt-sample { border-left: 0; border-top: 1px solid var(--vt-rule); padding: 1rem; }
+    .vt-sample th, .vt-sample td { padding: .3rem .5rem; }
+    .vt-sample caption { margin-bottom: .5rem; }
+    .vt-demo-verdict { flex-wrap: wrap; }
+    .vt-demo-verdict > div { flex: 1; }
+    .vt-record-label { flex-basis: 100%; flex-direction: row; flex-wrap: wrap; gap: .2rem .7rem; margin-left: 1.8rem; text-align: left; }
+    .vt-demo-contract { flex-direction: column; gap: .3rem; }
+    .vt-demo-toolbar { flex-wrap: wrap; gap: .6rem; }
+    .vt-demo-switch { margin-left: auto; }
+    .vt-demo-code :global(pre) { font-size: .72rem; }
+  }
+  @media (max-width: 25rem) { .vt-demo-switch { margin-left: 0; width: 100%; } .vt-demo-switch button { flex: 1; } }
+</style>

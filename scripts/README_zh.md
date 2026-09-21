@@ -48,10 +48,11 @@ wrapper 的行为依赖已安装的 `lean4` Claude Code 插件版本。
 ## Artifact checker
 
 `scripts/check-artifact.sh` 是 Lean artifact 的本地 release/CI gate。
-它会跑 `lake build`、拒绝 Lean `sorry` warning、按
+它会跑 `lake build VeriTile VeriTileFull`、拒绝 Lean `sorry` warning、按
 `scripts/artifact-axiom-whitelist.txt` 检查声明的 axiom、校验
 `scripts/kernel-manifest.tsv` 中的 per-kernel 注册表,并检查 README
-example 链接漂移。
+example 链接漂移。同时通过 `site/scripts/check-doc-api.py`，使用 Lean 检查
+文档中的公开 API 名称。
 
 `scripts/kernel-manifest.tsv` 是公开 kernel/example 元数据的 source of truth:
 file、theorem 符号、theorem kind、验证状态、source、静态 config、label

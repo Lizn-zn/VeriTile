@@ -7,10 +7,10 @@
 面向证明的算法语义目前仍是确定性的:
 
 ```lean
-Kernel.exec : Kernel -> BlockState -> Option BlockState
+exec : Kernel -> BlockState -> Option BlockState
 ```
 
-`Kernel.exec` 按顺序逐条 step statement 来执行一个符号 program instance。
+`exec` 按顺序逐条 step statement 来执行一个符号 program instance。
 它没有 scheduler、没有 interleaving trace、没有 in-flight operation,
 也没有独立的 shared-memory 或 barrier state。
 
@@ -22,9 +22,9 @@ Kernel.exec : Kernel -> BlockState -> Option BlockState
 - #61 footprint extraction helper;
 - #62 unrelated-frame helper。
 
-这一栈支持确定性、disjoint、顺序的内存推理。它不建模 overlapping write、
-atomic、barrier、shared memory、async/TMA、WGMMA dispatch/wait、
-warp specialization,也不建模 scheduling/interleaving。
+这一栈支持确定性、disjoint、顺序的内存推理。它不建模一般的 overlapping write、
+barrier、shared memory、async/TMA、WGMMA dispatch/wait、warp specialization
+或 scheduling/interleaving。已实现的有限 atomic-add 与 xchg/cas 片段见下文。
 
 ## 双层架构
 
@@ -171,12 +171,12 @@ inductive MemoryEvent where
 可交换 atomic 把 `input` 作为自己的 contribution,可选字段留空。
 order-sensitive atomic 例如 xchg/cas 可以填 `extraInput`、`observed`
 和 `result`,而不必引入第二种 event type。trace 模块不是 scheduler,
-也不会改 `Kernel.exec`。
+也不会改 `exec`。
 
-## #82 PR0 审计结果
+## #82 PR0 历史设计检查
 
 #82 的第一步实现是在加入 `atomic_xchg` / `atomic_cas` 语义之前先做
-ownership/API 审计。当前结果是:
+ownership/API 审计。下文所述的 xchg/cas 片段现已实现；此处记录当时的结果:
 
 ```text
 API ready; proceed to PR1.
@@ -277,13 +277,13 @@ Contract 给出未来必需 discipline 的命名:
 
 本边界文档不实现:
 
-- 超出 limited `tl.atomic_add` 面向证明切片的可执行 `tl.atomic_*`;
+- 超出已建模 add/xchg/cas 片段的完整硬件 atomic 语义;
 - async copy 或 TMA;
 - WGMMA 或 warp specialization;
 - shared memory 或 barrier;
 - Iris 风格或 separation-logic 基础设施;
 - scheduler 或 interleaving 语义;
-- 任何对 `Kernel.exec` 的修改。
+- 任何对 `exec` 的修改。
 
 目的是在定义未来非顺序效应进入位置的同时,保持当前确定性的
 `ComputeCorrect` / `ProjectedCorrect` 故事稳定。

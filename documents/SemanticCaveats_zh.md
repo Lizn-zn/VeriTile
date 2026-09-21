@@ -11,7 +11,7 @@ Lean soundness 问题,而是解释 theorem statement 时必须带着看的边界
 
 | 边界 | 当前模型 | 风险 | 必要 discipline |
 | --- | --- | --- | --- |
-| IEEE 浮点 | 浮点 carrier 是 `WithBot ℝ`;dtype tag 在算法证明层擦到数学 Real 语义。 | 没有证明 NaN、signed zero、rounding、overflow、underflow、denormal、exception flag、fast-math rewrite、硬件 dot precision。 | 对数学算子写明 domain/range 前提;bit-level claim 走 `GapPolicy` / 外部检查。 |
+| IEEE 浮点 | 浮点 carrier 是 `WithBot ℝ`;精确执行采用数学值，`execR` 可在 cast/store 处应用抽象舍入。 | 没有证明 NaN、signed zero、具体 IEEE rounding、overflow、underflow、denormal、exception flag、fast-math rewrite、硬件 dot precision。 | 对数学算子写明 domain/range 前提;bit-level claim 走 `GapPolicy` / 外部检查。 |
 | partial 数学函数 | `tl.log`、`tl.sqrt`、`tl.rsqrt`、`tl.extra.cuda.libdevice.pow` 在有限 Real 输入上使用 Mathlib total function。 | 真实硬件上会产生 NaN 或 inf 的非法输入,在模型里可能变成普通数学值。 | 声称 Triton/CUDA fidelity 时,给出 `x > 0`、`x ≥ 0`、分母非零、`pow` base 为正等前提。 |
 | fixed-width integer | `tl.int*` 映射到数学 `Int`;`tl.uint*` 映射到 `Nat`。 | 没有 width、overflow、wraparound、saturation、sign-extension、signed fixed-width bitwise 语义。 | quantization / int kernel 需要 `tritonInt8CastInRange` 这类 range predicate;不要从 `.int` proof 推出硬件宽度行为。 |
 | 地址 | pointer 是 `RegionName × Nat`;block-pointer offset、stride、base offset 都是 `Nat`。`BlockPtr.AdvanceNonnegative` 记录 signed `tl.advance` delta 的 theorem-side 无 underflow 义务。 | 执行语义里的负向 pointer arithmetic 和 underflow 会被截断或无法表达;模型是 cell offset,不是 byte address。 | 对 `tl.advance`、pointer subtraction、block-pointer rewind 写明 `BlockPtr.AdvanceNonnegative` 和 bounds obligation。 |

@@ -9,6 +9,10 @@ kernel into a `triton { ... }` block, writing its spec, and closing its
 out the bench corpus rather than the theoretical reference (for that see
 [Architecture & semantics](/VeriTile/architecture/) and [Proofs & surfaces](/VeriTile/proofs/)).
 
+Bench headlines prefer a `KernelIO` `⊨` / `⊨[R]` contract declared with
+`specification`. The output and loop templates below build its underlying
+proof. See [Correctness surfaces](/VeriTile/proofs/correctness-surfaces/).
+
 ## In this section
 
 1. [Translating a kernel](/VeriTile/cookbook/translating/) — what's a faithful 1:1

@@ -1,0 +1,68 @@
+---
+import DefaultHeader from '@astrojs/starlight/components/Header.astro';
+import ThemeSelect from '@astrojs/starlight/components/ThemeSelect.astro';
+
+const { entry } = Astro.locals.starlightRoute;
+const isHome = entry.data.template === 'splash';
+const base = import.meta.env.BASE_URL.replace(/\/$/, '');
+const home = `${base}/`;
+---
+
+{isHome ? (
+  <div class="vt-header">
+    <a class="vt-brand" href={home} aria-label="VeriTile">
+      <span class="vt-brand__tiles" aria-hidden="true"><i></i><i></i><i></i><i></i></span>
+      <span>Veri<span class="vt-brand__accent">Tile</span></span>
+    </a>
+    <nav aria-label="Main navigation">
+      <a class="vt-header__section" href="#agents">Proof agents</a>
+      <a class="vt-header__section" href="#examples">Results</a>
+      <a href={`${home}overview/`}>Docs</a>
+      <a href="https://github.com/Lizn-zn/VeriTile">GitHub <span aria-hidden="true">↗</span></a>
+    </nav>
+    <details class="vt-mobile-nav">
+      <summary>Menu</summary>
+      <div>
+        <a href="#language">Triton embedded in Lean</a>
+        <a href="#proofs">Correctness & equivalence</a>
+        <a href="#agents">Proof agents</a>
+        <a href="#examples">Results</a>
+        <a href={`${home}overview/`}>Docs</a>
+        <a href="https://github.com/Lizn-zn/VeriTile">GitHub ↗</a>
+      </div>
+    </details>
+    <div class="vt-header__settings">
+      <ThemeSelect />
+    </div>
+  </div>
+) : <DefaultHeader />}
+
+<script>
+  document.querySelectorAll<HTMLDetailsElement>('.vt-mobile-nav').forEach((menu) => {
+    menu.querySelectorAll('a').forEach((link) => {
+      link.addEventListener('click', () => { menu.open = false; });
+    });
+  });
+</script>
+
+<style>
+  .vt-header { display: flex; align-items: center; gap: 1.5rem; height: 100%; max-width: 55rem; margin: 0 auto; }
+  .vt-brand { display: inline-flex; align-items: center; gap: .7rem; color: var(--vt-ink); font: 400 1.2rem 'Fragment Mono', monospace; text-decoration: none; }
+  .vt-brand__accent { color: var(--vt-seal); }
+  .vt-brand__tiles { display: grid; grid-template-columns: repeat(2, 7px); gap: 3px; transform: rotate(-8deg); }
+  .vt-brand__tiles i { width: 7px; height: 7px; background: var(--vt-seal); }
+  .vt-brand__tiles i:last-child { background: transparent; border: 1px solid var(--vt-seal); }
+  nav { display: flex; align-items: center; gap: 1.1rem; margin-left: auto; }
+  nav a { color: var(--vt-ink-2); font: 400 .75rem/1.5 'IBM Plex Mono', monospace; text-decoration: none; white-space: nowrap; }
+  nav a:hover { color: var(--vt-seal); }
+  a:focus-visible { outline: 2px solid var(--vt-seal); outline-offset: 5px; }
+  .vt-header__settings { display: flex; align-items: center; gap: 1rem; padding-left: 1rem; border-left: 1px solid var(--vt-rule); }
+  .vt-mobile-nav { display: none; position: relative; margin-left: auto; font: .8rem 'IBM Plex Mono', monospace; }
+  .vt-mobile-nav summary { padding: .8rem .2rem; cursor: pointer; color: var(--vt-ink-2); }
+  .vt-mobile-nav summary:focus-visible { outline: 2px solid var(--vt-seal); outline-offset: 3px; }
+  .vt-mobile-nav > div { position: absolute; top: 100%; right: 0; width: 12rem; padding: .5rem; border: 1px solid var(--vt-rule-2); background: var(--vt-paper); box-shadow: 4px 4px 0 var(--vt-paper-3); }
+  .vt-mobile-nav a { display: block; padding: .8rem; color: var(--vt-ink); text-decoration: none; }
+  .vt-mobile-nav a:hover { background: var(--vt-paper-2); }
+  @media (max-width: 56rem) { .vt-header { gap: 1rem; } nav { display: none; } .vt-mobile-nav { display: block; } .vt-header__settings { gap: .6rem; padding-left: .6rem; } }
+  @media (max-width: 25rem) { .vt-header__settings :global(starlight-theme-select) { display: none; } }
+</style>

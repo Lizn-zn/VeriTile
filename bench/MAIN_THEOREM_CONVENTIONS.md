@@ -77,10 +77,10 @@ Pick the skin whose *signature shape* matches (inputs/outputs, program axes,
 metadata scalars, gather index). If none fits, say so in the preamble rather
 than bending the kernel to the skin.
 
-### 4b. `ComputeCorrect.Realizes` (when no skin fits)
+### 4b. `ComputeCorrect.Realizes_without_Rounding` (when no skin fits)
 
 ```lean
-ComputeCorrect.Realizes
+ComputeCorrect.Realizes_without_Rounding
   (kernel := <faithful surface>)
   (initialState := s)
   (write := <WriteMap: which cells to check>)
@@ -111,7 +111,7 @@ unregistered offender and a stale registration alike.
 
 ## 5. Axiom-clean
 
-`#print axioms <headline>` must be **exactly `[propext, Classical.choice,
+`#print axioms <headline>` must be a **subset of `[propext, Classical.choice,
 Quot.sound]`**. No `sorry` / `admit` / `native_decide` / `ofReduceBool`, and no
 `sorryAx` anywhere in the transitive dependency.
 
@@ -215,7 +215,7 @@ Notes:
 ---
 
 *One line:* the last theorem is a **dimension-general, non-self-referential,
-`ComputeCorrect.Realizes`-form (conjunction for multi-output), axiom-clean** main
+`ComputeCorrect.Realizes_without_Rounding`-form (conjunction for multi-output), axiom-clean** main
 theorem with honest hypotheses; pure math is factored into `Math/*`; the file
 carries no dead code or stale docstrings — and if any of this genuinely cannot be
 achieved, that is **reported as an explicit blocker, never faked or silently

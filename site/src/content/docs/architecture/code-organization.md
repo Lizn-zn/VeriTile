@@ -2,7 +2,6 @@
 title: "VeriTile Code Organization"
 ---
 
-
 VeriTile separates three concerns into three layers. Knowing which layer
 something belongs in saves churn when adding new operators, new bridge
 lemmas, and new kernel transcriptions.
@@ -150,7 +149,10 @@ VeriTile/
                             `Triton/Compute.lean` was folded in here and deleted).
     Semantics/              Typed operational semantics: exec, step, tiled
                             indexing, masked reduction, streaming accumulator, …
-    Memory/                 BlockState, tensor views, readback.
+    Memory/                 BlockState, tensor views, readback. Also the
+                            flat-memory bridge (Flatten*) and KernelSpec.lean
+                            — the `KernelIO` signatures behind the `⊨` headline
+                            surface (see documents/CorrectnessSurfaces.md).
     DSL/                    `triton { ... }` macro front-end.
     Math/                   Pure `(Fin N → ℝ) → ...` operators (see three-layer
                             rule). Math/Erf is split: lightweight
@@ -189,7 +191,7 @@ below it.
 
 ## See also
 
-- [`ProofConventions.md`](./ProofConventions.md) — proof-tactic conventions,
+- [`ProofConventions.md`](/VeriTile/proofs/proof-conventions/) — proof-tactic conventions,
   including the `erw` carrier-bridge fallback.
-- [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) — the user-facing
+- [`CorrectnessSurfaces.md`](/VeriTile/proofs/correctness-surfaces/) — the user-facing
   theorem surfaces (`Realizes`, `Refines`, `WriteMap`, `OutputReadable`).

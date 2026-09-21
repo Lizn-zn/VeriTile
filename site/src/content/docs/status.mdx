@@ -1,0 +1,60 @@
+---
+title: Project status
+description: Repository-derived corpus counts and links to VeriTile's proof audits.
+---
+
+import CorpusStats from '../../components/CorpusStats.astro';
+
+## Corpus at this build
+
+<CorpusStats />
+
+## Inspect the evidence
+
+The [completion audit](https://github.com/Lizn-zn/VeriTile/blob/main/bench/tritonbench_g/completion_audit.md)
+records the corpus review. Use the
+[proof-gap manifest](https://github.com/Lizn-zn/VeriTile/blob/main/bench/tritonbench_g/proof_gap_manifest.tsv)
+and [documented blockers](https://github.com/Lizn-zn/VeriTile/blob/main/bench/tritonbench_g/proof_blockers.md)
+to inspect the scope of individual results. A paired port is an inventory
+entry; its theorem statement, assumptions, and registered deviations determine
+what has been proved.
+
+The website build counts source files. It does not rerun the Lean proof
+audits or certify a new audit result.
+
+## Reproduce the checks
+
+From the repository root:
+
+```bash
+lake build
+scripts/check-artifact.sh
+bench/audit_tritonbench_g.sh
+```
+
+The artifact gate checks proof placeholders, allowed axioms, the kernel
+manifest, and documentation consistency. The bench audit also checks port
+elaboration, registered proof gaps, Python/Lean translation patterns, and
+trust reports. See the
+[artifact workflow](https://github.com/Lizn-zn/VeriTile/actions/workflows/artifact.yml)
+and [bench workflow](https://github.com/Lizn-zn/VeriTile/actions/workflows/bench-audit.yml)
+for recorded CI runs.
+
+## Upstream bug reports
+
+Two reports to PyTorch illustrate silent failures in generated kernels:
+
+- [Pooling and reduction: incorrect batch stride (#179931)](https://github.com/pytorch/pytorch/issues/179931).
+  A generated reduction used 3200 as the batch stride instead of the actual
+  3185, producing shifted reads and potentially out-of-bounds accesses.
+- [Slice-scatter backward: collapsed gradient dimension (#180164)](https://github.com/pytorch/pytorch/issues/180164).
+  A zero stride inherited from a broadcast tensor collapsed an iteration
+  dimension; correct forward outputs masked incorrect gradients.
+
+The reports contain reproduction details and the latest resolution.
+
+## Scope and next steps
+
+Read the [semantic scope](/VeriTile/architecture/triton-subset/) for the
+boundary between mathematical kernel proofs and external hardware checks.
+Follow the [roadmap](/VeriTile/roadmap/) for current development work.

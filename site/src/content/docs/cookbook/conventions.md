@@ -32,8 +32,8 @@ Lean-side pain on the outermost-first side:
 - Structural induction on `init`.
 - Helper `_pos` (positivity-asserting) variants to avoid `Option`.
 
-The reduce-axis implementation in `VeriTile/Triton/Semantics.lean` —
-`Tile.reduceSumDropLast`, `reduceMaxDropLast_pos` — is the canonical
+The reduce-axis implementation in `VeriTile/Triton/Semantics/TileOps.lean` —
+`Tile.reduceSumDrop`, `Tile.reduceMaxDrop` — is the canonical
 template.
 
 ## Always go fully ND
@@ -54,7 +54,7 @@ The discipline:
    `Offset.rowMajor2D`, `Offset.contig` are ergonomic helpers; the core
    API stays generic.
 
-The reduce-axis API in `VeriTile/Triton/Core.lean` — `axisDim`,
+The reduce-axis API in `VeriTile/Triton/Core/Shape.lean` — `axisDim`,
 `eraseAxis`, `setAxisOne`, `reduceShape`, `insertAxisIndex`,
 `replaceAxisIndex` — is the canonical template. Mirror that pattern for
 any new axis-aware op.
@@ -86,7 +86,7 @@ A handful of patterns recur across the bench corpus; staying consistent
 makes proofs cheaper.
 
 - **Per-kernel files** live at `bench/tritonbench_g/<kernel>/<Kernel>.lean`
-  for ports, `VeriTile/Examples/<Kernel>.lean` for examples.
+  for ports, `bench/examples/<Kernel>.lean` for examples.
 - **Theorem names** end in `_correct` (kernel ↔ spec) or `_refine`
   (kernel ↔ kernel). Compute-layer projections get a parallel
   `_compute_correct` / `_compute_refine`.
@@ -95,6 +95,10 @@ makes proofs cheaper.
   `inOffsetDef`, `outOffsetDef`, `outOffsetFn`, etc.
 - **`_pos` suffix** marks the positivity-asserting variant of a helper —
   returns the underlying value directly instead of `Option`.
+
+Bench headlines use the `specification` keyword and prefer a `KernelIO`
+`⊨` / `⊨[R]` contract. Naming suffixes are not how the audit discovers
+headlines; follow the [main-theorem conventions](https://github.com/Lizn-zn/VeriTile/blob/main/bench/MAIN_THEOREM_CONVENTIONS.md).
 
 ## Antiquotes are paste-in-hostile — minimize them
 

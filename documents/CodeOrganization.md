@@ -151,7 +151,7 @@ VeriTile/
                             indexing, masked reduction, streaming accumulator, …
     Memory/                 BlockState, tensor views, readback. Also the
                             flat-memory bridge (Flatten*) and KernelSpec.lean
-                            — the 61 `KernelIO` skins behind the `⊨` headline
+                            — the `KernelIO` signatures behind the `⊨` headline
                             surface (see documents/CorrectnessSurfaces.md).
     DSL/                    `triton { ... }` macro front-end.
     Math/                   Pure `(Fin N → ℝ) → ...` operators (see three-layer

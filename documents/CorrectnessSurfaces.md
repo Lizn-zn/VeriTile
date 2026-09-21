@@ -1,37 +1,40 @@
 # Correctness Surfaces
 
 This document explains which public theorem surface to use when proving
-properties of `ComputeKernel`s. Surfaces live in
-[`VeriTile.Triton.Correctness`](../VeriTile/Triton/Correctness.lean).
+properties of `ComputeKernel`s. Exact surfaces live in
+[`VeriTile.Triton.Correctness`](../VeriTile/Triton/Correctness.lean); rounding
+surfaces live in [`Float.Refine`](../VeriTile/Triton/Float/Refine.lean).
 
-## The rounding default
+## Rounding models and exact surfaces
 
-Read this first — it fixes what every surface name below means. The **unqualified**
-surface names (`Realizes`, `Refines`, `RefinesAt`, `Correct`) are the
-**rounding-model** surfaces: they take a `RoundingModel R` and execute under the
-R-threaded semantics `execR`. The **exact-ℝ idealization** — the older "everything
-is real arithmetic, no quantization" reading — is the explicitly-qualified
-`*_without_Rounding` surface (`Realizes_without_Rounding`,
-`Refines_without_Rounding`, `RefinesAt_without_Rounding`, `Correct_without_Rounding`).
+The interfaces are defined in `VeriTile/Triton/Correctness.lean` (exact
+semantics) and `VeriTile/Triton/Float/Refine.lean` (rounding models):
 
-Rule of thumb: the unqualified name is what a kernel *actually* does on hardware
-(rounded); `*_without_Rounding` is the mathematician's idealization you fall back
-to when the rounding is irrelevant to the claim. The exact surface **degenerates
-out of** the rounding one at the trivial model `.triv` (where `execR` collapses
-onto `exec`), never the other way around. Most of the 173 ported kernels are
-proven on `*_without_Rounding` (their outputs are exact-ℝ specs); the showcase
-pairs under `bench/examples/` that carry a bf16 boundary store land on the
-rounding surface `Refines R`.
+- `ComputeCorrect.Realizes_without_Rounding kernel s write expected` observes
+  outputs under exact semantics, with `expected : ι → α`.
+- `ComputeRefine.Realizes kernel s write expected` quantifies over all
+  `RoundingModel`s, with `expected : RoundingModel → ι → α`.
+- `ComputeRefine.Refines R lhs rhs s scratch` and `RefinesAt R ...` compare two
+  kernels under a supplied model `R`. Their exact versions have the
+  `_without_Rounding` suffix.
+- `ComputeCorrect.Post`, `General`, and the `Output*` wrappers retain exact semantics.
+
+A `RoundingModel` requires identity on the real channel (`round_real`) and
+idempotence (`round_idem`). Monotonicity, oddness, and grid nesting are optional
+hypotheses. The model records rounding at explicit float casts and stores;
+it does not model IEEE-754 rounding at every arithmetic operation or establish
+numerical error bounds. At `R := .triv`, `execR` degenerates to `exec`; the
+bridge lemmas are described below.
 
 ## KernelIO `⊨` — the per-kernel headline surface
 
 The surfaces below (`Realizes`, `Refines`, …) are the *library* vocabulary. The
 surface that the bench corpus actually states its headlines on is the **KernelIO
 `⊨` triple**, defined in
-[`VeriTile/Triton/Memory/KernelSpec.lean`](../VeriTile/Triton/Memory/KernelSpec.lean)
-(61 IO-signature structures, 41 scoped notations). Today **153 of the 173
-TritonBench-G ports and all 17 `bench/examples/` showcases** state a `⊨` face;
-68 ports additionally carry the rounding face `⊨[R]`.
+[`VeriTile/Triton/Memory/KernelSpec.lean`](../VeriTile/Triton/Memory/KernelSpec.lean). The signature variants cover different input/output arities, masks,
+indices, and streaming windows. Consult the
+[proof-gap manifest](../bench/tritonbench_g/proof_gap_manifest.tsv) for
+per-port coverage.
 
 ### What a `KernelIO` is
 
@@ -71,11 +74,10 @@ still owe it.
 | `io ⊨[R, dtype] f` | same, with `outDType` written out — use this whenever a file states more than one output channel, since the 3-hole form prints an `.fp16` face and a `.real` face identically |
 | `io₁ ≡[R] io₂` | kernel-vs-kernel refinement, the `⊨` counterpart of `Refines` |
 
-`⊨[R]` is quantified over **all** rounding models, so it degenerates to `⊨` at
-`R := .triv` — the rounding face is the strictly stronger statement. It only
-carries float-narrowing *content*, though, when the signature pins a narrow
-`outDType`: 13 ports pin `.fp16`/`.fp32`/`.f8e4`; on the rest `outDType = .real`
-and `R.round .real = id`.
+`io ⊨[R] f` uses the supplied model `R`; universal quantification must be
+explicit in the theorem. A theorem valid for every `R` can be instantiated at
+`.triv`. Boundary quantization has narrowing content when the output dtype is
+narrow; the `.real` channel satisfies `R.round .real = id`.
 
 ### Proving one
 
@@ -95,7 +97,7 @@ Only (3) is mathematical content; (1) and (2) are mechanical walks.
 |---|---|
 | **A bench-port / showcase headline** | a `KernelIO` skin's `⊨` (exact) or `⊨[R]` (rounded) — see the section above |
 | … kernel-vs-kernel, on the same surface | `io₁ ≡[R] io₂` |
-| One kernel realizes an output spec (rounded) | `ComputeCorrect.Realizes` |
+| One kernel realizes an output spec (rounded) | `ComputeRefine.Realizes` |
 | … the exact-ℝ idealization of that spec | `ComputeCorrect.Realizes_without_Rounding` |
 | One kernel refines another, writes-equality (rounded) | `ComputeRefine.Refines` |
 | … the exact-ℝ idealization | `ComputeRefine.Refines_without_Rounding` |
@@ -110,6 +112,16 @@ Only (3) is mathematical content; (1) and (2) are mechanical walks.
 The lower-level `ComputeKernel.ComputeCorrect` and
 `ComputeKernel.ComputeRefine` definitions remain the implementation layer.
 New example theorem statements should normally not expose those names directly.
+
+## Execution, termination, and frame
+
+`Realizes_without_Rounding` and `ComputeRefine.Realizes` constrain outputs of
+successful executions; they do not by themselves establish success or
+termination. `Refines` likewise compares the results when both executions
+succeed. `RealizesFrame_without_Rounding` additionally preserves memory outside
+the write map. For a bench headline that bundles termination, outputs, and
+frame, prefer an appropriate `KernelIO` `⊨` / `⊨[R]` signature and inspect its
+specific preconditions.
 
 ## Output Write Maps
 
@@ -170,7 +182,7 @@ the per-program-local form `Kernel.ForAllProgramsSome`, which says: for every
 typed grid index, running the kernel from `s.withGridIndex idx` produces a
 state where the per-`idx` postcondition holds. See
 `logsumexp_fwd_kernel_grid_blockLSE_correct` for the canonical example. Once
-the launcher exists, grid theorems will move to `ComputeCorrect.Realizes` with
+the launcher exists, grid theorems can use `ComputeCorrect.Realizes_without_Rounding` with
 the launch as an extra parameter; the user-facing theorem shape stays the same.
 
 ## Single-Kernel Correctness
@@ -236,7 +248,7 @@ VeriTile splits the two verification questions by name (each name is the
 rounding surface; append `_without_Rounding` for the exact-ℝ idealization):
 
 - **`Realizes`** — *a kernel realizes a spec* (one kernel vs expected
-  outputs). `ComputeCorrect.Realizes` is the rounding form;
+  outputs). `ComputeRefine.Realizes` is the rounding form;
   `ComputeCorrect.Realizes_without_Rounding` is the exact single-kernel
   workhorse that most ported kernels use.
 - **`Refines`** — *a kernel refines another kernel* (two kernels compared to
@@ -273,7 +285,7 @@ a non-equality relation, use the pointwise form. It relates the two kernels'
 outputs through two independent `WriteMap`s:
 
 ```lean
-ComputeRefine.RefinesAt lhs rhs s lhsWrite rhsWrite relation
+ComputeRefine.RefinesAt R lhs rhs s lhsWrite rhsWrite relation
 -- post: ∀ i, match lhsWrite i, rhsWrite i with
 --   | some la, some ra => relation i (read lhs' la) (read rhs' ra)
 --   | _, _ => True
@@ -288,7 +300,7 @@ genuinely need per-side values.
 ### Rounding-model surfaces (narrow float, #447)
 
 The unqualified surfaces are the rounding surfaces: each is parametric over a
-`RoundingModel R` (`round : FloatDType → ℝ → ℝ`, with idempotence a defining
+`R : RoundingModel` (`round : FloatDType → ℝ → ℝ`, with idempotence a defining
 field) and executes under the R-threaded semantics `execR`. They live in
 [`VeriTile.Triton.Float.Refine`](../VeriTile/Triton/Float/Refine.lean):
 
@@ -304,7 +316,7 @@ field) and executes under the R-threaded semantics `execR`. They live in
 
 The exact-ℝ idealizations are the `*_without_Rounding` mirrors, and they
 **degenerate out of** the rounding surfaces at the trivial model `.triv` (where
-`execR` collapses onto `exec`): the bridge `ComputeRefine.Realizes.toRealizes`
+`execR` collapses onto `exec`): the bridge `ComputeRefine.Realizes.toRealizes_without_Rounding`
 ("rounding claim implies ideal correctness") turns any `Realizes` into an
 ordinary `ComputeCorrect.Realizes_without_Rounding` for `expected .triv`.
 Degeneration lemmas `refines_triv_iff` / `refinesAt_triv_iff` recover
