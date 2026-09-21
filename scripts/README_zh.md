@@ -1,64 +1,60 @@
-# scripts/prove.sh
+# 自动证明脚本
 
-`lean4` Claude Code 插件 `/lean4:autoprove` 命令的轻量 wrapper。
-用于 VeriTile 的 LLM benchmark eval(详见 `PLAN.md` §LLM benchmark protocol)。
+`scripts/prove.sh` 调用 Claude Code 的 `/lean4:autoprove` 搜索证明，
+由 [Lean 官方 comparator](https://github.com/leanprover/comparator) 判定结果。
 
-## 用法
+## 安装与使用
 
-```bash
-scripts/prove.sh <lean_file> [--max-cycles N] [--prompt "extra text"]
-```
-
-示例:
+需要 Linux Landlock、可用的 systemd 用户服务、Go 1.24+、本项目 Lean
+工具链，以及 Claude Code 的 `lean4` 插件。
 
 ```bash
-# 用最多 5 个 cycle 关掉 held-out 文件中所有 sorry
-scripts/prove.sh bench/llm_eval/softmax_naive_correct_held_out.lean
-
-# 更激进的搜索
-scripts/prove.sh path/to/hard.lean --max-cycles=20
-
-# 带策略提示
-scripts/prove.sh path/to/file.lean --prompt "Try induction on n first."
+scripts/setup-comparator.sh /tmp/veritile-proof-tools
+export PATH="/tmp/veritile-proof-tools/bin:$PATH"
+lake build VeriTile VeriTileFull
+scripts/prove.sh path/to/Task.lean --theorem MyKernel.correctness \
+  --max-cycles 20 --prompt "Try induction on n first."
 ```
 
-## Exit code
+文件必须位于项目内。路径和定理名是占位示例，请替换为实际任务。
+**必须通过 `--theorem` 指定完整定理名**；可以重复此参数，检查多个定理。
+默认最多 5 个证明周期。只对指定定理及其依赖作判定。
 
-- 0 —— `/lean4:autoprove` 报告成功(启发式判断:干净退出、result subtype
-  不是 "error"、result text 不提到失败)
-- 1 —— 失败(cycle 用尽、卡住、claude error 或参数错误)
+安装脚本固定使用适配 Lean 4.29.0 的官方 comparator 提交
+`2a00b30df5e9173e70c4e4ec669fdf03da3163b9`、其 lockfile 中的 lean4export，
+以及 landrun 提交 `5283024a2f49b28046c3b4a06d7d775c058d4d80`。
+升级 Lean 时应同步检查这些版本。可以通过 `COMPARATOR_BIN` 指定其他兼容的
+官方 comparator；`landrun` 和 `lean4export` 必须在 PATH 中。
 
-日志写到 `Logs/<basename>_<timestamp>.json` 供查看 / 调试。
+## 判定过程
 
-## 固定的插件版本
+运行 agent 前复制原始题目、项目 Lean 源码、Lake 配置和依赖缓存。
+agent 结束后，只将候选源码交给独立副本中的 comparator；不采用 agent
+生成的构建产物或修改后的依赖。临时磁盘空间需容纳 `.lake` 副本，支持时使用 reflink。
 
-wrapper 的行为依赖已安装的 `lean4` Claude Code 插件版本。
+Comparator 比较指定定理的陈述及其依赖定义，检查公理，并用 Lean 内核重放证明。
+只允许 `propext`、`Quot.sound` 和 `Classical.choice`。遵循官方建议，同时使用
+systemd 的 AF_UNIX 限制和 landrun 沙箱；工具缺失或沙箱失败时不会降级判定。
 
-截至 2026-04-26,我们使用 `~/.claude/plugins/cache/lean4-skills/lean4/4.4.9/`
-下的版本。如果结果不再可复现,先检查插件版本。
+- 退出 0：comparator 接受全部指定定理。
+- 非零退出：证明被拒绝，或工具、沙箱、参数等出错。
 
-## 这 *不是* 什么
+agent 自报成功或编译输出中没有 `sorry` 都不能替代此判定。
+日志保存在 `Logs/<basename>_<unique-id>/`，包括原题、候选源码、配置、
+comparator 输出、agent JSON 流、输入源码哈希和 `result.json`。
+临时缓存副本在结束时删除。
 
-- 不是自定义 prover —— 所有证明搜索都发生在 `/lean4:autoprove` 内部
-- 不直接连接 lake —— 插件内部处理 `lake env lean`
-- 不直接用 Anthropic API —— 入口点是 `claude -p`(Claude Code CLI)
+初始项目、依赖和工具需要可信。本脚本没有把本地编码 agent 与宿主机隔离；
+对恶意 agent 的评测需使用独立的求解和判定环境。
+陈述中引用的 private 或模块自动生成名称可能在两个模块间不同，导致合法证明
+也被拒绝；任务的 kernel/spec 依赖宜使用公开名称。
 
-为什么是 wrapper 而不是自定义 Python 工具,见 `PLAN.md` 决策日志条目 5。
-
-## Artifact checker
-
-`scripts/check-artifact.sh` 是 Lean artifact 的本地 release/CI gate。
-它会跑 `lake build VeriTile VeriTileFull`、拒绝 Lean `sorry` warning、按
-`scripts/artifact-axiom-whitelist.txt` 检查声明的 axiom、校验
-`scripts/kernel-manifest.tsv` 中的 per-kernel 注册表,并检查 README
-example 链接漂移。同时通过 `site/scripts/check-doc-api.py`，使用 Lean 检查
-文档中的公开 API 名称。
-
-`scripts/kernel-manifest.tsv` 是公开 kernel/example 元数据的 source of truth:
-file、theorem 符号、theorem kind、验证状态、source、静态 config、label
-和 notes。新增公开 example 或 benchmark 端口前,先看
-`documents/KernelManifest.md`。
+## 回归检查
 
 ```bash
-scripts/check-artifact.sh
+python3 scripts/test_prove.py
 ```
+
+使用真实 comparator 和固定输出的模拟 agent，不调用模型 API。
+覆盖正常证明、修改陈述/定义、额外公理、残留 sorry、删除目标及多定理判定。
+更多说明及 artifact 检查入口见 [English documentation](README.md)。

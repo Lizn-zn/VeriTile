@@ -65,6 +65,11 @@ bash bench/audit_tritonbench_g.sh
 
 ## 审计边界
 
+陈述检查按 Lean 环境中记录的声明来源模块，排除可信的 `Init`、`Std`、
+`Lean` 和 `Mathlib` 依赖。不会按名称前缀排除：项目中的 `Nat.wrapper`、
+`Real.wrapper` 或 `instSomething` 仍会被检查，包括从其他项目模块导入时。
+规格依赖遍历会沿项目别名继续展开，在上述可信依赖处停止。
+
 `#axiomsClean` 检查传递公理依赖；另外两项检查约束陈述与定义中出现的常量。
 这些检查不能替代对规格是否表达目标行为、假设是否充分的审阅。
 `scripts/check-artifact.sh` 的源码公理白名单是另一项检查；白名单中的公理

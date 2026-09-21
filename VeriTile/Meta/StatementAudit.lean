@@ -26,16 +26,17 @@ open Lean Elab Command
 
 namespace VeriTile.Meta
 
-/-- Core / primitive namespaces that are axiomatically trusted — not project
-definitions that could encode a cheat. -/
-def isCoreConst (n : Name) : Bool :=
-  let s := n.toString
-  ["Eq", "Ne", "And", "Or", "Not", "Iff", "True", "False", "HEq",
-   "Nat", "Int", "Fin", "List", "Option", "Prod", "PUnit", "Sum", "Subtype",
-   "Real", "WithBot", "Bool", "Char", "String",
-   "Membership", "OfNat", "HMul", "HAdd", "HSub", "HDiv", "HPow",
-   "Mul", "Add", "Sub", "Div", "Neg", "Sort", "Exists", "Decidable",
-   "Function", "Set", "LE", "LT", "instH", "inst"].any (fun p => s.startsWith p)
+/-- Declarations originating in the trusted Lean/Mathlib dependencies. Use the
+environment's defining module, never the declaration's spelling: project code
+can extend `Nat`, `Real`, or an `inst…` namespace. Current-module declarations
+and declarations from other imports always remain in the audited surface.
+Like the rest of this audit, this assumes the imported dependencies are trusted. -/
+def isCoreConst (env : Environment) (n : Name) : Bool :=
+  match env.getModuleIdxFor? n with
+  | none => false
+  | some idx =>
+    let origin := env.header.modules[idx.toNat]!.module
+    #[`Init, `Std, `Lean, `Mathlib].any (·.isPrefixOf origin)
 
 /-- Constants appearing in a declaration's STATEMENT (its type). -/
 def stmtConsts (name : Name) : CommandElabM (Array Name) := do
@@ -55,11 +56,11 @@ partial def projValueClosure (env : Environment) : Array Name → NameSet → Na
     match work.toList with
     | [] => seen
     | n :: rest =>
-      if seen.contains n || isCoreConst n then
+      if seen.contains n then
         projValueClosure env rest.toArray seen
       else
         let seen := seen.insert n
-        let next := valueConsts env n
+        let next := if isCoreConst env n then #[] else valueConsts env n
         projValueClosure env (rest.toArray ++ next) seen
 
 elab "#stmtConsts " id:ident : command => do
@@ -69,13 +70,15 @@ elab "#stmtConsts " id:ident : command => do
 
 elab "#auditStmt " id:ident : command => do
   let name ← liftCoreM <| realizeGlobalConstNoOverload id
-  let cs := ((← stmtConsts name).filter (fun n => ! isCoreConst n)).qsort (·.toString < ·.toString)
+  let env ← getEnv
+  let cs := ((← stmtConsts name).filter (fun n => ! isCoreConst env n)).qsort (·.toString < ·.toString)
   logInfo m!"{name} — trusted project surface ({cs.size}):\n{cs}"
 
 elab "#stmtSurfaceSubset " id:ident " ⊆ " "[" allow:ident,* "]" : command => do
   let name ← liftCoreM <| realizeGlobalConstNoOverload id
   let allowNames ← allow.getElems.mapM (fun a => liftCoreM <| realizeGlobalConstNoOverload a)
-  let proj := (← stmtConsts name).filter (fun n => ! isCoreConst n)
+  let env ← getEnv
+  let proj := (← stmtConsts name).filter (fun n => ! isCoreConst env n)
   let bad := proj.filter (fun n => ! allowNames.contains n)
   if bad.isEmpty then
     logInfo m!"{name}: statement's project surface ⊆ allowlist ✓"
@@ -97,7 +100,7 @@ elab "#specNonCircular " spec:ident " avoiding " "[" ks:ident,* "]" : command =>
   let specName ← liftCoreM <| realizeGlobalConstNoOverload spec
   let kernelNames ← ks.getElems.mapM (fun k => liftCoreM <| realizeGlobalConstNoOverload k)
   let env ← getEnv
-  let closure := projValueClosure env (valueConsts env specName) {}
+  let closure := projValueClosure env #[specName] {}
   let hit := kernelNames.filter (fun k => closure.contains k)
   if hit.isEmpty then
     logInfo m!"{specName}: definition does not reference {kernelNames} — non-circular ✓"

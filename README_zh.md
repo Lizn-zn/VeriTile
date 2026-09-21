@@ -99,7 +99,8 @@ theorem add_kernel_correct
 标准套路:`ComputeKernel.computeCorrect_of_toAlgKernel rfl` 处理投影,
 然后 `simp` 把 `exec` 化简到 body 递推;代数内容由 `simp` 在 spec 上
 关掉,或者引用 `Mathlib` 的数学引理。LLM 证明 wrapper `scripts/prove.sh`
-自动化这个循环。
+自动化这个循环，再由官方 comparator 对照原始题目判定 `--theorem` 指定的定理。
+参见[安装和用法](./scripts/README_zh.md)。
 
 ### 4. 登记到 kernel manifest
 
@@ -177,7 +178,8 @@ verso/                     幻灯片 / 概览
 - Lean 4(`v4.29.0`)+ Mathlib
 - [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) +
   [`lean4-skills`](https://github.com/lean4-skills/lean4-skills)
-- `jq`(`scripts/prove.sh` 用)
+- 自动证明还需要 Python 3、官方 comparator、lean4export 和 landrun，
+  运行于提供 systemd 用户服务的 Linux；参见[安装和用法](./scripts/README_zh.md)。
 
 ## 路线图
 

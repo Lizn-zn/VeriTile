@@ -37,9 +37,11 @@ concurrency:
 jobs:
   audit:
     name: TritonBench-G audit gates
-    # Self-hosted 96-core runner (dsp5): parallel port elaboration finishes
-    # in minutes instead of the ~17min a 4-vCPU hosted runner needs, and the
-    # user-local mathlib cache makes `lake exe cache get` near-instant.
+    # Self-hosted runner with a user-local mathlib cache. Capacity can change;
+    # the scripts choose concurrency from available CPU and memory. The audit
+    # elaborates the original ports and then separate copies with trust gates.
+    # Allow both passes on the current 8-core / 32-GB machine: one port pass
+    # alone took 47 minutes in PR #644.
     #
     # The repo is PUBLIC. A pull_request from a fork would otherwise execute
     # the fork's workflow code on this machine, so fork PRs are excluded at the
@@ -48,7 +50,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, veritile]
-    timeout-minutes: 60
+    timeout-minutes: 180
 
     steps:
       - name: Checkout

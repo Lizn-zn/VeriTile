@@ -53,3 +53,8 @@ jobs:
 
       - name: Check artifact contract
         run: scripts/check-artifact.sh
+
+      - name: Check audit and documentation regressions
+        run: |
+          lake env lean bench/tests/StatementAudit.lean
+          python3 -m unittest discover -s scripts -p 'test_doc_api.py'

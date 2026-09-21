@@ -39,9 +39,12 @@ The [translation cookbook](/VeriTile/cookbook/) explains how to work with it.
 The [lemma library](https://github.com/Lizn-zn/VeriTile/tree/main/VeriTile/Triton/KernelLemmas)
 provides reusable facts for loops, mathematical operators, and memory.
 The [proving wrapper](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/prove.sh)
-runs an agent proof loop with a cycle limit and saved logs, then invokes
-Lean on the modified file. Artifact and trust audits check the resulting
-proofs and their dependencies.
+runs an agent proof loop with a cycle limit and saved logs. The official
+comparator judges the theorems selected with `--theorem` against a snapshot of
+the original task and dependencies, checks permitted axioms, and replays the
+proofs in Lean's kernel. See the
+[setup and usage guide](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/README.md).
+Artifact and trust audits provide separate checks of the repository's proofs.
 
 ## What the proof covers
 

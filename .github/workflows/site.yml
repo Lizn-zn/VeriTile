@@ -1,4 +1,4 @@
-name: Deploy docs site
+name: Website
 
 on:
   push:
@@ -7,19 +7,31 @@ on:
       - 'site/**'
       - 'documents/**'
       - 'lean-toolchain'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+      - 'VeriTile/**'
       - 'bench/tritonbench_g/**'
-      - 'bench/examples/VectorAdd.lean'
-      - 'bench/examples/FusedSiLUEquiv.lean'
+      - 'bench/examples/**'
+      - '.github/workflows/site.yml'
+  pull_request:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'documents/**'
+      - 'lean-toolchain'
+      - 'lakefile.toml'
+      - 'lake-manifest.json'
+      - 'VeriTile/**'
+      - 'bench/tritonbench_g/**'
+      - 'bench/examples/**'
       - '.github/workflows/site.yml'
   workflow_dispatch:
 
 permissions:
   contents: read
-  pages: write
-  id-token: write
 
 concurrency:
-  group: pages
+  group: website-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -45,24 +57,32 @@ jobs:
       - name: Check documentation copies
         run: python3 scripts/sync-docs.py --check
 
+      - name: Check recorded proof freshness
+        run: python3 scripts/record-home-demo.py --check
+
       - name: Build site
         run: bun run build
 
       - name: Check site links
         run: python3 scripts/check-site.py
 
-      - uses: actions/configure-pages@v5
-
       - uses: actions/upload-pages-artifact@v3
+        if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
         with:
           path: site/dist
 
   deploy:
+    if: github.event_name != 'pull_request' && github.ref == 'refs/heads/main'
     needs: build
     runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
     environment:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - uses: actions/configure-pages@v5
+
       - id: deployment
         uses: actions/deploy-pages@v4

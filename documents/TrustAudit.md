@@ -68,6 +68,12 @@ which pulls the heavy analysis chain), so a routine lite `lake build` stays fast
 
 ## Audit boundary
 
+The statement surface excludes declarations originating in the trusted `Init`,
+`Std`, `Lean`, and `Mathlib` modules. Origin comes from Lean's environment,
+not from a declaration's name: project definitions named `Nat.wrapper`,
+`Real.wrapper`, or `instSomething` are still audited, including after import.
+Spec traversal stops at those trusted dependencies; it follows project aliases.
+
 `#axiomsClean` checks transitive axiom dependencies. The statement and spec
 checks constrain referenced constants; they do not replace reviewing whether
 a specification expresses the intended behavior under appropriate assumptions.

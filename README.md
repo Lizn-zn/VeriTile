@@ -107,7 +107,9 @@ The standard pattern: `ComputeKernel.computeCorrect_of_toAlgKernel rfl`
 discharges the projection, then `simp` reduces `exec` to the body
 recurrence; the algebraic content closes by `simp` on the spec or by
 invoking a math identity from `Mathlib`. The LLM proof wrapper
-`scripts/prove.sh` automates this loop.
+`scripts/prove.sh` automates this loop and uses the official comparator to judge
+the targets selected with `--theorem` against the original task.
+See [setup and usage](./scripts/README.md).
 
 ### 4. Register in the kernel manifest
 
@@ -188,7 +190,9 @@ verso/                     Slide deck / overview
 - Lean 4 (`v4.29.0`) + Mathlib
 - [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) +
   [`lean4-skills`](https://github.com/lean4-skills/lean4-skills)
-- `jq` (used by `scripts/prove.sh`)
+- For proof automation: Python 3 and the official comparator, lean4export,
+  and landrun on Linux with a systemd user service; see
+  [installation instructions](./scripts/README.md#setup).
 
 ## Roadmap
 
