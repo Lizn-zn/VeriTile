@@ -1,0 +1,227 @@
+---
+import { Code } from 'astro:components';
+import { flashAttention as example } from '../lib/flash-attention';
+
+const { github } = Astro.props;
+const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
+const tabs = [
+  { id: 'kernel', label: 'Kernel' },
+  { id: 'specification', label: 'Specification' },
+  { id: 'proof', label: 'Proof' },
+];
+---
+
+<details class="fa-example" id="flash-attention-example">
+  <summary>
+    <span class="fa-summary"><strong>FlashAttention Forward</strong><span>Kernel, specification, and proof.</span></span>
+    <span class="fa-action"><span class="when-closed">View example</span><span class="when-open">Close example</span><span class="fa-toggle" aria-hidden="true">+</span></span>
+  </summary>
+  <div class="fa-reader" data-fa-reader>
+    <div class="fa-toolbar" data-fa-navigation hidden>
+      <div class="fa-tabs" role="tablist" aria-label="Read the FlashAttention example">
+        {tabs.map((tab, i) => (
+          <button type="button" id={`fa-tab-${tab.id}`} role="tab" aria-controls={`fa-panel-${tab.id}`} aria-selected={String(i === 0)} tabindex={i === 0 ? 0 : -1} data-fa-tab>
+            {tab.label}
+          </button>
+        ))}
+      </div>
+      <span class="fa-variant">Non-causal forward pass</span>
+    </div>
+    <p class="fa-scope">This example follows the non-causal kernel with sequence-boundary and head-dimension masks.</p>
+
+    <section id="fa-panel-kernel" aria-labelledby="fa-title-kernel" data-fa-panel>
+      <h3 id="fa-title-kernel" class="fa-panel-title">Kernel</h3>
+      <div class="fa-kernel-pair">
+        <div class="fa-code">
+          <h4>Online softmax update</h4>
+          <p class="fa-caption">Inside the loop, after loading a tile of K and V.</p>
+          <Code code={example.update} lang="lean" themes={themes} tabindex="0" aria-label="FlashAttention online softmax update" />
+        </div>
+        <dl class="fa-explanation">
+          <div><dt>Running maximum</dt><dd>Combine the previous maximum with the current tile’s scores.</dd></div>
+          <div><dt>Rescaling</dt><dd>Rescale the accumulated sum and output before adding the new tile.</dd></div>
+          <div><dt>Output</dt><dd>After the loop, divide the accumulator by the normalization sum and store the active lanes.</dd></div>
+        </dl>
+      </div>
+      <div class="fa-details-group">
+        <details class="fa-code-details fa-code">
+          <summary>Complete kernel<span>{example.kernel.split('\n').length} lines</span></summary>
+          <p class="fa-caption">Includes tile loads, the streaming loop, sequence and D-tail masks, and the final store.</p>
+          <Code code={example.kernel} lang="lean" themes={themes} tabindex="0" aria-label="Complete FlashAttention boundary and D-tail kernel" />
+        </details>
+        <details class="fa-code-details fa-code">
+          <summary>Tensor-view binding</summary>
+          <p class="fa-caption">The specification’s <code>views.boundaryKernelD</code> selects this kernel with the tensor layout’s strides.</p>
+          <Code code={example.viewBinding} lang="lean" themes={themes} tabindex="0" aria-label="FlashAttention tensor-view binding" />
+          <Code code={example.layoutBinding} lang="lean" themes={themes} tabindex="0" aria-label="FlashAttention layout binding" />
+        </details>
+      </div>
+    </section>
+
+    <section id="fa-panel-specification" aria-labelledby="fa-title-specification" data-fa-panel>
+      <h3 id="fa-title-specification" class="fa-panel-title">Specification</h3>
+      <div class="fa-spec-pair">
+        <div class="fa-reference fa-code">
+          <h4>Direct attention reference</h4>
+          <p class="fa-formula" aria-label="Output equals softmax of Q K transpose times scale, multiplied by V">O = softmax(QKᵀ · scale) V</p>
+          <Code code={example.reference} lang="lean" themes={themes} tabindex="0" aria-label="FlashAttention direct reference definition" />
+        </div>
+        <dl class="fa-explanation">
+          <div><dt>Computation</dt><dd>Each active output lane matches the direct attention reference for its batch, head, query, and feature indices.</dd></div>
+          <div><dt>Memory</dt><dd>The result is checked at its declared output address, determined by the tensor view and the program indices.</dd></div>
+          <div><dt>Scope</dt><dd>Real arithmetic, under the loaded-input and tile-size conditions stated in the theorem.</dd></div>
+        </dl>
+      </div>
+      <div class="fa-details-group">
+        <details class="fa-code-details fa-code">
+          <summary>Full theorem statement</summary>
+          <Code code={example.statement} lang="lean" themes={themes} tabindex="0" aria-label="Complete FlashAttention specification" />
+        </details>
+        <details class="fa-code-details fa-code">
+          <summary>Reference for each batch and head</summary>
+          <Code code={example.attentionReference} lang="lean" themes={themes} tabindex="0" aria-label="Four-dimensional attention reference" />
+        </details>
+      </div>
+    </section>
+
+    <section id="fa-panel-proof" aria-labelledby="fa-title-proof" data-fa-panel>
+      <h3 id="fa-title-proof" class="fa-panel-title">Proof</h3>
+      <div class="fa-proof fa-code">
+        <h4>From kernel execution to the specification</h4>
+        <p>The proof uses the forward-correctness theorem to relate each observed output value to direct attention.</p>
+        <p class="fa-caption">Proof body of <code>fa1_boundaryD_refines_naive_reference_views</code>.</p>
+        <Code code={example.proof} lang="lean" themes={themes} tabindex="0" aria-label="FlashAttention refinement proof body" />
+      </div>
+      <div class="fa-details-group">
+        <h4 class="fa-support-title">Supporting proofs</h4>
+        <details class="fa-code-details fa-code">
+          <summary>Execution agrees with the direct reference</summary>
+          <Code code={example.executionProof} lang="lean" themes={themes} tabindex="0" aria-label="FlashAttention execution refinement theorem" />
+        </details>
+        <details class="fa-code-details fa-code">
+          <summary>Forward correctness over tensor views</summary>
+          <Code code={example.viewProof} lang="lean" themes={themes} tabindex="0" aria-label="FlashAttention forward correctness over tensor views" />
+        </details>
+      </div>
+    </section>
+
+    <details class="fa-source fa-code">
+      <summary><span>Complete refinement source</span><span>{example.source.split('\n').length} lines</span></summary>
+      <p class="fa-caption">NaiveRefinement.lean includes the non-causal and causal reference contracts and their proofs.</p>
+      <Code code={example.source} lang="lean" themes={themes} tabindex="0" aria-label="Complete FlashAttention refinement source" />
+    </details>
+    <div class="fa-footer"><span>FlashAttention Forward</span><a href={`${github}/blob/main/${example.sourcePath}`}>Source on GitHub ↗</a></div>
+  </div>
+</details>
+
+<script>
+  document.querySelectorAll<HTMLElement>('[data-fa-reader]').forEach((reader) => {
+    const tabs = [...reader.querySelectorAll<HTMLButtonElement>('[data-fa-tab]')];
+    const panels = [...reader.querySelectorAll<HTMLElement>('[data-fa-panel]')];
+    const select = (index: number) => {
+      tabs.forEach((tab, i) => {
+        tab.setAttribute('aria-selected', String(index === i));
+        tab.tabIndex = index === i ? 0 : -1;
+        panels[i].hidden = index !== i;
+      });
+    };
+    panels.forEach((panel, i) => {
+      panel.setAttribute('role', 'tabpanel');
+      panel.setAttribute('aria-labelledby', tabs[i].id);
+      panel.tabIndex = 0;
+    });
+    tabs.forEach((tab, index) => {
+      tab.addEventListener('click', () => select(index));
+      tab.addEventListener('keydown', (event) => {
+        let next: number;
+        if (event.key === 'ArrowRight') next = (index + 1) % tabs.length;
+        else if (event.key === 'ArrowLeft') next = (index - 1 + tabs.length) % tabs.length;
+        else if (event.key === 'Home') next = 0;
+        else if (event.key === 'End') next = tabs.length - 1;
+        else return;
+        event.preventDefault();
+        select(next);
+        tabs[next].focus();
+      });
+    });
+    select(0);
+    reader.querySelector<HTMLElement>('[data-fa-navigation]')!.hidden = false;
+    reader.dataset.ready = '';
+  });
+</script>
+
+<style>
+  .fa-example { margin-top: 1.6rem; border: 1px solid var(--vt-rule-2); border-radius: 4px; scroll-margin-top: 5rem; }
+  .fa-example > summary { display: flex; justify-content: space-between; align-items: center; gap: 1rem; cursor: pointer; padding: 1rem 1.2rem; list-style: none; background: var(--vt-paper-2); border-radius: 4px; }
+  .fa-example > summary::-webkit-details-marker { display: none; }
+  .fa-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: .2rem 1rem; }
+  .fa-summary strong { font-weight: 500; color: var(--vt-ink); font-size: .8rem; }
+  .fa-summary > span { font-size: .67rem; color: var(--vt-ink-3); }
+  .fa-action { display: flex; align-items: center; gap: .8rem; color: var(--vt-seal-ink); font-size: .7rem; white-space: nowrap; }
+  .fa-toggle { font-size: 1.1rem; line-height: 1; }
+  .fa-example .when-open, .fa-example[open] .when-closed { display: none; }
+  .fa-example[open] .when-open { display: inline; }
+  .fa-example[open] > summary { border-bottom: 1px solid var(--vt-rule); border-radius: 4px 4px 0 0; }
+  .fa-example[open] .fa-toggle { transform: rotate(45deg); }
+  .fa-example > summary:hover .fa-action { text-decoration: underline; text-underline-offset: .2em; }
+  .fa-example :is(summary, button, a, [tabindex]):focus-visible, .fa-example :global(pre:focus-visible) { outline: 2px solid var(--vt-seal); outline-offset: -3px; }
+  .fa-reader { min-width: 0; }
+  .fa-reader [hidden] { display: none !important; }
+  .fa-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0 1.2rem; border-bottom: 1px solid var(--vt-rule); }
+  .fa-tabs { display: flex; gap: 1.3rem; }
+  .fa-tabs button { min-height: 3.2rem; padding: .8rem 0; border: 0; border-bottom: 2px solid transparent; color: var(--vt-ink-3); background: transparent; font: 500 .75rem/1.5 'IBM Plex Mono', monospace; cursor: pointer; }
+  .fa-tabs button[aria-selected='true'] { color: var(--vt-seal-ink); border-bottom-color: var(--vt-seal); }
+  .fa-tabs button:hover { color: var(--vt-ink); }
+  .fa-variant { font-size: .62rem; color: var(--vt-ink-3); }
+  .fa-scope { margin: 0; padding: .8rem 1.2rem; background: var(--vt-paper-2); color: var(--vt-ink-3); font-size: .67rem; }
+  .fa-panel-title { margin: 1rem 1.2rem 0; font-size: .85rem; }
+  [data-ready] .fa-panel-title { display: none; }
+  .fa-kernel-pair, .fa-spec-pair { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 1.5rem; padding: 1.2rem; }
+  .fa-kernel-pair > div, .fa-spec-pair > div { min-width: 0; }
+  .fa-reader h4 { margin: 0 0 .6rem; color: var(--vt-ink); font-size: .74rem; font-weight: 500; }
+  .fa-reader .fa-caption { margin: .4rem 0 .7rem; font-size: .64rem; color: var(--vt-ink-3); overflow-wrap: anywhere; }
+  .fa-reader .fa-code :global(pre) { margin: 0; padding: .8rem; background: var(--vt-paper-2) !important; border: 0; border-radius: 0; overflow: auto; font: .7rem/1.95 'IBM Plex Mono', monospace; }
+  .fa-reader :global(code) { font: inherit; }
+  :global(html[data-theme='dark']) .fa-reader :global(.astro-code),
+  :global(html[data-theme='dark']) .fa-reader :global(.astro-code span) { color: var(--shiki-dark) !important; }
+  .fa-explanation { margin: 0; border-left: 1px solid var(--vt-rule); padding-left: 1.2rem; font-size: .7rem; line-height: 1.8; }
+  .fa-explanation > div + div { margin-top: 1rem; }
+  .fa-explanation dt { color: var(--vt-ink); font-weight: 500; }
+  .fa-explanation dd { margin: .3rem 0 0; color: var(--vt-ink-2); }
+  .fa-reference .fa-formula { margin: .8rem 0 1.2rem; color: var(--vt-seal-ink); font-size: 1.1rem; line-height: 1.6; letter-spacing: -.035em; }
+  .fa-details-group { padding: 0 1.2rem 1.2rem; }
+  .fa-code-details { border-top: 1px solid var(--vt-rule); font-size: .7rem; }
+  .fa-code-details > summary { padding: .75rem 0; cursor: pointer; color: var(--vt-ink-2); }
+  .fa-code-details > summary:hover, .fa-source > summary:hover { color: var(--vt-seal-ink); }
+  .fa-code-details > summary > span, .fa-source > summary > span:last-child { float: right; color: var(--vt-ink-3); font-size: .62rem; }
+  .fa-reader .fa-code-details :global(pre) { max-height: 28rem; margin-bottom: .8rem; }
+  .fa-proof { padding: 1.2rem; }
+  .fa-proof > p { margin: .5rem 0 .8rem; font-size: .72rem; color: var(--vt-ink-2); }
+  .fa-reader .fa-support-title { margin: .1rem 0 .7rem; color: var(--vt-ink-3); font-size: .65rem; font-weight: 400; }
+  .fa-source { border-top: 1px solid var(--vt-rule); }
+  .fa-source > summary { padding: .85rem 1.2rem; cursor: pointer; color: var(--vt-ink-2); font-size: .7rem; }
+  .fa-reader .fa-source > p { margin: 0 1.2rem .8rem; }
+  .fa-reader .fa-source :global(pre) { max-height: 32rem; padding: 1.2rem; }
+  .fa-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .7rem; border-top: 1px solid var(--vt-rule); padding: .8rem 1.2rem; color: var(--vt-ink-3); font-size: .64rem; }
+  .fa-footer a { color: var(--vt-seal-ink); text-decoration: none; font-size: .64rem; }
+  .fa-footer a:hover { text-decoration: underline; text-underline-offset: .2em; }
+  @media (max-width: 48rem) {
+    .fa-example > summary { padding: .9rem 1rem; }
+    .fa-summary { flex-direction: column; gap: .2rem; }
+    .fa-toolbar { flex-wrap: wrap; padding-inline: 1rem; gap: 0 .7rem; }
+    .fa-tabs { gap: 1rem; }
+    .fa-tabs button { font-size: .68rem; }
+    .fa-variant { padding-bottom: .5rem; }
+    .fa-kernel-pair, .fa-spec-pair { grid-template-columns: 1fr; padding: 1rem; gap: 1rem; }
+    .fa-explanation { border-left: 0; border-top: 1px solid var(--vt-rule); padding: 1rem 0 0; }
+    .fa-scope, .fa-proof, .fa-details-group, .fa-footer, .fa-source > summary { padding-inline: 1rem; }
+    .fa-summary strong { font-size: .73rem; }
+    .fa-action { font-size: .65rem; gap: .5rem; }
+  }
+  @media (max-width: 25rem) {
+    .fa-tabs { width: 100%; justify-content: space-between; }
+    .fa-variant { font-size: .59rem; }
+    .fa-example > summary { gap: .6rem; }
+    .fa-source > summary > span:last-child { float: none; margin-left: .6rem; }
+  }
+</style>

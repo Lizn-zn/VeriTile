@@ -1,6 +1,7 @@
 ---
 import { Code } from 'astro:components';
 import KernelDemo from './KernelDemo.astro';
+import FlashAttentionExample from './FlashAttentionExample.astro';
 import { homeStory } from '../lib/home-story';
 import { corpus, proofInventory, vectorAddBodies } from '../lib/project-data';
 const { docsBase, github } = Astro.props;
@@ -102,7 +103,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
         <p class="attention-formula">softmax(QKᵀ · scale) V</p>
         <ul class="attention-parts">{copy.attentionParts.map((part) => <li><span aria-hidden="true">✓</span>{part}</li>)}</ul>
         <p>{copy.attentionText}</p>
-        <a href={source('VeriTile/Examples/FlashAttention1/NaiveRefinement.lean')}>{copy.attentionLink} ↗</a>
+        <a href="#flash-attention-example" class="attention-example-link">View example <span aria-hidden="true">↓</span></a>
       </article>
       <aside class="corpus" id="benchmark" aria-labelledby="corpus-title">
         <h3 id="corpus-title">{copy.corpusTitle}</h3>
@@ -115,10 +116,29 @@ const source = (path: string) => `${github}/blob/main/${path}`;
         <p class="scope-note">{copy.corpusNote}</p>
       </aside>
     </div>
+    <FlashAttentionExample {github} />
     <a class="all-examples" href={`${github}/tree/main/bench/examples`}>{copy.allExamples} ↗</a>
   </section>
 
 </div>
+
+<script>
+  const openLinkedExample = () => {
+    const id = window.location.hash === '#example' ? 'try-example' : window.location.hash.slice(1);
+    if (!['try-example', 'flash-attention-example'].includes(id)) return;
+    const example = document.getElementById(id) as HTMLDetailsElement | null;
+    if (!example) return;
+    example.open = true;
+    requestAnimationFrame(() => example.scrollIntoView({ block: 'start' }));
+  };
+  openLinkedExample();
+  window.addEventListener('hashchange', openLinkedExample);
+  document.querySelector<HTMLAnchorElement>('.attention-example-link')?.addEventListener('click', () => {
+    // A second click must reopen the reader even if the URL hash is unchanged.
+    const example = document.querySelector<HTMLDetailsElement>('#flash-attention-example');
+    if (example) example.open = true;
+  });
+</script>
 
 <style>
   .vt-story { font-size: .8rem; line-height: 1.8; }
