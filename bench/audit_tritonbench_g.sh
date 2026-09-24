@@ -3412,4 +3412,9 @@ if [ "${failures}" -gt 0 ]; then
   exit 1
 fi
 
-printf 'TritonBench-G audit gates passed\n'
+if [[ -v AUDIT_TRUST_SHARD_COUNT ]]; then
+  printf 'TritonBench-G audit shard %s/%s passed (zero-based); all shards are required\n' \
+    "${AUDIT_TRUST_SHARD_INDEX}" "${AUDIT_TRUST_SHARD_COUNT}"
+else
+  printf 'TritonBench-G audit gates passed\n'
+fi

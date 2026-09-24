@@ -19,6 +19,7 @@ on:
       - 'scripts/comparator_common.py'
       - 'scripts/setup-comparator.sh'
       - 'scripts/kernel-manifest.tsv'
+      - 'scripts/test_audit_shards.py'
       - 'lean-toolchain'
       - '.github/actions/setup-comparator/**'
       - '.github/workflows/bench-audit.yml'
@@ -31,6 +32,7 @@ on:
       - 'scripts/comparator_common.py'
       - 'scripts/setup-comparator.sh'
       - 'scripts/kernel-manifest.tsv'
+      - 'scripts/test_audit_shards.py'
       - 'lean-toolchain'
       - '.github/actions/setup-comparator/**'
       - '.github/workflows/bench-audit.yml'
@@ -40,28 +42,32 @@ on:
     - cron: '17 3 * * 1'
   workflow_dispatch:
 
-# Superseded runs on the same ref are dead weight on a single-machine runner;
-# cancel them when a newer commit arrives.
+permissions:
+  contents: read
+
+# Keep the newest audit for each ref.
 concurrency:
   group: bench-audit-${{ github.ref }}
   cancel-in-progress: true
 
 jobs:
   audit:
-    name: TritonBench-G audit gates
-    # Self-hosted runner with a user-local mathlib cache. Capacity can change;
-    # the scripts choose concurrency from available CPU and memory. One audit
-    # pass elaborates the ports with trust gates and replays their proofs through
-    # comparator. A port elaboration pass alone took 47 minutes in PR #644.
-    #
-    # The repo is PUBLIC. A pull_request from a fork would otherwise execute
-    # the fork's workflow code on this machine, so fork PRs are excluded at the
-    # job level: pushes, schedule, dispatch, and same-repo PRs still run.
+    name: TritonBench-G audit shard ${{ matrix.shard }}
+    # Each hosted runner checks a disjoint part of the complete corpus, plus
+    # all static and library gates. Workflow success requires all four shards.
     if: >-
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
-    runs-on: [self-hosted, linux, x64, veritile]
+    runs-on: ubuntu-latest
     timeout-minutes: 360
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0, 1, 2, 3]
+    env:
+      AUDIT_TRUST_JOBS: 1
+      AUDIT_TRUST_SHARD_COUNT: 4
+      AUDIT_TRUST_SHARD_INDEX: ${{ matrix.shard }}
 
     steps:
       - name: Checkout
@@ -71,6 +77,9 @@ jobs:
       # misconfigured runner dies in seconds with a clear message.
       - name: Check required tools
         run: command -v rg && command -v python3
+
+      - name: Check audit sharding regressions
+        run: python3 -m unittest discover -s scripts -p 'test_audit_shards.py'
 
       - name: Build Lean project
         uses: leanprover/lean-action@v1

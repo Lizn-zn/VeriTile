@@ -27,6 +27,8 @@
 #   bench/audit_trust.sh                 # audit the whole bench corpus
 #   bench/audit_trust.sh <kernel> ...    # audit only named tritonbench_g kernels
 #   AUDIT_TRUST_JOBS=4 bench/audit_trust.sh
+#   AUDIT_TRUST_SHARD_COUNT=4 AUDIT_TRUST_SHARD_INDEX=0 bench/audit_trust.sh
+# Shards use zero-based indices; every shard must pass to audit the full corpus.
 #
 # Exit codes:
 #   0 — every audited file passes its trust gates and official comparator replay
@@ -77,14 +79,26 @@ if [[ ! "${JOBS}" =~ ^[1-9][0-9]*$ ]]; then
   exit 2
 fi
 
-TMPDIR_AUDIT="$(mktemp -d)"
-trap 'rm -rf "${TMPDIR_AUDIT}"' EXIT
-
 target_list="$(select_targets "$@")" || exit "$?"
 if [ -z "${target_list}" ]; then
   printf 'No trust audit targets selected\n' >&2
   exit 2
 fi
+
+audit_scope='bench corpus'
+if [[ -v AUDIT_TRUST_SHARD_COUNT || -v AUDIT_TRUST_SHARD_INDEX ]]; then
+  if [ "$#" -ne 0 ]; then
+    printf 'Trust audit sharding cannot be combined with named targets\n' >&2
+    exit 2
+  fi
+  target_list="$(printf '%s\n' "${target_list}" | python3 "${SCRIPT_DIR}/select_audit_shard.py" \
+    "${AUDIT_TRUST_SHARD_COUNT-}" "${AUDIT_TRUST_SHARD_INDEX-}")" || exit "$?"
+  audit_scope="bench corpus shard ${AUDIT_TRUST_SHARD_INDEX}/${AUDIT_TRUST_SHARD_COUNT} (zero-based)"
+  printf 'Selected %s: %s files\n' "${audit_scope}" "$(printf '%s\n' "${target_list}" | wc -l)"
+fi
+
+TMPDIR_AUDIT="$(mktemp -d)"
+trap 'rm -rf "${TMPDIR_AUDIT}"' EXIT
 
 export PROJECT_ROOT TMPDIR_AUDIT
 
@@ -121,7 +135,7 @@ printf '%s\n' "${results}" | sort
 passed=$(printf '%s\n' "${results}" | grep -c '^  ok    ' || true)
 failed=$(printf '%s\n' "${results}" | grep -c '^  FAIL  ' || true)
 
-printf '\nTrust audit (bench corpus): %d ok, %d fail\n' "${passed}" "${failed}"
+printf '\nTrust audit (%s): %d ok, %d fail\n' "${audit_scope}" "${passed}" "${failed}"
 
 if [ "${failed}" -gt 0 ]; then
   printf 'Files whose trust gate FAILED (inspect diagnostics for proof or infrastructure failure):\n'

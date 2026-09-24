@@ -115,6 +115,15 @@ require the official comparator and the sandbox tools installed above. Missing
 tools, export failures, and comparator rejections fail the gate. CI installs
 the same pinned tools through `.github/actions/setup-comparator`.
 
+The public Bench audit workflow uses four GitHub-hosted runners. Each runs all
+static and library gates and a disjoint shard of the standalone trust audit;
+the workflow succeeds only after all four shards pass. Local runs still audit
+the whole corpus by default. To reproduce one CI shard, set
+`AUDIT_TRUST_SHARD_COUNT=4 AUDIT_TRUST_SHARD_INDEX=0` when running
+`bench/audit_tritonbench_g.sh` (indices are 0–3). Both variables are required,
+and sharding cannot be combined with named targets. A single shard's result
+is not a completed corpus audit.
+
 ```bash
 python3 scripts/check_comparator.py --library
 python3 scripts/check_comparator.py --file bench/examples/VectorAdd.lean --trust

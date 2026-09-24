@@ -74,7 +74,11 @@ The port-check script elaborates each `<KernelName>.lean` and requires official
 comparator export/replay, reports per-kernel pass/fail, and exits non-zero on
 any failure. The aggregate audit combines compilation, Lean trust/statement
 checks, and comparator replay in `bench/audit_trust.sh`, avoiding a duplicate
-port-build pass. Its other gates include Python/Lean count matching,
+port-build pass. The public CI workflow partitions the standalone corpus across
+four GitHub-hosted jobs; all four must pass. Local runs cover the whole corpus
+unless `AUDIT_TRUST_SHARD_COUNT` and `AUDIT_TRUST_SHARD_INDEX` are explicitly set
+(see [`scripts/README.md`](../../scripts/README.md#shared-comparator-gate)).
+Its other gates include Python/Lean count matching,
 placeholder-proof scanning, correctness-surface scanning, compiled-port README
 status checks, and a documented-scope check for Python `.to(tl.float32)` casts
 that are outside a Lean proof slice. It also rejects Lean-only
