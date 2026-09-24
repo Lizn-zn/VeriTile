@@ -65,4 +65,11 @@ const home = `${base}/`;
   .vt-mobile-nav a:hover { background: var(--vt-paper-2); }
   @media (max-width: 56rem) { .vt-header { gap: 1rem; } nav { display: none; } .vt-mobile-nav { display: block; } .vt-header__settings { gap: .6rem; padding-left: .6rem; } }
   @media (max-width: 25rem) { .vt-header { gap: .5rem; } .vt-brand { font-size: 1rem; gap: .4rem; } .vt-header__settings { padding-left: .4rem; } }
+  @media (max-width: 22rem) {
+    .vt-header { gap: .25rem; }
+    .vt-brand__tiles { display: none; }
+    .vt-mobile-nav summary { white-space: nowrap; }
+    .vt-header__settings { padding-left: 0; border-left: 0; }
+    .vt-header__settings :global(select) { font-size: var(--vt-text-small); }
+  }
 </style>

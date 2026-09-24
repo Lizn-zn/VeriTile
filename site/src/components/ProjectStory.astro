@@ -12,7 +12,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
 
 <div class="vt-story">
   <section class="story-section language-section" id="language" aria-labelledby="language-title">
-    <header><h2 id="language-title">{copy.languageTitle}</h2><p>{copy.languageLead} <span class="language-emphasis">{copy.languageEmphasis}</span>. {copy.languageText}</p></header>
+    <header><h2 id="language-title">{copy.languageTitle}</h2><p>{copy.languageLead} <strong class="language-emphasis">{copy.languageEmphasis}</strong>. {copy.languageText}</p></header>
     <div class="language-pair">
       <div>
         <div class="language-code-heading"><h3>{copy.pythonLabel}</h3><p>{copy.pythonRole}</p></div>
@@ -36,7 +36,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
         <article class="proof-card" aria-labelledby={`${card.id}-title`}>
           <div class="proof-card-heading">
             <p class="kicker">{card.label}</p><h3 id={`${card.id}-title`}>{card.title}</h3>
-            <p class="proof-description">{card.description}</p>
+            <p class="proof-description"><strong>{card.description}</strong></p>
           </div>
           <div class="proof-relation" aria-describedby="proof-relation-note">
             <code><span>{card.relationLeft}</span> <span class="relation-operator">{card.relationOperator}</span> <span>{card.relationRight}</span></code>
@@ -88,7 +88,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
             {copy.agentSteps.map((step) => <li><h4>{step.title}</h4><p>{step.text}</p></li>)}
           </ol>
           <p class="process-feedback"><span aria-hidden="true">↶</span>{copy.feedback}</p>
-          <div class="process-output"><span>{copy.generationSuccess}</span><p><span aria-hidden="true">✓</span>{copy.generationOutput}</p></div>
+          <div class="process-output"><span>{copy.generationSuccess}</span><p><span aria-hidden="true">✓</span><strong>{copy.generationOutput}</strong></p></div>
         </div>
       </article>
     </div>
@@ -150,11 +150,11 @@ const source = (path: string) => `${github}/blob/main/${path}`;
   .story-section { padding: 2.6rem 0; border-top: 1px solid var(--vt-rule); scroll-margin-top: 5rem; }
   .language-section { border-top: 0; padding-top: .6rem; }
   header { margin-bottom: 1.4rem; }
-  h2 { margin: 0; font: 500 clamp(1.15rem, 2.5vw, 1.4rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
-  h3 { margin: 0; font: 500 1rem/1.6 'IBM Plex Mono', monospace; letter-spacing: -.025em; }
+  h2 { margin: 0; font: 600 clamp(1.15rem, 2.5vw, 1.4rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
+  h3 { margin: 0; font: 600 1rem/1.6 'IBM Plex Mono', monospace; letter-spacing: -.025em; }
   p { margin: .6rem 0; color: var(--vt-ink-2); }
   header p { max-width: 49rem; margin-bottom: 0; }
-  .language-emphasis { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .2em; }
+  .language-emphasis, .proof-description strong, .process-output strong { color: var(--vt-ink); font-weight: 600; }
   .vt-story :global(pre) { background: transparent !important; margin: 0; font: var(--vt-text-code)/1.7 'IBM Plex Mono', monospace; }
   .vt-story :global(code) { font: inherit; }
   :global(html[data-theme='dark']) .vt-story :global(.astro-code),
@@ -194,9 +194,11 @@ const source = (path: string) => `${github}/blob/main/${path}`;
   .proof-source { align-self: end; padding-top: .2rem; font-size: var(--vt-text-small); }
   #proof-relation-note { margin: .8rem 0 0; }
   .formula { display: flex; flex-direction: column; margin: 0; color: var(--vt-ink); font-size: 1.1rem; letter-spacing: -.04em; }
-  .try-example { margin-top: 1.8rem; border-block: 1px solid var(--vt-rule); }
-  .try-example > summary { cursor: pointer; padding: .95rem 0; }
-  .try-example > summary > span:first-child { font-weight: 500; color: var(--vt-ink); font-size: var(--vt-text-small); }
+  .try-example { margin-top: 1.8rem; border-block: 1px solid var(--vt-rule-2); }
+  .try-example > summary { cursor: pointer; padding: .95rem 1rem; background: var(--vt-seal-soft); }
+  .try-example > summary::marker { color: var(--vt-seal-ink); }
+  .try-example > summary > span:first-child { font-weight: 600; color: var(--vt-seal-ink); font-size: var(--vt-text-small); }
+  .try-example > summary:hover > span:first-child { text-decoration: underline; text-underline-offset: .2em; }
   .try-example > summary > span:last-child { display: inline; margin-left: 1rem; font-size: var(--vt-text-small); color: var(--vt-ink-3); }
   .try-example > div { padding-top: 1rem; }
   .try-example :global(.vt-demo) { margin-bottom: 1.5rem; }
@@ -221,7 +223,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
   .agent-cycle p { margin: .3rem 0 0; font-size: var(--vt-text-small); }
   .process-feedback { display: flex; align-items: center; gap: .4rem; margin: .6rem 0 1rem; color: var(--vt-seal-ink); font-size: var(--vt-text-small); }
   .process-feedback > span { font-size: 1rem; }
-  .process-output { padding-top: .8rem; border-top: 1px solid var(--vt-rule); }
+  .process-output { margin-top: .8rem; padding: .75rem .9rem; border-left: 3px solid var(--vt-verified); background: var(--vt-paper); border-radius: 2px; }
   .process-output > span { color: var(--vt-ink-3); font-size: var(--vt-text-small); letter-spacing: .025em; }
   .process-output p { display: flex; align-items: baseline; gap: .5rem; margin: .2rem 0 0; color: var(--vt-ink); font-size: var(--vt-text-small); }
   .process-output p > span { color: var(--vt-verified); }
@@ -230,6 +232,8 @@ const source = (path: string) => `${github}/blob/main/${path}`;
   .attention-parts { display: flex; flex-wrap: wrap; gap: .45rem 1.1rem; list-style: none; padding: 0; margin: 0 0 1rem; font-size: var(--vt-text-small); color: var(--vt-ink-2); }
   .attention-parts span { color: var(--vt-verified); margin-right: .4rem; }
   .attention > a { display: inline-block; margin-top: .5rem; }
+  .attention > .attention-example-link { padding: .55rem .85rem; border: 1px solid var(--vt-seal-ink); border-radius: 3px; background: var(--vt-seal-soft); font-weight: 600; }
+  .attention-example-link:hover { background: var(--vt-paper-2); }
   .corpus { border-left: 1px solid var(--vt-rule); padding-left: 1.6rem; }
   .corpus h3 { font-size: var(--vt-text-small); }
   .corpus-count { display: flex; align-items: baseline; gap: .7rem; margin: .7rem 0 0; }
@@ -248,7 +252,8 @@ const source = (path: string) => `${github}/blob/main/${path}`;
     .story-section { padding-block: 2rem; }
     .language-section { padding-top: 0; }
     .results-pair { grid-template-columns: 1fr; }
-    .source-caption { flex-direction: column; gap: 0; }
+    .source-caption { flex-direction: column; align-items: stretch; gap: 0; }
+    .source-caption a { white-space: normal; }
     .corpus { border-left: 0; border-top: 1px solid var(--vt-rule); padding: 1.4rem 0 0; }
     .try-example > summary > span:last-child { display: block; margin: .4rem 0 0 1rem; }
     .results-pair { gap: 1.8rem; }

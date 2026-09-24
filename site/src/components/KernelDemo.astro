@@ -111,7 +111,7 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
 <style>
   .vt-demo { --vt-text-body: var(--vt-text-explanation); font-size: var(--vt-text-body); margin-bottom: 3.6rem; }
   .vt-demo-heading { margin-bottom: 1.4rem; }
-  .vt-demo-heading h2 { margin: 0; font: 500 clamp(1.1rem, 2.5vw, 1.35rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
+  .vt-demo-heading h2 { margin: 0; font: 600 clamp(1.1rem, 2.5vw, 1.35rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
   .vt-demo-heading p { margin: .5rem 0 0; color: var(--vt-ink-2); font-size: var(--vt-text-body); line-height: 1.7; }
   .vt-demo-heading .vt-demo-generality { color: var(--vt-ink-3); font-size: var(--vt-text-small); }
   .vt-demo-frame { border: 1px solid var(--vt-rule-2); border-radius: 4px; overflow: hidden; }
@@ -149,12 +149,13 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
   .vt-demo-contract { display: flex; gap: 1rem; align-items: baseline; padding: .8rem 1rem; border-block: 1px solid var(--vt-rule); }
   .vt-demo-contract > span { color: var(--vt-ink-3); font-size: var(--vt-text-small); white-space: nowrap; }
   .vt-demo-contract :global(pre) { min-width: 0; font-size: var(--vt-text-code); }
-  .vt-demo-verdict { display: flex; align-items: flex-start; gap: .7rem; padding: 1.15rem 1rem; }
+  .vt-demo-verdict { display: flex; align-items: flex-start; gap: .7rem; padding: 1.15rem 1rem; border-left: 3px solid var(--vt-verified); background: var(--vt-success-soft); }
   .vt-verdict-icon { color: var(--vt-verified); font-size: 1.1rem; }
-  .vt-demo-verdict h3 { margin: 0; color: var(--vt-verified); font-size: var(--vt-text-body); font-weight: 500; line-height: 1.6; }
+  .vt-demo-verdict h3 { margin: 0; color: var(--vt-verified); font-size: var(--vt-text-small); font-weight: 600; line-height: 1.6; }
   .vt-demo-verdict p { margin: .3rem 0 0; font-size: var(--vt-text-body); color: var(--vt-ink-2); line-height: 1.7; }
   .vt-record-label { display: flex; flex-direction: column; gap: .15rem; margin-left: auto; flex-shrink: 0; text-align: right; color: var(--vt-ink-3); font-size: var(--vt-text-small); line-height: 1.8; }
   [data-variant='subtract'] :is(.vt-demo-verdict h3, .vt-verdict-icon, .vt-sample-result, .vt-actual td) { color: var(--vt-error); }
+  [data-variant='subtract'] .vt-demo-verdict { border-left-color: var(--vt-error); background: var(--vt-error-soft); }
   [data-variant='subtract'] .vt-actual td { background: var(--vt-error-soft); }
   [data-variant='subtract'] .vt-demo-code :global(.line:nth-child(6)) { background: var(--vt-error-soft); }
   .vt-proof-details { border-top: 1px solid var(--vt-rule); font-size: var(--vt-text-small); }
@@ -174,7 +175,7 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
     .vt-sample caption { margin-bottom: .5rem; }
     .vt-demo-verdict { flex-wrap: wrap; }
     .vt-demo-verdict > div { flex: 1; }
-    .vt-record-label { flex-basis: 100%; flex-direction: row; flex-wrap: wrap; gap: .2rem .7rem; margin-left: 1.8rem; text-align: left; }
+    .vt-record-label { flex-basis: calc(100% - 1.8rem); min-width: 0; flex-direction: row; flex-wrap: wrap; gap: .2rem .7rem; margin-left: 1.8rem; text-align: left; }
     .vt-demo-contract { flex-direction: column; gap: .3rem; }
     .vt-demo-toolbar { flex-wrap: wrap; gap: .6rem; }
     .vt-demo-switch { margin-left: auto; }

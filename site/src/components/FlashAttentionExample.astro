@@ -155,9 +155,9 @@ const tabs = [
   .fa-example > summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; cursor: pointer; padding: 1rem 1.2rem; list-style: none; background: var(--vt-paper-2); border-radius: 4px; }
   .fa-example > summary::-webkit-details-marker { display: none; }
   .fa-summary { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; gap: .2rem 1rem; }
-  .fa-summary strong { font-weight: 500; color: var(--vt-ink); font-size: var(--vt-text-small); }
+  .fa-summary strong { font-weight: 600; color: var(--vt-ink); font-size: var(--vt-text-small); }
   .fa-summary > span { font-size: var(--vt-text-small); color: var(--vt-ink-3); }
-  .fa-action { display: flex; align-items: center; gap: .8rem; color: var(--vt-seal-ink); font-size: var(--vt-text-small); white-space: nowrap; }
+  .fa-action { display: flex; align-items: center; gap: .8rem; color: var(--vt-seal-ink); font-size: var(--vt-text-small); font-weight: 600; white-space: nowrap; }
   .fa-toggle { font-size: 1.1rem; line-height: 1; }
   .fa-example .when-open, .fa-example[open] .when-closed { display: none; }
   .fa-example[open] .when-open { display: inline; }
@@ -217,7 +217,7 @@ const tabs = [
     .fa-action { gap: .5rem; }
   }
   @media (max-width: 25rem) {
-    .fa-tabs { width: 100%; justify-content: space-between; }
+    .fa-tabs { width: 100%; justify-content: space-between; flex-wrap: wrap; gap: 0 .75rem; }
     .fa-example > summary { gap: .6rem; }
     .fa-source > summary > span:last-child { float: none; margin-left: .6rem; }
   }

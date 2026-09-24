@@ -16,7 +16,7 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
   <section class="vt-hero" aria-labelledby="_top">
     <p class="vt-eyebrow"><span class="vt-mark" aria-hidden="true"></span>{copy.eyebrow}</p>
     <h1 id="_top" data-page-title>{copy.titleLead}<span>{copy.titleAccent}</span></h1>
-    <p class="vt-hero-intro">{story.intro}</p>
+    <p class="vt-hero-intro"><strong>{story.introEmphasis}</strong> {story.intro}</p>
     <p class="vt-proof-promise">{story.promise}</p>
     <p class="vt-scope-note">Contracts cover the translated model and its stated arithmetic assumptions. <a href={`${docsBase}/architecture/semantic-caveats/`}>Translation, rounding, and hardware scope →</a></p>
     <div class="vt-actions">
@@ -80,6 +80,7 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
   .vt-hero h1 { margin: 0; font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', 'Microsoft YaHei', sans-serif; font-size: clamp(2rem, 4.4vw, 3rem); font-weight: 600; letter-spacing: -.05em; line-height: 1.17; }
   .vt-hero h1 span { display: block; color: var(--vt-seal); }
   .vt-hero-intro { max-width: 38rem; margin: 1.2rem auto 0; color: var(--vt-ink-2); font-size: var(--vt-text-body); text-wrap: pretty; }
+  .vt-hero-intro strong { color: var(--vt-ink); font-weight: 600; }
   .vt-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .8rem; margin-top: 1.4rem; }
   .vt-button { display: inline-flex; align-items: center; justify-content: center; gap: .75rem; min-height: 2.6rem; padding: .6rem .9rem; border: 1px solid var(--vt-rule-2); border-radius: 3px; color: var(--vt-ink); font-size: var(--vt-text-small); font-weight: 500; }
   .vt-button:hover { background: var(--vt-paper-2); border-color: var(--vt-ink-3); }
@@ -88,13 +89,13 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
   .vt-actions > .vt-text-link { margin-left: .4rem; }
   .vt-proof-promise { margin: .6rem 0 0; color: var(--vt-ink-3); font-size: var(--vt-text-small); }
   .vt-pillars { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; margin: 2.2rem 0 0; padding: 1rem 0; border-block: 1px solid var(--vt-rule); }
-  .vt-pillars a { display: flex; align-items: center; gap: .6rem; color: var(--vt-ink-2); font-size: var(--vt-text-small); text-align: left; }
+  .vt-pillars a { display: flex; align-items: center; gap: .6rem; color: var(--vt-ink); font-size: var(--vt-text-small); font-weight: 500; text-align: left; }
   .vt-pillars a > span:first-child { color: var(--vt-seal-ink); font-size: 1rem; }
   .vt-pillars a > span:last-child { margin-left: auto; color: var(--vt-ink-3); }
   .vt-pillars a:hover { color: var(--vt-seal-ink); }
   .vt-text-link { display: inline-flex; align-items: center; gap: .6rem; color: var(--vt-seal-ink); font-size: var(--vt-text-small); }
   .vt-text-link:hover { text-decoration: underline; text-underline-offset: .25em; }
-  .vt-section-heading h2 { margin: 0; font: 500 clamp(1.15rem, 2.5vw, 1.4rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
+  .vt-section-heading h2 { margin: 0; font: 600 clamp(1.15rem, 2.5vw, 1.4rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
   .vt-section-heading p { margin: .5rem 0 0; color: var(--vt-ink-2); font-size: var(--vt-text-body); }
   .vt-closing { border-top: 1px solid var(--vt-rule); padding: 2.6rem 0 1.6rem; }
   .vt-terminal { margin-top: 1.3rem; background: var(--vt-paper-2); border-radius: 3px; overflow: hidden; }

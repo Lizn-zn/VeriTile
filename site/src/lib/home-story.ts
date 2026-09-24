@@ -1,6 +1,7 @@
 // The project's contributions and their evidence, adapted from the deck.
 export const homeStory = {
-  intro: 'Lean-checked contracts for a typed Triton-style model, with explicit semantics, mathematical specifications, and proof generation using agents.',
+  introEmphasis: 'Lean-checked contracts',
+  intro: 'for a typed Triton-style model, with explicit semantics, mathematical specifications, and proof generation using agents.',
   promise: 'Theorems cover inputs and parameters that satisfy their stated preconditions.',
   pillars: [
     { label: 'Triton embedded in Lean', href: '#language', symbol: '{ }' },

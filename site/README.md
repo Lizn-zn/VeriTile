@@ -254,3 +254,9 @@ scales from 32px on phones to a 48px desktop maximum. Documentation reading size
 retain their existing scale and a 14px small-text/inline-code floor. All sizes
 scale with user font preferences; mobile layouts wrap or stack content rather
 than shrinking type further.
+
+Homepage emphasis uses 600-weight headings and selected key claims in the
+primary ink color. Proof outcomes have a status-colored edge and a 14px,
+600-weight label, with their conditions and recorded-check provenance alongside.
+Example entry points use the warm accent and a distinct background or border.
+Supporting prose and code retain the type sizes above.
