@@ -1,10 +1,17 @@
 ---
 import DefaultFooter from '@astrojs/starlight/components/Footer.astro';
 const { entry } = Astro.locals.starlightRoute;
+const collaborators = ['Zenan Li', 'Kaiyu Yang', 'Ziran Yang', 'Zhaoyu Li', 'Mike He', 'Aarti Gupta'];
 ---
 
 {entry.data.template === 'splash' ? (
   <footer class="vt-footer">
+    <section class="vt-footer__team" aria-labelledby="vt-team-title">
+      <h2 id="vt-team-title">Team</h2>
+      <ul class="vt-footer__names" role="list">
+        {collaborators.map((name) => <li>{name}</li>)}
+      </ul>
+    </section>
     <span>VeriTile <span class="vt-footer__separator" aria-hidden="true">/</span> Source code and documentation</span>
     <a href="https://github.com/Lizn-zn/VeriTile/blob/main/LICENSE">MIT License ↗</a>
   </footer>
@@ -12,6 +19,10 @@ const { entry } = Astro.locals.starlightRoute;
 
 <style>
   .vt-footer { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 1rem; max-width: 55rem; margin: 0 auto; padding: 1.5rem 0; border-top: 1px solid var(--vt-rule); color: var(--vt-ink-2); font: 400 var(--vt-text-small)/1.6 'IBM Plex Mono', monospace; }
+  .vt-footer__team { flex-basis: 100%; }
+  .vt-footer__team h2 { margin: 0; color: var(--vt-ink); font: inherit; font-weight: 600; }
+  .vt-footer__names { display: flex; flex-wrap: wrap; gap: .35rem 1.25rem; margin: .5rem 0 0; padding: 0; list-style: none; }
+  .vt-footer__names li { margin: 0; }
   .vt-footer__separator { margin: 0 .7rem; color: var(--vt-seal); }
   a { color: var(--vt-seal-ink); text-decoration: none; }
   a:hover { text-decoration: underline; text-underline-offset: .2em; }
