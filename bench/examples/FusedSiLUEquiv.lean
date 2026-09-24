@@ -67,7 +67,8 @@ in the library (`ComputeRefine.Refines.out`, `VeriTile.Triton.Float.Refine`).
 flow across the stage seams, which no real three-launch execution allows. The
 register-leakage gap is bridged once in the library
 (`ComputeKernel.execR_seq_rel_execPipelineR`, `VeriTile.Triton.Float.Pipeline`);
-this file's headline is about the concatenated kernel.
+that bridge requires successful projection and register-closedness of every
+stage. This file's headline is about the concatenated kernel.
 -/
 
 namespace VeriTile.Bench.Examples.FusedSiLUEquiv
@@ -198,7 +199,12 @@ private theorem execR_unfusedSiLU_split :
         (execR R (siluStepGate xReg gateReg zReg blockSize) s).bind (fun s1 =>
           (execR R (siluStepSilu zReg siluReg blockSize) s1).bind (fun s2 =>
             execR R (siluStepResidual siluReg residualReg outReg blockSize) s2)) := by
-    simp [unfusedSiLUKernel, execR, stepStmtsR_append]
+    unfold unfusedSiLUKernel
+    rw [execR_toAlgKernel_seq R _ _ _ s (by
+      intro k hk
+      simp only [List.mem_cons, List.not_mem_nil, or_false] at hk
+      rcases hk with rfl | rfl | rfl <;> rfl)]
+    simp only [List.foldl_cons, List.foldl_nil, Option.bind_some, Option.bind_assoc]
   rw [hsplit]
   simp only [execR_siluStepGate, execR_siluStepSilu]
 

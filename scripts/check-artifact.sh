@@ -61,55 +61,18 @@ check_axioms() {
   missing="$(mktemp)"
 
   if [[ -f "${AXIOM_WHITELIST}" ]]; then
-    grep -vE '^[[:space:]]*(#|$)' "${AXIOM_WHITELIST}" | LC_ALL=C sort >"${expected}"
+    sed -E '/^[[:space:]]*(#|$)/d' "${AXIOM_WHITELIST}" | LC_ALL=C sort >"${expected}"
   else
     : >"${expected}"
   fi
 
-  # Match declaration axioms only. Lean comments are stripped first, so prose
-  # such as a docstring line starting "axiom footprint, ..." cannot register as
-  # a declaration (it used to, and the whole gate reported a phantom axiom).
-  python3 - VeriTile <<'AXIOMSCAN' | LC_ALL=C sort >"${actual}"
-import re
-import sys
-from pathlib import Path
-
-
-def strip_lean_comments(text: str) -> str:
-    """Blank out `--` line comments and (nested) `/- ... -/` block comments."""
-    out = []
-    i, n, depth = 0, len(text), 0
-    while i < n:
-        if depth == 0 and text.startswith("--", i):
-            nl = text.find("\n", i)
-            if nl == -1:
-                break
-            i = nl
-        elif text.startswith("/-", i):
-            depth += 1
-            i += 2
-        elif depth > 0 and text.startswith("-/", i):
-            depth -= 1
-            i += 2
-        else:
-            ch = text[i]
-            out.append(ch if depth == 0 else ("\n" if ch == "\n" else " "))
-            i += 1
-    return "".join(out)
-
-
-decl = re.compile(
-    r"^[ \t]*(?:@\[[^\]]*\]\s*)*"
-    r"(?:(?:private|protected|noncomputable|unsafe|local|scoped)\s+)*"
-    r"axiom\s+([^\s:({\[]+)", re.M)
-rows = set()
-for path in Path(sys.argv[1]).rglob("*.lean"):
-    code = strip_lean_comments(path.read_text(encoding="utf-8"))
-    for m in decl.finditer(code):
-        rows.add("{}:{}".format(path.as_posix(), m.group(1)))
-for row in sorted(rows):
-    print(row)
-AXIOMSCAN
+  # Enumerate actual axiom declarations after compiling all project modules.
+  # Lean handles modifiers, literals, nested comments, and generated declarations.
+  if ! python3 "${SCRIPT_DIR}/source_axioms.py" VeriTile | LC_ALL=C sort >"${actual}"; then
+    fail "could not inventory project axiom declarations"
+    rm -f "${actual}" "${expected}" "${unexpected}" "${missing}"
+    return
+  fi
 
   comm -23 "${actual}" "${expected}" >"${unexpected}"
   comm -13 "${actual}" "${expected}" >"${missing}"
@@ -242,7 +205,17 @@ check_documented_api() {
   fi
 }
 
+check_proofs() {
+  if python3 "${SCRIPT_DIR}/check_comparator.py" --library; then
+    ok "official comparator accepts the proven library manifest"
+  else
+    fail "official comparator rejected the library proofs"
+  fi
+}
+
+python3 "${SCRIPT_DIR}/check_comparator.py" --check-tools
 run_build_no_sorry
+check_proofs
 check_axioms
 check_kernel_manifest
 check_readme_example_links

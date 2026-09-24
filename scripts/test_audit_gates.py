@@ -65,17 +65,89 @@ class AuditGateTests(unittest.TestCase):
         start = source.index('check_axioms() {')
         function = source[start:source.index('\n}\n', start) + 3]
         for declaration in ['private axiom hidden : False', 'protected axiom hidden : False',
-                            'private\naxiom hidden : False', '@[simp] axiom hidden : False']:
+                            'private\naxiom hidden : False', '@[simp] axiom hidden : False',
+                            'macro "hiddenAxiom" : command => `(axiom hidden : False)\nhiddenAxiom']:
             with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as temp:
                 directory = Path(temp)
                 (directory / 'VeriTile').mkdir()
                 (directory / 'VeriTile/Fixture.lean').write_text(declaration + '\n')
-                harness = ('AXIOM_WHITELIST=empty.txt\nfailures=0\n'
+                self.compile_axiom_fixture(directory)
+                harness = (f'set -o pipefail\nSCRIPT_DIR={ROOT / "scripts"}\nAXIOM_WHITELIST=empty.txt\nfailures=0\n'
                            'ok() { :; }\nfail() { failures=$((failures + 1)); }\n'
                            + function + '\ncheck_axioms\nexit "$failures"\n')
                 result = subprocess.run(['bash', '-c', harness], cwd=directory, capture_output=True)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn(b'Fixture.lean:hidden', result.stderr)
+
+    def test_literal_delimiters_do_not_hide_axioms(self):
+        source = (ROOT / 'scripts/check-artifact.sh').read_text()
+        start = source.index('check_axioms() {')
+        function = source[start:source.index('\n}\n', start) + 3]
+        prefixes = ['def marker : String := "/-"',
+                    'def marker : String := r#"\\" /-"#',
+                    r'def marker : String := "\"/-"',
+                    r'''def marker : Char := '"' ''',
+                    'def «/-» : Nat := 1',
+                    'def marker : String := s!"{"/-"}"',
+                    '/- outer /- nested -/ " -/']
+        for prefix in prefixes:
+            with self.subTest(prefix=prefix), tempfile.TemporaryDirectory() as temp:
+                directory = Path(temp)
+                (directory / 'VeriTile').mkdir()
+                (directory / 'VeriTile/Fixture.lean').write_text(
+                    prefix + '\nprivate axiom hidden : False\n')
+                self.compile_axiom_fixture(directory)
+                harness = (f'set -o pipefail\nSCRIPT_DIR={ROOT / "scripts"}\nAXIOM_WHITELIST=empty.txt\nfailures=0\n'
+                           'ok() { :; }\nfail() { failures=$((failures + 1)); }\n'
+                           + function + '\ncheck_axioms\nexit "$failures"\n')
+                result = subprocess.run(['bash', '-c', harness], cwd=directory, capture_output=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn(b'Fixture.lean:hidden', result.stderr)
+
+    def compile_axiom_fixture(self, directory):
+        path = directory / 'VeriTile/Fixture.lean'
+        path.write_text('namespace Fixture\n' + path.read_text() + '\nend Fixture\n')
+        compiled = subprocess.run(['lake', 'env', 'lean', '-R', str(directory),
+                                   '-o', str(path.with_suffix('.olean')), str(path)],
+                                  cwd=ROOT, text=True, capture_output=True, timeout=90)
+        self.assertEqual(compiled.returncode, 0, compiled.stdout + compiled.stderr)
+
+    def test_literals_and_comments_do_not_create_fake_declarations(self):
+        with tempfile.TemporaryDirectory() as temp:
+            directory = Path(temp)
+            (directory / 'VeriTile').mkdir()
+            (directory / 'VeriTile/Fixture.lean').write_text(
+                'def text : String := "\naxiom fake : False\n"\n'
+                '/- outer /- nested -/ axiom fakeAgain : False -/\n'
+                "def prime' : Nat := 1\n")
+            self.compile_axiom_fixture(directory)
+            result = subprocess.run(['python3', 'scripts/source_axioms.py',
+                                     str(directory / 'VeriTile')], cwd=ROOT,
+                                    text=True, capture_output=True, timeout=90)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+            self.assertEqual(result.stdout.strip(), '')
+
+    def test_real_runner_rejects_hidden_headline_axioms(self):
+        declarations = ['specification\n  missedHeadline : False := injected',
+                        'specification αβ : False := injected',
+                        'private specification hidden : False := injected',
+                        '@[simp] specification «quoted headline» : False := injected',
+                        'macro "headlineFixture" : command => `(specification generated : False := injected)\nheadlineFixture',
+                        'macro "headlineFixture" : command => `(theorem generated_correct : False := injected)\nheadlineFixture',
+                        'theorem\n  legacy_correct : False := injected']
+        for declaration in declarations:
+            with self.subTest(declaration=declaration), tempfile.TemporaryDirectory(
+                    prefix='_audit-regression-', dir=ROOT / 'bench/tritonbench_g') as temp:
+                directory = Path(temp)
+                (directory / 'Fixture.lean').write_text(
+                    'import VeriTile.Meta.StatementAudit\nnamespace Nested\n'
+                    'private axiom injected : False\n' + declaration + '\nend Nested\n')
+                result = subprocess.run(['bash', 'bench/audit_trust.sh', directory.name],
+                                        cwd=ROOT, text=True, capture_output=True, timeout=90,
+                                        env={**os.environ, 'AUDIT_TRUST_JOBS': '1'})
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('DISALLOWED axioms', result.stderr)
+                self.assertIn('injected', result.stderr)
 
     def test_unannotated_proof_is_not_promoted(self):
         self.assertEqual(coverage.classify('kernel_correctness', 'a checked theorem')[0], 'unreviewed')
@@ -83,6 +155,25 @@ class AuditGateTests(unittest.TestCase):
         self.assertEqual(rows['int8_quantization'].coverage_level, 'precomputed_input_slice')
         for name in ['quantize_global', 'rowwise_quantization_triton']:
             self.assertEqual(rows[name].coverage_level, 'pre_rounding_slice')
+
+    def test_real_runner_rejects_macro_generated_circular_specs(self):
+        declarations = [
+            'macro "specFixture" : command => `(def generatedSpec : ComputeKernel := kernel)\nspecFixture',
+            'macro "specFixture" : command => `(@[kernel_spec] def generated : Nat := kernel.toAlgKernel.inputs.length)\nspecFixture',
+        ]
+        for declaration in declarations:
+            with self.subTest(declaration=declaration), tempfile.TemporaryDirectory(
+                    prefix='_audit-regression-', dir=ROOT / 'bench/tritonbench_g') as temp:
+                directory = Path(temp)
+                (directory / 'Fixture.lean').write_text(
+                    'import VeriTile.Triton.Core\nimport VeriTile.Meta.StatementAudit\n'
+                    'open VeriTile.Triton\ndef kernel : ComputeKernel := .mk [] [] []\n'
+                    + declaration + '\n')
+                result = subprocess.run(['bash', 'bench/audit_trust.sh', directory.name],
+                                        cwd=ROOT, text=True, capture_output=True, timeout=90,
+                                        env={**os.environ, 'AUDIT_TRUST_JOBS': '1'})
+                self.assertNotEqual(result.returncode, 0, result.stdout + result.stderr)
+                self.assertIn('SELF-REFERENTIAL', result.stderr)
 
     def test_lean_rejects_specs_without_discovered_kernels(self):
         with tempfile.TemporaryDirectory() as temp:

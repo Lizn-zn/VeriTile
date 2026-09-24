@@ -92,7 +92,8 @@ when reporting benchmark results. The previous benchmark setup used version
 ## Artifact checker
 
 `scripts/check-artifact.sh` is the local release/CI gate for the Lean artifact.
-It runs `lake build VeriTile VeriTileFull`, rejects Lean `sorry` warnings, checks declared axioms
+It runs `lake build VeriTile VeriTileFull`, rejects Lean `sorry` warnings, runs
+the official comparator on every proven library target in the manifest, checks declared axioms
 against `scripts/artifact-axiom-whitelist.txt`, validates the per-kernel
 registry in `scripts/kernel-manifest.tsv`, and checks README example links for
 drift. It also resolves documented public API names with Lean through
@@ -106,3 +107,41 @@ adding a new public example or benchmark port.
 ```bash
 scripts/check-artifact.sh
 ```
+
+## Shared comparator gate
+
+The artifact checker, `bench/check_ports.sh`, and `bench/audit_trust.sh` all
+require the official comparator and the sandbox tools installed above. Missing
+tools, export failures, and comparator rejections fail the gate. CI installs
+the same pinned tools through `.github/actions/setup-comparator`.
+
+```bash
+python3 scripts/check_comparator.py --library
+python3 scripts/check_comparator.py --file bench/examples/VectorAdd.lean --trust
+python3 scripts/test_check_comparator.py
+```
+
+Routine checks freeze the current trusted project sources and build cache in
+an independent temporary workspace. Comparator exports and replays the current
+proofs against that source snapshot (`source-replay` mode). This is not a check
+that statements stayed unchanged from a previous Git revision; specification
+changes still require review. `prove.sh` retains its separate comparison against
+the original task captured before the agent runs.
+
+The library gate selects `proven` library rows from the manifest. Standalone
+gates enumerate every theorem object retained in the file's Lean environment,
+including private and macro-generated names, and expose checked aliases to
+comparator. Definition-only fixtures report zero theorem targets and run a
+separate trivial sentinel through comparator; this does not establish a kernel
+correctness claim. Anonymous `example` commands that Lean does not retain as
+theorem declarations are compilation tests, not inventoried proof targets.
+
+The trust gate also retains its headline, statement, and circular-spec checks.
+The aggregate bench audit performs compilation and comparator replay in one
+trust pass. Batch workers share one independent snapshot, with separate output
+modules, and concurrency accounts for export/replay memory. Raw `lake build`
+remains the build step; use these gates for proof acceptance.
+
+Logs under `Logs/comparator-check-*` record source hashes, selected targets,
+generated source, comparator configuration, diagnostics, binary hash, and exit
+status. Temporary build-cache copies are removed when a batch finishes.

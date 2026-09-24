@@ -44,7 +44,9 @@ comparator judges the theorems selected with `--theorem` against a snapshot of
 the original task and dependencies, checks permitted axioms, and replays the
 proofs in Lean's kernel. See the
 [setup and usage guide](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/README.md).
-Artifact and trust audits provide separate checks of the repository's proofs.
+Artifact and bench audits also require official comparator proof replay, using
+a frozen snapshot of the current repository sources. The trust gates retain
+their additional checks of theorem statements and circular specifications.
 
 ## What the proof covers
 

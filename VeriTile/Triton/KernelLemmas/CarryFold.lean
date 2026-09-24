@@ -85,6 +85,7 @@ and none of the three is free:
 
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Correctness
 
 namespace VeriTile.Triton
 
@@ -192,34 +193,35 @@ end AgreeOutsideRegion
 /--
 Run a list of stage kernels in order, resetting the register file before
 **every** stage: a real launch never inherits registers, so the only thing that
-crosses a stage seam is memory (plus the launch environment).
+crosses a stage seam is memory (plus the launch environment). Failed stage
+projection rejects the chain.
 
 This is the exact-semantics counterpart of `execPipelineR .triv` from
-`VeriTile.Triton.Float.Pipeline`; it is duplicated here only because
-`KernelLemmas` precedes the `Float` layer in the dependency order.
+`VeriTile.Triton.Float.Pipeline`; this driver uses the checked exact evaluator
+without depending on the rounding-model evaluator.
 -/
 noncomputable def execChain : List ComputeKernel → BlockState → Option BlockState
   | [], s => some s
-  | ck :: ks, s => (exec ck.toAlgKernel s.resetRegs).bind (execChain ks)
+  | ck :: ks, s => (ck.eval s.resetRegs).bind (execChain ks)
 
 @[simp] theorem execChain_nil (s : BlockState) : execChain [] s = some s := rfl
 
 @[simp] theorem execChain_cons (ck : ComputeKernel) (ks : List ComputeKernel)
     (s : BlockState) :
     execChain (ck :: ks) s
-      = (exec ck.toAlgKernel s.resetRegs).bind (execChain ks) := rfl
+      = (ck.eval s.resetRegs).bind (execChain ks) := rfl
 
 /-- Peel the **last** stage off a chain. This is the orientation a forward
 carry fold needs: the invariant's index grows with the prefix length. -/
 theorem execChain_append_singleton (ks : List ComputeKernel)
     (ck : ComputeKernel) (s : BlockState) :
     execChain (ks ++ [ck]) s
-      = (execChain ks s).bind (fun t => exec ck.toAlgKernel t.resetRegs) := by
+      = (execChain ks s).bind (fun t => ck.eval t.resetRegs) := by
   induction ks generalizing s with
   | nil => simp [execChain]
   | cons k ks ih =>
       rw [List.cons_append, execChain_cons, execChain_cons]
-      cases hk : exec k.toAlgKernel s.resetRegs with
+      cases hk : k.eval s.resetRegs with
       | none => simp
       | some s1 => simp only [Option.bind_some]; exact ih s1
 
@@ -272,7 +274,12 @@ theorem execChain_foldStages_inv
         | some t =>
             rw [hmid] at h
             simp only [Option.bind_some] at h
-            exact hStep j (by omega) t sF (ih (by omega) t hmid) h
+            cases hp : (step j).toAlgorithm? with
+            | error err => simp [ComputeKernel.eval, hp] at h
+            | ok alg =>
+              have hexec : exec (step j).toAlgKernel t.resetRegs = some sF := by
+                simpa [ComputeKernel.eval, ComputeKernel.toAlgKernel, hp] using h
+              exact hStep j (by omega) t sF (ih (by omega) t hmid) hexec
   exact key n le_rfl sFinal hRun
 
 /--

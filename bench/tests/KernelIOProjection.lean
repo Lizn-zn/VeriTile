@@ -1,5 +1,7 @@
 import VeriTile.Triton.Memory.KernelSpec
 import VeriTile.Triton.Correctness
+import VeriTile.Triton.Float.Pipeline
+import VeriTile.Triton.KernelLemmas.CarryFold
 import VeriTile.Meta.StatementAudit
 
 open VeriTile.Triton
@@ -52,6 +54,62 @@ theorem denotation_rejects (flat out : RegionName) (regs : List (RegionName × N
     (pid offset : Nat) (slots : List DenoteSlot) :
     denoteKernel blocked flat regs pid slots out offset = none := rfl
 
+-- Public helper transformations must retain the rejection, too.
+theorem erasure_rejects :
+    blocked.eraseDType.toAlgorithm? = .error (.requiresEffectProjection "tl.async_copy") := by
+  simp [ComputeKernel.eraseDType, projection_rejects]
+
+def supported : ComputeKernel := .fromKernelBody [] [] []
+
+theorem composition_rejects :
+    (ComputeKernel.seq [] [] [supported, blocked, supported]).toAlgorithm? =
+      .error (.requiresEffectProjection "tl.async_copy") := rfl
+
+theorem transformed_contract_rejects :
+    ¬ ∃ io : KernelIO₁, io.kernel = blocked.eraseDType := by
+  rintro ⟨io, h⟩
+  have hp := io.projection
+  rw [h, erasure_rejects] at hp
+  contradiction
+
+theorem composed_contract_rejects :
+    ¬ ∃ io : UKernelIO,
+      io.kernel = ComputeKernel.seq [] [] [supported, blocked, supported] := by
+  rintro ⟨io, h⟩
+  have hp := io.projection
+  rw [h, composition_rejects] at hp
+  contradiction
+
+theorem pipeline_rejects (R : RoundingModel) (s : BlockState) :
+    execPipelineR R [supported, blocked, supported] s = none := by
+  simp [execPipelineR, ComputeKernel.evalR, supported, projection_rejects,
+    execR, stepStmtsR]
+
+theorem chain_rejects (s : BlockState) :
+    execChain [supported, blocked, supported] s = none := by
+  simp [execChain, ComputeKernel.eval, supported, projection_rejects, exec]
+
+-- Success paths must still execute the store, not merely return some state.
+def store42 : ComputeKernel := .fromKernelBody [] ["victim"]
+  [Stmt.store' "victim" [] (Op.constNat 0) (Op.const 42)]
+
+theorem erased_store_projects : store42.eraseDType.toAlgorithm? = .ok store42.toAlgKernel := by
+  simp [ComputeKernel.eraseDType, store42, Kernel.eraseDType,
+    Stmt.store', Stmt.eraseDTypeList, Op.eraseDType, VeriTile.Triton.eraseDType]
+
+theorem composed_store_projects :
+    (ComputeKernel.seq [] ["victim"] [supported, store42, supported]).toAlgorithm? =
+      .ok store42.toAlgKernel := rfl
+
+theorem chain_executes_store (s : BlockState) :
+    ∃ s', execChain [store42] s = some s' ∧ s'.readMem "victim" 0 = 42 := by
+  simp [execChain, ComputeKernel.eval, store42, exec, stepStmts, stepStmt,
+    Stmt.store', BlockState.readMem, BlockState.writeMem]
+
+theorem pipeline_executes_store (s : BlockState) :
+    ∃ s', execPipelineR .triv [store42] s = some s' ∧ s'.readMem "victim" 0 = 42 := by
+  simpa [execPipelineR, execChain] using chain_executes_store s
+
 -- The automatic witness also works for an arbitrary algorithm body.
 def supportedIO (body : List Stmt) : KernelIO₁ where
   kernel := ComputeKernel.fromKernelBody ["x"] ["y"] body
@@ -68,5 +126,15 @@ def supportedIO (body : List Stmt) : KernelIO₁ where
 #axiomsClean equivalence_rejects_right
 #axiomsClean unified_core_rejects
 #axiomsClean denotation_rejects
+#axiomsClean erasure_rejects
+#axiomsClean composition_rejects
+#axiomsClean transformed_contract_rejects
+#axiomsClean composed_contract_rejects
+#axiomsClean pipeline_rejects
+#axiomsClean chain_rejects
+#axiomsClean erased_store_projects
+#axiomsClean composed_store_projects
+#axiomsClean chain_executes_store
+#axiomsClean pipeline_executes_store
 
 end KernelIOProjectionRegression

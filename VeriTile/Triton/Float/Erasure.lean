@@ -335,11 +335,18 @@ end Kernel
 namespace ComputeKernel
 
 /-- Project a compute-facing kernel to the algorithm layer, then erase
-algorithm dtype annotations. This keeps float-facing examples compute-first
-while reusing the existing Real proof path. -/
+algorithm dtype annotations. On failure retain the original kernel and its
+projection error; dtype erasure must never turn a rejected program into a no-op. -/
 def eraseDType (ck : ComputeKernel) : ComputeKernel :=
-  let k := ck.toAlgKernel.eraseDType
-  ComputeKernel.fromKernelBody k.inputs k.outputs k.body
+  match ck.toAlgorithm? with
+  | .ok alg =>
+      let k := alg.eraseDType
+      ComputeKernel.fromKernelBody k.inputs k.outputs k.body
+  | .error _ => ck
+
+theorem eraseDType_of_projection_error (ck : ComputeKernel) (err : EraseDTypeError)
+    (h : ck.toAlgorithm? = .error err) : ck.eraseDType = ck := by
+  simp [eraseDType, h]
 
 end ComputeKernel
 

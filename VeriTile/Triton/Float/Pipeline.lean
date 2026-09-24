@@ -12,7 +12,7 @@ seams, which no real multi-launch execution allows. This file provides:
   fresh register file (`BlockState.resetRegs`), including the first (a real
   launch never inherits registers).
 * `execR_toAlgKernel_seq` — the syntactic split: the concatenated kernel's
-  execution is the *no-reset* left fold of the stage executions.
+  execution is the *no-reset* left fold of successfully projected stages.
 * `MemPidsEq` — state agreement up to registers (memory, program ids, undef,
   grid dimensions all equal), with `MemPidsEqO` its `Option` lift (both
   executions fail, or both succeed with `MemPidsEq` results).
@@ -20,7 +20,7 @@ seams, which no real multi-launch execution allows. This file provides:
   register" condition: execution from `MemPidsEq` states yields
   `MemPidsEqO` outcomes.
 * `ComputeKernel.execR_seq_rel_execPipelineR` — **the bridge theorem**: if
-  every stage is `RegClosed`, the concatenated kernel and the honest
+  every stage projects successfully and is `RegClosed`, the concatenated kernel and the honest
   pipeline agree on everything but the final (dead) register file. This
   discharges the register-leakage gap of concatenation.
 -/
@@ -34,12 +34,13 @@ namespace VeriTile.Triton
 /-- The honest n-launch pipeline semantics: run the stage kernels in order,
 resetting the register file before **every** launch (a fresh launch never
 inherits registers — including the first stage). Memory, program ids, undef,
-and grid dimensions persist across the seams. -/
+and grid dimensions persist across the seams. A failed stage projection
+rejects the pipeline, just like a failed stage execution. -/
 noncomputable def execPipelineR (R : RoundingModel) :
     List ComputeKernel → BlockState → Option BlockState
   | [], s => some s
   | k :: ks, s =>
-      (execR R k.toAlgKernel s.resetRegs).bind fun s' => execPipelineR R ks s'
+      (k.evalR R s.resetRegs).bind fun s' => execPipelineR R ks s'
 
 @[simp] theorem execPipelineR_nil (R : RoundingModel) (s : BlockState) :
     execPipelineR R [] s = some s := rfl
@@ -47,15 +48,15 @@ noncomputable def execPipelineR (R : RoundingModel) :
 @[simp] theorem execPipelineR_cons (R : RoundingModel) (k : ComputeKernel)
     (ks : List ComputeKernel) (s : BlockState) :
     execPipelineR R (k :: ks) s =
-      (execR R k.toAlgKernel s.resetRegs).bind fun s' => execPipelineR R ks s' := rfl
+      (k.evalR R s.resetRegs).bind fun s' => execPipelineR R ks s' := rfl
 
 /-- Degeneration at the trivial model: each stage of the honest pipeline runs
 under the exact base semantics `exec`. -/
 theorem execPipelineR_triv_cons (k : ComputeKernel) (ks : List ComputeKernel)
     (s : BlockState) :
     execPipelineR .triv (k :: ks) s =
-      (exec k.toAlgKernel s.resetRegs).bind fun s' => execPipelineR .triv ks s' := by
-  rw [execPipelineR_cons, execR_triv]
+      (k.eval s.resetRegs).bind fun s' => execPipelineR .triv ks s' := by
+  rw [execPipelineR_cons, ComputeKernel.evalR_triv]
 
 /-! ## The syntactic split of the concatenated kernel -/
 
@@ -69,10 +70,11 @@ private theorem foldl_execR_none (R : RoundingModel) (ks : List ComputeKernel) :
 is the **no-reset** left fold of the stage executions: registers flow freely
 across the stage seams. Contrast with `execPipelineR`, which resets them. -/
 theorem execR_toAlgKernel_seq (R : RoundingModel)
-    (inputs outputs : List RegionName) (ks : List ComputeKernel) (s : BlockState) :
+    (inputs outputs : List RegionName) (ks : List ComputeKernel) (s : BlockState)
+    (hproj : ∀ k ∈ ks, k.toAlgorithm? = Except.ok k.toAlgKernel) :
     execR R (ComputeKernel.seq inputs outputs ks).toAlgKernel s =
       ks.foldl (fun acc k => acc.bind fun s' => execR R k.toAlgKernel s') (some s) := by
-  rw [ComputeKernel.toAlgKernel_seq]
+  rw [ComputeKernel.toAlgKernel_seq inputs outputs ks hproj]
   show stepStmtsR R (ks.flatMap ComputeKernel.body) s = _
   induction ks generalizing s with
   | nil => simp [stepStmtsR]
@@ -85,7 +87,7 @@ theorem execR_toAlgKernel_seq (R : RoundingModel)
           exact (foldl_execR_none R ks).symm
       | some s1 =>
           simp only [List.foldl_cons, hk, h, Option.bind_some]
-          exact ih s1
+          exact ih s1 (fun k hk => hproj k (List.mem_cons_of_mem _ hk))
 
 /-! ## State agreement up to registers -/
 
@@ -211,15 +213,17 @@ end ComputeKernel
 
 private theorem foldl_execR_rel_execPipelineR (R : RoundingModel) :
     ∀ (ks : List ComputeKernel), (∀ k ∈ ks, k.RegClosed) →
+      (∀ k ∈ ks, k.toAlgorithm? = Except.ok k.toAlgKernel) →
       ∀ (s t : BlockState), MemPidsEq s t →
         MemPidsEqO
           (ks.foldl (fun acc k => acc.bind fun s' => execR R k.toAlgKernel s') (some s))
           (execPipelineR R ks t)
-  | [], _, s, t, h => h
-  | k :: ks, hks, s, t, h => by
+  | [], _, _, s, t, h => h
+  | k :: ks, hks, hproj, s, t, h => by
       have hst : MemPidsEq s t.resetRegs := h.trans (memPidsEq_resetRegs t)
       have hk := hks k List.mem_cons_self R s t.resetRegs hst
       rw [List.foldl_cons, execPipelineR_cons, Option.bind_some]
+      simp only [ComputeKernel.evalR, hproj k List.mem_cons_self]
       cases h1 : execR R k.toAlgKernel s with
       | none =>
           rw [h1] at hk
@@ -240,20 +244,22 @@ private theorem foldl_execR_rel_execPipelineR (R : RoundingModel) :
               rw [h2] at hk
               rw [Option.bind_some]
               exact foldl_execR_rel_execPipelineR R ks
-                (fun k' hk' => hks k' (List.mem_cons_of_mem _ hk')) s1 t1 hk
+                (fun k' hk' => hks k' (List.mem_cons_of_mem _ hk'))
+                (fun k' hk' => hproj k' (List.mem_cons_of_mem _ hk')) s1 t1 hk
 
-/-- **The bridge theorem** (#447 Phase C.5): if every stage of the pipeline
-is `RegClosed`, the syntactic concatenation `ComputeKernel.seq` and the
+/-- **The bridge theorem** (#447 Phase C.5): if every stage projects successfully
+and is `RegClosed`, the syntactic concatenation `ComputeKernel.seq` and the
 honest per-launch semantics `execPipelineR` are indistinguishable up to the
 final (dead) register file: both fail, or both succeed with `MemPidsEq`
 results. This discharges the register-leakage gap of concatenation. -/
 theorem ComputeKernel.execR_seq_rel_execPipelineR (R : RoundingModel)
     (inputs outputs : List RegionName) {ks : List ComputeKernel}
-    (hks : ∀ k ∈ ks, k.RegClosed) (s : BlockState) :
+    (hks : ∀ k ∈ ks, k.RegClosed)
+    (hproj : ∀ k ∈ ks, k.toAlgorithm? = Except.ok k.toAlgKernel) (s : BlockState) :
     MemPidsEqO
       (execR R (ComputeKernel.seq inputs outputs ks).toAlgKernel s)
       (execPipelineR R ks s) := by
-  rw [execR_toAlgKernel_seq]
-  exact foldl_execR_rel_execPipelineR R ks hks s s (MemPidsEq.refl s)
+  rw [execR_toAlgKernel_seq R inputs outputs ks s hproj]
+  exact foldl_execR_rel_execPipelineR R ks hks hproj s s (MemPidsEq.refl s)
 
 end VeriTile.Triton

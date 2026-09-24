@@ -8,6 +8,13 @@ on:
       - 'scripts/prove.sh'
       - 'scripts/setup-comparator.sh'
       - 'scripts/test_prove.py'
+      - 'scripts/comparator_common.py'
+      - 'scripts/check_comparator.py'
+      - 'scripts/test_check_comparator.py'
+      - 'bench/audit_trust_prep.py'
+      - 'bench/check_ports.sh'
+      - 'bench/audit_trust.sh'
+      - '.github/actions/setup-comparator/**'
       - 'lean-toolchain'
       - '.github/workflows/proof-comparator.yml'
   pull_request:
@@ -16,6 +23,13 @@ on:
       - 'scripts/prove.sh'
       - 'scripts/setup-comparator.sh'
       - 'scripts/test_prove.py'
+      - 'scripts/comparator_common.py'
+      - 'scripts/check_comparator.py'
+      - 'scripts/test_check_comparator.py'
+      - 'bench/audit_trust_prep.py'
+      - 'bench/check_ports.sh'
+      - 'bench/audit_trust.sh'
+      - '.github/actions/setup-comparator/**'
       - 'lean-toolchain'
       - '.github/workflows/proof-comparator.yml'
   workflow_dispatch:
@@ -29,10 +43,6 @@ jobs:
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-go@v5
-        with:
-          go-version: '1.24'
-          cache: false
       - uses: leanprover/lean-action@v1
         with:
           build: false
@@ -40,16 +50,8 @@ jobs:
           lint: false
           use-mathlib-cache: false
           use-github-cache: false
-      - name: Build pinned official judge tools
-        run: |
-          scripts/setup-comparator.sh "$RUNNER_TEMP/veritile-proof-tools"
-          echo "$RUNNER_TEMP/veritile-proof-tools/bin" >> "$GITHUB_PATH"
-      - name: Start systemd user sandbox service
-        run: |
-          uid="$(id -u)"
-          sudo loginctl enable-linger "$USER"
-          sudo systemctl start "user@${uid}.service"
-          echo "XDG_RUNTIME_DIR=/run/user/${uid}" >> "$GITHUB_ENV"
-          echo "DBUS_SESSION_BUS_ADDRESS=unix:path=/run/user/${uid}/bus" >> "$GITHUB_ENV"
+      - uses: ./.github/actions/setup-comparator
       - name: Exercise comparator acceptance and rejection
-        run: python3 scripts/test_prove.py
+        run: |
+          python3 scripts/test_prove.py
+          python3 scripts/test_check_comparator.py

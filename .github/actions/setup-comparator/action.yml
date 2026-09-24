@@ -1,0 +1,29 @@
+name: Set up official proof comparator
+description: Build the pinned comparator/exporter and enable its systemd and landrun sandbox.
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v5
+      with:
+        go-version: '1.24'
+        cache: false
+    - name: Build pinned judge tools
+      shell: bash
+      run: |
+        scripts/setup-comparator.sh "$RUNNER_TEMP/veritile-proof-tools"
+        echo "$RUNNER_TEMP/veritile-proof-tools/bin" >> "$GITHUB_PATH"
+    - name: Enable user sandbox service
+      shell: bash
+      run: |
+        proof_uid="$(id -u)"
+        export XDG_RUNTIME_DIR="/run/user/${proof_uid}"
+        export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
+        if ! systemd-run --user --pipe --wait --collect --property='RestrictAddressFamilies=~AF_UNIX' true; then
+          sudo loginctl enable-linger "$USER"
+          sudo systemctl start "user@${proof_uid}.service"
+        fi
+        echo "XDG_RUNTIME_DIR=${XDG_RUNTIME_DIR}" >> "$GITHUB_ENV"
+        echo "DBUS_SESSION_BUS_ADDRESS=${DBUS_SESSION_BUS_ADDRESS}" >> "$GITHUB_ENV"
+    - name: Verify judge prerequisites
+      shell: bash
+      run: python3 scripts/check_comparator.py --check-tools

@@ -36,12 +36,8 @@ else
   printf 'ok python/lean port count: %s\n' "${py_count}"
 fi
 
-if bench/check_ports.sh; then
-  printf 'ok port elaboration\n'
-else
-  printf 'FAIL port elaboration\n'
-  failures=$((failures + 1))
-fi
+# The final bench trust gate performs port elaboration and official comparator
+# replay together. Do not compile/export the entire corpus a second time here.
 
 # Placeholder-proof scan. Operates on comment-stripped Lean source so prose
 # like "sorry-free" in docstrings cannot mask or fake a hit, and matches
@@ -3393,25 +3389,20 @@ else
 fi
 
 # ---- Machine-checkable trust audit (Phase E) --------------------------------
-# Two populations, two mechanisms (see documents/TrustAudit.md):
-#  * library theorems  -> VeriTile/Meta/TrustReport.lean (#axiomsClean on every
-#    proven library theorem). Building the module elaborates every gate;
-#    `lake build` of the target both materializes its deps (incl. ApproxGeLU)
-#    and fails on any smuggled `sorry`/axiom.
-#  * standalone bench   -> bench/audit_trust.sh (external temp-copy #axiomsClean
-#    over every bench/tritonbench_g/* port and bench/examples/* file).
-# A failure here is a REAL soundness finding (a proof calling itself complete
-# while depending on sorryAx / a non-standard axiom), not a scan heuristic.
+# Library manifest targets and standalone theorem inventories both pass through
+# the shared official-comparator driver. Standalone copies also retain the Lean
+# headline/statement/circular-spec gates. A failed comparator or infrastructure
+# step fails this aggregate audit; successful elaboration alone is insufficient.
 
-if lake build VeriTile.Meta.TrustReport; then
-  printf 'ok library trust report (#axiomsClean all proven lib theorems)\n'
+if python3 scripts/check_comparator.py --library; then
+  printf 'ok official comparator (all proven library manifest theorems)\n'
 else
-  printf 'FAIL library trust report: a proven library theorem has a bad axiom footprint\n'
+  printf 'FAIL official comparator: library proof verification failed\n'
   failures=$((failures + 1))
 fi
 
 if bench/audit_trust.sh; then
-  printf 'ok bench corpus trust audit (#axiomsClean all ports + examples)\n'
+  printf 'ok bench corpus trust audit (Lean gates + official comparator)\n'
 else
   printf 'FAIL bench corpus trust audit: a port/example has a bad axiom footprint\n'
   failures=$((failures + 1))

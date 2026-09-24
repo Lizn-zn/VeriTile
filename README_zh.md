@@ -101,6 +101,8 @@ theorem add_kernel_correct
 关掉,或者引用 `Mathlib` 的数学引理。LLM 证明 wrapper `scripts/prove.sh`
 自动化这个循环，再由官方 comparator 对照原始题目判定 `--theorem` 指定的定理。
 参见[安装和用法](./scripts/README_zh.md)。
+artifact 和 bench 检查脚本也必须通过 comparator 的证明重放，
+参见[统一门禁说明](./scripts/README_zh.md#统一-comparator-门禁)。
 
 ### 4. 登记到 kernel manifest
 
@@ -174,14 +176,14 @@ verso/                     幻灯片 / 概览
   (也被 `bench/audit_tritonbench_g.sh` 这个 bench-audit CI gate 调用)
 - `bench/audit_tritonbench_g.sh` —— 完整 bench gate:上面的逐港构建 ∧
   忠实性扫描 ∧ proof-gap manifest ∧ 两套信任审计
-- `bench/audit_trust.sh` —— 对每个独立 bench 文件跑 `#axiomsClean`
+- `bench/audit_trust.sh` —— 对每个独立 bench 文件执行信任门禁和 comparator 重放
 
 ## 环境
 
 - Lean 4(`v4.29.0`)+ Mathlib
 - [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) +
   [`lean4-skills`](https://github.com/lean4-skills/lean4-skills)
-- 自动证明还需要 Python 3、官方 comparator、lean4export 和 landrun，
+- artifact/bench 验证和自动证明需要 Python 3、官方 comparator、lean4export 和 landrun，
   运行于提供 systemd 用户服务的 Linux；参见[安装和用法](./scripts/README_zh.md)。
 
 ## 路线图

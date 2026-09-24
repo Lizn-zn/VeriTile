@@ -1179,27 +1179,53 @@ allows. The honest per-launch semantics (`execPipelineR`, registers reset
 between launches) and the bridge discharging the register-leakage gap live
 in `VeriTile.Triton.Float.Pipeline`. -/
 
-/-- Concatenate the stage bodies of `ks` into one kernel with the given
-input/output port lists. -/
+/-- The original compute statements, before fallible algorithm projection. -/
+def surfaceBody : ComputeKernel → List ComputeStmt
+  | .mk _ _ body => body
+
+/-- Concatenate the original compute-stage bodies. Unsupported effects remain
+in the result, so its checked projection fails rather than dropping a stage. -/
 def seq (inputs outputs : List RegionName) (ks : List ComputeKernel) : ComputeKernel :=
-  fromKernelBody inputs outputs (ks.flatMap ComputeKernel.body)
+  .mk inputs outputs (ks.flatMap surfaceBody)
+
+private theorem project_surfaceBody (k : ComputeKernel)
+    (hk : k.toAlgorithm? = Except.ok k.toAlgKernel) :
+    ComputeStmt.listToAlgorithm? k.surfaceBody = Except.ok k.body := by
+  cases k with
+  | mk inputs outputs body =>
+    cases hb : ComputeStmt.listToAlgorithm? body <;>
+      simp_all [surfaceBody, ComputeKernel.body, toAlgKernel]
+
+private theorem project_stage_bodies (ks : List ComputeKernel)
+    (hks : ∀ k ∈ ks, k.toAlgorithm? = Except.ok k.toAlgKernel) :
+    ComputeStmt.listToAlgorithm? (ks.flatMap surfaceBody) =
+      Except.ok (ks.flatMap ComputeKernel.body) := by
+  induction ks with
+  | nil => rfl
+  | cons k ks ih =>
+    simp only [List.flatMap_cons, ComputeStmt.listToAlgorithm?_append,
+      project_surfaceBody k (hks k List.mem_cons_self),
+      ih (fun k hk => hks k (List.mem_cons_of_mem _ hk))]
 
 @[simp] theorem toAlgorithm?_seq
-    (inputs outputs : List RegionName) (ks : List ComputeKernel) :
+    (inputs outputs : List RegionName) (ks : List ComputeKernel)
+    (hks : ∀ k ∈ ks, k.toAlgorithm? = Except.ok k.toAlgKernel) :
     (ComputeKernel.seq inputs outputs ks).toAlgorithm? =
       Except.ok (Kernel.mk inputs outputs (ks.flatMap ComputeKernel.body)) := by
-  simp [ComputeKernel.seq]
+  simp [ComputeKernel.seq, project_stage_bodies ks hks]
 
 @[simp] theorem toAlgKernel_seq
-    (inputs outputs : List RegionName) (ks : List ComputeKernel) :
+    (inputs outputs : List RegionName) (ks : List ComputeKernel)
+    (hks : ∀ k ∈ ks, k.toAlgorithm? = Except.ok k.toAlgKernel) :
     (ComputeKernel.seq inputs outputs ks).toAlgKernel =
       Kernel.mk inputs outputs (ks.flatMap ComputeKernel.body) := by
-  simp [ComputeKernel.seq]
+  simp only [toAlgKernel, toAlgorithm?_seq inputs outputs ks hks]
 
 @[simp] theorem body_seq
-    (inputs outputs : List RegionName) (ks : List ComputeKernel) :
+    (inputs outputs : List RegionName) (ks : List ComputeKernel)
+    (hks : ∀ k ∈ ks, k.toAlgorithm? = Except.ok k.toAlgKernel) :
     (ComputeKernel.seq inputs outputs ks).body = ks.flatMap ComputeKernel.body := by
-  simp [ComputeKernel.seq]
+  simp only [ComputeKernel.body, toAlgKernel_seq inputs outputs ks hks]
 
 end ComputeKernel
 

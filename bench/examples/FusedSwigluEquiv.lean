@@ -79,8 +79,8 @@ no `#specNonCircular` gate to run).
 across the stage seam, which no real two-launch execution allows. The honest
 per-launch semantics is `execPipelineR`, and the register-leakage gap is
 bridged once in the library (`ComputeKernel.execR_seq_rel_execPipelineR`,
-`VeriTile.Triton.Float.Pipeline`); this file's headline is about the
-concatenated kernel.
+`VeriTile.Triton.Float.Pipeline`) when every stage projects successfully and
+is register-closed; this file's headline is about the concatenated kernel.
 -/
 
 namespace VeriTile.Bench.Examples.FusedSwigluEquiv
@@ -165,7 +165,10 @@ private theorem exec_swiglu_unfusedR (R : RoundingModel)
         (fun s1 => execR R (mul_step S Y OUT ncols BLOCK_N) s1) := by
   show execR R (ComputeKernel.seq [X, Y] [OUT]
       [silu_step X S ncols BLOCK_N, mul_step S Y OUT ncols BLOCK_N]).toAlgKernel s = _
-  rw [execR_toAlgKernel_seq]
+  rw [execR_toAlgKernel_seq R _ _ _ s (by
+    intro k hk
+    simp only [List.mem_cons, List.not_mem_nil, or_false] at hk
+    rcases hk with rfl | rfl <;> rfl)]
   simp only [List.foldl_cons, List.foldl_nil, Option.bind_some]
 
 /-! ## Component realizations
@@ -315,7 +318,7 @@ private theorem swiglu_unfused_realizesR
             (R.castTo .bf16 (R.castTo .bf16
               (R.castTo .bf16 (R.castTo .bf16 (TiledActivation.silu (xs i))) * ys i)))) := by
   apply ComputeKernel.computeCorrectR_of_toAlgKernel
-  · simp [swiglu_unfused]
+  · rfl
   intro s0 s' hExec hs0
   subst s0
   rw [exec_swiglu_unfusedR] at hExec
@@ -489,7 +492,7 @@ theorem swiglu_fused_refines_unfused
       (swiglu_unfused X Y S OUT ncols BLOCK_N) s [S] := by
   apply ComputeKernel.computeRefineR_of_toAlgKernel
   · simp [swiglu_fused, ComputeExpr.toAlgorithm?]
-  · simp [swiglu_unfused]
+  · rfl
   intro s0 lhs' rhs' hL hR hs0
   subst s0
   intro r hr o
@@ -520,7 +523,7 @@ theorem swiglu_fused_refines_unfused
             (by simp [swiglu_fused, ComputeExpr.toAlgorithm?]) hL
           have hUout := ComputeKernel.ExecCorrectR.out
             (swiglu_unfused_realizesR X Y S OUT ncols BLOCK_N s xs ys R h_x h_y h_SY)
-            (by simp [swiglu_unfused]) hR
+            (by rfl) hR
           have hF := hFout i (by rw [BlockState.pid_eq]; exact hAct)
           have hU := hUout i (by rw [BlockState.pid_eq]; exact hAct)
           simp only [ComputeCorrect.OutputReadable.read_memcell, BlockState.pid_eq] at hF hU
@@ -732,7 +735,7 @@ specification swiglu_equiv (R : RoundingModel) (ncols B : Nat) :
       (swiglu_fused_refines_unfused ⟨"X"⟩ ⟨"Y"⟩ ⟨"S"⟩ ⟨"OUT"⟩ ncols B s₀
           _ _ R hxs hys (by decide)).out
         (by simp [swiglu_fused, ComputeExpr.toAlgorithm?])
-        (by simp [swiglu_unfused])
+        (by rfl)
         hexec1 hexec2
     refine ⟨s1, s2, hexec1, hexec2, ?_, ?_, ?_⟩
     · -- active OUT lanes agree (OUT ∉ [S])

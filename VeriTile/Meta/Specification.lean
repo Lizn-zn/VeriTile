@@ -5,10 +5,10 @@ The `specification` declaration keyword. A **specification** is a public
 headline theorem — the statement a reader audits as the file's trust
 surface. It elaborates *identically* to `theorem` (same kernel object, same
 axiom footprint, `#axiomsClean`/`#print axioms` unaffected); the keyword is
-a machine-readable marker, so headline discovery in the audit tooling
-(`scripts/spec_sheet.py`, `bench/check_proof_gap_manifest.py`,
-`bench/audit_trust_prep.py`) can key on syntax instead of name-suffix
-heuristics.
+a machine-readable marker registered in Lean's environment by `kernel_headline`.
+The trust audit enumerates this metadata, independently of source formatting.
+Source inventories (`scripts/spec_sheet.py`, `bench/check_proof_gap_manifest.py`)
+also use the keyword as a visible declaration marker.
 
 Modeled on Mathlib's `lemma` command macro.
 
@@ -21,15 +21,28 @@ elaborates identically to `def`; combine with modifiers as usual
 
 import Lean
 
+namespace VeriTile.Meta
+
+/-- Headline declarations are registered during elaboration, independently of
+source layout, identifier spelling, and declaration modifiers. -/
+initialize headlineAttr : Lean.TagAttribute ←
+  Lean.registerTagAttribute `kernel_headline "A public kernel specification theorem."
+
+end VeriTile.Meta
+
 /-- `specification` declares a public headline theorem. Identical to
 `theorem` after elaboration; the keyword marks the declaration as a file's
 public spec surface for readers and for the audit tooling. -/
 syntax (name := specification) declModifiers
   group("specification " declId ppIndent(declSig) declVal) : command
 
+open Lean in
 macro_rules
-  | `($mods:declModifiers specification%$tk $id:declId $sig:declSig $val:declVal) =>
-    `($mods:declModifiers theorem%$tk $id $sig $val)
+  | `($mods:declModifiers specification%$tk $id:declId $sig:declSig $val:declVal) => do
+    let decl ← `($mods:declModifiers theorem%$tk $id $sig $val)
+    let name : TSyntax `ident := ⟨id.raw[0]⟩
+    let tag ← `(attribute [kernel_headline] $name)
+    return mkNullNode #[decl, tag]
 
 /-- `denotation` declares a kernel's denotation ⟦·⟧ — the single audited
 definition carrying all addressing/layout content of a denotation-style

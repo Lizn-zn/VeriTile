@@ -58,3 +58,32 @@ python3 scripts/test_prove.py
 使用真实 comparator 和固定输出的模拟 agent，不调用模型 API。
 覆盖正常证明、修改陈述/定义、额外公理、残留 sorry、删除目标及多定理判定。
 更多说明及 artifact 检查入口见 [English documentation](README.md)。
+
+## 统一 comparator 门禁
+
+`scripts/check-artifact.sh`、`bench/check_ports.sh` 和 `bench/audit_trust.sh`
+都必须通过官方 comparator。使用前按上面的步骤安装工具并设置 PATH；工具缺失、
+导出失败或 comparator 拒绝都会使门禁失败。CI 通过同一个本地 action 安装固定版本。
+
+```bash
+scripts/check-artifact.sh
+python3 scripts/check_comparator.py --library
+python3 scripts/check_comparator.py --file bench/examples/VectorAdd.lean --trust
+python3 scripts/test_check_comparator.py
+```
+
+日常检查在独立临时目录冻结当前可信源码和构建缓存，再由 comparator 导出、检查
+公理并重放证明（`source-replay` 模式）。它不比较历史 Git 版本，规格变更仍需要审阅。
+`prove.sh` 继续对照 agent 修改前保存的原始题目进行比较。
+
+库检查覆盖 manifest 中标为 `proven` 的库定理。独立文件检查枚举 Lean 环境中保留的
+全部定理对象，包括私有和宏生成名称，通过别名交给 comparator。仅含定义的测试文件
+明确报告零条目标定理，并额外重放一个平凡哨兵；这不代表证明了某个 kernel 正确。
+Lean 不保留为定理声明的匿名 `example` 仍属于编译测试，不计入证明目标。
+
+原有 headline、公理、陈述和循环规格检查继续执行。完整 bench 审计合并编译和
+comparator 重放，避免重复检查整个语料。批量 worker 共用一份独立快照，各自使用
+独立输出模块。直接 `lake build` 仍是构建步骤，证明验收请使用上述门禁。
+
+`Logs/comparator-check-*` 保留源码哈希、目标清单、生成源码、comparator 配置、
+诊断、二进制哈希和退出状态；批次结束时删除临时构建缓存。

@@ -1,11 +1,11 @@
 name: Bench audit
 
-# TritonBench-G completion gates: port elaboration (bench/check_ports.sh),
+# TritonBench-G completion gates: comparator-backed trust audit (bench/audit_trust.sh),
 # proof-gap manifest exact-match (bench/check_proof_gap_manifest.py), and the
 # textual py<->lean faithfulness scans (bench/audit_tritonbench_g.sh).
 #
-# The elaboration pass dominates the runtime (parallelized in
-# bench/check_ports.sh), so this workflow is scoped to bench/ changes rather
+# Elaboration and proof replay dominate runtime (parallelized in
+# bench/audit_trust.sh), so this workflow is scoped to bench/ changes rather
 # than every .lean touch; the weekly scheduled run catches drift introduced
 # by library changes that never touch bench/.
 
@@ -15,12 +15,24 @@ on:
       - main
     paths:
       - 'bench/**'
+      - 'scripts/check_comparator.py'
+      - 'scripts/comparator_common.py'
+      - 'scripts/setup-comparator.sh'
+      - 'scripts/kernel-manifest.tsv'
+      - 'lean-toolchain'
+      - '.github/actions/setup-comparator/**'
       - '.github/workflows/bench-audit.yml'
   pull_request:
     branches:
       - main
     paths:
       - 'bench/**'
+      - 'scripts/check_comparator.py'
+      - 'scripts/comparator_common.py'
+      - 'scripts/setup-comparator.sh'
+      - 'scripts/kernel-manifest.tsv'
+      - 'lean-toolchain'
+      - '.github/actions/setup-comparator/**'
       - '.github/workflows/bench-audit.yml'
   schedule:
     # Weekly drift check (Monday 03:17 UTC) so library-only changes that
@@ -38,10 +50,9 @@ jobs:
   audit:
     name: TritonBench-G audit gates
     # Self-hosted runner with a user-local mathlib cache. Capacity can change;
-    # the scripts choose concurrency from available CPU and memory. The audit
-    # elaborates the original ports and then separate copies with trust gates.
-    # Allow both passes on the current 8-core / 32-GB machine: one port pass
-    # alone took 47 minutes in PR #644.
+    # the scripts choose concurrency from available CPU and memory. One audit
+    # pass elaborates the ports with trust gates and replays their proofs through
+    # comparator. A port elaboration pass alone took 47 minutes in PR #644.
     #
     # The repo is PUBLIC. A pull_request from a fork would otherwise execute
     # the fork's workflow code on this machine, so fork PRs are excluded at the
@@ -50,7 +61,7 @@ jobs:
       github.event_name != 'pull_request' ||
       github.event.pull_request.head.repo.full_name == github.repository
     runs-on: [self-hosted, linux, x64, veritile]
-    timeout-minutes: 180
+    timeout-minutes: 360
 
     steps:
       - name: Checkout
@@ -70,5 +81,8 @@ jobs:
           lint: false
           use-mathlib-cache: auto
 
-      - name: Run TritonBench-G audit
+      - name: Set up official proof comparator
+        uses: ./.github/actions/setup-comparator
+
+      - name: Run TritonBench-G audit with comparator
         run: bench/audit_tritonbench_g.sh

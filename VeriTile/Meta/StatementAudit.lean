@@ -20,7 +20,7 @@ audit:
                              transitively references any kernel in the list
                              (a self-referential spec is a circular proof).
 -/
-import Lean
+import VeriTile.Meta.Specification
 
 open Lean Elab Command
 
@@ -93,8 +93,8 @@ elab "#stmtSurfaceSubset " id:ident " ⊆ " "[" allow:ident,* "]" : command => d
   else
     throwError m!"{name}: statement mentions non-allowlisted project constants:\n{bad}"
 
-elab "#axiomsClean " id:ident : command => do
-  let name ← liftCoreM <| realizeGlobalConstNoOverload id
+/-- Shared axiom check for explicit names and environment-discovered headlines. -/
+def auditAxioms (name : Name) : CommandElabM Unit := do
   let env ← getEnv
   let (_, st) := ((CollectAxioms.collect name).run env).run {}
   let allowed : Array Name := #[`propext, `Classical.choice, `Quot.sound]
@@ -103,6 +103,27 @@ elab "#axiomsClean " id:ident : command => do
     logInfo m!"{name}: axiom footprint ⊆ standard base ✓  ({st.axioms})"
   else
     throwError m!"{name}: DISALLOWED axioms {bad} (sorryAx ⇒ fake proof)"
+
+elab "#axiomsClean " id:ident : command => do
+  auditAxioms (← liftCoreM <| realizeGlobalConstNoOverload id)
+
+/-- Check all registered headlines and legacy theorem suffixes in this module.
+Discovery uses the elaborated environment, including private and Unicode names. -/
+elab "#auditModuleAxioms" : command => do
+  let env ← getEnv
+  let suffixes := #["_compute_correct", "_correct", "_output_summary_general", "_output_summary"]
+  let mut names : Array Name := #[]
+  for (name, info) in env.constants.toList do
+    let userName := ((privateToUserName? name).getD name).eraseMacroScopes
+    if (env.getModuleIdxFor? name).isSome then
+      continue
+    let .thmInfo _ := info | continue
+    if headlineAttr.hasTag env name || suffixes.any (fun suffix => userName.getString!.endsWith suffix) then
+      names := names.push name
+  names := names.qsort (·.toString < ·.toString)
+  for name in names do auditAxioms name
+  let display := names.map fun name => (privateToUserName? name).getD name
+  logInfo m!"Axiom audit: headlines={names.size}\nheadlines: {display}"
 
 elab "#specNonCircular " spec:ident " avoiding " "[" ks:ident,* "]" : command => do
   let specName ← liftCoreM <| realizeGlobalConstNoOverload spec
@@ -125,8 +146,8 @@ elab "#auditModuleSpecs" : command => do
   let mut specs : Array Name := #[]
   let mut denotations : Array Name := #[]
   for (name, info) in env.constants.toList do
-    let userName := (privateToUserName? name).getD name
-    if (env.getModuleIdxFor? name).isSome || userName.isInternal then
+    let userName := ((privateToUserName? name).getD name).eraseMacroScopes
+    if (env.getModuleIdxFor? name).isSome then
       continue
     unless info.isDefinition do continue
     let isKernel ← liftTermElabM do

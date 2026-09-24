@@ -3,7 +3,6 @@
 import argparse
 import hashlib
 import json
-import os
 from pathlib import Path
 import shlex
 import shutil
@@ -12,8 +11,9 @@ import sys
 import tempfile
 import time
 
+from comparator_common import comparator_command, require_tools, snapshot_project, write_config
+
 ROOT = Path(__file__).resolve().parents[1]
-AXIOMS = ['propext', 'Quot.sound', 'Classical.choice']
 
 
 def positive_int(value):
@@ -21,65 +21,6 @@ def positive_int(value):
     if number <= 0:
         raise argparse.ArgumentTypeError('must be a positive integer')
     return number
-
-
-def snapshot_project(root, destination):
-    """Copy trusted inputs before the agent runs; never share writable caches."""
-    paths = subprocess.check_output(
-        ['git', 'ls-files', '-z', '--cached', '--others', '--exclude-standard'],
-        cwd=root).decode().split('\0')
-    hashes = {}
-    for relative in sorted(set(paths)):
-        if not relative or not (relative.endswith('.lean') or relative in {
-            'lakefile.toml', 'lakefile.lean', 'lake-manifest.json', 'lean-toolchain'
-        }):
-            continue
-        source = root / relative
-        if not source.is_file():
-            continue
-        target = destination / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        data = source.read_bytes()
-        target.write_bytes(data)
-        hashes[relative] = hashlib.sha256(data).hexdigest()
-    # Independent copies include the trusted dependency sources and their build
-    # artifacts. Reflinks save space where supported; hard links/symlinks would
-    # allow the agent's edits to alter the judge's inputs.
-    if (root / '.lake').exists():
-        subprocess.run(['cp', '-aL', '--reflink=auto', str(root / '.lake'),
-                        str(destination / '.lake')], check=True)
-    lakefile = destination / 'lakefile.toml'
-    if not lakefile.exists() or (destination / 'lakefile.lean').exists():
-        raise ValueError('The proof runner requires the project lakefile.toml.')
-    with lakefile.open('a') as output:
-        output.write('\n[[lean_lib]]\nname = "ComparatorChallenge"\n'
-                     '\n[[lean_lib]]\nname = "ComparatorSolution"\n')
-    return hashes
-
-
-def write_config(directory, theorems):
-    if not theorems or any(not name.strip() for name in theorems):
-        raise ValueError('At least one nonempty, fully qualified theorem name is required.')
-    config = {
-        'challenge_module': 'ComparatorChallenge',
-        'solution_module': 'ComparatorSolution',
-        'theorem_names': list(dict.fromkeys(theorems)),
-        'permitted_axioms': AXIOMS,
-        'enable_nanoda': False,
-    }
-    path = directory / 'comparator.json'
-    path.write_text(json.dumps(config, indent=2) + '\n')
-    return path
-
-
-def comparator_command(directory, comparator):
-    # Follow upstream's AF_UNIX restriction as well as comparator's landrun
-    # sandbox. Failure to start either is a failed check, never a fallback.
-    return ['systemd-run', '--user', '--pipe', '--wait', '--collect',
-            '--property=RestrictAddressFamilies=~AF_UNIX',
-            '--setenv=PATH=' + os.environ['PATH'],
-            '--working-directory=' + str(directory),
-            'lake', 'env', comparator, str(directory / 'comparator.json')]
 
 
 def main():
@@ -97,15 +38,9 @@ def main():
     if any(not name.strip() for name in args.theorem):
         parser.error('--theorem cannot be empty')
 
-    comparator = shutil.which(os.environ.get('COMPARATOR_BIN', 'comparator'))
-    if not comparator:
-        parser.error('Official comparator is required; see scripts/README.md for setup.')
-    for tool in ('claude', 'lake', 'lean4export', 'landrun', 'systemd-run'):
-        if not shutil.which(tool):
-            parser.error(f'Missing {tool}; see scripts/README.md for setup.')
-    # Detect unavailable user services before spending an agent attempt.
-    subprocess.run(['systemd-run', '--user', '--pipe', '--wait', '--collect',
-                    '--property=RestrictAddressFamilies=~AF_UNIX', 'true'], check=True)
+    comparator = require_tools()
+    if not shutil.which('claude'):
+        parser.error('Missing claude; see scripts/README.md for setup.')
 
     logs = ROOT / 'Logs'
     logs.mkdir(exist_ok=True)

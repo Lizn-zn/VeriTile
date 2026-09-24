@@ -110,6 +110,8 @@ invoking a math identity from `Mathlib`. The LLM proof wrapper
 `scripts/prove.sh` automates this loop and uses the official comparator to judge
 the targets selected with `--theorem` against the original task.
 See [setup and usage](./scripts/README.md).
+The artifact and bench check scripts also require comparator proof replay;
+see [the shared verification gate](./scripts/README.md#shared-comparator-gate).
 
 ### 4. Register in the kernel manifest
 
@@ -186,14 +188,14 @@ verso/                     Slide deck / overview
   (also run inside `bench/audit_tritonbench_g.sh`, the bench-audit CI gate)
 - `bench/audit_tritonbench_g.sh` — the full bench gate: the per-port build
   above ∧ faithfulness scans ∧ proof-gap manifest ∧ both trust audits
-- `bench/audit_trust.sh` — `#axiomsClean` over every standalone bench file
+- `bench/audit_trust.sh` — trust gates and comparator replay for every standalone bench file
 
 ## Environment
 
 - Lean 4 (`v4.29.0`) + Mathlib
 - [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) +
   [`lean4-skills`](https://github.com/lean4-skills/lean4-skills)
-- For proof automation: Python 3 and the official comparator, lean4export,
+- For artifact/bench verification and proof automation: Python 3 and the official comparator, lean4export,
   and landrun on Linux with a systemd user service; see
   [installation instructions](./scripts/README.md#setup).
 

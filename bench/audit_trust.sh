@@ -11,10 +11,10 @@
 #   * bench/examples/*.lean          (the kernel showcases)
 #   * bench/tests/*.lean             (infra smoke tests / regression gates)
 #
-# For each file it emits a TEMP COPY (via bench/audit_trust_prep.py) that adds
-# `import VeriTile.Meta.StatementAudit` and appends `#axiomsClean` on every
-# headline theorem plus `#auditModuleSpecs` for environment-based discovery, then compiles
-# the copy with `lake env lean`. The port files themselves are never modified —
+# For each file the shared comparator driver emits a snapshot copy that adds
+# `import VeriTile.Meta.StatementAudit` and appends `#auditModuleAxioms` and
+# `#auditModuleSpecs` for environment-based discovery, compiles it, and requires
+# official comparator export/replay. The port files themselves are never modified —
 # the corpus stays clean.
 #
 # A `#axiomsClean` failure means a `sorry`/smuggled axiom leaked into a proof
@@ -29,7 +29,7 @@
 #   AUDIT_TRUST_JOBS=4 bench/audit_trust.sh
 #
 # Exit codes:
-#   0 — every audited file compiles with its appended trust gates
+#   0 — every audited file passes its trust gates and official comparator replay
 #   1 — at least one file failed; failing names are printed
 set -uo pipefail
 
@@ -40,7 +40,6 @@ cd "${PROJECT_ROOT}"
 PORTS_ROOT="bench/tritonbench_g"
 EXAMPLES_ROOT="bench/examples"
 TESTS_ROOT="bench/tests"
-PREP="bench/audit_trust_prep.py"
 
 select_targets() {
   if [ "$#" -eq 0 ]; then
@@ -65,7 +64,7 @@ default_jobs() {
   local cores mem_gb by_mem jobs
   cores=$(nproc 2>/dev/null || echo 1)
   mem_gb=$(awk '/MemAvailable/ {print int($2 / 1048576)}' /proc/meminfo 2>/dev/null || echo 4)
-  by_mem=$((mem_gb / 4))
+  by_mem=$((mem_gb / 8))
   jobs=$((cores < by_mem ? cores : by_mem))
   [ "${jobs}" -gt 32 ] && jobs=32
   [ "${jobs}" -lt 1 ] && jobs=1
@@ -87,7 +86,7 @@ if [ -z "${target_list}" ]; then
   exit 2
 fi
 
-export PROJECT_ROOT TMPDIR_AUDIT PREP
+export PROJECT_ROOT TMPDIR_AUDIT
 
 launcher_status=0
 results="$(printf '%s\n' "${target_list}" | xargs -P "${JOBS}" -I{} bash -c '
@@ -96,12 +95,9 @@ results="$(printf '%s\n' "${target_list}" | xargs -P "${JOBS}" -I{} bash -c '
   # a unique temp name: <parent-dir>__<basename>
   tag="$(basename "$(dirname "${src}")")__$(basename "${src}")"
   tmp="${TMPDIR_AUDIT}/${tag}"
-  if ! python3 "${PREP}" "${src}" > "${tmp}"; then
-    printf "  FAIL  %s   (prep error)\n" "${rel}"
-    exit 0
-  fi
-  if lake env lean "${tmp}" > "${tmp}.log" 2>&1; then
-    summary=$(sed -n "/^Spec audit:/p" "${tmp}.log")
+  if python3 "${PROJECT_ROOT}/scripts/check_comparator.py" --file "${src}" --trust \
+      --workspace "${TMPDIR_AUDIT}/judge" > "${tmp}.log" 2>&1; then
+    summary=$(sed -n "/^Axiom audit:/p; /^Spec audit:/p; /^Comparator:/p" "${tmp}.log" | paste -sd ";")
     printf "%s: %s\n" "${rel}" "${summary}" >&2
     printf "  ok    %s\n" "${rel}"
   else

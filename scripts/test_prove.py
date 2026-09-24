@@ -19,7 +19,8 @@ class ComparatorRunnerTests(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix='veritile-prove-test-') as temp:
             project = Path(temp)
             (project / 'scripts').mkdir()
-            shutil.copy(ROOT / 'scripts/prove.py', project / 'scripts/prove.py')
+            for name in ('prove.py', 'comparator_common.py'):
+                shutil.copy(ROOT / 'scripts' / name, project / 'scripts' / name)
             shutil.copy(ROOT / 'lean-toolchain', project / 'lean-toolchain')
             (project / 'lakefile.toml').write_text('name = "veritiletest"\n')
             (project / 'lake-manifest.json').write_text(json.dumps({

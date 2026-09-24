@@ -51,7 +51,10 @@ jobs:
           lint: false
           use-mathlib-cache: auto
 
-      - name: Check artifact contract
+      - name: Set up official proof comparator
+        uses: ./.github/actions/setup-comparator
+
+      - name: Check artifact contract with comparator
         run: scripts/check-artifact.sh
 
       - name: Check audit and documentation regressions
@@ -59,13 +62,15 @@ jobs:
           lake env lean bench/tests/StatementAudit.lean
           lake env lean bench/tests/KernelIOProjection.lean
           lake env lean bench/tests/ModuleSpecAudit.lean
+          lake env lean bench/tests/ModuleHeadlineAudit.lean
           python3 -m unittest discover -s scripts -p 'test_audit_gates.py'
           python3 -m unittest discover -s scripts -p 'test_doc_api.py'
+          python3 scripts/test_check_comparator.py
 
       - name: Check representative standalone ports after library changes
         env:
-          CHECK_PORTS_JOBS: 2
-          AUDIT_TRUST_JOBS: 2
+          CHECK_PORTS_JOBS: 1
+          AUDIT_TRUST_JOBS: 1
         run: |
           bash bench/check_ports.sh vector_addition mean_reduction quantize_global
           bash bench/audit_trust.sh vector_addition mean_reduction quantize_global
