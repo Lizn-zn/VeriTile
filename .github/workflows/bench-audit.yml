@@ -73,10 +73,11 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # The audit script hard-fails without rg/python3; verify up front so a
-      # misconfigured runner dies in seconds with a clear message.
-      - name: Check required tools
-        run: command -v rg && command -v python3
+      - name: Install required audit tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          command -v rg && command -v python3
 
       - name: Check audit sharding regressions
         run: python3 -m unittest discover -s scripts -p 'test_audit_shards.py'
