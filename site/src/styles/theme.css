@@ -16,6 +16,7 @@
   /* Shared type roles; narrow layouts wrap instead of shrinking text. */
   --vt-text-body: 1rem;
   --vt-text-small: .875rem;
+  --vt-text-explanation: .875rem;
   --vt-text-code: .875rem;
   /* Paper */
   --vt-paper:   #F2EBDC;
@@ -301,8 +302,9 @@ aside.starlight-aside--tip     { border-left-color: var(--vt-verified); }
 /* Give the project homepage its own wider canvas while retaining docs widths. */
 html[data-has-hero]:not([data-has-sidebar]) {
   --sl-content-width: 78rem;
-  --vt-text-body: .9375rem;
-  --vt-text-code: .8125rem;
+  --vt-text-body: .875rem;
+  --vt-text-explanation: .8125rem;
+  --vt-text-code: .75rem;
 }
 
 /* Project homepage: warm paper, quiet ink, and a restrained amber accent. */

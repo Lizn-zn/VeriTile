@@ -151,11 +151,11 @@ const tabs = [
 </script>
 
 <style>
-  .fa-example { --vt-text-body: var(--vt-text-small); font-size: var(--vt-text-body); margin-top: 1.6rem; border: 1px solid var(--vt-rule-2); border-radius: 4px; scroll-margin-top: 5rem; }
+  .fa-example { --vt-text-body: var(--vt-text-explanation); font-size: var(--vt-text-body); margin-top: 1.6rem; border: 1px solid var(--vt-rule-2); border-radius: 4px; scroll-margin-top: 5rem; }
   .fa-example > summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; cursor: pointer; padding: 1rem 1.2rem; list-style: none; background: var(--vt-paper-2); border-radius: 4px; }
   .fa-example > summary::-webkit-details-marker { display: none; }
   .fa-summary { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; gap: .2rem 1rem; }
-  .fa-summary strong { font-weight: 500; color: var(--vt-ink); font-size: var(--vt-text-body); }
+  .fa-summary strong { font-weight: 500; color: var(--vt-ink); font-size: var(--vt-text-small); }
   .fa-summary > span { font-size: var(--vt-text-small); color: var(--vt-ink-3); }
   .fa-action { display: flex; align-items: center; gap: .8rem; color: var(--vt-seal-ink); font-size: var(--vt-text-small); white-space: nowrap; }
   .fa-toggle { font-size: 1.1rem; line-height: 1; }
@@ -184,7 +184,7 @@ const tabs = [
   .fa-reader :global(code) { font: inherit; }
   :global(html[data-theme='dark']) .fa-reader :global(.astro-code),
   :global(html[data-theme='dark']) .fa-reader :global(.astro-code span) { color: var(--shiki-dark) !important; }
-  .fa-explanation { margin: 0; border-left: 1px solid var(--vt-rule); padding-left: 1.2rem; font-size: var(--vt-text-body); line-height: 1.8; }
+  .fa-explanation { margin: 0; border-left: 1px solid var(--vt-rule); padding-left: 1.2rem; font-size: var(--vt-text-body); line-height: 1.65; }
   .fa-explanation > div + div { margin-top: 1rem; }
   .fa-explanation dt { color: var(--vt-ink); font-weight: 500; }
   .fa-explanation dd { margin: .3rem 0 0; color: var(--vt-ink-2); }

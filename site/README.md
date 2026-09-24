@@ -245,10 +245,12 @@ checked DSL/IO contract, full proof, trust checks, and rejected mutation. Its
 code excerpts are extracted from the executable `bench/examples/VectorAdd.lean`
 by `src/lib/vector-add-tutorial.ts`; missing anchors fail the site build.
 
-Typography separates reading paragraphs (`--vt-text-body`), supporting text
-and controls (`--vt-text-small`), and code (`--vt-text-code`). At the default
-root size, the homepage uses 15px paragraphs, 14px expanded-example explanations
-and controls, and 13px code with a 1.7 line height. Documentation reading sizes
+Typography separates reading paragraphs (`--vt-text-body`), expanded-example
+explanations (`--vt-text-explanation`), supporting text and controls
+(`--vt-text-small`), and code (`--vt-text-code`). At the default root size,
+the homepage uses 14px paragraphs with a 1.65 line height, 13px expanded-example
+explanations, 14px controls, and 12px code with a 1.7 line height. The hero title
+scales from 32px on phones to a 48px desktop maximum. Documentation reading sizes
 retain their existing scale and a 14px small-text/inline-code floor. All sizes
 scale with user font preferences; mobile layouts wrap or stack content rather
 than shrinking type further.
