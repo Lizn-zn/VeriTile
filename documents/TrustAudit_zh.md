@@ -104,3 +104,13 @@ bench 审计会追加 `#auditModuleAxioms` 和 `#auditModuleSpecs`。
 下的所有模块，再从 Lean 环境枚举实际公理声明，包括私有声明和宏生成的声明。
 注释、字符串和源码格式不会影响发现结果。白名单中的公理并不因此获准进入
 `#axiomsClean` 所检查的定理。
+
+### GeLU 余项的证据范围
+
+`VeriTile.Math.geluError_mid_taylor20_approx` 仍是白名单中的假设，断言
+`[0.83, 3.8]` 上 Taylor-20 近似残差的界。多项式本身的界已在 Lean 中证明，
+但这不能证明另一项残差界。数值采样只能提供检查点证据：多项式极值点不一定
+是残差的极值点，在这些点采样不能保证整个区间。本 artifact 尚未提供该残差
+的可检查区间证书。依赖此假设的定理必须披露依赖，也不能通过只允许标准逻辑
+公理的 `#axiomsClean`。消除假设的候选方法见
+[研究说明](./ApproxGeluPhiStrategy_zh.md)。

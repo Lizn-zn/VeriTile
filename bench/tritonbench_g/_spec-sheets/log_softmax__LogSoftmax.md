@@ -51,10 +51,6 @@ specification log_softmax_backward_kernel_correctness
             (laneIdx BLOCK_M BLOCK_N j))
 ```
 
-**Assumptions / layout contracts:**
-- `fun j : Fin (BLOCK_M * BLOCK_N) =>
-        outOffset p₀ p₁ N K BLOCK_M (laneIdx BLOCK_M BLOCK_N j)`
-
 **Closed-form spec defs (transitive):** `outOffset`, `laneIdx`, `logSoftmaxBackwardIO`, `logSoftmaxBackwardOf`, `logSoftmaxBackwardPureOutTile`, `logSoftmaxBackwardPureGradTile`, `log_softmax_backward_kernel`, `active`, `laneOf`
 
 <details><summary><code>outOffset</code></summary>
@@ -273,8 +269,6 @@ specification log_softmax_kernel_correctness
 
 **Assumptions / layout contracts:**
 - `hBN : 0 < BLOCK_N`
-- `fun j : Fin (BLOCK_M * BLOCK_N) =>
-        outOffset p₀ p₁ N K BLOCK_M (laneIdx BLOCK_M BLOCK_N j)`
 
 **Closed-form spec defs (transitive):** `outOffset`, `laneIdx`, `logSoftmaxIO`, `logSoftmaxOf`, `logSoftmaxPureTile`, `log_softmax_kernel`, `active`, `laneOf`
 

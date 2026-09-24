@@ -32,7 +32,6 @@ specification kldiv_backward_default_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s new_grads_stride i)`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
 
 **Closed-form spec defs (transitive):** `kldiv_backward_default`, `defaultSpec`, `inOffset`
 
@@ -114,7 +113,6 @@ specification kldiv_backward_log_target_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s new_grads_stride i)`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
 
 **Closed-form spec defs (transitive):** `kldiv_backward_log_target`, `logTargetSpec`, `inOffset`
 
@@ -192,7 +190,6 @@ specification kldiv_forward_default_none_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s loss_stride i)`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
 
 **Closed-form spec defs (transitive):** `kldiv_forward_default_none`, `forwardDefaultSpec`, `inOffset`
 
@@ -281,7 +278,6 @@ specification kldiv_forward_log_target_none_compute_correct
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => linearOffset s loss_stride i)`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
 
 **Closed-form spec defs (transitive):** `kldiv_forward_log_target_none`, `forwardLogTargetSpec`, `inOffset`
 

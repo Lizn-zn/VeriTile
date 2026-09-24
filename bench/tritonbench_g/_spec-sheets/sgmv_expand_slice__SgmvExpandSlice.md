@@ -30,7 +30,17 @@ specification sgmv_expand_slice_one_row_block_output_summary
         lora_indices N (BLOCK_K * numKBlocks) xm_stride xk_stride l0_stride lora_k_stride
         lora_n_stride cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := sgmv_expand_slice_surface input_ptr lora_ptr out_ptr b_seq_start_loc seq_lens
+        lora_indices N (BLOCK_K * numKBlocks) xm_stride xk_stride l0_stride lora_k_stride
+        lora_n_stride cm_stride cn_stride slice_offset BLOCK_M BLOCK_N BLOCK_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_N] => activeLane s seq_lens N BLOCK_M BLOCK_N idx)
+        (fun idx => (out_ptr, cOffset s b_seq_start_loc cm_stride cn_stride slice_offset BLOCK_M BLOCK_N idx)))
+      (expected := fun idx =>
+        sgmvSpec s input_ptr lora_ptr b_seq_start_loc seq_lens lora_indices
+          N xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
+          BLOCK_M BLOCK_N BLOCK_K numKBlocks idx.1 idx.2.1)
 ```
 
 **Assumptions / layout contracts:**
@@ -38,7 +48,7 @@ specification sgmv_expand_slice_one_row_block_output_summary
 - `hInj : Function.Injective (cOffset s b_seq_start_loc cm_stride cn_stride slice_offset BLOCK_M BLOCK_N)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
 
-**Closed-form spec defs (transitive):** `cOffset`, `sgmv_expand_slice_surface`, `seqStart`, `rowG`, `colG`
+**Closed-form spec defs (transitive):** `cOffset`, `sgmv_expand_slice_surface`, `activeLane`, `sgmvSpec`, `seqStart`, `rowG`, `colG`, `seqLen`, `aElem`, `bElem`, `ramRow`, `loraIdx`, `rbnCol`
 
 <details><summary><code>cOffset</code></summary>
 
@@ -109,6 +119,34 @@ def sgmv_expand_slice_surface
 ```
 </details>
 
+<details><summary><code>activeLane</code></summary>
+
+```
+/-- A lane is *active* iff `offset_m < M` and `offset_n < N`. -/
+```
+```lean
+def activeLane (s : BlockState) (seq_lens : Region .nat) (N BLOCK_M BLOCK_N : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : Prop :=
+  rowG s BLOCK_M idx.1 < seqLen s seq_lens ∧ colG s BLOCK_N idx.2.1 < N
+```
+</details>
+
+<details><summary><code>sgmvSpec</code></summary>
+
+```
+/-- **Genuine SGMV spec**: `out[i,j] = Σ_{k < BLOCK_K·numKBlocks} aElem i k · bElem j k`. -/
+```
+```lean
+noncomputable def sgmvSpec (s : BlockState)
+    (input_ptr lora_ptr : RegionName) (b_seq_start_loc seq_lens lora_indices : Region .nat)
+    (N xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
+      BLOCK_M BLOCK_N BLOCK_K numKBlocks : Nat) (i : Fin BLOCK_M) (j : Fin BLOCK_N) : ℝ :=
+  (Finset.range (BLOCK_K * numKBlocks)).sum
+    (fun k => aElem s input_ptr b_seq_start_loc seq_lens xm_stride xk_stride BLOCK_M i k
+      * bElem s lora_ptr lora_indices N l0_stride lora_k_stride lora_n_stride BLOCK_N j k)
+```
+</details>
+
 <details><summary><code>seqStart</code></summary>
 
 ```
@@ -139,6 +177,83 @@ def rowG (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
 ```lean
 def colG (s : BlockState) (BLOCK_N : Nat) (j : Fin BLOCK_N) : Nat :=
   s.pids 1 * BLOCK_N + j.val
+```
+</details>
+
+<details><summary><code>seqLen</code></summary>
+
+```
+/-- `M = seq_lens[cur_batch]` (this program's sequence length). -/
+```
+```lean
+def seqLen (s : BlockState) (seq_lens : Region .nat) : Nat :=
+  s.readMemValue .nat seq_lens.cast (s.pids 2)
+```
+</details>
+
+<details><summary><code>aElem</code></summary>
+
+```
+/-- `input[gathered_row, k]` at the kernel's row-major flattened address
+`input + cur_seq_start·xm + ram·xm + k·xk`. -/
+```
+```lean
+noncomputable def aElem (s : BlockState) (input_ptr : RegionName)
+    (b_seq_start_loc seq_lens : Region .nat)
+    (xm_stride xk_stride BLOCK_M : Nat) (i : Fin BLOCK_M) (k : Nat) : ℝ :=
+  s.readMem input_ptr
+    (seqStart s b_seq_start_loc * xm_stride + ramRow s seq_lens BLOCK_M i * xm_stride
+      + k * xk_stride)
+```
+</details>
+
+<details><summary><code>bElem</code></summary>
+
+```
+/-- `loraB[lora_index, gathered_col, k]` at the kernel's address
+`lora + l0·lora_index + k·lora_n + rbn·lora_k`. -/
+```
+```lean
+noncomputable def bElem (s : BlockState) (lora_ptr : RegionName)
+    (lora_indices : Region .nat)
+    (N l0_stride lora_k_stride lora_n_stride BLOCK_N : Nat) (j : Fin BLOCK_N) (k : Nat) : ℝ :=
+  s.readMem lora_ptr
+    (l0_stride * loraIdx s lora_indices + k * lora_n_stride
+      + rbnCol s N BLOCK_N j * lora_k_stride)
+```
+</details>
+
+<details><summary><code>ramRow</code></summary>
+
+```
+/-- Gathered input row `ram = offset_m % M` (`tl.max_contiguous`/`tl.multiple_of`
+are layout hints erased to this `%`). -/
+```
+```lean
+def ramRow (s : BlockState) (seq_lens : Region .nat) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
+  rowG s BLOCK_M i % seqLen s seq_lens
+```
+</details>
+
+<details><summary><code>loraIdx</code></summary>
+
+```
+/-- `lora_index = lora_indices[cur_batch]` (this program's LoRA slot). -/
+```
+```lean
+def loraIdx (s : BlockState) (lora_indices : Region .nat) : Nat :=
+  s.readMemValue .nat lora_indices.cast (s.pids 2)
+```
+</details>
+
+<details><summary><code>rbnCol</code></summary>
+
+```
+/-- Gathered LoRA col `rbn = offset_n % N`. -/
+```
+```lean
+def rbnCol (s : BlockState) (N BLOCK_N : Nat) (j : Fin BLOCK_N) : Nat :=
+  colG s BLOCK_N j % N
 ```
 </details>
 

@@ -8,6 +8,9 @@ title: "ApproxGeLU Midrange Strategy: Phi / Critical-Point Proof"
 > `VeriTile/Math/GeluTaylor20Cert.lean:geluError_mid_taylor20_approx`.
 > Inspect a theorem's transitive axiom dependencies and the
 > [trust audit](/VeriTile/proofs/trust-audit/) when interpreting a result.
+> Numerical evaluations are checkpoint evidence, not interval certificates.
+> Polynomial extrema need not maximize the approximation residual; neither
+> those checkpoints nor a dense sample discharges the remainder axiom.
 
 Goal:
 

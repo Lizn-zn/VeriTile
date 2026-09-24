@@ -45,7 +45,6 @@ specification attention_score_python_case1_output_summary_general
 - `hBNpos : 0 < BN`
 - `hdvd : BN ∣ ROUND_CTX`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun i : Fin BN => case1OutActiveG s BN NKV_CTX i`
 
 **Closed-form spec defs (transitive):** `attention_score_kernel`, `case1OutActiveG`, `case1OutStoreOffsetG`, `case1OutClosedFormG`, `case1ColSumG`, `case1MaskG`, `case1WeightG`, `case1DistG`, `case1RawScoreG`, `case1QKOffsetQG`, `case1QKOffsetKG`, `case1MOffsetG`, `case1QElemG`, `case1KElemG`
 

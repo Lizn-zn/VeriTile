@@ -53,7 +53,32 @@ specification pow_scalar_tensor_output_summary_general
       tile_size0).toAlgorithm? = Except.ok alg) ∧
     -- (2) one_tile_per_cta = true: genuine elementwise scalar-base power
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := pow_func_scalar_tensor_kernel_rank_1_one_tile_surface val0
+        in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+        tile_size0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin tile_size0 => taskIndex (s.pids 0) tile_size0 i < s0)
+        (fun i => (out0_ptr, taskIndex (s.pids 0) tile_size0 i * out0_stride0)))
+      (expected := fun i =>
+        powSpec s in0_ptr in0_stride0 val0
+          (taskIndex (s.pids 0) tile_size0 i)) ∧
+    -- (3) one_tile_per_cta = false: genuine elementwise scalar-base power
+    --     across the whole grid-stride loop
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := pow_func_scalar_tensor_kernel_rank_1_grid_stride_surface val0
+        in0_ptr out0_ptr in0_stride0 out0_stride0 s0 num_tasks tiles_per_cta
+        tile_size0)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun p : Fin tiles_per_cta × Fin tile_size0 =>
+          taskIndex (s.pids 0 + p.1.val * s.numPids 0) tile_size0 p.2 < s0)
+        (fun p => (out0_ptr,
+          taskIndex (s.pids 0 + p.1.val * s.numPids 0) tile_size0 p.2
+            * out0_stride0)))
+      (expected := fun p =>
+        powSpec s in0_ptr in0_stride0 val0
+          (taskIndex (s.pids 0 + p.1.val * s.numPids 0) tile_size0 p.2))
 ```
 
 **Assumptions / layout contracts:**
@@ -61,7 +86,7 @@ specification pow_scalar_tensor_output_summary_general
 - `hDisj : in0_ptr ≠ out0_ptr`
 - `hGrid : 0 < s.numPids 0`
 
-**Closed-form spec defs (transitive):** `pow_func_scalar_tensor_kernel_rank_1_one_tile_surface`, `pow_func_scalar_tensor_kernel_rank_1_grid_stride_surface`
+**Closed-form spec defs (transitive):** `pow_func_scalar_tensor_kernel_rank_1_one_tile_surface`, `pow_func_scalar_tensor_kernel_rank_1_grid_stride_surface`, `taskIndex`, `powSpec`
 
 <details><summary><code>pow_func_scalar_tensor_kernel_rank_1_one_tile_surface</code></summary>
 
@@ -123,6 +148,30 @@ def pow_func_scalar_tensor_kernel_rank_1_grid_stride_surface
     tl.store(out0_bptr, (out0).to(out0_bptr.type.element_ty), boundary_check=([0] : List Nat))
   }
 }
+```
+</details>
+
+<details><summary><code>taskIndex</code></summary>
+
+```
+/-- Flat task index covered by lane `i` of tile `tile_id0`. -/
+```
+```lean
+def taskIndex (tile_id0 tile_size0 : Nat) (i : Fin tile_size0) : Nat :=
+  tile_id0 * tile_size0 + i.val
+```
+</details>
+
+<details><summary><code>powSpec</code></summary>
+
+```
+/-- Genuine spec value of task `t`: the scalar base `val0` raised to the
+input cell `t·in0_stride0` (`Real.rpow`). -/
+```
+```lean
+noncomputable def powSpec (s : BlockState) (in0_ptr : RegionName)
+    (in0_stride0 : Nat) (val0 : ℝ) (t : Nat) : ℝ :=
+  Real.rpow val0 (s.readMem in0_ptr (t * in0_stride0))
 ```
 </details>
 

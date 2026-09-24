@@ -180,9 +180,6 @@ specification chunk_gate_recurrence_output_summary_general
       (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
         outOffset s NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K
           BLOCK_MODEL_V idx)`
-- `fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
-        forwardStepTileOffset s (t_rel + 1) NUM_BLOCK D_MODEL_K D_MODEL_V
-          BLOCK_MODEL_K BLOCK_MODEL_V idx`
 - `hDIInj : Function.Injective
       (fun idx : TileIndex [BLOCK_MODEL_K, BLOCK_MODEL_V] =>
         timeTileOffset s t_rel NUM_BLOCK D_MODEL_K D_MODEL_V BLOCK_MODEL_K

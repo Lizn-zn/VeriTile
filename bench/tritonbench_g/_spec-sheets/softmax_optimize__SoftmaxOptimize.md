@@ -34,9 +34,6 @@ specification softmax_kernel_online_v2_one_tile_output_summary
       (expected := fun i => softmaxOptimizeSpec s input_ptr N TILE_N i)
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : Fin TILE_N => i.val < N`
-
 **Closed-form spec defs (transitive):** `softmax_kernel_online_v2_one_tile`, `softmaxOptimizeSpec`, `softmaxOptimizeInputTile`
 
 <details><summary><code>softmax_kernel_online_v2_one_tile</code></summary>

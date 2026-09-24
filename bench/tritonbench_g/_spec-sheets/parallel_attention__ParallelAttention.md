@@ -49,13 +49,6 @@ specification pa_fwd_o_exec_genuine
 - `hσ : BV ≤ s_vo_t`
 - `hBTS : BTL % BTS = 0`
 - `hBTSpos : 0 < BTS`
-- `∀ idx : TileIndex [BTL, BV], paOActive s T V BV BTL idx →
-          sF.readMem o (paOOffset s B H s_vo_h s_vo_t s_vo_d V BV BTL idx)
-            = paOOut s q k v s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
-                T K V BTL BK BV idx.1.val idx.2.1.val`
-- `∀ a : Fin BTL, s.pids 1 * BTL + a.val < T →
-          sF.readMem z (paZOffset s B H T V BV BTL a)
-            = paZOut s q k s_qk_h s_qk_t s_qk_d scale T K V BTL BK BV a.val`
 
 **Closed-form spec defs (transitive):** `pa_fwd_surface`, `paOActive`, `paOOffset`, `paOOut`, `paZOffset`, `paZOut`, `paIv`, `paOBase`, `paOAcc`, `paODiag`, `paIk`, `paZAcc`, `paZDiag`, `paNV`, `paScore`, `paVGuarded`, `paQGuarded`, `paKGuarded`
 
@@ -436,16 +429,6 @@ specification pa_bwd_dkv_exec_genuine
 - `hBTS : BTL % BTS = 0`
 - `hBTSpos : 0 < BTS`
 - `hundef : ∀ rg off, s.undef rg off = 0`
-- `∀ idx : TileIndex [BTL, BK], pbDkActive i_c i_k T K BTL BK idx →
-          sF.readMem dk
-              (pbDkOffset i_bh i_c i_k i_v B H s_k_h s_k_t s_k_d BTL BK idx)
-            = pbDkOut s q k v do_ dz s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d i_bh
-                i_c i_k i_v scale T K V BTL BTS BK BV idx.1.val idx.2.1.val`
-- `∀ idx : TileIndex [BTL, BV], pbDvActive i_c i_v T V BTL BV idx →
-          sF.readMem dv
-              (pbDvOffset i_bh i_c i_k i_v B H s_v_h s_v_t s_v_d BTL BV idx)
-            = pbDvOut s q k do_ s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d i_bh i_c
-                i_k i_v scale T K V BTL BTS BK BV idx.1.val idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `pa_bwd_dkv_surface`, `pbDkActive`, `pbDkOffset`, `pbDkOut`, `pbDvActive`, `pbDvOffset`, `pbDvOut`, `pbDkPart`, `pbNB`, `pbDvPart`, `pbDsVal`, `pbSVal`, `pbQGuarded`, `pbDoGuarded`, `pbVGuarded`, `pbDzGuarded`, `pbKGuarded`
 

@@ -187,13 +187,6 @@ specification fused_recurrent_retention_output_summary_general
       s.readMem DHPrev (stateOffset s DK DV BK BV jk jv)
         = bbVal s H *
             dStateClosed s q do_ s_qk_h s_vo_h H DK DV BK BV T scale (m + 1) jk jv`
-- `fun idx : TileIndex [BV, BK] => activeKV s DK DV BK BV idx`
-- `fun idx : TileIndex [BV, BK] =>
-          (HSeed, stateOffset s DK DV BK BV idx.2.1 idx.1)`
-- `fun jv : Fin BV => activeV s DV BV jv`
-- `fun jk : Fin BK => activeK s DK BK jk`
-- `fun jk : Fin BK => activeK s DK BK jk`
-- `fun jv : Fin BV => activeV s DV BV jv`
 
 **Closed-form spec defs (transitive):** `stateOffset`, `stateClosed`, `bbVal`, `dStateClosed`, `fused_recurrent_retention_fwd_surface`, `fused_recurrent_retention_bwd_surface`, `fused_recurrent_retention_seed_slice`, `activeKV`, `fused_recurrent_retention_output_step_slice`, `activeV`, `outStepOffset`, `outClosed`, `fused_recurrent_retention_state_step_slice`, `fused_recurrent_retention_bwd_dq_step_slice`, `activeK`, `dqStepOffset`, `dqClosed`, `fused_recurrent_retention_bwd_dstate_step_slice`, `fused_recurrent_retention_bwd_dk_step_slice`, `dkClosed`, `fused_recurrent_retention_bwd_dv_step_slice`, `dvClosed`, `kIdx`, `vIdx`, `stateSeed`, `kValR`, `vValR`
 
@@ -884,10 +877,6 @@ specification fused_recurrent_retention_seed_io_correctness
       ⊨ fun _p₀ _p₁ xs idx => xs idx
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BV, BK] =>
-        p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)`
-
 **Closed-form spec defs (transitive):** `seedIO`, `fused_recurrent_retention_seed_slice`
 
 <details><summary><code>seedIO</code></summary>
@@ -967,10 +956,6 @@ specification fused_recurrent_retention_seed_io_correctnessR (R : RoundingModel)
     seedIO initial_state HSeed DK DV BK BV
       ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BV, BK] =>
-        p₂ * DK * DV + (p₁ * BK + idx.2.1.val) * DV + (p₀ * BV + idx.1.val)`
 
 **Closed-form spec defs (transitive):** `seedIO`, `fused_recurrent_retention_seed_slice`
 

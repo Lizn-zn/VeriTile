@@ -109,10 +109,6 @@ specification rotary_transform_ops_output_summary_general
           body_BLOCK_M i)`
 - `hStrideHd : body_stride_out_headdim ≠ 0`
 - `hHalfBound : BLOCK_HALF ≤ body_rotary_dim_half`
-- `fun i : Fin BLOCK_HALF =>
-          active s body_seqlen body_rotary_dim_half body_BLOCK_M i`
-- `fun i : Fin BLOCK_HALF =>
-          active s body_seqlen body_rotary_dim_half body_BLOCK_M i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `out1Offset`, `rotary_kernel_surface`, `rotary_kernel_o0o1_row`, `active`, `rotaryO0Spec`, `rotaryO1Spec`, `rowIndex`, `dimIndex`, `rotOffset`, `x0Offset`, `x1Offset`
 

@@ -54,10 +54,6 @@ specification context_attn_bloom_surface_compute_correct_general
 - `hOInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          active s B_Seqlen B_Prompt_Cache_Len head_dim BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          (Out, outOffset s B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `outOffset`, `context_attn_bloom_fwd_kernel_surface`, `active`, `bloomFwdGenuineOutValueG`, `startLoc`, `mIndex`, `dIndex`, `seqLen`, `contextAttnBloomExactFoldMG`, `bloomFwdWindowG`, `bloomFwdBel`, `promptLen`, `gAccN`, `bloomKVMG`, `gStateBot`, `bloomQTileMG`, `bloomKTileMG`, `bloomVTileMG`, `gKeysUpto`, `osStepBot`, `bloomQTileG`, `bloomKTileG`, `bloomVTileG`, `curHead`, `bloomKvLocG`, `reqIdx`
 

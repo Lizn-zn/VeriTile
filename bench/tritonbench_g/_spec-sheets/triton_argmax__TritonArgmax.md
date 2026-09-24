@@ -311,7 +311,6 @@ specification argmax_kernel_dim_single_block_compute_correct
 - `hNle : N ≤ BLOCK_N`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_M => argmaxKernelOutOffset s K BLOCK_M i)`
-- `fun i : Fin BLOCK_M => s.pids 0 * BLOCK_M + i.val < M`
 
 **Closed-form spec defs (transitive):** `argmaxKernelOutOffset`, `argmax_kernel`, `argmaxKernelDimSingleBlockSpec`, `argmaxKernelDimSingleBlockRowMax`, `argmaxKernelArgmaxSpec`, `argmaxKernelInputTile`
 

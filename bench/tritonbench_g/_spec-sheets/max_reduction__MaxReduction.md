@@ -41,7 +41,6 @@ specification max_kernel_output_summary
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_M => maxKernelOutOffset s K BLOCK_M i)`
 - `hOutRegions : out_value ≠ out_index`
-- `fun i : Fin BLOCK_M => s.pids 0 * BLOCK_M + i.val < M`
 
 **Closed-form spec defs (transitive):** `maxKernelOutOffset`, `max_kernel`, `maxKernelValueSpec`, `maxKernelIndexSpec`, `maxKernelInputTile`, `maxInpElem`
 

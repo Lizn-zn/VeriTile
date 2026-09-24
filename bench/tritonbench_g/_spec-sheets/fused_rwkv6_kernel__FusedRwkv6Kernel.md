@@ -122,21 +122,6 @@ specification fused_recurrent_rwkv6_output_summary_general
 - `hBV : BV ≤ V`
 - `hBK : BK ≤ K`
 - `hBVpos : 0 < BV`
-- `∀ idx : TileIndex [BV, BK],
-        s.readMem BHPrev (finalStateOffset s K V BK BV idx)
-          = stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV m idx`
-- `fun jv : Fin BV => active s V BV jv`
-- `∀ idx : TileIndex [BV, BK],
-        s.readMem BHPrev (finalStateOffset s K V BK BV idx)
-          = stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV m idx`
-- `fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx`
-- `∀ idx : TileIndex [BV, BK], activeKV s K V BK BV idx →
-        s.readMem C (finalStateOffset s K V BK BV idx)
-          = stateSeed s h0 USE_INITIAL_STATE K V BK BV idx`
-- `AgreeOutsideRegion C s sFinal ∧
-        ∀ idx : TileIndex [BV, BK], activeKV s K V BK BV idx →
-          sFinal.readMem C (finalStateOffset s K V BK BV idx)
-            = stateClosed s k v w h0 USE_INITIAL_STATE s_k_h s_v_h K V BK BV T idx`
 
 **Closed-form spec defs (transitive):** `fused_recurrent_rwkv6_fwd_surface`, `finalStateOffset`, `stateClosed`, `fused_recurrent_rwkv6_output_step_slice`, `active`, `outStepOffset`, `outputClosed`, `fused_recurrent_rwkv6_state_step_slice`, `activeKV`, `stateSeed`, `kIndex`, `vIndex`, `decay`, `kVal`, `vVal`, `activeK`, `uVal`, `qVal`, `h0Val`
 
@@ -545,10 +530,6 @@ specification fused_recurrent_rwkv6_state_step_io_correctness
           xs idx * Real.exp (ws (idx.2.1, PUnit.unit))
             + ks (idx.2.1, PUnit.unit) * vs (idx.1, PUnit.unit)
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BV, BK] =>
-        p₂ * K * V + (p₁ * BK + idx.2.1.val) * V + (p₀ * BV + idx.1.val)`
 
 **Closed-form spec defs (transitive):** `stateStepIO`, `fused_recurrent_rwkv6_state_step_slice`
 

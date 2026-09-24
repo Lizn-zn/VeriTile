@@ -44,7 +44,35 @@ specification rotary_emb_kernel_correctness
     (rotaryQ0IO Q Cos Sin stride_qbs stride_qh stride_qd stride_cosbs
         stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q BLOCK_HALF
       ⊨ fun _ _ xs _ j =>
-          let dataEven
+          let dataEven := xs (⟨0, by decide⟩ : Fin 4) j
+          let dataOdd := xs (⟨1, by decide⟩ : Fin 4) j
+          let cosLane := xs (⟨2, by decide⟩ : Fin 4) j
+          let sinLane := xs (⟨3, by decide⟩ : Fin 4) j
+          dataEven * cosLane - dataOdd * sinLane) ∧
+    (rotaryQ1IO Q Cos Sin stride_qbs stride_qh stride_qd stride_cosbs
+        stride_cosd stride_sinbs stride_sind max_total_len HEAD_Q BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let dataEven := xs (⟨0, by decide⟩ : Fin 4) j
+          let dataOdd := xs (⟨1, by decide⟩ : Fin 4) j
+          let cosLane := xs (⟨2, by decide⟩ : Fin 4) j
+          let sinLane := xs (⟨3, by decide⟩ : Fin 4) j
+          dataEven * sinLane + dataOdd * cosLane) ∧
+    (rotaryK0IO K Cos Sin stride_kbs stride_kh stride_kd stride_cosbs
+        stride_cosd stride_sinbs stride_sind max_total_len HEAD_K BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let dataEven := xs (⟨0, by decide⟩ : Fin 4) j
+          let dataOdd := xs (⟨1, by decide⟩ : Fin 4) j
+          let cosLane := xs (⟨2, by decide⟩ : Fin 4) j
+          let sinLane := xs (⟨3, by decide⟩ : Fin 4) j
+          dataEven * cosLane - dataOdd * sinLane) ∧
+    (rotaryK1IO K Cos Sin stride_kbs stride_kh stride_kd stride_cosbs
+        stride_cosd stride_sinbs stride_sind max_total_len HEAD_K BLOCK_HALF
+      ⊨ fun _ _ xs _ j =>
+          let dataEven := xs (⟨0, by decide⟩ : Fin 4) j
+          let dataOdd := xs (⟨1, by decide⟩ : Fin 4) j
+          let cosLane := xs (⟨2, by decide⟩ : Fin 4) j
+          let sinLane := xs (⟨3, by decide⟩ : Fin 4) j
+          dataEven * sinLane + dataOdd * cosLane)
 ```
 
 **Assumptions / layout contracts:**
@@ -57,7 +85,7 @@ specification rotary_emb_kernel_correctness
 - `hKOdd : Function.Injective
       (fun i : Fin BLOCK_HALF => dimOdd i * stride_kd)`
 
-**Closed-form spec defs (transitive):** `dimEven`, `dimOdd`, `rotary_kernel_surface`, `rotaryQ0IO`, `rotaryStoreIO`, `rotary_emb_q0_block`
+**Closed-form spec defs (transitive):** `dimEven`, `dimOdd`, `rotary_kernel_surface`, `rotaryQ0IO`, `rotaryQ1IO`, `rotaryK0IO`, `rotaryK1IO`, `rotaryStoreIO`, `rotary_emb_q0_block`, `rotary_emb_q1_block`, `rotary_emb_k0_block`, `rotary_emb_k1_block`
 
 <details><summary><code>dimEven</code></summary>
 
@@ -202,6 +230,57 @@ def rotaryQ0IO (Q Cos Sin : RegionName)
 ```
 </details>
 
+<details><summary><code>rotaryQ1IO</code></summary>
+
+```
+/-- The Q odd-dimension store's IO signature. -/
+```
+```lean
+def rotaryQ1IO (Q Cos Sin : RegionName)
+    (stride_qbs stride_qh stride_qd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_Q BLOCK_HALF : Nat) :
+    GroupedMasked2DKernelIO :=
+  rotaryStoreIO (rotary_emb_q1_block Q Cos Sin stride_qbs stride_qh stride_qd stride_cosbs stride_cosd
+      stride_sinbs stride_sind max_total_len HEAD_Q BLOCK_HALF)
+    Q Cos Sin stride_qbs stride_qh stride_qd stride_cosbs stride_cosd stride_sinbs
+    stride_sind max_total_len HEAD_Q BLOCK_HALF dimOdd
+```
+</details>
+
+<details><summary><code>rotaryK0IO</code></summary>
+
+```
+/-- The K even-dimension store's IO signature. -/
+```
+```lean
+def rotaryK0IO (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat) :
+    GroupedMasked2DKernelIO :=
+  rotaryStoreIO (rotary_emb_k0_block K Cos Sin stride_kbs stride_kh stride_kd stride_cosbs stride_cosd
+      stride_sinbs stride_sind max_total_len HEAD_K BLOCK_HALF)
+    K Cos Sin stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+    stride_sind max_total_len HEAD_K BLOCK_HALF dimEven
+```
+</details>
+
+<details><summary><code>rotaryK1IO</code></summary>
+
+```
+/-- The K odd-dimension store's IO signature. -/
+```
+```lean
+def rotaryK1IO (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat) :
+    GroupedMasked2DKernelIO :=
+  rotaryStoreIO (rotary_emb_k1_block K Cos Sin stride_kbs stride_kh stride_kd stride_cosbs stride_cosd
+      stride_sinbs stride_sind max_total_len HEAD_K BLOCK_HALF)
+    K Cos Sin stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+    stride_sind max_total_len HEAD_K BLOCK_HALF dimOdd
+```
+</details>
+
 <details><summary><code>rotaryStoreIO</code></summary>
 
 ```
@@ -307,6 +386,128 @@ def rotary_emb_q0_block
       cur_head_index * $(stride_qh) + dim0 * $(stride_qd),
     out0,
     mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_Q)))
+}
+```
+</details>
+
+<details><summary><code>rotary_emb_q1_block</code></summary>
+
+```
+/-- Proof-oriented Q-odd-dimension slice of `rotary_emb.py`'s `_rotary_kernel`.
+
+This models the second Q store for one sequence/head program tile:
+`out1 = q0 * sin0 + q1 * cos0`, written at the odd-dimension offset. -/
+```
+```lean
+def rotary_emb_q1_block
+    (Q Cos Sin : RegionName)
+    (stride_qbs stride_qh stride_qd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_Q BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  cur_head_index = tl.program_id(0)
+  cur_seq_index = tl.program_id(1)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  dim0 = dim * $(2)
+  dim1 = dim * $(2) + $(1)
+  q0 = tl.load(Q + cur_seq_index * $(stride_qbs) +
+      cur_head_index * $(stride_qh) + dim0 * $(stride_qd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_Q)),
+    other=0.0)
+  q1 = tl.load(Q + cur_seq_index * $(stride_qbs) +
+      cur_head_index * $(stride_qh) + dim1 * $(stride_qd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_Q)),
+    other=0.0)
+  cos0 = tl.load(Cos + cur_seq_index * $(stride_cosbs) +
+      dim0 * $(stride_cosd),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  sin0 = tl.load(Sin + cur_seq_index * $(stride_sinbs) +
+      dim0 * $(stride_sind),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  out1 = q0 * sin0 + q1 * cos0
+  tl.store(Q + cur_seq_index * $(stride_qbs) +
+      cur_head_index * $(stride_qh) + dim1 * $(stride_qd),
+    out1,
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_Q)))
+}
+```
+</details>
+
+<details><summary><code>rotary_emb_k0_block</code></summary>
+
+```
+/-- Proof-oriented K-even-dimension slice of `rotary_emb.py`'s `_rotary_kernel`.
+
+Mirrors the Q0 slice for the K buffer with `HEAD_K` head bound. -/
+```
+```lean
+def rotary_emb_k0_block
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  cur_head_index = tl.program_id(0)
+  cur_seq_index = tl.program_id(1)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  dim0 = dim * $(2)
+  dim1 = dim * $(2) + $(1)
+  k0 = tl.load(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim0 * $(stride_kd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)),
+    other=0.0)
+  k1 = tl.load(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim1 * $(stride_kd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)),
+    other=0.0)
+  cos0 = tl.load(Cos + cur_seq_index * $(stride_cosbs) +
+      dim0 * $(stride_cosd),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  sin0 = tl.load(Sin + cur_seq_index * $(stride_sinbs) +
+      dim0 * $(stride_sind),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  outK0 = k0 * cos0 - k1 * sin0
+  tl.store(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim0 * $(stride_kd),
+    outK0,
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)))
+}
+```
+</details>
+
+<details><summary><code>rotary_emb_k1_block</code></summary>
+
+```
+/-- Proof-oriented K-odd-dimension slice of `rotary_emb.py`'s `_rotary_kernel`. -/
+```
+```lean
+def rotary_emb_k1_block
+    (K Cos Sin : RegionName)
+    (stride_kbs stride_kh stride_kd stride_cosbs stride_cosd stride_sinbs
+      stride_sind max_total_len HEAD_K BLOCK_HALF : Nat) :
+    ComputeKernel := triton {
+  cur_head_index = tl.program_id(0)
+  cur_seq_index = tl.program_id(1)
+  dim = tl.arange(0, $(BLOCK_HALF))
+  dim0 = dim * $(2)
+  dim1 = dim * $(2) + $(1)
+  k0 = tl.load(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim0 * $(stride_kd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)),
+    other=0.0)
+  k1 = tl.load(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim1 * $(stride_kd),
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)),
+    other=0.0)
+  cos0 = tl.load(Cos + cur_seq_index * $(stride_cosbs) +
+      dim0 * $(stride_cosd),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  sin0 = tl.load(Sin + cur_seq_index * $(stride_sinbs) +
+      dim0 * $(stride_sind),
+    mask=cur_seq_index < $(max_total_len), other=0.0)
+  outK1 = k0 * sin0 + k1 * cos0
+  tl.store(K + cur_seq_index * $(stride_kbs) +
+      cur_head_index * $(stride_kh) + dim1 * $(stride_kd),
+    outK1,
+    mask=(cur_seq_index < $(max_total_len)) and (cur_head_index < $(HEAD_K)))
 }
 ```
 </details>

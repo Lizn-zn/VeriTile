@@ -4,6 +4,8 @@
 > 当前 `scripts/artifact-axiom-whitelist.txt` 仍列出
 > `VeriTile/Math/GeluTaylor20Cert.lean:geluError_mid_taylor20_approx`。
 > 判断具体结果时，应查看定理的传递公理依赖和 [信任审计](./TrustAudit_zh.md)。
+> 在多项式极值点计算余项，只是检查点数值证据：这些点不一定是余项的极值点。
+> 目前没有可核验的全区间余项证书，数值采样不能消除上述公理。
 
 目标:
 

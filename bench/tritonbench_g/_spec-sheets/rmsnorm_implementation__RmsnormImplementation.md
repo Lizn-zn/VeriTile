@@ -50,7 +50,6 @@ specification rmsnorm_implementation_output_summary
 - `hStrideOutKPos : 0 < stride_out_k`
 - `hXOutNe : x_ptr ≠ out_ptr`
 - `hWOutNe : rms_w_ptr ≠ out_ptr`
-- `fun _ : Fin N_SIZE => True`
 
 **Closed-form spec defs (transitive):** `rmsnorm_implementation`, `outColOffset`, `rmsnormWeightedYFullNSpec`, `rmsnormYFullNSpec`, `rmsInvVarFullN`, `rmsVarFullNCarrier`, `xColOffset`
 

@@ -708,11 +708,6 @@ specification mixed_sparse_attention_epilogue_io_correctness
       ⊨ fun _p₀ _p₁ _m xs ys idx => xs idx / ys (idx.1, PUnit.unit)
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        p₁ / H * stride_qz + p₁ % H * stride_qh +
-          (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_ok`
-
 **Closed-form spec defs (transitive):** `epilogueIO`, `mixed_sparse_attention_epilogue_slice`
 
 <details><summary><code>epilogueIO</code></summary>

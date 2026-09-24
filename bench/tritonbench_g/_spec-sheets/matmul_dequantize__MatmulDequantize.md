@@ -45,10 +45,6 @@ specification matmul_dequantize_matmul4_exec_genuine
                 idx.1.val idx.2.1.val
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN
-        (pidM s M N BM BN GM) (pidN s M N BM BN GM) i`
-
 **Closed-form spec defs (transitive):** `cAddr`, `pidM`, `pidN`, `matmul_dequantize_matmul4_surface`, `accSpec`, `firstPidM`, `groupSizeM`, `numPidInGroup`, `numPidK`, `accStep`, `groupId`, `numPidM`, `numPidN`, `aElem`, `bDequant`, `bNibble`, `scalesElem`, `groupRow`, `zeroScaled`, `bWord`, `zerosNibble`, `zerosWord`
 
 <details><summary><code>cAddr</code></summary>
@@ -461,8 +457,6 @@ specification matmul_dequantize_matmul_exec_genuine
 - `hK : K = BK * numKBlocks`
 - `hBK8 : BK % 8 = 0`
 - `hpid1 : s.pids 1 = 0`
-- `fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN
-        (pidM s M N BM BN GM) (pidN s M N BM BN GM) i`
 
 **Closed-form spec defs (transitive):** `cAddr`, `pidM`, `pidN`, `matmul_dequantize_matmul_surface`, `i4AccSpec`, `firstPidM`, `groupSizeM`, `numPidInGroup`, `i4AccStep`, `groupId`, `numPidM`, `numPidN`, `i4AElem`, `i4BDequant`, `i4BNibble`, `bzpNibble`, `bsElem`, `i4BWord`, `bzpWord`
 
@@ -797,10 +791,6 @@ specification matmul_dequantize_dequantize_exec_genuine
                 stride_bn stride_bsk stride_bsn stride_bzpk stride_bzpn
                 (s.pids 0 * BK + idx.1.val) (s.pids 1 * BN + idx.2.1.val)
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BK, BN] =>
-        fpbAddr stride_fpbk stride_fpbn BK BN (s.pids 0) (s.pids 1) idx`
 
 **Closed-form spec defs (transitive):** `fpbAddr`, `matmul_dequantize_dequantize_surface`, `dequantSpec`, `dqBNibble`, `dqZpNibble`, `dqScElem`, `dqBWord`, `dqZpWord`
 

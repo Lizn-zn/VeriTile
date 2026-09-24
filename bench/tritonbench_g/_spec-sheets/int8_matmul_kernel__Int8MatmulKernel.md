@@ -58,8 +58,6 @@ specification int8_matmul_kernel_exec_genuine
 
 **Assumptions / layout contracts:**
 - `hK : K = 4 * (BK * numKBlocks)`
-- `fun i : TileIndex [BM, BN] => imCAddr stride_cm stride_cn BM BN
-        (pidM s M N BM BN GM) (pidN s M N BM BN GM) i`
 
 **Closed-form spec defs (transitive):** `imCAddr`, `pidM`, `pidN`, `int8_matmul_kernel_surface`, `imSpec`, `firstPidM`, `numPidInGroup`, `groupSizeM`, `aElem`, `bBits`, `bWord`, `groupId`, `numPidN`, `numPidM`
 

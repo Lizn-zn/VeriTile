@@ -35,7 +35,15 @@ specification quantize_global_transpose_blocked_output_summary_general
       stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N
       GROUP_M).toAlgorithm? = Except.error err) ∧
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := quantize_global_transpose_scaled_store_slice A AbsmaxInv B
+        stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N scale127)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s M N BLOCK_M BLOCK_N)
+        (fun idx => (B, bOffset s stride_bm stride_bn BLOCK_M BLOCK_N idx)))
+      (expected := fun idx =>
+        quantTransposeScaledSpec s A AbsmaxInv stride_am stride_an
+          BLOCK_M BLOCK_N scale127 idx)
 ```
 
 **Assumptions / layout contracts:**
@@ -43,7 +51,7 @@ specification quantize_global_transpose_blocked_output_summary_general
       (fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
         bOffset s stride_bm stride_bn BLOCK_M BLOCK_N idx)`
 
-**Closed-form spec defs (transitive):** `bOffset`, `quantize_global_transpose_real_surface`, `rowIndex`, `colIndex`
+**Closed-form spec defs (transitive):** `bOffset`, `quantize_global_transpose_real_surface`, `quantize_global_transpose_scaled_store_slice`, `active`, `quantTransposeScaledSpec`, `rowIndex`, `colIndex`, `aOffset`
 
 <details><summary><code>bOffset</code></summary>
 
@@ -94,6 +102,63 @@ def quantize_global_transpose_real_surface
 ```
 </details>
 
+<details><summary><code>quantize_global_transpose_scaled_store_slice</code></summary>
+
+```
+/-- Proof-oriented scaled-store tile slice of `quant_transpose_kernel.py`'s
+`_quantize_global_transpose`.
+
+The full Triton kernel uses a one-dimensional grouped program-id schedule to
+derive `pid_m` and `pid_n`. This slice starts after that scheduling choice, uses
+program axes 0/1 for the tile coordinates, loads the `BLOCK_M × BLOCK_N` tile
+from `A`, applies the global `absmax_inv` scale, and proves the masked writeback
+into `B`. CUDA `llrint` and int8 casting are outside VeriTile's current real-tile
+arithmetic layer, matching the other quantization ports. -/
+```
+```lean
+def quantize_global_transpose_scaled_store_slice
+    (A AbsmaxInv B : RegionName)
+    (stride_am stride_an stride_bn stride_bm M N BLOCK_M BLOCK_N : Nat)
+    (scale127 : ℝ) :
+    ComputeKernel := triton {
+  pid_m = tl.program_id(0)
+  pid_n = tl.program_id(1)
+  rm = pid_m * $(BLOCK_M) + tl.arange(0, $(BLOCK_M))
+  rn = pid_n * $(BLOCK_N) + tl.arange(0, $(BLOCK_N))
+  mask = (rm[:, None] < $(M)) & (rn[None, :] < $(N))
+  a = tl.load(A + rm[:, None] * $(stride_am) + rn[None, :] * $(stride_an),
+    mask=mask)
+  absmax_inv = tl.load(AbsmaxInv)
+  output = $(scale127) * (a * absmax_inv)
+  tl.store(B + rm[:, None] * $(stride_bm) + rn[None, :] * $(stride_bn),
+    output, mask=mask)
+}
+```
+</details>
+
+<details><summary><code>active</code></summary>
+
+```lean
+def active
+    (s : BlockState) (M N BLOCK_M BLOCK_N : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : Prop :=
+  rowIndex s BLOCK_M idx.1 < M ∧ colIndex s BLOCK_N idx.2.1 < N
+```
+</details>
+
+<details><summary><code>quantTransposeScaledSpec</code></summary>
+
+```lean
+noncomputable def quantTransposeScaledSpec
+    (s : BlockState) (A AbsmaxInv : RegionName)
+    (stride_am stride_an BLOCK_M BLOCK_N : Nat) (scale127 : ℝ)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : ℝ :=
+  scale127 *
+    (s.readMem A (aOffset s stride_am stride_an BLOCK_M BLOCK_N idx) *
+      s.readMem AbsmaxInv 0)
+```
+</details>
+
 <details><summary><code>rowIndex</code></summary>
 
 ```lean
@@ -107,6 +172,16 @@ def rowIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
 ```lean
 def colIndex (s : BlockState) (BLOCK_N : Nat) (j : Fin BLOCK_N) : Nat :=
   s.pids 1 * BLOCK_N + j.val
+```
+</details>
+
+<details><summary><code>aOffset</code></summary>
+
+```lean
+def aOffset
+    (s : BlockState) (stride_am stride_an BLOCK_M BLOCK_N : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_N]) : Nat :=
+  rowIndex s BLOCK_M idx.1 * stride_am + colIndex s BLOCK_N idx.2.1 * stride_an
 ```
 </details>
 
@@ -155,9 +230,6 @@ specification quant_transpose_scaled_store_io_correctness
 **Assumptions / layout contracts:**
 - `hM : 0 < BLOCK_M`
 - `hN : 0 < BLOCK_N`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_N] =>
-        (p₀ * BLOCK_M + idx.1.val) * stride_bm
-          + (p₁ * BLOCK_N + idx.2.1.val) * stride_bn`
 
 **Closed-form spec defs (transitive):** `quantTransposeScaledIO`, `quantize_global_transpose_scaled_store_slice`
 

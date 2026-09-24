@@ -62,12 +62,7 @@ specification attention_llama_fwd_closed_form_correct
 - `hBN : 0 < BLOCK_N`
 - `hSEQ : N_CTX = BLOCK_N * numKVBlocks`
 - `hnum : 0 < numKVBlocks`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        (s.pids 0 * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_on`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => alActive s H BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          (Out, alOutOffset s N_HEAD stride_oz stride_oh stride_om stride_on BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `attention_llama_fwd_surface`, `alActive`, `alOutOffset`, `alQTileG`, `alKTileG`, `alVTileG`, `alRow`, `alBase`
 
@@ -311,12 +306,7 @@ specification attention_llama_fwd_causal_closed_form_correct
 - `hspanEq : (s.pids 0 + 1) * BLOCK_N + start_position = BLOCK_N * numCausalBlocks`
 - `hspanle : BLOCK_N * numCausalBlocks ≤ N_CTX`
 - `hsp : start_position ≤ s.pids 0 * BLOCK_M`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-        (s.pids 0 * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val * stride_on`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => alActive s H BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          (Out, alOutOffset s N_HEAD stride_oz stride_oh stride_om stride_on BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `attention_llama_fwd_causal_surface`, `alActive`, `alOutOffset`, `alQTileG`, `alKTileG`, `alVTileG`, `alRow`, `alBase`
 

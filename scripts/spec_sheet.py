@@ -83,14 +83,64 @@ def trim_decl(t):
 
 
 def split_statement(decl_text):
-    """For a theorem, split into (signature_up_to_first_:=, proof)."""
-    # find ':=' that begins the proof (top-level). Heuristic: first ' := ' or
-    # ':= by' at the top — adequate for these files.
-    m = re.search(r":=\s*by\b", decl_text)
-    if not m:
-        m = re.search(r"\n\s*:=", decl_text) or re.search(r":=", decl_text)
-    if m:
-        return decl_text[:m.start()].rstrip(), decl_text[m.start():]
+    """Split at the declaration's assignment, not a named argument/default.
+
+    This is source presentation, never theorem discovery for a proof gate.
+    In particular, a term proof can have `(kernel := ...)` in its type.
+    """
+    depth = comment = 0
+    pending_lets = []
+    i = 0
+    while i < len(decl_text):
+        pair = decl_text[i:i + 2]
+        if comment:
+            if pair == '/-':
+                comment += 1
+                i += 2
+            elif pair == '-/':
+                comment -= 1
+                i += 2
+            else:
+                i += 1
+            continue
+        if pair == '/-':
+            comment = 1
+            i += 2
+            continue
+        if pair == '--':
+            end = decl_text.find('\n', i)
+            i = len(decl_text) if end < 0 else end + 1
+            continue
+        if decl_text[i] in ('"', '«'):
+            closing = '»' if decl_text[i] == '«' else '"'
+            i += 1
+            while i < len(decl_text):
+                if closing == '"' and decl_text[i] == '\\':
+                    i += 2
+                elif decl_text[i] == closing:
+                    i += 1
+                    break
+                else:
+                    i += 1
+            continue
+        word = re.match(r"[A-Za-z_][A-Za-z0-9_']*", decl_text[i:])
+        if word:
+            if word[0] == 'let':
+                pending_lets.append(depth)
+            elif word[0] == 'where' and depth == 0:
+                return decl_text[:i].rstrip(), decl_text[i:]
+            i += len(word[0])
+            continue
+        if pair == ':=':
+            if pending_lets and pending_lets[-1] == depth:
+                pending_lets.pop()
+            elif depth == 0:
+                return decl_text[:i].rstrip(), decl_text[i:]
+        if decl_text[i] in '([{':
+            depth += 1
+        elif decl_text[i] in ')]}':
+            depth -= 1
+        i += 1
     return decl_text.rstrip(), ""
 
 
@@ -117,10 +167,9 @@ def body_of(decl):
     """Return the def's value (after :=) or theorem statement for closure scan.
     Comments stripped so trailing docstrings of the *next* decl can't leak
     identifiers/self-ref tokens into this decl's scan span."""
-    if decl["kind"] in ("def", "abbrev", "instance"):
-        # value is after the first := (skip proof heuristic; defs use term :=)
-        m = re.search(r":=", decl["text"])
-        raw = decl["text"][m.end():] if m else decl["text"]
+    if decl["kind"] in ("def", "abbrev", "instance", "denotation"):
+        _, value = split_statement(decl["text"])
+        raw = value.removeprefix('where').removeprefix(':=') if value else decl["text"]
         return strip_comments(raw)
     sig, _ = split_statement(decl["text"])
     return strip_comments(sig)  # theorems: scan the statement only
@@ -247,6 +296,10 @@ def hypotheses(sig):
     # not mistaken for `name : type` binders.
     for m in re.finditer(r"\(([^():]+):(?!=)\s*([^()]*(?:\([^()]*\)[^()]*)*)\)", sig):
         names, ty = m.group(1).strip(), m.group(2).strip()
+        if (not re.fullmatch(r"[^\W\d][\w']*(?:\s+[^\W\d][\w']*)*", names)
+                or any(n in {'fun', 'let', 'match', 'if'} for n in names.split())
+                or ':=' in ty):
+            continue
         if any(s in ty for s in ("=", "≠", "<", "≤", "∣", "∈", "Prop", "→")) \
            or all(n.startswith("h") for n in names.split()):
             hyps.append(f"{names} : {ty}")
@@ -260,7 +313,8 @@ def py_source(file_path):
 
 
 def make_sheet(file_path, manifest):
-    text = open(file_path, encoding="utf-8").read()
+    with open(file_path, encoding="utf-8") as source:
+        text = source.read()
     decls = split_decls(text)
     defmap = {d["name"]: d for d in decls if d["kind"] in ("def", "abbrev", "instance")}
     mdecls = manifest.get(os.path.abspath(file_path), [])
@@ -273,7 +327,8 @@ def make_sheet(file_path, manifest):
         out.append("")
     if not headline:
         out.append("> ⚠ no `*summary*` theorem found — public spec not located.")
-        return "\n".join(out), {"file": rel, "headline": 0, "selfref": [], "defs": 0}
+        return "\n".join(out), {"file": rel, "headline": 0, "selfref": [], "defs": 0,
+                                "flat_reads": 0, "stmt_lines": 0, "hyps": 0, "score": 0}
 
     all_selfref, all_defs = set(), set()
     for thm in headline:

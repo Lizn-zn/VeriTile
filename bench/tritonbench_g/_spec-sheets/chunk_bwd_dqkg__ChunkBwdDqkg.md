@@ -50,20 +50,6 @@ specification chunk_bwd_dqkg_exec_genuine
 - `hDkDg : dk ≠ dg`
 - `hInj : Function.Injective
       (fun i : TileIndex [BT, BK] => cbdQkAddr s s_k_h s_k_t BT BK i)`
-- `∀ i : TileIndex [BT, BK],
-          (s.pids 1 * BT + i.1.val < T ∧ s.pids 0 * BK + i.2.1.val < K) →
-          sF.readMem dq (cbdQkAddr s s_k_h s_k_t BT BK i)
-            = dqSpec s g k v h do_ s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
-                T K V BT BK BV NT i.1.val i.2.1.val`
-- `∀ i : TileIndex [BT, BK],
-          (s.pids 1 * BT + i.1.val < T ∧ s.pids 0 * BK + i.2.1.val < K) →
-          sF.readMem dk (cbdQkAddr s s_k_h s_k_t BT BK i)
-            = dkSpec s g q v do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
-                T K V BT BK BV NT i.1.val i.2.1.val`
-- `∀ i : TileIndex [BT], s.pids 1 * BT + i.1.val < T →
-          sF.readMem dg (cbdDgAddr s T BT i)
-            = dgSpec s g q k v h do_ dh s_k_h s_k_t s_v_h s_v_t s_h_h s_h_t scale
-                T K V BT BK BV NT i.1.val`
 
 **Closed-form spec defs (transitive):** `cbdQkAddr`, `chunk_bwd_dqkg_surface`, `dqSpec`, `dkSpec`, `cbdDgAddr`, `dgSpec`, `dqGated`, `dsMasked`, `qkElem`, `dkGated`, `dgLastFinal`, `dqAcc`, `gElem`, `dsAcc`, `dkAcc`, `gLastElem`, `dgLastAcc`, `voElem`, `hElem`
 

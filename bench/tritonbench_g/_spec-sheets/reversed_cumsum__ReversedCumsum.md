@@ -45,9 +45,6 @@ specification reversed_cumsum_output_summary_general
       ∀ k : TileIndex [BT, BS], singleBlockActive s T S BS k →
         singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
           singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx`
-- `fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx`
-- `fun idx : TileIndex [BT, BS] =>
-          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)`
 
 **Closed-form spec defs (transitive):** `singleBlockActive`, `singleBlockTileOffset`, `reversed_cumsum_surface`, `reversed_cumsum_single_block_surface`, `reversedCumsumClosed`, `sIndex`
 
@@ -204,11 +201,6 @@ specification reversed_cumsum_block_store_io_correctness (BC Z : RegionName)
       ⊨ fun _p₀ _p₁ xs idx => xs idx
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BT, BS] =>
-        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
-          + (p₀ * BS + idx.2.1.val) * s_s_d`
-
 **Closed-form spec defs (transitive):** `blockStoreIO`, `reversed_cumsum_store_slice`
 
 <details><summary><code>blockStoreIO</code></summary>
@@ -290,11 +282,6 @@ specification reversed_cumsum_block_store_io_correctnessR (R : RoundingModel)
     blockStoreIO BC Z s_s_h s_s_t s_s_d T S BT BS
       ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BT, BS] =>
-        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
-          + (p₀ * BS + idx.2.1.val) * s_s_d`
 
 **Closed-form spec defs (transitive):** `blockStoreIO`, `reversed_cumsum_store_slice`
 

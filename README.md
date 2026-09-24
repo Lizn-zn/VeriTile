@@ -39,7 +39,8 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   [`bench/examples/FusedSwigluEquiv.lean`](./bench/examples/FusedSwigluEquiv.lean).
 - **Examples**: 173 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
-  see [`bench/tritonbench_g/`](./bench/tritonbench_g/)) plus FlashAttention-1
+  see the [per-theorem coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)
+  for configured models, slices, and remaining gaps) plus FlashAttention-1
   forward, online softmax, Welford, LayerNorm, log-sum-exp.
 - **CI gates**: `.github/workflows/bench-audit.yml` runs
   `bench/audit_tritonbench_g.sh` — per-port elaboration

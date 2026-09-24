@@ -255,22 +255,6 @@ specification fused_recurrent_delta_output_summary_general
       s.readMem HOut (stateOffset s K V BK BV idx)
         = deltaState s k v beta h0 IS_HEADWISE_BETA USE_INITIAL_STATE
             s_qk_h s_vo_h T K V BK BV (m + 1) idx`
-- `fun jv : Fin BV => activeV s V BV jv`
-- `fun idx : TileIndex [BV, BK] => activeKV s K V BK BV idx`
-- `fun jv : Fin BV => activeV s V BV jv`
-- `fun jk : Fin BK => activeK s K BK jk`
-- `fun jv : Fin BV => activeV s V BV jv`
-- `fun jv : Fin BV => activeV s V BV jv`
-- `∀ jk : Fin BK,
-        s.readMem dk (dkRowOffset s m s_qk_h B H K BK jk)
-          = dkStepSpec s DHPrev q do_ v beta IS_HEADWISE_BETA
-              m s_qk_h s_vo_h T K V BK BV scale jk`
-- `∀ jv : Fin BV,
-        s.readMem dv (outOffset s m s_vo_h B H V BV jv)
-          = dvStepSpec s DHPrev q do_ k beta IS_HEADWISE_BETA
-              m s_qk_h s_vo_h T K V BK BV scale jv`
-- `fun jk : Fin BK => activeK s K BK jk`
-- `fun jk : Fin BK => activeK s K BK jk`
 
 **Closed-form spec defs (transitive):** `stateOffset`, `deltaState`, `fused_recurrent_delta_fwd_surface`, `fused_recurrent_delta_bwd_surface`, `fused_recurrent_delta_vnew_step_slice`, `activeV`, `vRowOffset`, `vNewClosed`, `fused_recurrent_delta_state_step_slice_headwise`, `fused_recurrent_delta_state_step_slice_scalarbeta`, `activeKV`, `fused_recurrent_delta_output_step_slice`, `outOffset`, `outputClosed`, `fused_recurrent_delta_bwd_dk_step_slice_headwise`, `fused_recurrent_delta_bwd_dk_step_slice_scalarbeta`, `activeK`, `dkRowOffset`, `dkStepSpec`, `fused_recurrent_delta_bwd_dv_step_slice_headwise`, `fused_recurrent_delta_bwd_dv_step_slice_scalarbeta`, `dvStepSpec`, `fused_recurrent_delta_bwd_dbeta_step_slice_headwise`, `dbetaRowOffset`, `dbetaStepSpec`, `fused_recurrent_delta_bwd_dbeta_step_slice_scalarbeta`, `dbetaScalarOffset`, `dbetaScalarStepSpec`, `fused_recurrent_delta_bwd_dk_correction_step_slice`, `dkCorrClosed`, `fused_recurrent_delta_bwd_dq_step_slice_headwise`, `fused_recurrent_delta_bwd_dq_step_slice_scalarbeta`, `dqStepSpec`, `kIndex`, `vIndex`, `stateSeed`, `kVal`, `betaVal`, `vVal`, `vMinusClosed`, `qVal`, `dhOffset`, `h0Val`
 
@@ -1433,10 +1417,6 @@ specification fused_recurrent_delta_output_step_io_correctness
               xs (jv.1, jk, PUnit.unit) * ys (jk, PUnit.unit)
             else 0
 ```
-
-**Assumptions / layout contracts:**
-- `fun jv : Fin BV =>
-        (p₂ + p₁ * B * H) * s_vo_h + p₀ * BV + jv.val + t * V`
 
 **Closed-form spec defs (transitive):** `outputStepIO`, `fused_recurrent_delta_output_step_slice`
 

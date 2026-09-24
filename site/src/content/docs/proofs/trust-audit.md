@@ -118,3 +118,16 @@ check: it builds every module under `VeriTile/` and enumerates actual axiom
 declarations from Lean's environment, including private and macro-generated
 declarations. Comments, strings, and source formatting do not affect discovery.
 A whitelisted axiom is not thereby allowed in a theorem checked by `#axiomsClean`.
+
+### GeLU remainder evidence
+
+`VeriTile.Math.geluError_mid_taylor20_approx` remains a whitelisted assumption
+about the Taylor-20 approximation residual on `[0.83, 3.8]`. The polynomial
+bound is proved in Lean; that proof does not establish the separate residual
+bound. Numerical samples are checkpoint evidence only. In particular, extrema
+of the polynomial need not be extrema of the residual, so checking those
+points cannot certify the whole interval. No checked interval certificate for
+this residual is included in the artifact. A theorem that depends on this
+assumption must disclose it and cannot pass the standard-base `#axiomsClean`
+gate. The [research note](/VeriTile/proofs/approx-gelu-phi-strategy/) describes possible ways
+to remove the assumption.

@@ -27,7 +27,15 @@ specification chunk_cumsum_vector_output_summary_general
         singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
           singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx) :
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := chunk_cumsum_vector_single_block_surface SReg Z s_s_h s_s_t
+        s_s_d T S BT BS)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BT, BS] => singleBlockActive s T S BS idx)
+        (fun idx : TileIndex [BT, BS] =>
+          (Z, singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx)))
+      (expected := fun idx : TileIndex [BT, BS] =>
+        singleBlockCumsumVectorClosed s SReg s_s_h s_s_t s_s_d T S BS idx)
 ```
 
 **Assumptions / layout contracts:**
@@ -36,7 +44,7 @@ specification chunk_cumsum_vector_output_summary_general
         singleBlockTileOffset s s_s_h s_s_t s_s_d BS k =
           singleBlockTileOffset s s_s_h s_s_t s_s_d BS idx → k = idx`
 
-**Closed-form spec defs (transitive):** `singleBlockActive`, `singleBlockTileOffset`, `sIndex`
+**Closed-form spec defs (transitive):** `singleBlockActive`, `singleBlockTileOffset`, `chunk_cumsum_vector_single_block_surface`, `singleBlockCumsumVectorClosed`, `sIndex`
 
 <details><summary><code>singleBlockActive</code></summary>
 
@@ -53,6 +61,56 @@ def singleBlockActive (s : BlockState) (T S BS : Nat)
 def singleBlockTileOffset (s : BlockState) (s_s_h s_s_t s_s_d BS : Nat)
     (idx : TileIndex [BT, BS]) : Nat :=
   s.pids 1 * s_s_h + idx.1.val * s_s_t + sIndex s BS idx.2.1 * s_s_d
+```
+</details>
+
+<details><summary><code>chunk_cumsum_vector_single_block_surface</code></summary>
+
+```
+/-- Single-iteration surface for Python cases where `T <= BT`.
+
+The checked cases are covered by the autotuned `BT = 16` configuration. In this
+path the loop executes once, `b_z` is the initial zero vector, and the observable
+output is the block-pointer load followed by the lower-triangular dot and
+boundary-checked block-pointer store. -/
+```
+```lean
+def chunk_cumsum_vector_single_block_surface
+    (S Z : RegionName) (s_s_h s_s_t s_s_d T SSize BT BS : Nat) :
+    ComputeKernel := triton {
+  i_s = tl.program_id(0)
+  i_bh = tl.program_id(1)
+  o_i = tl.arange(0, $(BT))
+  m_s = tl.where(o_i[:, None] >= o_i[None, :], 1.0, 0.0)
+  p_s = tl.make_block_ptr(base=S + i_bh * $(s_s_h), shape=($(T), $(SSize)),
+    strides=($(s_s_t), $(s_s_d)), offsets=($(0), i_s * $(BS)),
+    block_shape=($(BT), $(BS)), order=(1, 0))
+  p_z = tl.make_block_ptr(base=Z + i_bh * $(s_s_h), shape=($(T), $(SSize)),
+    strides=($(s_s_t), $(s_s_d)), offsets=($(0), i_s * $(BS)),
+    block_shape=($(BT), $(BS)), order=(1, 0))
+  b_s = tl.load(p_s, boundary_check=([0, 1] : List Nat)).to(tl.float32)
+  b_c = tl.dot(m_s, b_s, allow_tf32=false)
+  tl.store(p_z, (b_c).to(p_z.dtype.element_ty), boundary_check=([0, 1] : List Nat))
+}
+```
+</details>
+
+<details><summary><code>singleBlockCumsumVectorClosed</code></summary>
+
+```
+/-- Genuine closed form for the single-Python-chunk path (`i_t = 0`, carry `= 0`):
+for each feature column `j`, the prefix sum of all source entries up to and
+including flat index `i`. -/
+```
+```lean
+noncomputable def singleBlockCumsumVectorClosed
+    (s : BlockState) (SReg : RegionName) (s_s_h s_s_t s_s_d T S BS : Nat)
+    (idx : TileIndex [BT, BS]) : ℝ :=
+  if sIndex s BS idx.2.1 < S then
+    ∑ flat ∈ (Finset.range T).filter (fun flat => flat ≤ idx.1.val),
+      s.readMem SReg (s.pids 1 * s_s_h + flat * s_s_t +
+        sIndex s BS idx.2.1 * s_s_d)
+  else 0
 ```
 </details>
 
@@ -93,11 +151,6 @@ specification chunk_cumsum_vector_block_store_io_correctness (BC Z : RegionName)
     blockStoreIO BC Z s_s_h s_s_t s_s_d T S BT BS
       ⊨ fun _p₀ _p₁ xs idx => xs idx
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BT, BS] =>
-        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
-          + (p₀ * BS + idx.2.1.val) * s_s_d`
 
 **Closed-form spec defs (transitive):** `blockStoreIO`, `chunk_cumsum_vector_store_slice`
 
@@ -180,11 +233,6 @@ specification chunk_cumsum_vector_block_store_io_correctnessR (R : RoundingModel
     blockStoreIO BC Z s_s_h s_s_t s_s_d T S BT BS
       ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BT, BS] =>
-        p₁ * s_s_h + (p₂ * BT + idx.1.val) * s_s_t
-          + (p₀ * BS + idx.2.1.val) * s_s_d`
 
 **Closed-form spec defs (transitive):** `blockStoreIO`, `chunk_cumsum_vector_store_slice`
 

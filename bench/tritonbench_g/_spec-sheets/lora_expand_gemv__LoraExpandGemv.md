@@ -27,7 +27,16 @@ specification gemv_full_output_summary
         split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
         cm_stride cn_stride BLOCK_N BLOCK_K).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := bgmv_loop_surface input_ptr lora_ptr out_ptr lora_indices K
+        split_n_length xm_stride xk_stride l0_stride lora_k_stride lora_n_stride
+        cm_stride cn_stride BLOCK_N BLOCK_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun _ : Fin split_n_length => True)
+        (fun m => (out_ptr, outOffG s split_n_length cm_stride cn_stride m.val)))
+      (expected := fun m : Fin split_n_length =>
+        gemvSpec s input_ptr lora_ptr lora_indices K split_n_length
+          xm_stride xk_stride l0_stride lora_k_stride lora_n_stride m.val)
 ```
 
 **Assumptions / layout contracts:**
@@ -37,7 +46,7 @@ specification gemv_full_output_summary
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `hcn : 0 < cn_stride`
 
-**Closed-form spec defs (transitive):** `bgmv_loop_surface`
+**Closed-form spec defs (transitive):** `bgmv_loop_surface`, `outOffG`, `gemvSpec`, `aElem`, `bElem`, `loraIdx`
 
 <details><summary><code>bgmv_loop_surface</code></summary>
 
@@ -76,6 +85,74 @@ def bgmv_loop_surface
       mask=current_n < $(split_n_length))
   }
 }
+```
+</details>
+
+<details><summary><code>outOffG</code></summary>
+
+```
+/-- Global output offset for lane `m`: `cur_batch·cm + pid_sn·snl + m·cn`. -/
+```
+```lean
+def outOffG (s : BlockState) (split_n_length cm_stride cn_stride : Nat)
+    (m : Nat) : Nat :=
+  s.pids 1 * cm_stride + s.pids 0 * split_n_length + m * cn_stride
+```
+</details>
+
+<details><summary><code>gemvSpec</code></summary>
+
+```
+/-- **Genuine GEMV spec**: output lane `m` equals `Σ_{k<K} x[k]·W[m,k]`. -/
+```
+```lean
+noncomputable def gemvSpec (s : BlockState) (input_ptr lora_ptr : RegionName)
+    (lora_indices : Region .nat)
+    (K split_n_length xm_stride xk_stride l0_stride lora_k_stride
+      lora_n_stride : Nat) (m : Nat) : ℝ :=
+  gemmSum (fun k => aElem s input_ptr xm_stride xk_stride k)
+    (fun k => bElem s lora_ptr lora_indices split_n_length l0_stride lora_k_stride
+      lora_n_stride m k) K
+```
+</details>
+
+<details><summary><code>aElem</code></summary>
+
+```
+/-- The input vector element `x[k] = input[cur_batch·xm + k·xk]`. -/
+```
+```lean
+noncomputable def aElem (s : BlockState) (input_ptr : RegionName)
+    (xm_stride xk_stride : Nat) (k : Nat) : ℝ :=
+  s.readMem input_ptr (s.pids 1 * xm_stride + k * xk_stride)
+```
+</details>
+
+<details><summary><code>bElem</code></summary>
+
+```
+/-- The LoRA-B element `W[m,k] = lora[l0·idx + pid_sn·snl·lk + m·lk + k·ln]`. -/
+```
+```lean
+noncomputable def bElem (s : BlockState) (lora_ptr : RegionName)
+    (lora_indices : Region .nat)
+    (split_n_length l0_stride lora_k_stride lora_n_stride : Nat)
+    (m k : Nat) : ℝ :=
+  s.readMem lora_ptr
+    (l0_stride * loraIdx s lora_indices +
+      s.pids 0 * split_n_length * lora_k_stride +
+      m * lora_k_stride + k * lora_n_stride)
+```
+</details>
+
+<details><summary><code>loraIdx</code></summary>
+
+```
+/-- The selected LoRA index (`lora_indices[cur_batch]`). -/
+```
+```lean
+def loraIdx (s : BlockState) (lora_indices : Region .nat) : Nat :=
+  s.readMemValue .nat lora_indices (s.pids 1)
 ```
 </details>
 

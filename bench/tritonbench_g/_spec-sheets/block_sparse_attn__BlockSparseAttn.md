@@ -131,14 +131,6 @@ specification block_sparse_attn_output_closed_form_summary_general
 - `hVis0 : ∀ idx : TileIndex [BLOCK_M, BLOCK_D], active s total_seq_len BLOCK_M idx →
       selKeyGlobal s C (s.pids 1 % num_heads % num_layout) num_heads start_l BLOCK_N 0
         ≤ s.pids 0 * BLOCK_M + idx.1.val`
-- `fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
-            qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val`
-- `fun jx : TileIndex [BLOCK_M, 2 * BLOCK_D] =>
-              qTileBSA s Q num_heads sqb sqh sqm BLOCK_M jx.1 jx.2.1.val`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_D] => active s total_seq_len BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out, outOffset s num_heads sob soh som BLOCK_M idx)`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_D] => active s total_seq_len BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_D] => (Out, out2Offset s num_heads sob soh som BLOCK_M BLOCK_D idx)`
 
 **Closed-form spec defs (transitive):** `outOffset`, `out2Offset`, `active`, `selKeyGlobal`, `bsaInvariantG`, `qTileBSA`, `kRowBSA`, `vRowBSA`, `bsaLoopBodyG`, `block_sparse_attention_kernel`, `blockSparseAttnClosedForm`, `offB`, `offH`, `mIndex`, `dIndex`, `bsaMPartial`, `bsaLPartial`, `bsaOPartial`, `qBase`, `kvBase`, `rawScoreBSA`, `maskedScore`, `offHkv`, `gScore`, `headGroups`
 
@@ -921,14 +913,6 @@ specification block_sparse_attn_output_stores_io_correctness
       ⊨ fun _p₀ _p₁ xs idx => xs idx)
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
-          + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
-          + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val`
-
 **Closed-form spec defs (transitive):** `out_storeIO`, `out2_storeIO`, `block_sparse_attn_output_store_slice`, `block_sparse_attn_output_store_second_slice`
 
 <details><summary><code>out_storeIO</code></summary>
@@ -1089,14 +1073,6 @@ specification block_sparse_attn_output_stores_io_correctnessR (R : RoundingModel
       stride_acc_m stride_acc_d stride_ob stride_oh stride_om BLOCK_M BLOCK_D
       ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx)
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
-          + (p₀ * BLOCK_M + idx.1.val) * stride_om + idx.2.1.val`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_D] =>
-        p₁ / num_heads * stride_ob + p₁ % num_heads * stride_oh
-          + (p₀ * BLOCK_M + idx.1.val) * stride_om + BLOCK_D + idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `out_storeIO`, `out2_storeIO`, `block_sparse_attn_output_store_slice`, `block_sparse_attn_output_store_second_slice`
 

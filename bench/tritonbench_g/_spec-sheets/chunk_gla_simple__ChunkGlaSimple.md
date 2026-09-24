@@ -55,7 +55,6 @@ specification chunk_gla_simple_output_summary_general
 - `hundef : ∀ rg off, s.undef rg off = 0`
 - `hInj : Function.Injective
       (fun idx : TileIndex [BT, BV] => outOffset s s_v_h s_v_t BT BV idx)`
-- `fun idx : TileIndex [BT, BV] => active s T V BT BV idx`
 
 **Closed-form spec defs (transitive):** `outOffset`, `chunk_gla_simple_fwd_surface`, `active`, `glaOutput`, `tIndex`, `vIndex`, `interTerm`, `scoreTerm`, `vElem`, `qElem`, `hElem`, `gElem`, `kElem`
 
@@ -341,8 +340,6 @@ specification chunk_gla_simple_io_correctness (R : RoundingModel)
 - `hKBK : K = BK`
 - `hBK : 0 < BK`
 - `hBT : 0 < BT`
-- `fun idx : TileIndex [BT, BV] =>
-        p₂ * s_v_h + (p₁ * BT + idx.1.val) * s_v_t + (p₀ * BV + idx.2.1.val) * 1`
 
 **Closed-form spec defs (transitive):** `chunkGlaSimpleIO`, `chunkGlaSimpleIOOutSpec`, `chunk_gla_simple_fwd_surface`, `cgsIOqT`, `cgsIOhT`, `cgsIOgT`, `cgsIOScoreTerm`, `cgsIOvT`, `cgsIOkT`
 

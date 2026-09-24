@@ -41,8 +41,6 @@ specification token_softmax_llama_correctness
 
 **Assumptions / layout contracts:**
 - `hB : 0 < BLOCK_SIZE`
-- `fun i : Fin BLOCK_SIZE =>
-        pid₁ * stride_prob_h + (m₁ + i.val) * stride_prob_bs`
 
 **Closed-form spec defs (transitive):** `tokenSoftmaxLlamaIO`, `tokenSoftmaxRowSpec`, `token_softmax_surface`, `tokenSoftmaxRowTile`
 

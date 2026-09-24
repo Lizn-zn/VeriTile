@@ -11,6 +11,9 @@ on:
       - 'lake-manifest.json'
       - 'VeriTile/**'
       - 'bench/tritonbench_g/**'
+      - 'bench/coverage_review.py'
+      - 'bench/check_proof_gap_manifest.py'
+      - 'scripts/spec_sheet.py'
       - 'bench/examples/**'
       - '.github/workflows/site.yml'
   pull_request:
@@ -23,6 +26,9 @@ on:
       - 'lake-manifest.json'
       - 'VeriTile/**'
       - 'bench/tritonbench_g/**'
+      - 'bench/coverage_review.py'
+      - 'bench/check_proof_gap_manifest.py'
+      - 'scripts/spec_sheet.py'
       - 'bench/examples/**'
       - '.github/workflows/site.yml'
   workflow_dispatch:
@@ -61,6 +67,9 @@ jobs:
 
       - name: Check documentation copies
         run: python3 scripts/sync-docs.py --check
+
+      - name: Check coverage review regressions
+        run: python3 -m unittest discover -s ../scripts -p 'test_coverage_review.py'
 
       - name: Check recorded proof freshness
         run: python3 scripts/record-home-demo.py --check

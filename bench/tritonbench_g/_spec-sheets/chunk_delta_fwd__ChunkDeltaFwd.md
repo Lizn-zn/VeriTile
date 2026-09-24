@@ -118,20 +118,6 @@ specification chunk_delta_fwd_exec_genuine
       (fun idx : TileIndex [BK, BV] => hOffset s i_t.val s_h_h s_h_t K V BK BV idx)`
 - `hInjF : Function.Injective
       (fun idx : TileIndex [BK, BV] => finalStateOffset s K V BK BV idx)`
-- `∀ j : Fin NT, ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
-          sF.readMem h (hOffset s j.val s_h_h s_h_t K V BK BV idx)
-            = hValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-                K V BT BV BK USE_INITIAL_STATE j.val idx`
-- `∀ j : Fin NT, ∀ idx : TileIndex [BC, BV],
-          vNewActive s j.val 0 T V BT BC BV idx →
-          sF.readMem v_new (cdfVNewAddr s s_vo_h s_vo_t s_vo_d BT BC BV j.val idx)
-            = vNewSpec s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-                K V BT BV BK BC USE_INITIAL_STATE j.val idx`
-- `STORE_FINAL_STATE = Bool.true →
-          ∀ idx : TileIndex [BK, BV], active s K V BK BV idx →
-            sF.readMem final_state (finalStateOffset s K V BK BV idx)
-              = finalValue s k v d initial_state s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-                  K V BT BV BK USE_INITIAL_STATE NT idx`
 
 **Closed-form spec defs (transitive):** `cdfVNewAddr`, `hOffset`, `finalStateOffset`, `chunk_delta_rule_fwd_h_surface`, `active`, `hValue`, `vNewActive`, `vNewSpec`, `finalValue`, `kIndex`, `vIndex`, `stateValue`, `cIndex`, `vNewValue`, `initElem`, `kElem`, `vElem`, `dElem`
 
@@ -483,11 +469,6 @@ specification chunk_delta_h_state_store_io_correctness
       ⊨ fun _p₀ _p₁ xs idx => xs idx
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BK, BV] =>
-        p₂ * s_h_h + i_t * K * V + (p₀ * BK + idx.1.val) * s_h_t
-          + (p₁ * BV + idx.2.1.val)`
-
 **Closed-form spec defs (transitive):** `h_stateIO`, `chunk_delta_h_state_store_slice`
 
 <details><summary><code>h_stateIO</code></summary>
@@ -568,11 +549,6 @@ specification chunk_delta_h_state_store_io_correctnessR
     h_stateIO HPre h i_t s_h_h s_h_t K V BK BV
       ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BK, BV] =>
-        p₂ * s_h_h + i_t * K * V + (p₀ * BK + idx.1.val) * s_h_t
-          + (p₁ * BV + idx.2.1.val)`
 
 **Closed-form spec defs (transitive):** `h_stateIO`, `chunk_delta_h_state_store_slice`
 

@@ -48,12 +48,6 @@ specification bmm_o_exec_genuine
 - `hTN : TILE_N ≤ N`
 - `hTK : 0 < TILE_K`
 - `hundef : ∀ rg off, s.undef rg off = 0`
-- `∀ idx : TileIndex [TILE_M, TILE_N],
-          bmmOActive s M N TILE_M TILE_N GROUP_M idx →
-          sF.readMem O (bmmOOffset s M N TILE_M TILE_N GROUP_M idx)
-            = bmmOOut s A B M N K
-                (bmmRowG s TILE_M GROUP_M idx.1.val)
-                (bmmColG s TILE_N GROUP_M idx.2.1.val)`
 
 **Closed-form spec defs (transitive):** `bmm_surface`, `bmmOActive`, `bmmOOffset`, `bmmOOut`, `bmmRowG`, `bmmColG`, `bmmAVal`, `bmmBVal`, `bmmPidM`, `bmmPidN`, `bmmGroupSize`
 

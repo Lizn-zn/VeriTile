@@ -25,7 +25,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
     </div>
     <div class="source-caption">
       <p>{copy.languageNote}</p>
-      <div class="source-links"><a href={source('bench/examples/VectorAdd.lean')}>Example source ↗</a><a href={`${docsBase}/architecture/triton-subset/`}>{copy.languageLink} →</a></div>
+      <div class="source-links"><a href={source('bench/examples/VectorAdd.lean')}>Example source ↗</a><a href={`${docsBase}/cookbook/vector-add-walkthrough/`}>Complete VectorAdd tutorial →</a><a href={`${docsBase}/architecture/triton-subset/`}>{copy.languageLink} →</a></div>
     </div>
   </section>
 
@@ -112,6 +112,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
         <p class="statement-count"><strong>{proofInventory.statements}</strong> {copy.statements}</p>
         <p>{copy.corpusText}</p>
         <a href={source('bench/tritonbench_g/completion_audit.md')}>{copy.auditLink} ↗</a>
+        <a href={`${docsBase}/proofs/coverage/`}>Browse theorem coverage →</a>
         <a href={`${docsBase}/status/`}>{copy.coverageLink} →</a>
         <p class="scope-note">{copy.corpusNote}</p>
       </aside>

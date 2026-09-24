@@ -56,14 +56,6 @@ specification chunked_cumsum_fwd_correctness
 **Assumptions / layout contracts:**
 - `hDtNe : DtOut ≠ DACumsum`
 - `hCK : 0 < BLOCK_SIZE_CHUNK`
-- `fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
-        p₀ * stride_dt_out_batch + p₁ * stride_dt_out_chunk +
-          (p₂ * BLOCK_SIZE_H + idx.1.val) * stride_dt_out_head +
-          idx.2.1.val * stride_dt_out_csize`
-- `fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
-        p₀ * stride_dA_cs_batch + p₁ * stride_dA_cs_chunk +
-          (p₂ * BLOCK_SIZE_H + idx.1.val) * stride_dA_cs_head +
-          idx.2.1.val * stride_dA_cs_csize`
 
 **Closed-form spec defs (transitive):** `chunkedCumsumFwdIO`, `dACumsumLaneClosed`, `chunked_cumsum_fused_slice`
 
@@ -243,14 +235,6 @@ specification chunked_cumsum_fwd_summary_general
 **Assumptions / layout contracts:**
 - `hDtNe : DtOut ≠ DACumsum`
 - `hCK : 0 < BLOCK_SIZE_CHUNK`
-- `fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
-        p₀ * stride_dt_out_batch + p₁ * stride_dt_out_chunk +
-          (p₂ * BLOCK_SIZE_H + idx.1.val) * stride_dt_out_head +
-          idx.2.1.val * stride_dt_out_csize`
-- `fun idx : TileIndex [BLOCK_SIZE_H, BLOCK_SIZE_CHUNK] =>
-        p₀ * stride_dA_cs_batch + p₁ * stride_dA_cs_chunk +
-          (p₂ * BLOCK_SIZE_H + idx.1.val) * stride_dA_cs_head +
-          idx.2.1.val * stride_dA_cs_csize`
 
 **Closed-form spec defs (transitive):** `chunked_cumsum_fwd_surface`, `chunkedCumsumFwdIO`, `dACumsumLaneClosed`, `chunked_cumsum_fused_slice`
 

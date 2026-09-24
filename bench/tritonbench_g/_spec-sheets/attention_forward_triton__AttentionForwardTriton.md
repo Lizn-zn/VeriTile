@@ -71,10 +71,6 @@ specification attention_forward_triton_closed_form_correct
 - `hActiveLe : HEAD_ACTIVE ≤ BLOCK_DMODEL`
 - `hHD : HEAD_ACTIVE ≤ HEAD_DIM`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          active s (BLOCK_N * numKVBlocks) HEAD_ACTIVE BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
-          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `attention_forward_triton_surface`, `active`, `outOffset`, `qTile`, `kTile`, `vTile`, `keyScale`, `mIndex`, `kIndex`, `offZ`, `offH`, `baseOffset`
 

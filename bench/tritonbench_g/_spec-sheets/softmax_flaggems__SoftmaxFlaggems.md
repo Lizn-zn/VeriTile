@@ -26,9 +26,6 @@ specification softmax_kernel_inner_one_tile_compute_correct
       (expected := fun i => softmaxFlaggemsSpec s input_ptr N TILE_N i)
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : Fin TILE_N => i.val < N`
-
 **Closed-form spec defs (transitive):** `softmax_kernel_inner_one_tile`, `softmaxFlaggemsSpec`, `softmaxFlaggemsInputTile`
 
 <details><summary><code>softmax_kernel_inner_one_tile</code></summary>
@@ -125,8 +122,6 @@ specification softmax_kernel_non_inner_one_tile_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRange : s.pids 1 * TILE_K + TILE_K ≤ K`
-- `fun idx : TileIndex [TILE_N, TILE_K] =>
-          idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K`
 
 **Closed-form spec defs (transitive):** `softmax_kernel_non_inner_one_tile_surface`, `nonInnerOffset`, `softmaxFlaggemsNonInnerSpec`, `softmaxFlaggemsNonInnerInputTile`
 
@@ -259,8 +254,6 @@ specification softmax_backward_kernel_inner_one_tile_compute_correct
 **Assumptions / layout contracts:**
 - `hOffInj : Function.Injective
       (fun idx : TileIndex [TILE_M, TILE_N] => innerBwdOffset s N TILE_M idx)`
-- `fun idx : TileIndex [TILE_M, TILE_N] =>
-          innerBwdActive s M N TILE_M idx`
 
 **Closed-form spec defs (transitive):** `innerBwdOffset`, `softmax_backward_kernel_inner_one_tile_surface`, `innerBwdActive`, `innerBwdSpec`, `innerBwdRowIndex`, `innerBwdColIndex`, `innerBwdOutTile`, `innerBwdOutGradTile`
 
@@ -408,8 +401,6 @@ specification softmax_backward_kernel_non_inner_one_tile_compute_correct
 
 **Assumptions / layout contracts:**
 - `hRange : s.pids 1 * TILE_K + TILE_K ≤ K`
-- `fun idx : TileIndex [TILE_N, TILE_K] =>
-          idx.1.val < N ∧ s.pids 1 * TILE_K + idx.2.1.val < K`
 
 **Closed-form spec defs (transitive):** `softmax_backward_kernel_non_inner_one_tile_surface`, `nonInnerOffset`, `nonInnerBwdSpec`, `nonInnerBwdOutTile`, `nonInnerBwdOutGradTile`
 

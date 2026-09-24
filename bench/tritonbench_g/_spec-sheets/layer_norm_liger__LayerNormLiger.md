@@ -63,7 +63,6 @@ specification layer_norm_liger_forward_output_summary
 - `hRSTDY : RSTD ≠ Y`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s Y_row_stride i)`
-- `fun i : Fin BLOCK_SIZE => i.val < n_cols`
 
 **Closed-form spec defs (transitive):** `yOffset`, `layer_norm_liger_forward_surface`, `layer_norm_liger_forward`, `layernormYSpec`, `layernormMeanCarrier`, `layernormInvVarCarrier`, `xOffset`, `layernormInputTile`, `layernormVarCarrier`, `layernormCenteredTile`
 

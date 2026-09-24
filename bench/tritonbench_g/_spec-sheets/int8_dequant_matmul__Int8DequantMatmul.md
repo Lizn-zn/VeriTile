@@ -65,8 +65,6 @@ specification int8_dequant_matmul_exec_genuine
 - `has_bias : Bool`
 - `hK : K = BK * numKBlocks`
 - `hpid1 : s.pids 1 = 0`
-- `fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN
-        (pidM s M N BM BN GM) (pidN s M N BM BN GM) i`
 
 **Closed-form spec defs (transitive):** `cAddr`, `pidM`, `pidN`, `int8_dequant_matmul_surface`, `i8Spec`, `groupId`, `groupSize`, `i8Width`, `i8ProdSpec`, `biasElem`, `gridM`, `gridN`, `wFElem`, `xFElem`, `accSpec`, `accStep`, `aElem`, `bElem`
 

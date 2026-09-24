@@ -48,7 +48,6 @@ specification bgmv_full_output_summary
 - `hol : out_ptr ≠ lora_ptr`
 - `hcn : 0 < cn_stride`
 - `hlx : s.readMemValue .int (Region.cast lora_indices) (s.pids 1) = Int.ofNat li`
-- `fun _ : Fin split_n_length => True`
 
 **Closed-form spec defs (transitive):** `bgmv_full`, `cOff`, `bgmvFullSpec`, `prodGK`, `aElem`, `bElem`
 

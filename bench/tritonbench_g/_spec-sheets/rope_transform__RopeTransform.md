@@ -131,14 +131,6 @@ specification rope_transform_output_summary_general
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `hqk : Q ≠ K`
-- `fun idx : TileIndex [pad_n_qh, pad_hd/2] =>
-          activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx`
-- `fun idx : TileIndex [pad_n_qh, pad_hd/2] =>
-          activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx`
-- `fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
-          activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx`
-- `fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
-          activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx`
 
 **Closed-form spec defs (transitive):** `triton_rope_surface`, `activeQFull`, `qFullFirstOffset`, `ropeForwardKernelQ0Spec`, `qFullSecondOffset`, `ropeForwardKernelQ1Spec`, `activeKFull`, `kFullFirstOffset`, `ropeForwardKernelK0Spec`, `kFullSecondOffset`, `ropeForwardKernelK1Spec`, `ropeQ0HeadIO`, `ropeQ1HeadIO`, `ropeK0HeadIO`, `ropeK1HeadIO`, `cosFullFirstOffset`, `sinFullFirstOffset`, `ropeHeadIO`, `rope_transform_q0_head`, `rope_transform_q1_head`
 

@@ -66,9 +66,6 @@ specification attn_fwd_causal_output_summary_general
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => active s N_CTX HEAD_ACTIVE BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
-          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `outOffset`, `afcScoreBoundG`, `qTileAFCmG`, `kTileAFCG`, `vTileAFCmG`, `keyScaleAFCG`, `qStartAFCG`, `attn_fwd_causal_surface`, `active`, `attnFwdCausalOutSpecG`, `offZ`, `offH`, `mIndex`, `kIndex`, `qTileAFCG`, `baseOffsetAFCG`, `vTileAFCG`
 

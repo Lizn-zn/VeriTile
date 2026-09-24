@@ -215,3 +215,32 @@ that, every push is automatic.
 
 The workflow can also be triggered manually from the Actions tab
 (`workflow_dispatch`).
+
+## Coverage table and complete tutorial
+
+`/proofs/coverage/` displays every registered TritonBench-G headline with its
+exact statement, relevant IO definitions, source links, numeric model, and
+reviewed scope. Search and filters enhance an already readable HTML table.
+`bench/coverage_review.py` validates `bench/tritonbench_g/coverage_review.json`
+against complete Lean/Python source fingerprints and exact declaration/function
+identities. Python 3 is required during site builds; Lean is not. After changing
+a port, review its statements and excluded operations before updating its
+fingerprints and regenerating `proof_gap_manifest.tsv`. Never refresh hashes
+merely to silence the validator.
+
+The historical completed corpus audit in `src/lib/coverage-ci.json` is pinned
+to an exact commit and linked from every row. Refresh it only after a newer
+full audit succeeds:
+
+```bash
+python3 scripts/record_coverage_ci.py RUN_ID  # from repository root; requires gh
+```
+
+Pending, failed, and skipped runs cannot be recorded. This record is historical
+evidence, not a claim that later source commits passed; the page links to newer
+runs. Building the coverage table does not replay proofs.
+
+`/cookbook/vector-add-walkthrough/` walks from the Python kernel through the
+checked DSL/IO contract, full proof, trust checks, and rejected mutation. Its
+code excerpts are extracted from the executable `bench/examples/VectorAdd.lean`
+by `src/lib/vector-add-tutorial.ts`; missing anchors fail the site build.

@@ -65,6 +65,8 @@ jobs:
           lake env lean bench/tests/ModuleHeadlineAudit.lean
           python3 -m unittest discover -s scripts -p 'test_audit_gates.py'
           python3 -m unittest discover -s scripts -p 'test_doc_api.py'
+          python3 -m unittest discover -s scripts -p 'test_coverage_review.py'
+          python3 bench/coverage_review.py
           python3 scripts/test_check_comparator.py
 
       - name: Check representative standalone ports after library changes

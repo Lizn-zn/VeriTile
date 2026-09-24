@@ -57,8 +57,6 @@ specification int4_matmul_exec_genuine
 - `hK : K = BK * numKBlocks`
 - `hBK8 : BK % 8 = 0`
 - `hpid1 : s.pids 1 = 0`
-- `fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN
-        (pidM s M N BM BN GM) (pidN s M N BM BN GM) i`
 
 **Closed-form spec defs (transitive):** `cAddr`, `pidM`, `pidN`, `int4_matmul_surface`, `accSpec`, `firstPidM`, `groupSizeM`, `numPidInGroup`, `accStep`, `groupId`, `numPidM`, `numPidN`, `aElem`, `bDequant`, `bNibble`, `bzpNibble`, `bsElem`, `bWord`, `bzpWord`
 

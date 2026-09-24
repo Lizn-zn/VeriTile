@@ -27,7 +27,14 @@ specification matmul_triton2_output_summary_general
     (∃ alg, (matmul_triton2_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN
         BM BN BK GM).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := matmul_triton2_surface A B C M N (BK * numKBlocks) SAM SAK SBK SBN SCM SCN
+        BM BN BK GM)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s M N BM BN GM)
+        (fun idx => (C, cOffset s M N BM BN GM SCM SCN idx)))
+      (expected := fun idx : TileIndex [BM, BN] =>
+        matmulSpec s A B M N BM BN GM SAM SAK SBK SBN BK numKBlocks idx.1 idx.2.1)
 ```
 
 **Assumptions / layout contracts:**
@@ -35,7 +42,7 @@ specification matmul_triton2_output_summary_general
 - `hInj : Function.Injective (cOffset s M N BM BN GM SCM SCN)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
 
-**Closed-form spec defs (transitive):** `cOffset`, `matmul_triton2_surface`, `rowIndex`, `colIndex`, `cdiv`, `pidM`, `pidN`, `numPidM`, `numPidN`
+**Closed-form spec defs (transitive):** `cOffset`, `matmul_triton2_surface`, `active`, `matmulSpec`, `rowIndex`, `colIndex`, `cdiv`, `aElem`, `bElem`, `pidM`, `pidN`, `numPidM`, `numPidN`
 
 <details><summary><code>cOffset</code></summary>
 
@@ -88,6 +95,33 @@ def matmul_triton2_surface
 ```
 </details>
 
+<details><summary><code>active</code></summary>
+
+```
+/-- Active output lane: `rowIndex i < M ∧ colIndex j < N`. -/
+```
+```lean
+def active (s0 : BlockState) (M N BM BN GM : Nat) (idx : TileIndex [BM, BN]) : Prop :=
+  rowIndex s0 M N BM BN GM idx.1 < M ∧ colIndex s0 M N BM BN GM idx.2.1 < N
+
+instance (s0 : BlockState) (M N BM BN GM : Nat) (idx : TileIndex [BM, BN]) :
+    Decidable (active s0 M N BM BN GM idx) := by unfold active; infer_instance
+```
+</details>
+
+<details><summary><code>matmulSpec</code></summary>
+
+```
+/-- **Genuine GEMM spec**: `C[i,j] = Σ_{k < BLOCK_K·numKBlocks} A[i,k] · B[k,j]`. -/
+```
+```lean
+noncomputable def matmulSpec (s : BlockState) (A B : RegionName)
+    (M N BM BN GM SAM SAK SBK SBN BLOCK_K numKBlocks : Nat) (i : Fin BM) (j : Fin BN) : ℝ :=
+  (Finset.range (BLOCK_K * numKBlocks)).sum
+    (fun k => aElem s A M N BM BN GM SAM SAK i k * bElem s B M N BM BN GM SBK SBN j k)
+```
+</details>
+
 <details><summary><code>rowIndex</code></summary>
 
 ```
@@ -117,6 +151,30 @@ def colIndex (s : BlockState) (M N BM BN GM : Nat) (j : Fin BN) : Nat :=
 ```
 ```lean
 def cdiv (a b : Nat) : Nat := (a + b - 1) / b
+```
+</details>
+
+<details><summary><code>aElem</code></summary>
+
+```
+/-- `A[i, k] = readMem A (rowIndex i · SAM + k · SAK)` (kernel's A layout). -/
+```
+```lean
+noncomputable def aElem (s : BlockState) (A : RegionName) (M N BM BN GM SAM SAK : Nat)
+    (i : Fin BM) (k : Nat) : ℝ :=
+  s.readMem A (rowIndex s M N BM BN GM i * SAM + k * SAK)
+```
+</details>
+
+<details><summary><code>bElem</code></summary>
+
+```
+/-- `B[k, j] = readMem B (k · SBK + colIndex j · SBN)` (kernel's B layout). -/
+```
+```lean
+noncomputable def bElem (s : BlockState) (B : RegionName) (M N BM BN GM SBK SBN : Nat)
+    (j : Fin BN) (k : Nat) : ℝ :=
+  s.readMem B (k * SBK + colIndex s M N BM BN GM j * SBN)
 ```
 </details>
 

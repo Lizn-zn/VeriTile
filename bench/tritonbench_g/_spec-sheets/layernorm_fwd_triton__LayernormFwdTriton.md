@@ -48,7 +48,6 @@ specification layernorm_fwd_triton_output_summary
 - `hBlockPos : 0 < BLOCK_SIZE`
 - `hXYNe : X ≠ Y`
 - `hWYNe : W ≠ Y`
-- `fun _ : Fin N => True`
 
 **Closed-form spec defs (transitive):** `layernorm_fwd_triton`, `yColOffset`, `layernormYFullNSpec`, `xColOffset`, `layernormMeanFullNSpec`, `layernormRstdFullNSpec`, `wColOffset`, `layernormVarFullNSpec`
 

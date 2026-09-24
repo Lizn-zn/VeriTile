@@ -52,8 +52,6 @@ specification int_scaled_matmul_matmul_exec_genuine
 
 **Assumptions / layout contracts:**
 - `hBK : 0 < BK`
-- `fun i : TileIndex [BM, BN] => mmCAddr stride_cm stride_cn BM BN
-        (mmPidM s M N BM BN GM) (mmPidN s M N BM BN GM) i`
 
 **Closed-form spec defs (transitive):** `mmCAddr`, `mmPidM`, `mmPidN`, `int_scaled_matmul_matmul_surface`, `mmSpec`, `mmFirstPidM`, `mmGroupSize`, `mmNumPidInGroup`, `mmAElem`, `mmBElem`, `mmGroupId`, `mmNumPidM`, `mmNumPidN`
 

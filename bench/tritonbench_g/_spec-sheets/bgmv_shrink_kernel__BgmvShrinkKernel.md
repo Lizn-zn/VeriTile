@@ -72,7 +72,29 @@ specification bgmv_shrink_kernel_output_summary_general
       s'.mem = s.mem) ∧
     -- (4) SPLIT_K = 1: masked store of the genuine contraction
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := bgmv_shrink_store_surface input_ptr lora_ptr out_ptr N K
+        lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
+        cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun n : Fin BLOCK_N => n.val < N)
+        (fun n => (out_ptr, outOff s cm_stride cn_stride n.val)))
+      (expected := fun n : Fin BLOCK_N =>
+        shrinkSpec s input_ptr lora_ptr lora_indices scaling K xm_stride
+          l0_stride lora_k_stride lora_n_stride BLOCK_K SPLIT_K n.val) ∧
+    -- (5) SPLIT_K > 1: masked atomic add of the genuine contraction
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := bgmv_shrink_atomic_surface input_ptr lora_ptr out_ptr N K
+        lora_indices scaling xm_stride l0_stride lora_k_stride lora_n_stride
+        cm_stride cn_stride BLOCK_N BLOCK_K SPLIT_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun n : Fin BLOCK_N => n.val < N)
+        (fun n => (out_ptr, outOff s cm_stride cn_stride n.val)))
+      (expected := fun n : Fin BLOCK_N =>
+        s.readMem out_ptr (outOff s cm_stride cn_stride n.val)
+          + shrinkSpec s input_ptr lora_ptr lora_indices scaling K xm_stride
+              l0_stride lora_k_stride lora_n_stride BLOCK_K SPLIT_K n.val)
 ```
 
 **Assumptions / layout contracts:**
@@ -80,7 +102,7 @@ specification bgmv_shrink_kernel_output_summary_general
 - `hSK : 0 < SPLIT_K`
 - `hcn : 0 < cn_stride`
 
-**Closed-form spec defs (transitive):** `bgmv_shrink_surface`, `bgmv_shrink_store_surface`, `bgmv_shrink_atomic_surface`
+**Closed-form spec defs (transitive):** `bgmv_shrink_surface`, `bgmv_shrink_store_surface`, `bgmv_shrink_atomic_surface`, `outOff`, `shrinkSpec`, `accPartial`, `numKIters`, `blockTerm`, `kIdx`, `aElem`, `bElem`, `loraIdx`
 
 <details><summary><code>bgmv_shrink_surface</code></summary>
 
@@ -215,6 +237,135 @@ def bgmv_shrink_atomic_surface
   c_mask = offset_cn < $(N)
   tl.atomic_add(c_ptr, accumulator, mask=c_mask)
 }
+```
+</details>
+
+<details><summary><code>outOff</code></summary>
+
+```
+/-- Output offset of lane `n`: `cur_batch·cm_stride + n·cn_stride`. -/
+```
+```lean
+def outOff (s : BlockState) (cm_stride cn_stride n : Nat) : Nat :=
+  s.pids 1 * cm_stride + n * cn_stride
+```
+</details>
+
+<details><summary><code>shrinkSpec</code></summary>
+
+```
+/-- **Genuine spec**: this program's scaled rank-slice contribution at output
+lane `n` — `scaling · Σ_{c<⌈K/S⌉} Σ_{e<BLOCK_K} [k(c,e)<K] · x[k(c,e)] ·
+W[n,k(c,e)]`, a closed form over INPUT memory. -/
+```
+```lean
+noncomputable def shrinkSpec (s : BlockState) (input_ptr lora_ptr : RegionName)
+    (lora_indices : Region .nat) (scaling : ℝ)
+    (K xm_stride l0_stride lora_k_stride lora_n_stride
+      BLOCK_K SPLIT_K n : Nat) : ℝ :=
+  scaling * accPartial s input_ptr lora_ptr lora_indices K xm_stride l0_stride
+    lora_k_stride lora_n_stride BLOCK_K SPLIT_K
+    (numKIters K (BLOCK_K * SPLIT_K)) n
+```
+</details>
+
+<details><summary><code>accPartial</code></summary>
+
+```
+/-- Partial accumulator after `c` K-split blocks at lane `n`. -/
+```
+```lean
+noncomputable def accPartial (s : BlockState) (input_ptr lora_ptr : RegionName)
+    (lora_indices : Region .nat)
+    (K xm_stride l0_stride lora_k_stride lora_n_stride
+      BLOCK_K SPLIT_K c n : Nat) : ℝ :=
+  (Finset.range c).sum fun c' =>
+    blockTerm s input_ptr lora_ptr lora_indices K xm_stride l0_stride
+      lora_k_stride lora_n_stride BLOCK_K SPLIT_K c' n
+```
+</details>
+
+<details><summary><code>numKIters</code></summary>
+
+```
+/-- Trip count of `for k in range(0, K, S)`: `⌈K/S⌉`. -/
+```
+```lean
+def numKIters (K S : Nat) : Nat := (K + S - 1) / S
+```
+</details>
+
+<details><summary><code>blockTerm</code></summary>
+
+```
+/-- One K-split block's masked contribution at output lane `n`:
+`Σ_{e<BLOCK_K} [k(c,e) < K] · x[k(c,e)] · W[n,k(c,e)]` (the `tl.sum` of the
+masked `tiled_a · tiled_b` products; out-of-range rank lanes load `0`). -/
+```
+```lean
+noncomputable def blockTerm (s : BlockState) (input_ptr lora_ptr : RegionName)
+    (lora_indices : Region .nat)
+    (K xm_stride l0_stride lora_k_stride lora_n_stride
+      BLOCK_K SPLIT_K c n : Nat) : ℝ :=
+  (Finset.univ : Finset (Fin BLOCK_K)).sum fun e =>
+    if kIdx s BLOCK_K SPLIT_K c e.val < K then
+      aElem s input_ptr xm_stride (kIdx s BLOCK_K SPLIT_K c e.val)
+        * bElem s lora_ptr lora_indices l0_stride lora_k_stride lora_n_stride
+            n (kIdx s BLOCK_K SPLIT_K c e.val)
+    else 0
+```
+</details>
+
+<details><summary><code>kIdx</code></summary>
+
+```
+/-- The kernel's `current_k` rank index at loop iteration `c`, lane `e`:
+`k(c,e) = c·(BLOCK_K·SPLIT_K) + (e + pid_sk·BLOCK_K)` — this program's
+(`pid_sk`) slice of the rank dimension. -/
+```
+```lean
+def kIdx (s : BlockState) (BLOCK_K SPLIT_K c e : Nat) : Nat :=
+  c * (BLOCK_K * SPLIT_K) + (e + s.pids 0 * BLOCK_K)
+```
+</details>
+
+<details><summary><code>aElem</code></summary>
+
+```
+/-- Input element `x[k] = input[cur_batch·xm_stride + k]` (upstream addresses
+the input row directly by `current_k`; its `xk_stride` argument is unused). -/
+```
+```lean
+noncomputable def aElem (s : BlockState) (input_ptr : RegionName)
+    (xm_stride k : Nat) : ℝ :=
+  s.readMem input_ptr (s.pids 1 * xm_stride + k)
+```
+</details>
+
+<details><summary><code>bElem</code></summary>
+
+```
+/-- LoRA-A element
+`W[n,k] = lora[l0_stride·lora_index + n·lora_k_stride + k·lora_n_stride]`. -/
+```
+```lean
+noncomputable def bElem (s : BlockState) (lora_ptr : RegionName)
+    (lora_indices : Region .nat)
+    (l0_stride lora_k_stride lora_n_stride n k : Nat) : ℝ :=
+  s.readMem lora_ptr
+    (l0_stride * loraIdx s lora_indices + n * lora_k_stride
+      + k * lora_n_stride)
+```
+</details>
+
+<details><summary><code>loraIdx</code></summary>
+
+```
+/-- The selected LoRA index (`lora_indices[cur_batch]`). -/
+```
+```lean
+def loraIdx (s : BlockState) (lora_indices : Region .nat) : Nat :=
+  s.readMemValue .nat lora_indices (s.pids 1)
 ```
 </details>
 

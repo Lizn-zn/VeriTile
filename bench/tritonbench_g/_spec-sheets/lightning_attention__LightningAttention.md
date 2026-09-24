@@ -127,10 +127,6 @@ specification lightning_attention_output_summary_general
 - `hV : ∀ (idx : TileIndex [d, BLOCK_MODEL]) (j : Fin BLOCK),
       s.readMem VTile (j.val * BLOCK_MODEL + idx.2.1.val)
         = fwdVVal s V n e BLOCK_MODEL idx.2.1.val (m * BLOCK + j.val)`
-- `∀ idx : TileIndex [d, BLOCK_MODEL],
-      kvStepSpec s KVPrev KTrans VTile d BLOCK BLOCK_MODEL idx
-        = kvClosed s K V n d e BLOCK BLOCK_MODEL (m + 1) idx.1.val idx.2.1.val`
-- `fun idx : TileIndex [BLOCK, BLOCK_MODEL] => m * BLOCK + idx.1.val < n`
 
 **Closed-form spec defs (transitive):** `kvOffset`, `kvClosed`, `fwdKVal`, `fwdVVal`, `lightning_attention_forward_surface`, `lightning_attention_bwd_intra_surface`, `lightning_attention_bwd_inter_surface`, `lightning_attention_forward_kv_step_slice`, `kvStepSpec`, `lightning_attention_forward_o_inter_dot_slice`, `oInterOffset`, `oInterDotSpec`, `lightning_attention_forward_body_slice`, `bodyOutOffset`, `fwdOutClosed`, `tileElem`
 
@@ -668,10 +664,6 @@ specification lightning_attention_bwd_grad_store_io_correctness
       ⊨ fun _p₀ _p₁ xs idx => xs idx
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BLOCK, WIDTH] =>
-        p₀ * n * width + (p₁ * BLOCK + idx.1.val) * width + idx.2.1.val`
-
 **Closed-form spec defs (transitive):** `gradStoreIO`, `lightning_attention_bwd_grad_store_slice`
 
 <details><summary><code>gradStoreIO</code></summary>
@@ -752,10 +744,6 @@ specification lightning_attention_bwd_grad_store_io_correctnessR
     gradStoreIO GradPre Out n width BLOCK WIDTH
       ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BLOCK, WIDTH] =>
-        p₀ * n * width + (p₁ * BLOCK + idx.1.val) * width + idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `gradStoreIO`, `lightning_attention_bwd_grad_store_slice`
 

@@ -65,10 +65,6 @@ specification attention_fwd_triton3_python_case1_output_summary_general
 - `hsoh : soh = sqh`
 - `hMO : M ≠ Out`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son`
-- `fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)`
-- `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
-- `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
 
 **Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case1OutSpecG`, `lRowOffset`, `attentionFwdTriton3KMSpecG`, `natSlidingWindowKeepG`, `mIndex`, `kIndex`, `offZ`, `offH`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `aft3RunningMaxG`, `aft3StateBotKG`, `natDist3G`, `aft3KeysUptoG`, `aft3StateBotG`, `aft3OsStepBot`
 
@@ -507,10 +503,6 @@ specification attention_fwd_triton3_python_case2_output_summary_general
 - `hsoh : soh = sqh`
 - `hMO : M ≠ Out`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son`
-- `fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)`
-- `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
-- `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
 
 **Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case2OutSpecG`, `lRowOffset`, `attentionFwdTriton3KMSpecG`, `natComplementSlidingWindowKeepG`, `mIndex`, `kIndex`, `offZ`, `offH`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `aft3RunningMaxG`, `aft3StateBotKG`, `natDist3G`, `aft3KeysUptoG`, `aft3StateBotG`, `aft3OsStepBot`
 
@@ -949,10 +941,6 @@ specification attention_fwd_triton3_python_case3_output_summary_general
 - `hsoh : soh = sqh`
 - `hMO : M ≠ Out`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son`
-- `fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)`
-- `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
-- `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
 
 **Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case3OutSpecG`, `lRowOffset`, `attentionFwdTriton3Case3MSpecG`, `mIndex`, `kIndex`, `offZ`, `offH`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `aft3RunningMaxG`, `aft3StateBot1G`, `aft3KeysUptoG`, `aft3OsStepBot`
 
@@ -1354,10 +1342,6 @@ specification attention_fwd_triton3_python_case4_output_summary_general
 - `hsoh : soh = sqh`
 - `hMO : M ≠ Out`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BM, ND] => (s.pids 1 / H * sqz + s.pids 1 % H * sqh) + (s.pids 0 * BM + idx.1.val) * som + idx.2.1.val * son`
-- `fun r : TileIndex [BM] => s.pids 1 * ROUND_CTX + (s.pids 0 * BM + r.1.val)`
-- `fun idx : TileIndex [BM, ND] => active s N_CTX ND BM idx`
-- `fun idx : TileIndex [BM, ND] => (Out, outOffset s H sqz sqh som son BM idx)`
 
 **Closed-form spec defs (transitive):** `attention_fwd_triton3_surface`, `active`, `outOffset`, `attentionFwdTriton3Case4OutSpecG`, `lRowOffset`, `attentionFwdTriton3Case4MSpecG`, `mIndex`, `kIndex`, `offZ`, `offH`, `aft3Case4Seed`, `natSlidingWindowKeepG`, `aft3StateSeededG`, `qTile3G`, `kTile3G`, `vTile3G`, `keyScale3G`, `mlRow3G`, `outLane3G`, `natDist3G`, `aft3KeysUptoG`, `aft3OsStepBot`
 
@@ -1844,9 +1828,6 @@ specification attention_fwd_triton3_case3_io_correctness (R : RoundingModel)
 - `hsoz : soz = sqz`
 - `hsoh : soh = sqh`
 - `hMO : M ≠ Out`
-- `fun idx : TileIndex [BM, ND] =>
-        (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + idx.1.val) * som + idx.2.1.val * son`
-- `fun r : TileIndex [BM] => p₁ * ROUND_CTX + (p₀ * BM + r.1.val)`
 
 **Closed-form spec defs (transitive):** `attentionFwdTriton3Case3IO`, `attentionFwdTriton3Case3IOOutSpec`, `attentionFwdTriton3Case3IOMSpec`, `attention_fwd_triton3_surface`, `aft3IOqT`, `aft3IOkT`, `aft3IOvT`, `keyScale3G`, `aft3RunningMaxG`, `aft3StateBot1G`, `aft3KeysUptoG`, `aft3OsStepBot`
 
@@ -2242,9 +2223,6 @@ specification attention_fwd_triton3_case1_io_correctness (R : RoundingModel)
 - `hsoz : soz = sqz`
 - `hsoh : soh = sqh`
 - `hMO : M ≠ Out`
-- `fun idx : TileIndex [BM, ND] =>
-        (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + idx.1.val) * som + idx.2.1.val * son`
-- `fun r : TileIndex [BM] => p₁ * ROUND_CTX + (p₀ * BM + r.1.val)`
 
 **Closed-form spec defs (transitive):** `attentionFwdTriton3Case1IO`, `attentionFwdTriton3Case1IOOutSpec`, `attentionFwdTriton3Case1IOMSpec`, `attention_fwd_triton3_surface`, `aft3IOqT`, `aft3IOkT`, `aft3IOvT`, `keyScale3G`, `natSlidingWindowKeepG`, `aft3RunningMaxG`, `aft3StateBotKG`, `natDist3G`, `aft3KeysUptoG`, `aft3StateBotG`, `aft3OsStepBot`
 
@@ -2664,9 +2642,6 @@ specification attention_fwd_triton3_case2_io_correctness (R : RoundingModel)
 - `hsoz : soz = sqz`
 - `hsoh : soh = sqh`
 - `hMO : M ≠ Out`
-- `fun idx : TileIndex [BM, ND] =>
-        (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + idx.1.val) * som + idx.2.1.val * son`
-- `fun r : TileIndex [BM] => p₁ * ROUND_CTX + (p₀ * BM + r.1.val)`
 
 **Closed-form spec defs (transitive):** `attentionFwdTriton3Case2IO`, `attentionFwdTriton3Case2IOOutSpec`, `attentionFwdTriton3Case2IOMSpec`, `attention_fwd_triton3_surface`, `aft3IOqT`, `aft3IOkT`, `aft3IOvT`, `keyScale3G`, `natComplementSlidingWindowKeepG`, `aft3RunningMaxG`, `aft3StateBotKG`, `natDist3G`, `aft3KeysUptoG`, `aft3StateBotG`, `aft3OsStepBot`
 
@@ -3103,9 +3078,6 @@ specification attention_fwd_triton3_case4_io_correctness (R : RoundingModel)
 - `hsoz : soz = sqz`
 - `hsoh : soh = sqh`
 - `hMO : M ≠ Out`
-- `fun idx : TileIndex [BM, ND] =>
-        (p₁ / H * sqz + p₁ % H * sqh) + (p₀ * BM + idx.1.val) * som + idx.2.1.val * son`
-- `fun r : TileIndex [BM] => p₁ * ROUND_CTX + (p₀ * BM + r.1.val)`
 
 **Closed-form spec defs (transitive):** `attentionFwdTriton3Case4IO`, `attentionFwdTriton3Case4IOOutSpec`, `attentionFwdTriton3Case4IOMSpec`, `attention_fwd_triton3_surface`, `aft3StateSeededG`, `aft3IOqT`, `aft3IOkT`, `aft3IOvT`, `keyScale3G`, `natSlidingWindowKeepG`, `aft3IOseedT`, `aft3KeysUptoG`, `aft3OsStepBot`, `natDist3G`
 

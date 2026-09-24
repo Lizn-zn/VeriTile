@@ -39,9 +39,6 @@ specification layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general
       (expected := fun _ => rstdStoreSpec s RstdPre))
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : Fin BLOCK_N => i.val < N`
-
 **Closed-form spec defs (transitive):** `layer_norm_ops_fwd_y_store_slice`, `fwdYOffset`, `fwdYStoreSpec`, `layer_norm_ops_fwd_mean_store_slice`, `meanRowOffset`, `meanStoreSpec`, `layer_norm_ops_fwd_rstd_store_slice`, `rstdStoreSpec`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorOffset`, `bwdRowVectorStoreSpec`
 
 <details><summary><code>layer_norm_ops_fwd_y_store_slice</code></summary>
@@ -204,9 +201,6 @@ specification layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general
       (expected := fun _ => rstdStoreSpec s RstdPre))
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : Fin BLOCK_N => i.val < N`
-
 **Closed-form spec defs (transitive):** `layer_norm_ops_fwd_y_store_slice`, `fwdYOffset`, `fwdYStoreSpec`, `layer_norm_ops_fwd_rstd_store_slice`, `meanRowOffset`, `rstdStoreSpec`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorOffset`, `bwdRowVectorStoreSpec`
 
 <details><summary><code>layer_norm_ops_fwd_y_store_slice</code></summary>
@@ -360,10 +354,6 @@ specification layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_gener
       (write := fun _ : PUnit => some (Rstd, meanRowOffset s))
       (expected := fun _ => rstdStoreSpec s RstdPre))
 ```
-
-**Assumptions / layout contracts:**
-- `fun i : Fin BLOCK_N => i.val < N`
-- `fun i : Fin BLOCK_N => i.val < N`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_fwd_residual_out_store_slice`, `fwdResidualOutOffset`, `fwdResidualOutStoreSpec`, `layer_norm_ops_fwd_y_store_slice`, `fwdYOffset`, `fwdYStoreSpec`, `layer_norm_ops_fwd_mean_store_slice`, `meanRowOffset`, `meanStoreSpec`, `layer_norm_ops_fwd_rstd_store_slice`, `rstdStoreSpec`, `layer_norm_ops_bwd_row_vector_store_slice`, `bwdRowVectorOffset`, `bwdRowVectorStoreSpec`
 
@@ -580,8 +570,6 @@ specification layer_norm_ops_bwd_rms_core_outputs_compute_correct_general
 
 **Assumptions / layout contracts:**
 - `hDWDX : DW ≠ DX`
-- `fun i : Fin BLOCK_N => i.val < N`
-- `fun i : Fin BLOCK_N => i.val < N`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_bwd_c1_reduction_slice`, `bwdC1ReductionSpec`, `layer_norm_ops_bwd_rms_dx_from_c1_slice`, `bwdRmsDXOffset`, `bwdRmsDXFromC1Spec`, `layer_norm_ops_bwd_rms_one_row`, `bwdRmsDWOffset`, `bwdRmsDWSpec`, `bwdRecomputeXhatOffset`, `bwdRmsWdyTile`, `bwdRmsDYOffset`, `bwdRmsDYTile`, `bwdRmsXhatTile`, `bwdRmsWTile`, `bwdRmsXTile`, `bwdRmsXOffset`
 
@@ -898,9 +886,6 @@ specification layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general
 - `hDWDB : DW ≠ DB`
 - `hDBDX : DB ≠ DX`
 - `hDBDW : DB ≠ DW`
-- `fun i : Fin BLOCK_N => i.val < N`
-- `fun i : Fin BLOCK_N => i.val < N`
-- `fun i : Fin BLOCK_N => i.val < N`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_bwd_c1_reduction_slice`, `bwdC1ReductionSpec`, `layer_norm_ops_bwd_c2_reduction_slice`, `bwdC2ReductionSpec`, `layer_norm_ops_bwd_plain_dx_from_c1_c2_slice`, `bwdRmsDXOffset`, `bwdPlainDXFromC1C2Spec`, `layer_norm_ops_bwd_plain_bias_one_row`, `bwdParamGradOffset`, `bwdPlainBiasDWSpec`, `bwdBiasDBSpec`, `bwdRecomputeXhatOffset`, `bwdRmsWdyTile`, `bwdRmsDYOffset`, `bwdRmsDYTile`, `bwdPlainXhatTile`, `bwdRmsWTile`, `bwdRmsXOffset`
 
@@ -1232,8 +1217,6 @@ specification layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_genera
 **Assumptions / layout contracts:**
 - `hDXDresIn : DX ≠ DRESIDUAL_IN`
 - `hDresInDX : DRESIDUAL_IN ≠ DX`
-- `fun i : Fin BLOCK_N => i.val < N`
-- `fun i : Fin BLOCK_N => i.val < N`
 
 **Closed-form spec defs (transitive):** `layer_norm_ops_bwd_residual_add_store_slice`, `bwdRmsDXOffset`, `bwdResidualAddSpec`, `bwdDResidualInOffset`, `bwdDResidualOffset`
 

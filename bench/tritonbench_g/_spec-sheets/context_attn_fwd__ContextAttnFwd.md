@@ -52,10 +52,6 @@ specification context_attn_fwd_surface_compute_correct_general
 - `hOInj : Function.Injective
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          active s H B_Seqlen B_Prompt_Cache_Len BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
-          (Out, outOffset s H B_Start_Loc stride_obs stride_oh stride_od BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `outOffset`, `context_attn_fwd_kernel_int8kv_surface`, `active`, `ctxFwdGenuineOutValueG`, `startLoc`, `mIndex`, `curHead`, `dIndex`, `seqLen`, `contextAttnExactFoldMG`, `ctxFwdWindowG`, `ctxFwdBelG`, `curBatch`, `promptLen`, `gStateBot`, `ctxKVMG`, `gKeysUpto`, `osStepBot`, `ctxQTileMG`, `ctxKTileMG`, `ctxVTileMG`, `ctxQTileG`, `ctxKTileG`, `ctxVTileG`
 

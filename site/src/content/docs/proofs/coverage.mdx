@@ -1,0 +1,47 @@
+---
+title: Proof coverage by kernel
+description: Search every registered benchmark theorem, its numeric model, prerequisites, source, and reviewed limitations.
+tableOfContents: false
+---
+
+import CoverageTable from '../../../components/CoverageTable.astro';
+
+Find the theorem that matches the operation and configuration you intend to
+use. The table distinguishes original-kernel candidates, configured models,
+individual stages, and slices that consume precomputed values. It records a
+review of the **stated claim**; it is not an independent certification of
+Python translation, GPU compilation, or hardware execution.
+
+<details>
+<summary>How to read the scope, contracts, and numeric models</summary>
+
+An **original-kernel candidate** has an explicit per-program value target
+corresponding to the identified Python kernel, subject to the model and
+contract assumptions. A **configured model / stage** narrows the mode,
+layout, output, or pipeline stage; inspect its scope note. A
+**precomputed-input slice** starts after an omitted producer, and a
+**pre-rounding slice** omits the final quantized result. A **blocked surface**
+records a rejected faithful operation alongside any narrower results.
+
+The exact theorem statement shows all explicit binders. IO definitions add
+allocation disjointness, loaded-input windows, masks, bounds, and frame
+conditions through their contract type. `Realizes` is a partial-correctness
+surface: it specifies outputs of successful executions and does not by itself
+promise termination or a frame. An explicit exec-existential adds termination;
+`KernelIO` contracts add termination, output values, and a frame.
+
+**Mathematical execution** uses the repository's real/integer/index models.
+**Abstract cast/store rounding** adds a `RoundingModel`; some theorems require
+identity rounding on particular dtypes. Neither label promises bit-accurate
+IEEE behavior, fixed-width overflow, or a numerical error bound.
+
+The source fingerprints and complete declaration inventory are checked at
+build time. Source changes require an updated review. Building this page does
+not run Lean or the comparator; use the
+[CI audit history](https://github.com/Lizn-zn/VeriTile/actions/workflows/bench-audit.yml)
+for proof-check outcomes and their exact commits, and the
+[trust audit guide](/VeriTile/proofs/trust-audit/) to reproduce them.
+
+</details>
+
+<CoverageTable />

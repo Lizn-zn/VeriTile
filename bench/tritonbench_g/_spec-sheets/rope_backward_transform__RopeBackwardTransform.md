@@ -123,14 +123,6 @@ specification rope_backward_python_backward_output_summary_general
 **Assumptions / layout contracts:**
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `hqk : Q ≠ K`
-- `fun idx : TileIndex [pad_n_qh, pad_hd/2] =>
-          activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx`
-- `fun idx : TileIndex [pad_n_qh, pad_hd/2] =>
-          activeQFull (pad_n_qh := pad_n_qh) (pad_hd_half := pad_hd/2) n_qh hd idx`
-- `fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
-          activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx`
-- `fun idx : TileIndex [pad_n_kh, pad_hd/2] =>
-          activeKFull (pad_n_kh := pad_n_kh) (pad_hd_half := pad_hd/2) n_kh hd idx`
 
 **Closed-form spec defs (transitive):** `triton_rope_surface`, `activeQFull`, `qFullFirstOffset`, `ropeBackwardKernelQ0Spec`, `qFullSecondOffset`, `ropeBackwardKernelQ1Spec`, `activeKFull`, `kFullFirstOffset`, `ropeBackwardKernelK0Spec`, `kFullSecondOffset`, `ropeBackwardKernelK1Spec`, `ropeBackwardQ0HeadIO`, `ropeBackwardQ1HeadIO`, `ropeBackwardK0HeadIO`, `ropeBackwardK1HeadIO`, `cosFullFirstOffset`, `sinFullFirstOffset`, `ropeBackwardHeadIO`, `rope_backward_q0_head`, `rope_backward_q1_head`
 

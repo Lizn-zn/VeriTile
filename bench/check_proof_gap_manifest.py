@@ -6,11 +6,13 @@ The #139 audit made every public Python path discoverable through an
 summaries are full value-level proofs, and which still depend on proof slices,
 precomputed values, or explicit semantic blockers.
 
-This script derives a conservative classification from the Lean source and
-compares it with `bench/tritonbench_g/proof_gap_manifest.tsv`.  Use
-`--write` after intentionally changing Lean summaries.
+This script combines conservative source signals with explicit, source-fingerprinted
+statement reviews from `coverage_review.json`, then compares the result with
+`bench/tritonbench_g/proof_gap_manifest.tsv`. After changing a source, review its
+claims and update its review record before running `--write`. The review loader
+rejects missing, stale, or conflicting classifications.
 
-Classification uses hard signals only, in priority order: an explicit
+The initial source classification uses hard signals only, in priority order: an explicit
 `coverage:` annotation in the summary docstring, an explicit
 `blocked_output_summary` declaration name, and a genuinely self-referential
 `expected` (shared detector with `scripts/spec_sheet.py`).  Docstring prose is
@@ -458,7 +460,7 @@ def headline_names(full_text: str) -> set[str]:
     return picked
 
 
-def collect() -> list[Summary]:
+def collect(*, reviewed: bool = True) -> list[Summary]:
     rows: list[Summary] = []
     for lean_file in sorted(PORTS_ROOT.glob("*/*.lean")):
         rel = lean_file.relative_to(ROOT).as_posix()
@@ -493,6 +495,10 @@ def collect() -> list[Summary]:
                         else evidence_for(ctx, level, self_ref),
                 )
             )
+    if reviewed:
+        sys.path.insert(0, str(ROOT / 'bench'))
+        from coverage_review import apply_reviews
+        return apply_reviews(rows)
     return rows
 
 
@@ -595,7 +601,7 @@ def validate_rows(rows: list[Summary]) -> list[str]:
 
 def main() -> int:
     parser = argparse.ArgumentParser()
-    parser.add_argument("--write", action="store_true", help="rewrite the manifest from Lean source")
+    parser.add_argument("--write", action="store_true", help="rewrite the manifest from Lean source and validated reviews")
     args = parser.parse_args()
 
     rows = collect()

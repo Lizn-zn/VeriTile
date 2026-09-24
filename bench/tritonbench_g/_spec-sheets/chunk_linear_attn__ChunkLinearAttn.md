@@ -52,11 +52,6 @@ specification cla_fwd_h_exec_genuine
 - `hσ : BV ≤ s_h_t`
 - `hFit : (K - 1) * s_h_t + V ≤ K * V`
 - `hBVV : BV ≤ V`
-- `STORE_FINAL_STATE = Bool.true →
-          ∀ idx : TileIndex [BK, BV], claActive s K V BK BV idx →
-          sF.readMem ht (claHtOffset s K V BK BV idx)
-            = claHState s k v h0 USE_INITIAL_STATE s_qk_h s_qk_t s_qk_d s_vo_h
-                s_vo_t s_vo_d T K V BT BK BV NT idx.1.val idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `cla_fwd_h_surface`, `claActive`, `claHOffset`, `claHState`, `claHtOffset`, `h0Guarded`, `claContrib`, `h0Elem`, `kGuarded`, `vGuarded`, `kElem`, `vElem`
 

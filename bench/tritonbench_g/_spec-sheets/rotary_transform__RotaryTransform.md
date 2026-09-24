@@ -94,8 +94,6 @@ specification rotary_transform_python_output_summary_general
           stride_out_headdim rotary_dim_half BLOCK_M i)`
 - `hStrideHd : stride_out_headdim ≠ 0`
 - `hHalfBound : BLOCK_HALF ≤ rotary_dim_half`
-- `fun i : Fin BLOCK_HALF => active s seqlen rotary_dim_half BLOCK_M i`
-- `fun i : Fin BLOCK_HALF => active s seqlen rotary_dim_half BLOCK_M i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `out1Offset`, `rotary_kernel_surface`, `rotary_kernel_o0o1_row`, `active`, `rotaryO0Spec`, `rotaryO1Spec`, `rowIndex`, `dimIndex`, `rotOffset`, `x0Offset`, `x1Offset`
 

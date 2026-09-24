@@ -243,11 +243,6 @@ specification embedding_body_io_correctness
               ids (j.1, PUnit.unit) < vob_end_id then xs j else 0
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
-        (pid * BLOCK_N + start_nn + idx.1.val) * stride_out_seq
-          + idx.2.1.val`
-
 **Closed-form spec defs (transitive):** `bodyIO`, `embedding_body_slice`
 
 <details><summary><code>bodyIO</code></summary>
@@ -354,11 +349,6 @@ specification embedding_body_io_correctnessR (R : RoundingModel)
           if vob_start_id ≤ ids (j.1, PUnit.unit) ∧
               ids (j.1, PUnit.unit) < vob_end_id then xs j else 0
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BLOCK_NN, BLOCK_DMODEL] =>
-        (pid * BLOCK_N + start_nn + idx.1.val) * stride_out_seq
-          + idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `bodyIO`, `embedding_body_slice`
 
@@ -487,8 +477,6 @@ specification embedding_kernel_whole_io_correctnessR (R : RoundingModel)
 **Assumptions / layout contracts:**
 - `hInputOutNe : input_ids ≠ out`
 - `hWeightOutNe : weight ≠ out`
-- `fun idx : TileIndex [BLOCK_N, BLOCK_DMODEL] =>
-        (pid * BLOCK_N + idx.1.val) * stride_out_seq + idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `wholeIO`, `embedding_kernel`
 

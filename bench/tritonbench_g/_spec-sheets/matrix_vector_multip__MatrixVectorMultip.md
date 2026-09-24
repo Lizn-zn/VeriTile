@@ -226,7 +226,6 @@ specification mv_one_block_io_correctness (A B C : RegionName)
 **Assumptions / layout contracts:**
 - `hBN : 0 < BLOCK_N`
 - `hBM : 0 < BLOCK_M`
-- `fun i : Fin BLOCK_N => (p₀ * BLOCK_N + i.val) * stride_cn`
 
 **Closed-form spec defs (transitive):** `mvOneBlockIO`, `mvSpecOf`, `mv_kernel_one_block`
 

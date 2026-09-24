@@ -25,6 +25,9 @@ available. The source of each theorem records its full assumptions.
 
 ## From code to proof
 
+Follow the [Python-to-contract walkthrough](/VeriTile/cookbook/vector-add-walkthrough/)
+for an executable vector-add example, its assumptions, and a rejected mutation.
+
 1. Describe a supported kernel using the typed `triton { ... }` DSL.
 2. State its input/output contract or its relationship to another kernel.
 3. Prove the contract against VeriTile's operational semantics in Lean 4.

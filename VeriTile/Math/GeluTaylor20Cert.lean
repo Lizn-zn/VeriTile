@@ -52,8 +52,10 @@ On `[83/100, 19/5]`, the degree-20 Taylor expansion of `geluErrorForCert`
 at `463/200` matches `geluErrorForCert` within `1e-5`. Proving this
 internally would require either (a) Lagrange remainder over an explicit
 21st-derivative bound for the sigmoid / erf composition, or (b) interval
-arithmetic over a micro-partition of the domain. Both are out of scope;
-discharged externally for now. -/
+arithmetic over a micro-partition of the domain. This remains an assumption:
+numerical samples, including samples at the polynomial's extrema, are only
+checkpoint evidence. Those points need not maximize the approximation residual,
+and no checked interval certificate for this remainder is supplied here. -/
 axiom geluError_mid_taylor20_approx :
     ∀ x ∈ Set.Icc (83 / 100 : ℝ) (19 / 5),
       |geluErrorForCert x - geluError_mid_taylor20_forCert x| ≤ 1 / 100000

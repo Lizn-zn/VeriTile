@@ -69,9 +69,6 @@ specification reversed_cumsum_scalar_output_summary_general
 **Assumptions / layout contracts:**
 - `hT : T ≤ BT`
 - `hOutInj : Function.Injective (fun i : Fin BT => singleBlockVecOffset s T i)`
-- `fun i : Fin BT => singleBlockActive s T i`
-- `fun i : Fin BT => vecOffset s' T BT i`
-- `fun i : Fin BT => active s' T BT i`
 
 **Closed-form spec defs (transitive):** `singleBlockVecOffset`, `reversed_cumsum_scalar_surface`, `reversed_cumsum_scalar_single_block_surface`, `singleBlockActive`, `singleBlockRevClosed`, `vecOffset`, `rowElem`, `reversed_cumsum_scalar_rev_slice`, `active`, `globalRevCumsumClosed`, `tIndex`
 
@@ -277,9 +274,6 @@ specification reversed_cumsum_scalar_vec_store_io_correctness
     vecStoreIO BO O T BT ⊨ fun _p₀ _p₁ xs i => xs i
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : Fin BT => p₀ * T + (p₁ * BT + i.val)`
-
 **Closed-form spec defs (transitive):** `vecStoreIO`, `reversed_cumsum_scalar_store_slice`
 
 <details><summary><code>vecStoreIO</code></summary>
@@ -348,9 +342,6 @@ specification reversed_cumsum_scalar_vec_store_io_correctnessR
       (fun i : Fin BT => p₀ * T + (p₁ * BT + i.val))) :
     vecStoreIO BO O T BT ⊨[R, FloatDType.real] fun _p₀ _p₁ xs i => xs i
 ```
-
-**Assumptions / layout contracts:**
-- `fun i : Fin BT => p₀ * T + (p₁ * BT + i.val)`
 
 **Closed-form spec defs (transitive):** `vecStoreIO`, `reversed_cumsum_scalar_store_slice`
 

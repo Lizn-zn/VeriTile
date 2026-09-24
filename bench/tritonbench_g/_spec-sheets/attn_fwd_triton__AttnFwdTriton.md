@@ -66,9 +66,6 @@ specification attn_fwd_triton_output_summary_general
       (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
         outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => active s N_CTX HEAD_ACTIVE BLOCK_M idx`
-- `fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
-          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)`
 
 **Closed-form spec defs (transitive):** `outOffset`, `aftgScoreBoundG`, `qTileAFT2mG`, `kTileAFT2G`, `vTileAFT2mG`, `keyScaleAFT2G`, `qStartAFT2G`, `attn_fwd_triton_surface`, `active`, `attnFwdTritonOutSpecG`, `offZ`, `offH`, `mIndex`, `kIndex`, `qTileAFT2G`, `baseOffsetAFT2G`, `vTileAFT2G`
 

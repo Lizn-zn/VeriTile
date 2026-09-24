@@ -593,12 +593,6 @@ specification triton_attention_bwd_grads_genuine_output_summary_general (H strid
 - `hin : ∀ R : RegionName, R = Q ∨ R = K ∨ R = V ∨ R = DO ∨ R = M ∨ R = Delta →
         R ≠ DV ∧ R ≠ DK ∧ R ≠ DQ`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
-- `fun idx : TileIndex [BM * nb, BD] => (DQ, base + idx.1.val * BD + idx.2.1.val)`
-- `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
-- `fun idx : TileIndex [BM * nb, BD] => (DV, base + idx.1.val * BD + idx.2.1.val)`
-- `fun idx : TileIndex [BM * nb, BD] => idx.1.val < nb * BM`
-- `fun idx : TileIndex [BM * nb, BD] => (DK, base + idx.1.val * BD + idx.2.1.val)`
 
 **Closed-form spec defs (transitive):** `triton_attention_bwd_kernel`, `bwdKernelDQSpecG`, `bwdFp16`, `bwdKernelPG`, `bwdKernelDOG`, `bwdKernelDSG`, `bwdKernelQG`, `bwdKernelDQ0G`, `bwdKernelKG`, `storeValue`, `bwdKernelQKG`, `bwdKernelMG`, `bwdKernelDPG`, `active`, `accOffset`, `bwdKernelVG`, `bwdKernelDiG`, `rowIndex`, `dIndex`
 

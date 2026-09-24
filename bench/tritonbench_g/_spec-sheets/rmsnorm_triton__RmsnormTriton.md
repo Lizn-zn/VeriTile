@@ -39,7 +39,6 @@ specification rmsnorm_full_output_summary
 - `hox : o ≠ x`
 - `how : o ≠ w`
 - `hsok : 0 < sok`
-- `fun _ : Fin N => True`
 
 **Closed-form spec defs (transitive):** `rmsnorm_triton`, `outOff`, `rmsSpecFull`, `xOff`, `meanSq`
 

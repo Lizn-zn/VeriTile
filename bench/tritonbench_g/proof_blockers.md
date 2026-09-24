@@ -1,116 +1,40 @@
 # TritonBench-G Proof Blockers
 
-No current TritonBench-G port exposes an explicit algorithm-layer `hAlg`
-correctness blocker.
+The current statement-scope inventory is `coverage_review.json`, checked against
+both Lean and Python source fingerprints by `bench/coverage_review.py` and
+rendered into `proof_gap_manifest.tsv` by `bench/check_proof_gap_manifest.py`.
+The [browsable coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)
+shows exact theorem statements, IO definitions, Python functions, numeric
+models, and limitations for all 345 headlines across 173 ports.
 
-The mechanical audit still remains a translation-consistency gate, not a
-substitute for future human line review against `review_criteria.md`.
+The 2026-09-24 review records 8 `full_value_candidate`, 296 `specialization`,
+37 `precomputed_input_slice`, 3 `pre_rounding_slice`, and 1 `blocked_summary`
+rows. A candidate is subject to its model and explicit assumptions; a scope
+review is not an independent certification of the Python translation or GPU
+execution. Source changes require a new review rather than automatically
+retaining a favorable label. Explicit source annotations cannot be overridden
+by the review metadata. Axiom cleanliness is a separate property.
 
-The stronger proof-status inventory for #146 lives in
-`proof_gap_manifest.tsv` and is checked by
-`bench/check_proof_gap_manifest.py`. It classifies every current
-`output_summary` declaration and links each remaining non-full proof gap to a
-specific follow-up issue plus a blocker family. Unannotated declarations are
-`unreviewed`: their checked proofs remain valid, but the inventory makes no
-full-original-kernel coverage claim. `full_value_candidate` now requires an
-explicit `coverage:` annotation and still denotes a candidate for human review.
+Several headline statements consume prepared intermediates even when the file
+also contains a full producer surface or projection proof. For example,
+`flash_decode2_llama`, `flash_decode2_phi`, `chunk_cumsum_vector`, and
+`layer_norm_ops` include writeback contracts whose inputs are already computed.
+The inventory records the actual headline's scope, without transferring claims
+from neighboring declarations. `rotary_emb` proves separate store contracts;
+its full-surface projection does not itself compose them into one full IO proof.
 
-The inventory distinguishes `specialization`, `precomputed_input_slice`,
-`pre_rounding_slice`, `projection_only`, and `blocked_summary`. These describe
-proof scope separately from axiom cleanliness. For each reviewed headline,
-the annotation's evidence should name the source kernel, mathematical target,
-and any excluded operations.
+The quantization gaps remain explicit: `int8_quantization` takes `ScalePre`;
+`quantize_global` and `rowwise_quantization_triton` have pre-rounding claims;
+faithful fixed-width cast/rounding behavior is not inferred from these slices.
+Existing issue links identify the historical blocker family, not an assertion
+that the linked issue is currently open or that closing it completed a proof.
 
-Known quantization gaps (#158): `int8_quantization` proves a store slice with
-`ScalePre` as input, not the original Q/K scale reduction and rounded int8
-result. `quantize_global` and `rowwise_quantization_triton` prove real-valued
-pre-rounding slices; the faithful CUDA `llrint`/int8 surfaces remain blocked.
-The latter does compute its row maximum. Projection facts for a full surface
-must not be read as value correctness of that surface. Fixed-width cast gaps
-also remain tracked under #154.
-
-The historical completion notes below describe particular proof work. They
-are not explicit coverage reviews for the current declarations; the manifest
-is authoritative about which rows still require review.
-The broad #150 recurrent/cumsum bucket has been split by mechanism:
-the now-discharged `chunk-cumsum-carry-fold` (#185) tracks chunk cumsum
-summaries now connected to full scalar, vector, and chunked forward surfaces,
-the now-discharged
-`decay-cumsum-scan-fold` (#186) tracks `decay_cumsum.py` summaries now
-connected to full prepare, forward cumsum, and backward global-cumsum surfaces,
-the now-discharged `recurrent-state-loop-fold` (#187) connects chunk-gate,
-HGRN, and RWKV recurrent state summaries to their full producer surfaces,
-the now-discharged `gla-output-tile-producer` (#188) tracks
-`chunk_gla_simple.py` summaries whose proof used to start from a precomputed
-output tile, and
-the now-discharged `reverse-cumsum-directional-scan` (#94) tracks reverse
-cumsum direction semantics. All reversed-cumsum case rows now connect the
-checked surfaces to full-surface output readbacks.
-The broad #149 attention/softmax bucket has been split as well:
-`attention-final-store-lift` tracks summaries that still connect a faithful
-surface to a final-store/proof-oriented writeback from precomputed Acc/Score/Prob
-tiles under #161. The #162 attention recurrence rows are now discharged. The `triton_attention.py` forward
-row now connects `Out`, `L`, and `M` readbacks to the full forward surface.
-Flash-attention cases 1 and 2 now connect `O` and `L` readbacks to their full
-causal and non-causal forward surfaces.
-All mixed-sparse attention cases now connect `Out` readbacks to the full
-mixed-sparse forward surface.
-The lightning-attention row now connects `Out`/`DQ`/`DK`/`DV` readbacks to
-launched full surfaces.
-The token-attention-reduction rows
-are now discharged: the LLaMA and Bloom token-softmax case-1 rows, the
-softmax-reduceV row, and the reduce-V, Mistral, and LLaMA2 token-attention
-case-1 rows all connect the checked probability/output directly to their full
-Python-shape surfaces.
-The broad #151 reduction/layernorm aggregation bucket has been split into
-narrower follow-ups: the now-discharged
-`chunk-delta-forward-recurrence-store` (#190) connects the two chunk-delta
-forward summaries to the full producer surface for `h`, `v_new`, and optional
-`final_state`, while the now-discharged
-`layernorm-backward-residual-recompute-aggregation` (#191) covers the LayerNorm
-backward residual/recompute summaries that used to compose row-level C1/C2
-reductions, DX/Y writebacks, and partial DW/DB slices.
-The #161 final-store bucket has been split again into kernel-specific producer
-obligations: the now-discharged
-`attention-fwd-triton1-bo-bhpre-producers` (#165),
-the now-discharged `dense-attention-acc-store` (#166), whose remaining
-Q/K/V streaming-softmax `Acc`/`L` producer proof is now discharged by
-`dense-attention-online-softmax-recurrence` (#199),
-the now-discharged `context-attention-mistral-sliding-window-acc-store` (#167),
-`context-attention-nopad-varlen-acc-store` (#167), and
-`flash-decode-normalized-vector-store` (#168).
-The #168 flash-decode normalized-vector bucket has been split into
-kernel-specific stage2 recurrence obligations:
-the now-discharged `flash-decode-llama-stage2-normalization` (#171) and
-`flash-decode-phi-stage2-normalization` (#172).
-The #171 LLaMA stage2 normalization bucket now connects loop-produced `Acc` and
-`SumExp` values to the final `O` writeback as a full-value candidate, and the
-#181 LLaMA running-max recurrence step over `Mid_O_LogExpSum` is now also a
-full-value candidate.
-The #172 Phi stage2 recurrence bucket has been split into narrower
-obligations: the now-discharged `flash-decode-phi-running-max-recurrence`
-(#175), the now-discharged `flash-decode-phi-masked-accumulator-recurrence`
-(#176), and the now-discharged `flash-decode-phi-normalization-store` (#177).
-The #175 path states and proves the Python test-shape running `max_logic`
-recurrence, #176 carries the Python test-shape masked `Mid_O` load through the
-`AccOut` and `SumExpOut` recurrence step, and #177 connects the Python
-test-shape `Acc` and `SumExp` outputs to the final masked `Out` writeback; all
-three are historically described as full-value candidates (current coverage is unreviewed unless explicitly annotated).
-The broad #148 matmul/dot bucket is now discharged: GEMV, BMM, dequantization,
-IV-dependent matmul, plain matmul, activation-tail, and TMA summaries connect
-their checked outputs directly to full Python-shape surfaces and are
-historically described as full-value candidates (current coverage is unreviewed unless explicitly annotated).
-The #191 layer-norm backward residual/recompute paths now connect the checked
-Python test-shape outputs to the full backward surface for DX, recomputed Y,
-and partial DW/DB, so the affected `layer_norm_ops.py` summaries are
-full-value candidates.
-The broad #153 rotary/cache bucket is now discharged. The rotary 2D tile rows,
-forward rope-transform row, and backward rope-transform row connect their
-checked surfaces to full-surface output readbacks and are full-value candidates
-in `proof_gap_manifest.tsv`.
-The explicit blocked-output summaries formerly tracked by the broad #152
-`semantic-blocker` bucket are all quantization `llrint` / int8-cast blockers
-and now track under the open #154 `fixed-width-int8-cast-semantics` family.
+The older completion narrative is preserved in
+[the pre-review revision](https://github.com/Lizn-zn/VeriTile/blob/c29712db635d72fec66c6c5f6ee1fb22b3605e2e/bench/tritonbench_g/proof_blockers.md).
+Its broad “discharged” and “full-value” labels must not replace the current
+per-statement inventory. The sections below track additional named-surface,
+frame, and translation limitations. The mechanical translation scan remains
+a consistency gate, not a substitute for review against `review_criteria.md`.
 
 ## Correctness-Surface Blockers
 

@@ -45,10 +45,6 @@ specification pra_fwd_o_exec_genuine
 - `hσ : BV ≤ s_vo_t`
 - `hBTS : BTL % BTS = 0`
 - `hBTSpos : 0 < BTS`
-- `∀ idx : TileIndex [BTL, BV], praOActive s T V BV BTL idx →
-          sF.readMem o (praOOffset s B H s_vo_h s_vo_t s_vo_d V BV BTL idx)
-            = praOOut s q k v s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d scale
-                H T K V BTL BK BV idx.1.val idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `pra_fwd_surface`, `praOActive`, `praOOffset`, `praOOut`, `praIv`, `praOBase`, `praW`, `praBeta`, `praScore`, `praVGuarded`, `praNV`, `praIk`, `praQGuarded`, `praKGuarded`
 
@@ -361,18 +357,6 @@ specification pra_bwd_dkv_exec_genuine
 - `hσv : BV ≤ s_vo_t`
 - `hBTS : BTL % BTS = 0`
 - `hBTSpos : 0 < BTS`
-- `∀ idx : TileIndex [BTL, BK], prbDkActive i_c i_k T K BTL BK idx →
-          sF.readMem dk
-              (prbDkOffset i_bh i_c i_k i_v B H s_qk_h s_qk_t s_qk_d BTL BK idx)
-            = prbDkOut s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-                i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
-                idx.1.val idx.2.1.val`
-- `∀ idx : TileIndex [BTL, BV], prbDvActive i_c i_v T V BTL BV idx →
-          sF.readMem dv
-              (prbDvOffset i_bh i_c i_k i_v B H s_vo_h s_vo_t s_vo_d BTL BV idx)
-            = prbDvOut s q k v do_ s_qk_h s_qk_t s_qk_d s_vo_h s_vo_t s_vo_d
-                i_bh i_c i_k i_v i_h scale T K V BTL BTS BK BV
-                idx.1.val idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `pra_bwd_dkv_surface`, `prbDkActive`, `prbDkOffset`, `prbDkOut`, `prbDvActive`, `prbDvOffset`, `prbDvOut`, `prbNB`, `praW`, `prbBeta`, `prbDsVal`, `prbQGuarded`, `prbSVal`, `prbDoGuarded`, `prbVGuarded`, `prbKGuarded`
 

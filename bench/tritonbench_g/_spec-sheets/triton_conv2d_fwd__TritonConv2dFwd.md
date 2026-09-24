@@ -28,7 +28,17 @@ specification conv2d_output_summary
         out_feat_dim out_height out_width IBS IIFS IHS IWS WOFS WIFS WHS WWS OBS OOFS OHS OWS
         KH KW SH SW PH PW groups Bool.true tf32 BHW BIN OF).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := conv2d_forward_surface Input Weight Output batch_dim in_feat_dim in_height in_width
+        out_feat_dim out_height out_width IBS IIFS IHS IWS WOFS WIFS WHS WWS OBS OOFS OHS OWS
+        KH KW SH SW PH PW groups Bool.true tf32 BHW BIN OF)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (active s BHW OF batch_dim out_height out_width (out_feat_dim / groups))
+        (fun idx => (Output, outputOffset s BHW OF out_height out_width OBS OOFS OHS OWS (out_feat_dim / groups) idx)))
+      (expected := fun idx : TileIndex [BHW, OF] =>
+        convSpec s Input Weight BHW BIN OF batch_dim in_height in_width
+          IBS IIFS IHS IWS WOFS WIFS WHS WWS out_height out_width (BIN * numCBlocks) (out_feat_dim / groups)
+          SH SW PH PW KH KW numCBlocks idx.1 idx.2.1)
 ```
 
 **Assumptions / layout contracts:**
@@ -36,7 +46,7 @@ specification conv2d_output_summary
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `hIGD : in_feat_dim / groups = BIN * numCBlocks`
 
-**Closed-form spec defs (transitive):** `outputOffset`, `conv2d_forward_surface`, `batchIdx`, `featIdx`, `heightIdx`, `widthIdx`, `bhIdx`, `bhwIdx`
+**Closed-form spec defs (transitive):** `outputOffset`, `conv2d_forward_surface`, `active`, `convSpec`, `batchIdx`, `featIdx`, `heightIdx`, `widthIdx`, `accH`, `bhIdx`, `bhwIdx`, `accW`, `accC`, `blockDot`, `miVal`, `mwVal`, `inMask`, `inAddr`, `wMask`, `wAddr`, `inHeightOff`, `inWidthOff`, `inputBase`, `weightBase`
 
 <details><summary><code>outputOffset</code></summary>
 
@@ -135,6 +145,37 @@ def conv2d_forward_surface
 ```
 </details>
 
+<details><summary><code>active</code></summary>
+
+```
+/-- The output store-mask predicate for tile lane `(i,j)`. -/
+```
+```lean
+def active (s0 : BlockState) (BHW OF batch_dim OH OW OGD : Nat) (idx : TileIndex [BHW, OF]) : Prop :=
+  ((batchIdx s0 OH OW BHW idx.1 < batch_dim ∧ featIdx s0 OF idx.2.1 < OGD) ∧
+    heightIdx s0 OH OW BHW idx.1 < OH) ∧ widthIdx s0 OW BHW idx.1 < OW
+
+instance (s0 : BlockState) (BHW OF batch_dim OH OW OGD : Nat) (idx : TileIndex [BHW, OF]) :
+    Decidable (active s0 BHW OF batch_dim OH OW OGD idx) := by unfold active; infer_instance
+```
+</details>
+
+<details><summary><code>convSpec</code></summary>
+
+```
+/-- **Genuine conv2d spec**: every output cell equals the full im2col convolution
+sum over the kernel window and input-feature axis. -/
+```
+```lean
+noncomputable def convSpec (s0 : BlockState)
+    (Input Weight : RegionName) (BHW BIN OF batch_dim in_height in_width
+      IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW KH KW numCBlocks : Nat)
+    (i : Fin BHW) (j : Fin OF) : ℝ :=
+  accH s0 Input Weight BHW BIN OF batch_dim in_height in_width
+    IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW KW numCBlocks KH i j
+```
+</details>
+
 <details><summary><code>batchIdx</code></summary>
 
 ```
@@ -175,6 +216,23 @@ def widthIdx (s0 : BlockState) (OW BHW : Nat) (i : Fin BHW) : Nat := bhwIdx s0 B
 ```
 </details>
 
+<details><summary><code>accH</code></summary>
+
+```
+/-- Accumulator after `hCount` complete kernel-height iterations (each runs the
+full kernel-width loop). The full convolution value is `accH … KH`. -/
+```
+```lean
+noncomputable def accH (s0 : BlockState)
+    (Input Weight : RegionName) (BHW BIN OF batch_dim in_height in_width
+      IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW KW numCBlocks : Nat)
+    (hCount : Nat) (i : Fin BHW) (j : Fin OF) : ℝ :=
+  (Finset.range hCount).sum fun h =>
+    accW s0 Input Weight BHW BIN OF batch_dim in_height in_width
+      IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW numCBlocks h KW i j
+```
+</details>
+
 <details><summary><code>bhIdx</code></summary>
 
 ```
@@ -192,6 +250,200 @@ def bhIdx (s0 : BlockState) (OW BHW : Nat) (i : Fin BHW) : Nat := bhwIdx s0 BHW 
 ```
 ```lean
 def bhwIdx (s0 : BlockState) (BHW : Nat) (i : Fin BHW) : Nat := s0.pids 0 * BHW + i.val
+```
+</details>
+
+<details><summary><code>accW</code></summary>
+
+```
+/-- Accumulator after `wCount` complete kernel-width iterations within outer
+iteration `h` (each width iteration runs the full `numCBlocks`-block c-loop). -/
+```
+```lean
+noncomputable def accW (s0 : BlockState)
+    (Input Weight : RegionName) (BHW BIN OF batch_dim in_height in_width
+      IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW numCBlocks : Nat)
+    (h wCount : Nat) (i : Fin BHW) (j : Fin OF) : ℝ :=
+  (Finset.range wCount).sum fun w =>
+    accC s0 Input Weight BHW BIN OF batch_dim in_height in_width
+      IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW h w numCBlocks i j
+```
+</details>
+
+<details><summary><code>accC</code></summary>
+
+```
+/-- Accumulator after `cbCount` complete input-feature blocks within the
+`(h, w)` iteration (the innermost-loop partial value, on top of the `accHW`
+prefix). The c-loop index for block `cb` is `cb · BIN`. -/
+```
+```lean
+noncomputable def accC (s0 : BlockState)
+    (Input Weight : RegionName) (BHW BIN OF batch_dim in_height in_width
+      IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW : Nat)
+    (h w cbCount : Nat) (i : Fin BHW) (j : Fin OF) : ℝ :=
+  (Finset.range cbCount).sum fun cb =>
+    blockDot s0 Input Weight BHW BIN OF batch_dim in_height in_width
+      IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW h w (cb * BIN) i j
+```
+</details>
+
+<details><summary><code>blockDot</code></summary>
+
+```
+/-- The per-block masked dot at output lane `(i,j)`, block `(h,w,c)`:
+`Σ_{e<BIN} miVal(h,w,c,i,e) · mwVal(h,w,c,e,j)`. This is one `tl.dot`'s worth. -/
+```
+```lean
+noncomputable def blockDot (s0 : BlockState)
+    (Input Weight : RegionName) (BHW BIN OF batch_dim in_height in_width
+      IBS IIFS IHS IWS WOFS WIFS WHS WWS OH OW IGD OGD SH SW PH PW : Nat)
+    (h w c : Nat) (i : Fin BHW) (j : Fin OF) : ℝ :=
+  Finset.univ.sum fun e : Fin BIN =>
+    miVal s0 Input BHW BIN batch_dim in_height in_width IBS IIFS IHS IWS OH OW IGD SH SW PH PW h w c i e
+      * mwVal s0 Weight BIN OF IGD OGD WOFS WIFS WHS WWS h w c e j
+```
+</details>
+
+<details><summary><code>miVal</code></summary>
+
+```
+/-- The masked input value at lane `(i,e)`, block `(h,w,c)`: the loaded `Input`
+cell when the input mask holds, else `0` (zero padding under clean `undef`). -/
+```
+```lean
+noncomputable def miVal (s0 : BlockState)
+    (Input : RegionName) (BHW BIN batch_dim in_height in_width
+      IBS IIFS IHS IWS OH OW IGD SH SW PH PW : Nat)
+    (h w c : Nat) (i : Fin BHW) (e : Fin BIN) : ℝ :=
+  if inMask s0 batch_dim in_height in_width OH OW BHW IGD SH SW PH PW h w c i e then
+    s0.readMem Input (inAddr s0 IBS IIFS IHS IWS OH OW BHW IGD SH SW PH PW h w c i e)
+  else 0
+```
+</details>
+
+<details><summary><code>mwVal</code></summary>
+
+```
+/-- The masked weight value at lane `(e,j)`, block `(h,w,c)`. -/
+```
+```lean
+noncomputable def mwVal (s0 : BlockState)
+    (Weight : RegionName) (BIN OF IGD OGD WOFS WIFS WHS WWS : Nat)
+    (h w c : Nat) (e : Fin BIN) (j : Fin OF) : ℝ :=
+  if wMask s0 IGD OGD OF c e j then
+    s0.readMem Weight (wAddr s0 WOFS WIFS WHS WWS OF OGD h w c e j)
+  else 0
+```
+</details>
+
+<details><summary><code>inMask</code></summary>
+
+```
+/-- The kernel's input mask Prop at lane `(i,e)`, block `(h,w,c)`. -/
+```
+```lean
+def inMask (s0 : BlockState)
+    (batch_dim in_height in_width OH OW BHW IGD SH SW PH PW : Nat)
+    (h w c : Nat) (i : Fin BHW) (e : Fin BIN) : Prop :=
+  ((((batchIdx s0 OH OW BHW i < batch_dim ∧ c + e.val < IGD) ∧
+      (0 : Int) ≤ inHeightOff s0 OH OW BHW SH PH h i) ∧
+      inHeightOff s0 OH OW BHW SH PH h i < (in_height : Int)) ∧
+      (0 : Int) ≤ inWidthOff s0 OW BHW SW PW w i) ∧
+      inWidthOff s0 OW BHW SW PW w i < (in_width : Int)
+
+instance (s0 : BlockState) (batch_dim in_height in_width OH OW BHW IGD SH SW PH PW h w c : Nat)
+    (i : Fin BHW) (e : Fin BIN) :
+    Decidable (inMask s0 batch_dim in_height in_width OH OW BHW IGD SH SW PH PW h w c i e) := by
+  unfold inMask; infer_instance
+```
+</details>
+
+<details><summary><code>inAddr</code></summary>
+
+```
+/-- The kernel's input load address at lane `(i,e)`, block `(h,w,c)`:
+`inputBase i + IIFS·(c+e) + (IHS·inHeightOff).toNat + (IWS·inWidthOff).toNat`. -/
+```
+```lean
+def inAddr (s0 : BlockState)
+    (IBS IIFS IHS IWS OH OW BHW IGD SH SW PH PW : Nat) (h w c : Nat) (i : Fin BHW) (e : Fin BIN) : Nat :=
+  inputBase s0 IBS IIFS OH OW BHW IGD i + IIFS * (c + e.val)
+    + ((IHS : Int) * inHeightOff s0 OH OW BHW SH PH h i).toNat
+    + ((IWS : Int) * inWidthOff s0 OW BHW SW PW w i).toNat
+```
+</details>
+
+<details><summary><code>wMask</code></summary>
+
+```
+/-- The kernel's weight mask Prop at lane `(e,j)`, block `(h,w,c)`. -/
+```
+```lean
+def wMask (s0 : BlockState) (IGD OGD OF c : Nat) (e : Fin BIN) (j : Fin OF) : Prop :=
+  c + e.val < IGD ∧ featIdx s0 OF j < OGD
+
+instance (s0 : BlockState) (IGD OGD OF c : Nat) (e : Fin BIN) (j : Fin OF) :
+    Decidable (wMask s0 IGD OGD OF c e j) := by unfold wMask; infer_instance
+```
+</details>
+
+<details><summary><code>wAddr</code></summary>
+
+```
+/-- The kernel's weight load address at lane `(e,j)`, block `(h,w,c)`:
+`weightBase j + WIFS·(c+e) + WHS·h + WWS·w`. -/
+```
+```lean
+def wAddr (s0 : BlockState)
+    (WOFS WIFS WHS WWS OF OGD : Nat) (h w c : Nat) (e : Fin BIN) (j : Fin OF) : Nat :=
+  weightBase s0 WOFS OF OGD j + WIFS * (c + e.val) + WHS * h + WWS * w
+```
+</details>
+
+<details><summary><code>inHeightOff</code></summary>
+
+```
+/-- The kernel's `input_height_offset` (an `Int`): `h - padding_height + stride_height · heightIdx i`. -/
+```
+```lean
+def inHeightOff (s0 : BlockState) (OH OW BHW SH PH : Nat) (h : Nat) (i : Fin BHW) : Int :=
+  (h : Int) - (PH : Int) + (SH : Int) * (heightIdx s0 OH OW BHW i : Int)
+```
+</details>
+
+<details><summary><code>inWidthOff</code></summary>
+
+```
+/-- The kernel's `input_width_offset` (an `Int`): `w - padding_width + stride_width · widthIdx i`. -/
+```
+```lean
+def inWidthOff (s0 : BlockState) (OW BHW SW PW : Nat) (w : Nat) (i : Fin BHW) : Int :=
+  (w : Int) - (PW : Int) + (SW : Int) * (widthIdx s0 OW BHW i : Int)
+```
+</details>
+
+<details><summary><code>inputBase</code></summary>
+
+```
+/-- Per-lane input row base (the `Input +=` prefix), lane `i`:
+`input_batch_stride · batchIdx i + input_in_feat_stride · pid2 · in_group_dim`. -/
+```
+```lean
+def inputBase (s0 : BlockState) (IBS IIFS OH OW BHW IGD : Nat) (i : Fin BHW) : Nat :=
+  IBS * batchIdx s0 OH OW BHW i + IIFS * s0.pids 2 * IGD
+```
+</details>
+
+<details><summary><code>weightBase</code></summary>
+
+```
+/-- Per-lane weight col base (the `Weight +=` prefix), lane `j`:
+`weight_out_feat_stride · featIdx j + weight_out_feat_stride · pid2 · out_group_dim`. -/
+```
+```lean
+def weightBase (s0 : BlockState) (WOFS OF OGD : Nat) (j : Fin OF) : Nat :=
+  WOFS * featIdx s0 OF j + WOFS * s0.pids 2 * OGD
 ```
 </details>
 
@@ -281,9 +533,6 @@ specification triton_conv2d_fwd_io_correctness (R : RoundingModel)
 - `hfp16 : R.round .fp16 = id`
 - `hBIN : 0 < BIN`
 - `hIGD : in_feat_dim / groups = BIN * numCBlocks`
-- `fun idx : TileIndex [BHW, OF] =>
-        pOutAddr pid₀ pid₁ pid₂ BHW OF out_height out_width OBS OOFS OHS OWS
-          (out_feat_dim / groups) idx.1.val idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `pOutAddr`, `triton_conv2d_fwd_IO`, `convStreamSum`, `pBatch`, `pFeat`, `pHeight`, `pWidth`, `conv2d_forward_surface`, `pInAddr`, `convStepH`, `convStepW`, `convStepCB`, `pWAddr`, `pInMask`, `pWMask`, `pActive`, `convInLane`, `convWLane`, `pBh`, `pBhw`, `pInputBase`, `pInH`, `pInW`, `pWeightBase`
 

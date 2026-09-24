@@ -51,10 +51,6 @@ specification matmul_dequant_int4_exec_genuine
                 (s.pids 0 * BK + idx.1.val) (s.pids 1 * BN + idx.2.1.val)
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BK, BN] =>
-        fpbAddr stride_fpbk stride_fpbn BK BN (s.pids 0) (s.pids 1) idx`
-
 **Closed-form spec defs (transitive):** `fpbAddr`, `matmul_dequant_int4_surface`, `dequantSpec`, `bNibble`, `zpNibble`, `scElem`, `bWord`, `zpWord`
 
 <details><summary><code>fpbAddr</code></summary>

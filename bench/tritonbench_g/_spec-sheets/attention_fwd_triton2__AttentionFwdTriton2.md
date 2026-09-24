@@ -46,7 +46,29 @@ specification attention_fwd_triton2_output_summary_general
       Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
       HEAD_ACTIVE STAGE).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := attention_fwd_triton2_surface Q K V Q_scale K_scale Out
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        stride_qz stride_qh HEAD_DIM 1
+        Z H (BLOCK_N * numKVBlocks) HEAD_DIM BLOCK_M BLOCK_N BLOCK_DMODEL
+        HEAD_ACTIVE STAGE)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+          active s (BLOCK_N * numKVBlocks) HEAD_ACTIVE BLOCK_M idx)
+        (fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] => (Out,
+          outOffset s H stride_qz stride_qh HEAD_DIM 1 BLOCK_M idx)))
+      (expected := fun idx : TileIndex [BLOCK_M, BLOCK_DMODEL] =>
+        if h : idx.2.1.val < HEAD_ACTIVE then
+          attentionRealBase2PerKeyScale
+            (qTile s Q H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE)
+            (kTile s K H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (vTile s V H stride_qz stride_qh HEAD_DIM (BLOCK_N * numKVBlocks) HEAD_ACTIVE)
+            (keyScale s Q_scale K_scale (BLOCK_N * numKVBlocks) BLOCK_M BLOCK_N
+              (BLOCK_N * numKVBlocks))
+            (idx.1, ⟨idx.2.1.val, h⟩, PUnit.unit)
+        else (0 : ℝ))
 ```
 
 **Assumptions / layout contracts:**
@@ -55,7 +77,7 @@ specification attention_fwd_triton2_output_summary_general
 - `hHD : HEAD_ACTIVE ≤ HEAD_DIM`
 - `hundef : ∀ rg o, s.undef rg o = 0`
 
-**Closed-form spec defs (transitive):** `attention_fwd_triton2_surface`, `cdiv`
+**Closed-form spec defs (transitive):** `attention_fwd_triton2_surface`, `active`, `outOffset`, `qTile`, `kTile`, `vTile`, `keyScale`, `cdiv`, `mIndex`, `kIndex`, `offZ`, `offH`, `baseOffset`
 
 <details><summary><code>attention_fwd_triton2_surface</code></summary>
 
@@ -140,6 +162,78 @@ def attention_fwd_triton2_surface
 ```
 </details>
 
+<details><summary><code>active</code></summary>
+
+```lean
+def active
+    (s : BlockState) (N_CTX HEAD_ACTIVE BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Prop :=
+  mIndex s BLOCK_M idx.1 < N_CTX ∧ kIndex idx < HEAD_ACTIVE
+```
+</details>
+
+<details><summary><code>outOffset</code></summary>
+
+```lean
+def outOffset
+    (s : BlockState)
+    (H stride_qz stride_qh stride_qm stride_qk BLOCK_M : Nat)
+    (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
+  offZ s H * stride_qz + offH s H * stride_qh +
+    mIndex s BLOCK_M idx.1 * stride_qm + kIndex idx * stride_qk
+```
+</details>
+
+<details><summary><code>qTile</code></summary>
+
+```lean
+noncomputable def qTile (s : BlockState) (Q : RegionName)
+    (H stride_qz stride_qh HEAD_DIM BLOCK_M HEAD_ACTIVE : Nat) :
+    TileIndex [BLOCK_M, HEAD_ACTIVE] → ℝ :=
+  fun (i, e, _) =>
+    s.readMem Q (baseOffset s H stride_qz stride_qh + mIndex s BLOCK_M i * HEAD_DIM + e.val)
+```
+</details>
+
+<details><summary><code>kTile</code></summary>
+
+```lean
+noncomputable def kTile (s : BlockState) (K : RegionName)
+    (H stride_qz stride_qh HEAD_DIM S HEAD_ACTIVE : Nat) :
+    TileIndex [S, HEAD_ACTIVE] → ℝ :=
+  fun (j, e, _) =>
+    s.readMem K (baseOffset s H stride_qz stride_qh + j.val * HEAD_DIM + e.val)
+```
+</details>
+
+<details><summary><code>vTile</code></summary>
+
+```lean
+noncomputable def vTile (s : BlockState) (V : RegionName)
+    (H stride_qz stride_qh HEAD_DIM S HEAD_ACTIVE : Nat) :
+    TileIndex [S, HEAD_ACTIVE] → ℝ :=
+  fun (j, d, _) =>
+    s.readMem V (baseOffset s H stride_qz stride_qh + j.val * HEAD_DIM + d.val)
+```
+</details>
+
+<details><summary><code>keyScale</code></summary>
+
+```
+/-- Per-key scale `q_scale · k_scale[block(j)]`, `block(j) = j / BLOCK_N`.
+`q_scale` is read at `off_hz · cdiv(N_CTX, BLOCK_M) + pid₀`; `k_scale[b]` at
+`off_hz · cdiv(N_CTX, BLOCK_N) + b`. -/
+```
+```lean
+noncomputable def keyScale (s : BlockState) (Q_scale K_scale : RegionName)
+    (N_CTX BLOCK_M BLOCK_N S : Nat) :
+    Fin S → ℝ :=
+  fun j =>
+    s.readMem Q_scale (s.pids 1 * cdiv N_CTX BLOCK_M + s.pids 0) *
+      s.readMem K_scale (s.pids 1 * cdiv N_CTX BLOCK_N + j.val / BLOCK_N)
+```
+</details>
+
 <details><summary><code>cdiv</code></summary>
 
 ```
@@ -147,6 +241,49 @@ def attention_fwd_triton2_surface
 ```
 ```lean
 def cdiv (a b : Nat) : Nat := (a + b - 1) / b
+```
+</details>
+
+<details><summary><code>mIndex</code></summary>
+
+```lean
+def mIndex (s : BlockState) (BLOCK_M : Nat) (i : Fin BLOCK_M) : Nat :=
+  s.pids 0 * BLOCK_M + i.val
+```
+</details>
+
+<details><summary><code>kIndex</code></summary>
+
+```lean
+def kIndex (idx : TileIndex [BLOCK_M, BLOCK_DMODEL]) : Nat :=
+  idx.2.1.val
+```
+</details>
+
+<details><summary><code>offZ</code></summary>
+
+```lean
+def offZ (s : BlockState) (H : Nat) : Nat :=
+  s.pids 1 / H
+```
+</details>
+
+<details><summary><code>offH</code></summary>
+
+```lean
+def offH (s : BlockState) (H : Nat) : Nat :=
+  s.pids 1 % H
+```
+</details>
+
+<details><summary><code>baseOffset</code></summary>
+
+```
+/-- Batch/head base offset `off_z · stride_qz + off_h · stride_qh`. -/
+```
+```lean
+def baseOffset (s : BlockState) (H stride_qz stride_qh : Nat) : Nat :=
+  offZ s H * stride_qz + offH s H * stride_qh
 ```
 </details>
 

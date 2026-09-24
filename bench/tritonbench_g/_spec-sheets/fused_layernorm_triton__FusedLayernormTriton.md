@@ -83,7 +83,6 @@ specification fused_layernorm_triton_output_summary_general
 **Assumptions / layout contracts:**
 - `hLe : rnumel ≤ RBLOCK`
 - `hMeanRstd : out_ptr0 ≠ in_out_ptr0`
-- `fun i : Fin RBLOCK => activeLane s' rnumel RBLOCK i`
 
 **Closed-form spec defs (transitive):** `fused_layernorm_triton_surface`, `fused_layernorm_triton_reduce_slice`, `rowMeanSpec`, `rowRstdSpec`, `fused_layernorm_triton_normalize_slice`, `activeLane`, `yOffset`, `rowYSpec`, `rIndex`, `rowElem`, `rowVarSpec`
 

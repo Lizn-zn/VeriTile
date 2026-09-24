@@ -56,11 +56,6 @@ specification var_len_copy_kernel_triton_small_length_output_summary
 - `hLen : s.readMemValue .nat (Region.cast old_a_len : RegionName) (s.pids 0)
         ≤ BLOCK_SIZE`
 - `hLenPos : 0 < s.readMemValue .nat (Region.cast old_a_len : RegionName) (s.pids 0)`
-- `fun i : Fin BLOCK_SIZE =>
-        s.readMemValue .nat (Region.cast new_a_start : RegionName) (s.pids 0)
-          + i.val`
-- `fun i : Fin BLOCK_SIZE =>
-          i.val < s.readMemValue .nat (Region.cast old_a_len : RegionName) (s.pids 0)`
 
 **Closed-form spec defs (transitive):** `var_len_copy_kernel_triton`
 

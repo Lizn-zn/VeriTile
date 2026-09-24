@@ -4,6 +4,8 @@
 
 📖 **文档站:** [lizn-zn.github.io/VeriTile/](https://lizn-zn.github.io/VeriTile/)(bench 翻译手册、项目状态、架构)。本地起:`./site/scripts/dev.sh`。
 
+逐条查看 [定理覆盖范围](https://lizn-zn.github.io/VeriTile/proofs/coverage/)：区分配置特化、中间步骤、预计算输入切片与剩余缺口。完整的 [VectorAdd 教程](https://lizn-zn.github.io/VeriTile/cookbook/vector-add-walkthrough/) 展示 Python 到已检查合约的工作流。
+
 VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明这些 kernel
 对数学规范的正确性 (correctness),或者两个 kernel 之间的等价性 (refinement)。
 实现上,DSL 通过 `triton { ... }` 语法嵌入,为支持的子集定义类型化的

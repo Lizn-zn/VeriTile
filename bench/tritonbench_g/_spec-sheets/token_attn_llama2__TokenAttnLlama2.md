@@ -60,7 +60,6 @@ specification token_attn_llama2_output_summary_general
 - `hundef : ∀ rg o, s.undef rg o = 0`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_N => outOffset s B_Start_Loc att_stride_h att_stride_bs BLOCK_N i)`
-- `fun i : Fin BLOCK_N => active s B_Seqlen max_input_len BLOCK_N i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `token_attn_llama2_surface`, `active`, `tokenAttnLlama2ClosedForm`, `startLoc`, `blockOffset`, `seqLen`, `blockActive`, `tokenAttnLlama2DotScore`, `qOffset`, `kOffset`, `kLoc`
 

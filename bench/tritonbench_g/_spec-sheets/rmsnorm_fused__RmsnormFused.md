@@ -39,7 +39,6 @@ specification rms_norm_fwd_fused_output_summary
 - `hNle : N ≤ BLOCK_SIZE`
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_SIZE => yOffset s stride i)`
-- `fun i : Fin BLOCK_SIZE => i.val < N`
 
 **Closed-form spec defs (transitive):** `yOffset`, `rms_norm_fwd_fused`, `rmsnormSpec`, `rmsLoad`, `rmsWeight`, `xOffset`
 

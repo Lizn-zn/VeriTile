@@ -50,11 +50,6 @@ specification crh_fwd_h_exec_genuine
 - `hσ : BV ≤ s_h_t`
 - `hFit : (K - 1) * s_h_t + V ≤ K * V`
 - `hBVV : BV ≤ V`
-- `STORE_FINAL_STATE = Bool.true →
-          ∀ idx : TileIndex [BK, BV], crhActive s K V BK BV idx →
-          sF.readMem ht (crhHtOffset s K V BK BV idx)
-            = crhState s k v h0 USE_INITIAL_STATE s_qk_h s_qk_t s_qk_d s_vo_h
-                s_vo_t s_vo_d H T K V BT BK BV NT NT idx.1.val idx.2.1.val`
 
 **Closed-form spec defs (transitive):** `crh_fwd_h_surface`, `crhActive`, `crhHOffset`, `crhState`, `crhHtOffset`, `crhH0Guarded`, `crhDb`, `crhKGuarded`, `crhVGuarded`, `crhDi`, `crhH0Elem`, `crhLen`, `crhBeta`, `crhKElem`, `crhVElem`
 

@@ -48,8 +48,6 @@ specification context_attn_mistral_genuine_output_summary_general
 - `hDM : 0 < DM`
 - `hDMrs : DM ≤ rs`
 - `hundef : ∀ rg o, s.undef rg o = 0`
-- `fun idx : TileIndex [BLK, DM] => mistralActiveG s B_Seqlen BLK DM idx`
-- `fun idx : TileIndex [BLK, DM] => (Out, mistralOutOffsetG s B_Start_Loc rs hs BLK DM idx)`
 
 **Closed-form spec defs (transitive):** `context_attn_mistral_fwd_kernel_surface`, `mistralActiveG`, `mistralOutOffsetG`, `mistralGenuineOutValueG`, `seqLen`, `startLoc`, `contextAttnMistralExactFoldMG`, `ctxMistralWindowG`, `ctxMistralBel`, `mistralScore`, `ctxVTileMG`, `mistralActive`, `ctxQTileG`, `ctxKTileMG`, `ctxVTileG`, `ctxKTileG`
 

@@ -71,8 +71,6 @@ specification int8_matmul_quantization_quantize_exec_genuine
 - `hFit : s.pids 0 * BM + BM ≤ M`
 - `hFpaNe : fpa_ptr ≠ (Region.cast a_ptr : RegionName)`
 - `hAsNe : as_ptr ≠ (Region.cast a_ptr : RegionName)`
-- `fun p : Fin BM × Fin K =>
-      (s.pids 0 * BM + p.1.val) * stride_am + p.2.val * stride_ak`
 
 **Closed-form spec defs (transitive):** `int8_matmul_quantization_quantize_surface`, `qInt8Spec`, `qFpaElem`, `qScaleSpec`, `qMaxPartial`, `qBlockMax`
 
@@ -246,8 +244,6 @@ specification int8_matmul_quantization_matmul_exec_genuine
 **Assumptions / layout contracts:**
 - `hK : K ≤ numKBlocks * BK`
 - `hpid1 : s.pids 1 = 0`
-- `fun i : TileIndex [BM, BN] => mmCAddr stride_cm stride_cn BM BN
-        (mmPidM s M N BM BN GM) (mmPidN s M N BM BN GM) i`
 
 **Closed-form spec defs (transitive):** `mmCAddr`, `mmPidM`, `mmPidN`, `int8_matmul_quantization_matmul_surface`, `mmAElem`, `mmBElem`, `mmAScaleElem`, `mmBScaleElem`, `mmGroupId`, `mmGroupSize`, `mmWidth`, `mmGridM`, `mmGridN`
 

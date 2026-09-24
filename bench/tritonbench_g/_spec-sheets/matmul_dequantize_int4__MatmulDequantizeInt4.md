@@ -45,10 +45,6 @@ specification matmul_dequantize_int4_exec_genuine
                 idx.1.val idx.2.1.val
 ```
 
-**Assumptions / layout contracts:**
-- `fun i : TileIndex [BM, BN] => cAddr stride_cm stride_cn BM BN
-        (pidM s M N BM BN GM) (pidN s M N BM BN GM) i`
-
 **Closed-form spec defs (transitive):** `cAddr`, `pidM`, `pidN`, `matmul_dequantize_int4_surface`, `accSpec`, `firstPidM`, `groupSizeM`, `numPidInGroup`, `numPidK`, `accStep`, `groupId`, `numPidM`, `numPidN`, `aElem`, `bDequant`, `bNibble`, `scalesElem`, `groupRow`, `zeroScaled`, `bWord`, `zerosNibble`, `zerosWord`
 
 <details><summary><code>cAddr</code></summary>

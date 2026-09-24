@@ -87,7 +87,6 @@ specification layer_norm_welfold_output_summary_general
 - `hLe : rnumel ≤ RBLOCK`
 - `hMeanRstd : in_out_ptr0 ≠ in_out_ptr1`
 - `hInMean : in_ptr0 ≠ in_out_ptr0`
-- `fun i : Fin RBLOCK => activeLane s' rnumel RBLOCK i`
 
 **Closed-form spec defs (transitive):** `layer_norm_welfold_surface`, `layer_norm_welfold_reduce_slice`, `rowMeanSpec`, `rowRstdSpec`, `layer_norm_welfold_normalize_slice`, `activeLane`, `yOffset`, `rowYSpec`, `rIndex`, `rowElem`, `rowVarSpec`
 

@@ -42,9 +42,6 @@ specification dequantize_kernel_correctness
 
 **Assumptions / layout contracts:**
 - `hBK : 0 < BLOCK_SIZE_K`
-- `fun j : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N) =>
-        fpbOffset p₀ p₁ stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K
-          (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j)`
 
 **Closed-form spec defs (transitive):** `fpbOffset`, `laneIdx`, `dequantizeIO`, `dequantize_kernel`, `bOffset`, `nOffset`, `dequantizeActive`
 

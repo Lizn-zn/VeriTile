@@ -117,9 +117,6 @@ specification chunk_gated_attention_cum_slice_output_summary_general
       s.readMem HPrev (finalStateOffset s KSize VSize BK BV idx)
         = hClosed s K V G H0 Bool.true USE_INITIAL_STATE
             s_k_h s_k_t s_k_d s_v_h s_v_t s_v_d KSize VSize BT BK BV m idx`
-- `fun idx : TileIndex [BT, BS] => cumSurfaceActive s T S BT BS idx`
-- `fun idx : TileIndex [BT, BS] =>
-          (GCum, tileOffset s s_s_h s_s_t s_s_d BT BS idx)`
 
 **Closed-form spec defs (transitive):** `tileOffset`, `finalStateOffset`, `hClosed`, `chunk_gated_attention_cum_compute_slice`, `cumSurfaceActive`, `cumComputeStoreValue`, `chunk_gated_attention_h_step_gatev_slice`, `chunk_gated_attention_h_step_gatek_slice`, `hSeed`, `cumSurfaceTIndex`, `cumSurfaceSIndex`, `kIndexFinal`, `vIndexFinal`, `hGate`, `hStepTerm`, `lowerTriTile`, `sourceTile`, `chunkLastTime`, `h0Elem`, `kIndexState`, `vIndexState`, `gnkElem`, `gnvElem`, `ktElem`, `tvElem`
 
@@ -567,14 +564,6 @@ specification chunk_gated_attention_state_stores_io_correctness
       ⊨ fun _p₀ _p₁ xs idx => xs idx)
 ```
 
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BK, BV] =>
-        p₂ * s_h_h + i_t * KSize * VSize + (p₁ * BK + idx.1.val) * s_h_t
-          + (p₀ * BV + idx.2.1.val) * s_h_d`
-- `fun idx : TileIndex [BK, BV] =>
-        p₂ * KSize * VSize + (p₁ * BK + idx.1.val) * VSize
-          + (p₀ * BV + idx.2.1.val)`
-
 **Closed-form spec defs (transitive):** `h_stateIO`, `final_stateIO`, `chunk_gated_attention_h_state_store_slice`, `chunk_gated_attention_final_state_store_slice`
 
 <details><summary><code>h_stateIO</code></summary>
@@ -717,14 +706,6 @@ specification chunk_gated_attention_state_stores_io_correctnessR
     (final_stateIO BHFinal Ht KSize VSize BK BV
       ⊨[R, FloatDType.real] fun _p₀ _p₁ xs idx => xs idx)
 ```
-
-**Assumptions / layout contracts:**
-- `fun idx : TileIndex [BK, BV] =>
-        p₂ * s_h_h + i_t * KSize * VSize + (p₁ * BK + idx.1.val) * s_h_t
-          + (p₀ * BV + idx.2.1.val) * s_h_d`
-- `fun idx : TileIndex [BK, BV] =>
-        p₂ * KSize * VSize + (p₁ * BK + idx.1.val) * VSize
-          + (p₀ * BV + idx.2.1.val)`
 
 **Closed-form spec defs (transitive):** `h_stateIO`, `final_stateIO`, `chunk_gated_attention_h_state_store_slice`, `chunk_gated_attention_final_state_store_slice`
 

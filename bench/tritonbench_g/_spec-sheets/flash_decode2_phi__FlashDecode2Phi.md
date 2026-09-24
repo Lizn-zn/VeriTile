@@ -71,7 +71,6 @@ specification flash_decode2_phi_masked_accumulator_output_summary_general
 - `hAccOutInj : Function.Injective
       (fun i : Fin BLOCK_DMODEL =>
         accOffset s stride_acc_b stride_acc_h stride_acc_d i)`
-- `fun i : Fin BLOCK_DMODEL => active s head_dim i`
 
 **Closed-form spec defs (transitive):** `accOffset`, `flash_decode2_phi_surface`, `flash_decode2_phi_accumulator_step_kernel`, `active`, `accumulatorStepValue`, `flash_decode2_phi_sum_exp_step_kernel`, `sumExpOffset`, `sumExpStepValue`, `dIndex`, `oldScaleValue`, `expLogicValue`, `midOffset`, `logicOffset`
 
@@ -490,7 +489,6 @@ specification flash_decode2_phi_normalization_output_summary_general
 **Assumptions / layout contracts:**
 - `hOutInj : Function.Injective
       (fun i : Fin BLOCK_DMODEL => outOffset s stride_obs stride_oh stride_od i)`
-- `fun i : Fin BLOCK_DMODEL => active s head_dim i`
 
 **Closed-form spec defs (transitive):** `outOffset`, `flash_decode2_phi_surface`, `flash_decode2_phi_normalization_store_kernel`, `active`, `normalizedStoreValue`, `dIndex`, `accOffset`, `sumExpOffset`
 

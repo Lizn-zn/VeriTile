@@ -34,7 +34,43 @@ specification rope_embedding_forward_backward_summary_general
     (∃ alg, (rope_embedding_surface Q Q_row_stride cos cos_row_stride sin
       sin_row_stride seqlen head_dim n_heads Bool.false BLOCK_SIZE ROPE_GROUP_SIZE).toAlgorithm? = Except.ok alg) ∧
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := rope_embedding_forward_first_half Q cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
+      (initialState := sQ)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sQ head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE i)
+        (fun i => (Q, qFirstOffset sQ Q_row_stride head_dim ROPE_GROUP_SIZE i)))
+      (expected := fun i => ropeFirstSpec sQ Q cos sin Q_row_stride cos_row_stride
+        sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := rope_embedding_forward_second_half Q cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
+      (initialState := sQ)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sQ head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE i)
+        (fun i => (Q, qSecondOffset sQ Q_row_stride head_dim ROPE_GROUP_SIZE i)))
+      (expected := fun i => ropeSecondSpec sQ Q cos sin Q_row_stride cos_row_stride
+        sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
+    (∃ alg, (rope_embedding_surface dY Q_row_stride cos cos_row_stride sin
+      sin_row_stride seqlen head_dim n_heads Bool.true BLOCK_SIZE ROPE_GROUP_SIZE).toAlgorithm? = Except.ok alg) ∧
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := rope_embedding_backward_first_half dY cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
+      (initialState := sDY)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sDY head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE i)
+        (fun i => (dY, qFirstOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)))
+      (expected := fun i => ropeBackwardFirstSpec sDY dY cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i) ∧
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := rope_embedding_backward_second_half dY cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE)
+      (initialState := sDY)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun i : Fin BLOCK_SIZE => active sDY head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE i)
+        (fun i => (dY, qSecondOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)))
+      (expected := fun i => ropeBackwardSecondSpec sDY dY cos sin Q_row_stride
+        cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE BLOCK_SIZE i)
 ```
 
 **Assumptions / layout contracts:**
@@ -47,7 +83,7 @@ specification rope_embedding_forward_backward_summary_general
 - `hDS : Function.Injective
       (fun i : Fin BLOCK_SIZE => qSecondOffset sDY Q_row_stride head_dim ROPE_GROUP_SIZE i)`
 
-**Closed-form spec defs (transitive):** `qFirstOffset`, `qSecondOffset`, `rope_embedding_surface`, `headStart`, `colIndex`
+**Closed-form spec defs (transitive):** `qFirstOffset`, `qSecondOffset`, `rope_embedding_surface`, `rope_embedding_forward_first_half`, `active`, `ropeFirstSpec`, `rope_embedding_forward_second_half`, `ropeSecondSpec`, `rope_embedding_backward_first_half`, `ropeBackwardFirstSpec`, `rope_embedding_backward_second_half`, `ropeBackwardSecondSpec`, `headStart`, `colIndex`, `cosOffset`, `sinOffset`, `rowMod`
 
 <details><summary><code>qFirstOffset</code></summary>
 
@@ -112,6 +148,216 @@ def rope_embedding_surface
 ```
 </details>
 
+<details><summary><code>rope_embedding_forward_first_half</code></summary>
+
+```
+/-- Proof-oriented forward first-half slice of `rope_embedding.py`'s
+`_rope_embedding`.
+
+The full kernel loops over `ROPE_GROUP_SIZE` heads and writes both halves of
+the rotary pair. This slice captures one group's first head and first-half
+store: `Q1 * cos - Q2 * sin`. -/
+```
+```lean
+def rope_embedding_forward_first_half
+    (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      ROPE_GROUP_SIZE BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row_position = tl.program_id(0)
+  group_head_position = tl.program_id(1)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  half_head_dim = $(head_dim / 2)
+  mask = col_offsets < $(head_dim / 2)
+  sin1 = tl.load(sin + (row_position % $(seqlen)) * $(sin_row_stride) + col_offsets,
+    mask=mask, other=0)
+  cos1 = tl.load(cos + (row_position % $(seqlen)) * $(cos_row_stride) + col_offsets,
+    mask=mask, other=0)
+  head_start = group_head_position * $(ROPE_GROUP_SIZE)
+  offs_q1 = row_position * $(Q_row_stride) + head_start * $(head_dim) + col_offsets
+  offs_q2 = row_position * $(Q_row_stride) + head_start * $(head_dim) +
+    col_offsets + $(head_dim / 2)
+  Q1 = tl.load(Q + offs_q1, mask=mask, other=0).to(sin1.dtype)
+  Q2 = tl.load(Q + offs_q2, mask=mask, other=0).to(sin1.dtype)
+  out = Q1 * cos1 - Q2 * sin1
+  tl.store(Q + offs_q1, out, mask=mask and head_start < $(n_heads))
+}
+```
+</details>
+
+<details><summary><code>active</code></summary>
+
+```lean
+def active (s : BlockState) (head_dim n_heads ROPE_GROUP_SIZE BLOCK_SIZE : Nat)
+    (i : Fin BLOCK_SIZE) : Prop :=
+  colIndex i < head_dim / 2 ∧ headStart s ROPE_GROUP_SIZE < n_heads
+```
+</details>
+
+<details><summary><code>ropeFirstSpec</code></summary>
+
+```lean
+noncomputable def ropeFirstSpec
+    (s : BlockState) (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE
+      BLOCK_SIZE : Nat)
+    (i : Fin BLOCK_SIZE) : ℝ :=
+  s.readMem Q (qFirstOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) *
+    s.readMem cos (cosOffset s seqlen cos_row_stride i) -
+  s.readMem Q (qSecondOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) *
+    s.readMem sin (sinOffset s seqlen sin_row_stride i)
+```
+</details>
+
+<details><summary><code>rope_embedding_forward_second_half</code></summary>
+
+```
+/-- Proof-oriented second-half slice of `_rope_embedding` (forward).
+Captures the companion second-half writeback `out = Q2 * cos + Q1 * sin`
+to offset `offs_q2`. -/
+```
+```lean
+def rope_embedding_forward_second_half
+    (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      ROPE_GROUP_SIZE BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row_position = tl.program_id(0)
+  group_head_position = tl.program_id(1)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  half_head_dim = $(head_dim / 2)
+  mask = col_offsets < $(head_dim / 2)
+  sin1 = tl.load(sin + (row_position % $(seqlen)) * $(sin_row_stride) + col_offsets,
+    mask=mask, other=0)
+  cos1 = tl.load(cos + (row_position % $(seqlen)) * $(cos_row_stride) + col_offsets,
+    mask=mask, other=0)
+  head_start = group_head_position * $(ROPE_GROUP_SIZE)
+  offs_q1 = row_position * $(Q_row_stride) + head_start * $(head_dim) + col_offsets
+  offs_q2 = row_position * $(Q_row_stride) + head_start * $(head_dim) +
+    col_offsets + $(head_dim / 2)
+  Q1 = tl.load(Q + offs_q1, mask=mask, other=0).to(sin1.dtype)
+  Q2 = tl.load(Q + offs_q2, mask=mask, other=0).to(sin1.dtype)
+  out = Q2 * cos1 + Q1 * sin1
+  tl.store(Q + offs_q2, out, mask=mask and head_start < $(n_heads))
+}
+```
+</details>
+
+<details><summary><code>ropeSecondSpec</code></summary>
+
+```lean
+noncomputable def ropeSecondSpec
+    (s : BlockState) (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE
+      BLOCK_SIZE : Nat)
+    (i : Fin BLOCK_SIZE) : ℝ :=
+  s.readMem Q (qSecondOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) *
+    s.readMem cos (cosOffset s seqlen cos_row_stride i) +
+  s.readMem Q (qFirstOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) *
+    s.readMem sin (sinOffset s seqlen sin_row_stride i)
+```
+</details>
+
+<details><summary><code>rope_embedding_backward_first_half</code></summary>
+
+```
+/-- Proof-oriented first-half slice of `_rope_embedding` for
+`BACKWARD_PASS = true`. The surface flips `sin1 = -sin1`, so the first-half
+write becomes `Q1 * cos + Q2 * sin`. -/
+```
+```lean
+def rope_embedding_backward_first_half
+    (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      ROPE_GROUP_SIZE BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row_position = tl.program_id(0)
+  group_head_position = tl.program_id(1)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  half_head_dim = $(head_dim / 2)
+  mask = col_offsets < $(head_dim / 2)
+  sin1 = tl.load(sin + (row_position % $(seqlen)) * $(sin_row_stride) + col_offsets,
+    mask=mask, other=0)
+  cos1 = tl.load(cos + (row_position % $(seqlen)) * $(cos_row_stride) + col_offsets,
+    mask=mask, other=0)
+  sin1 = -sin1
+  head_start = group_head_position * $(ROPE_GROUP_SIZE)
+  offs_q1 = row_position * $(Q_row_stride) + head_start * $(head_dim) + col_offsets
+  offs_q2 = row_position * $(Q_row_stride) + head_start * $(head_dim) +
+    col_offsets + $(head_dim / 2)
+  Q1 = tl.load(Q + offs_q1, mask=mask, other=0).to(sin1.dtype)
+  Q2 = tl.load(Q + offs_q2, mask=mask, other=0).to(sin1.dtype)
+  out = Q1 * cos1 - Q2 * sin1
+  tl.store(Q + offs_q1, out, mask=mask and head_start < $(n_heads))
+}
+```
+</details>
+
+<details><summary><code>ropeBackwardFirstSpec</code></summary>
+
+```lean
+noncomputable def ropeBackwardFirstSpec
+    (s : BlockState) (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE
+      BLOCK_SIZE : Nat)
+    (i : Fin BLOCK_SIZE) : ℝ :=
+  s.readMem Q (qFirstOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) *
+    s.readMem cos (cosOffset s seqlen cos_row_stride i) +
+  0 - s.readMem Q (qSecondOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) *
+    ((0.0 : ℝ) - s.readMem sin (sinOffset s seqlen sin_row_stride i))
+```
+</details>
+
+<details><summary><code>rope_embedding_backward_second_half</code></summary>
+
+```
+/-- Proof-oriented second-half slice of `_rope_embedding` for
+`BACKWARD_PASS = true`. The surface flips `sin1 = -sin1`, so the second-half
+write becomes `Q2 * cos - Q1 * sin`. -/
+```
+```lean
+def rope_embedding_backward_second_half
+    (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim n_heads
+      ROPE_GROUP_SIZE BLOCK_SIZE : Nat) :
+    ComputeKernel := triton {
+  row_position = tl.program_id(0)
+  group_head_position = tl.program_id(1)
+  col_offsets = tl.arange(0, $(BLOCK_SIZE))
+  half_head_dim = $(head_dim / 2)
+  mask = col_offsets < $(head_dim / 2)
+  sin1 = tl.load(sin + (row_position % $(seqlen)) * $(sin_row_stride) + col_offsets,
+    mask=mask, other=0)
+  cos1 = tl.load(cos + (row_position % $(seqlen)) * $(cos_row_stride) + col_offsets,
+    mask=mask, other=0)
+  sin1 = -sin1
+  head_start = group_head_position * $(ROPE_GROUP_SIZE)
+  offs_q1 = row_position * $(Q_row_stride) + head_start * $(head_dim) + col_offsets
+  offs_q2 = row_position * $(Q_row_stride) + head_start * $(head_dim) +
+    col_offsets + $(head_dim / 2)
+  Q1 = tl.load(Q + offs_q1, mask=mask, other=0).to(sin1.dtype)
+  Q2 = tl.load(Q + offs_q2, mask=mask, other=0).to(sin1.dtype)
+  out = Q2 * cos1 + Q1 * sin1
+  tl.store(Q + offs_q2, out, mask=mask and head_start < $(n_heads))
+}
+```
+</details>
+
+<details><summary><code>ropeBackwardSecondSpec</code></summary>
+
+```lean
+noncomputable def ropeBackwardSecondSpec
+    (s : BlockState) (Q cos sin : RegionName)
+    (Q_row_stride cos_row_stride sin_row_stride seqlen head_dim ROPE_GROUP_SIZE
+      BLOCK_SIZE : Nat)
+    (i : Fin BLOCK_SIZE) : ℝ :=
+  s.readMem Q (qSecondOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) *
+    s.readMem cos (cosOffset s seqlen cos_row_stride i) -
+  0 + s.readMem Q (qFirstOffset s Q_row_stride head_dim ROPE_GROUP_SIZE i) *
+    ((0.0 : ℝ) - s.readMem sin (sinOffset s seqlen sin_row_stride i))
+```
+</details>
+
 <details><summary><code>headStart</code></summary>
 
 ```lean
@@ -125,6 +371,32 @@ def headStart (s : BlockState) (ROPE_GROUP_SIZE : Nat) : Nat :=
 ```lean
 def colIndex (i : Fin BLOCK_SIZE) : Nat :=
   i.val
+```
+</details>
+
+<details><summary><code>cosOffset</code></summary>
+
+```lean
+def cosOffset
+    (s : BlockState) (seqlen cos_row_stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
+  rowMod s seqlen * cos_row_stride + colIndex i
+```
+</details>
+
+<details><summary><code>sinOffset</code></summary>
+
+```lean
+def sinOffset
+    (s : BlockState) (seqlen sin_row_stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
+  rowMod s seqlen * sin_row_stride + colIndex i
+```
+</details>
+
+<details><summary><code>rowMod</code></summary>
+
+```lean
+def rowMod (s : BlockState) (seqlen : Nat) : Nat :=
+  IntegralDType.nat.mod (s.pids 0) seqlen
 ```
 </details>
 

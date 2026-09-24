@@ -81,7 +81,49 @@ specification rbe_triton_transform_output_summary_general
         = Except.ok alg) ∧
     -- (2) even offsets: genuine `x_real·cos − x_imag·sin`
     ComputeCorrect.Realizes_without_Rounding
-      (kernel
+      (kernel := rbe_triton_surface x_ptr out_ptr M K stride_x_batch
+        stride_x_m stride_x_n stride_out_batch stride_out_m stride_out_n
+        start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2] =>
+          activeReal s M K BLOCK_SIZE_M BLOCK_SIZE_K idx)
+        (fun idx => (out_ptr,
+          outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
+            BLOCK_SIZE_K idx)))
+      (expected := fun idx =>
+        rbeOutRealSpec s x_ptr K stride_x_batch stride_x_m stride_x_n
+          start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K THETA idx) ∧
+    -- (3) odd offsets: genuine `x_real·sin + x_imag·cos`
+    ComputeCorrect.Realizes_without_Rounding
+      (kernel := rbe_triton_surface x_ptr out_ptr M K stride_x_batch
+        stride_x_m stride_x_n stride_out_batch stride_out_m stride_out_n
+        start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K)
+      (initialState := s)
+      (write := ComputeCorrect.WriteMap.writeIf
+        (fun idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2] =>
+          activeImag s M K BLOCK_SIZE_M BLOCK_SIZE_K idx)
+        (fun idx => (out_ptr,
+          outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
+            BLOCK_SIZE_K idx + 1)))
+      (expected := fun idx =>
+        rbeOutImagSpec s x_ptr K stride_x_batch stride_x_m stride_x_n
+          start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K THETA idx) ∧
+    -- (4) the flat-memory `⊨` face of both interleaved stores
+    (rbeTritonIO x_ptr out_ptr M K stride_x_batch stride_x_m stride_x_n
+        stride_out_batch stride_out_m stride_out_n start_token_position THETA
+        DIM BLOCK_SIZE_M BLOCK_SIZE_K
+      ⊨ fun _pid₀ pid₁ xs o j =>
+          let xr := xs (⟨0, by decide⟩ : Fin 2) j
+          let xi := xs (⟨1, by decide⟩ : Fin 2) j
+          let f := rbeFreqP pid₁ K start_token_position DIM BLOCK_SIZE_M
+            BLOCK_SIZE_K THETA j
+          match o with
+          | ⟨0, _⟩ =>
+              xr * Real.cos f -
+                (if 1 + rbeColP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < K then xi
+                  else 0) * Real.sin f
+          | ⟨_ + 1, _⟩ => xr * Real.sin f + xi * Real.cos f)
 ```
 
 **Assumptions / layout contracts:**
@@ -105,7 +147,7 @@ specification rbe_triton_transform_output_summary_general
         ≠ outOff s K stride_out_batch stride_out_m stride_out_n BLOCK_SIZE_M
             BLOCK_SIZE_K k + 1`
 
-**Closed-form spec defs (transitive):** `outOff`, `rbe_triton_surface`, `rowIdx`, `colIdx`, `pidM`, `pidN`, `kCdiv`
+**Closed-form spec defs (transitive):** `outOff`, `rbe_triton_surface`, `activeReal`, `rbeOutRealSpec`, `activeImag`, `rbeOutImagSpec`, `rbeTritonIO`, `rbeFreqP`, `rbeColP`, `rowIdx`, `colIdx`, `xOff`, `freqSpec`, `rbeXAddrP`, `rbeRowP`, `rbeOutAddrP`, `kCdiv`, `pidM`, `pidN`
 
 <details><summary><code>outOff</code></summary>
 
@@ -176,6 +218,177 @@ def rbe_triton_surface
 ```
 </details>
 
+<details><summary><code>activeReal</code></summary>
+
+```
+/-- `x_real_mask` / `out_real_mask` of lane `(i, j)`:
+`offs_m[i] < M ∧ offs_n[j] < K`. -/
+```
+```lean
+def activeReal (s : BlockState) (M K BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
+    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]) : Prop :=
+  rowIdx s K BLOCK_SIZE_M BLOCK_SIZE_K idx.1 < M ∧
+    colIdx s K BLOCK_SIZE_K idx.2.1 < K
+```
+</details>
+
+<details><summary><code>rbeOutRealSpec</code></summary>
+
+```
+/-- Genuine spec of the even-offset (`out_real`) store on an active lane:
+`x_real·cos(freq) − x_imag·sin(freq)`, where `x_imag` is the masked imaginary
+load (`0` on the `1 + offs_n[j] ≥ K` boundary lane, matching `x_imag_mask`'s
+`other=0.0`). -/
+```
+```lean
+noncomputable def rbeOutRealSpec (s : BlockState) (x_ptr : RegionName)
+    (K stride_x_batch stride_x_m stride_x_n
+      start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K : Nat) (THETA : ℝ)
+    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]) : ℝ :=
+  s.readMem x_ptr
+      (xOff s K stride_x_batch stride_x_m stride_x_n BLOCK_SIZE_M
+        BLOCK_SIZE_K idx) *
+    Real.cos (freqSpec s K start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K
+      THETA idx) -
+  (if 1 + colIdx s K BLOCK_SIZE_K idx.2.1 < K then
+      s.readMem x_ptr
+        (xOff s K stride_x_batch stride_x_m stride_x_n BLOCK_SIZE_M
+          BLOCK_SIZE_K idx + 1)
+    else 0) *
+    Real.sin (freqSpec s K start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K
+      THETA idx)
+```
+</details>
+
+<details><summary><code>activeImag</code></summary>
+
+```
+/-- `x_imag_mask` / `out_imag_mask` of lane `(i, j)`:
+`offs_m[i] < M ∧ 1 + offs_n[j] < K`. -/
+```
+```lean
+def activeImag (s : BlockState) (M K BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
+    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]) : Prop :=
+  rowIdx s K BLOCK_SIZE_M BLOCK_SIZE_K idx.1 < M ∧
+    1 + colIdx s K BLOCK_SIZE_K idx.2.1 < K
+```
+</details>
+
+<details><summary><code>rbeOutImagSpec</code></summary>
+
+```
+/-- Genuine spec of the odd-offset (`out_imag`) store on an active lane:
+`x_real·sin(freq) + x_imag·cos(freq)` (on an `x_imag_mask`-active lane the
+real-part load is also in bounds, so both reads are genuine). -/
+```
+```lean
+noncomputable def rbeOutImagSpec (s : BlockState) (x_ptr : RegionName)
+    (K stride_x_batch stride_x_m stride_x_n
+      start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K : Nat) (THETA : ℝ)
+    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]) : ℝ :=
+  s.readMem x_ptr
+      (xOff s K stride_x_batch stride_x_m stride_x_n BLOCK_SIZE_M
+        BLOCK_SIZE_K idx) *
+    Real.sin (freqSpec s K start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K
+      THETA idx) +
+  s.readMem x_ptr
+      (xOff s K stride_x_batch stride_x_m stride_x_n BLOCK_SIZE_M
+        BLOCK_SIZE_K idx + 1) *
+    Real.cos (freqSpec s K start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K
+      THETA idx)
+```
+</details>
+
+<details><summary><code>rbeTritonIO</code></summary>
+
+```
+/-- The **IO signature** of `rbe_triton` — the whole kernel-specific audit
+surface of the `⊨` headline.
+
+* `bufs = [x_ptr, out_ptr]`, `nIn = 2`, `nOut = 2`,
+  `B = BLOCK_SIZE_M · (BLOCK_SIZE_K / 2)` (the kernel's 2D tile flattened
+  row-major by `Lane2D.decode`).
+* read channel `0` — `x_ptr` at the even address `x_ptrs`, gated by
+  `x_real_mask` (`offs_m < M ∧ offs_n < K`);
+  read channel `1` — `x_ptr` at the interleaved odd address `x_ptrs + 1`,
+  gated by `x_imag_mask` (`offs_m < M ∧ 1 + offs_n < K`).
+* write channel `0` — `out_ptr` at `out_ptrs`, gated by `out_real_mask`;
+  write channel `1` — `out_ptr` at `out_ptrs + 1`, gated by `out_imag_mask`.
+
+`cos`/`sin` are *not* read channels: the kernel derives them from index
+arithmetic (`get_freq_multi_tokens`, inlined), so they appear in the spec
+value as the exact `Real.cos`/`Real.sin` of `rbeFreqP`, not as pinned inputs. -/
+```
+```lean
+def rbeTritonIO (x_ptr out_ptr : RegionName)
+    (M K stride_x_batch stride_x_m stride_x_n
+      stride_out_batch stride_out_m stride_out_n
+      start_token_position : Nat)
+    (THETA : ℝ) (DIM BLOCK_SIZE_M BLOCK_SIZE_K : Nat) :
+    GroupedMasked2DKernelIO where
+  kernel := rbe_triton_surface x_ptr out_ptr M K stride_x_batch stride_x_m
+    stride_x_n stride_out_batch stride_out_m stride_out_n
+    start_token_position THETA DIM BLOCK_SIZE_M BLOCK_SIZE_K
+  nIn := 2
+  nOut := 2
+  bufs := [x_ptr, out_ptr]
+  inp := fun _ => x_ptr
+  out := fun _ => out_ptr
+  B := BLOCK_SIZE_M * (BLOCK_SIZE_K / 2)
+  read := fun i pid₀ pid₁ j => match i with
+    | ⟨0, _⟩ => rbeXAddrP pid₀ pid₁ K stride_x_batch stride_x_m stride_x_n
+        BLOCK_SIZE_M BLOCK_SIZE_K j
+    | ⟨_ + 1, _⟩ => rbeXAddrP pid₀ pid₁ K stride_x_batch stride_x_m stride_x_n
+        BLOCK_SIZE_M BLOCK_SIZE_K j + 1
+  readMask := fun i _pid₀ pid₁ j => match i with
+    | ⟨0, _⟩ => rbeRowP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < M ∧
+        rbeColP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < K
+    | ⟨_ + 1, _⟩ => rbeRowP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < M ∧
+        1 + rbeColP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < K
+  write := fun o pid₀ pid₁ j => match o with
+    | ⟨0, _⟩ => rbeOutAddrP pid₀ pid₁ K stride_out_batch stride_out_m
+        stride_out_n BLOCK_SIZE_M BLOCK_SIZE_K j
+    | ⟨_ + 1, _⟩ => rbeOutAddrP pid₀ pid₁ K stride_out_batch stride_out_m
+        stride_out_n BLOCK_SIZE_M BLOCK_SIZE_K j + 1
+  writeMask := fun o _pid₀ pid₁ j => match o with
+    | ⟨0, _⟩ => rbeRowP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < M ∧
+        rbeColP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < K
+    | ⟨_ + 1, _⟩ => rbeRowP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < M ∧
+        1 + rbeColP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j < K
+```
+</details>
+
+<details><summary><code>rbeFreqP</code></summary>
+
+```
+/-- Rotation angle of flat lane `j`. -/
+```
+```lean
+noncomputable def rbeFreqP (pid₁ K start_token_position DIM
+    BLOCK_SIZE_M BLOCK_SIZE_K : Nat) (THETA : ℝ)
+    (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) : ℝ :=
+  (((Lane2D.decode j).1.val +
+      (start_token_position + pid₁ / kCdiv K BLOCK_SIZE_K * BLOCK_SIZE_M)
+        : ℕ) : ℝ) /
+    Real.rpow THETA
+      (((rbeColP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j % DIM : ℕ) : ℝ) /
+        ((DIM : ℕ) : ℝ))
+```
+</details>
+
+<details><summary><code>rbeColP</code></summary>
+
+```
+/-- Global (even) column `offs_n[j]` covered by flat lane `j`. -/
+```
+```lean
+def rbeColP (pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
+    (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) : Nat :=
+  pid₁ % kCdiv K BLOCK_SIZE_K * BLOCK_SIZE_K +
+    (Lane2D.decode j).2.1.val * 2
+```
+</details>
+
 <details><summary><code>rowIdx</code></summary>
 
 ```
@@ -201,6 +414,94 @@ def colIdx (s : BlockState) (K BLOCK_SIZE_K : Nat)
 ```
 </details>
 
+<details><summary><code>xOff</code></summary>
+
+```
+/-- Input address of the real part read by lane `(i, j)` (the imaginary part
+sits at `+ 1`). -/
+```
+```lean
+def xOff (s : BlockState)
+    (K stride_x_batch stride_x_m stride_x_n BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
+    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]) : Nat :=
+  s.pids 0 * stride_x_batch +
+    stride_x_m * rowIdx s K BLOCK_SIZE_M BLOCK_SIZE_K idx.1 +
+    stride_x_n * colIdx s K BLOCK_SIZE_K idx.2.1
+```
+</details>
+
+<details><summary><code>freqSpec</code></summary>
+
+```
+/-- Rotation angle of lane `(i, j)`:
+`(i + (start_token_position + pid_m·BLOCK_SIZE_M)) / THETA^((offs_n[j] % DIM)/DIM)`
+— the numerator is exactly `start_token_position + offs_m[i]`
+(see `freqSpec_eq_token`). -/
+```
+```lean
+noncomputable def freqSpec (s : BlockState)
+    (K start_token_position DIM BLOCK_SIZE_M BLOCK_SIZE_K : Nat) (THETA : ℝ)
+    (idx : TileIndex [BLOCK_SIZE_M, BLOCK_SIZE_K / 2]) : ℝ :=
+  ((idx.1.val + (start_token_position + pidM s K BLOCK_SIZE_K * BLOCK_SIZE_M)
+      : ℕ) : ℝ) /
+    Real.rpow THETA
+      (((colIdx s K BLOCK_SIZE_K idx.2.1 % DIM : ℕ) : ℝ) / ((DIM : ℕ) : ℝ))
+```
+</details>
+
+<details><summary><code>rbeXAddrP</code></summary>
+
+```
+/-- Input address of the real part read by flat lane `j`. -/
+```
+```lean
+def rbeXAddrP (pid₀ pid₁ K stride_x_batch stride_x_m stride_x_n
+    BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
+    (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) : Nat :=
+  pid₀ * stride_x_batch +
+    stride_x_m * rbeRowP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j +
+    stride_x_n * rbeColP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j
+```
+</details>
+
+<details><summary><code>rbeRowP</code></summary>
+
+```
+/-- Global row `offs_m[i]` covered by flat lane `j`. -/
+```
+```lean
+def rbeRowP (pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
+    (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) : Nat :=
+  pid₁ / kCdiv K BLOCK_SIZE_K * BLOCK_SIZE_M +
+    (Lane2D.decode j).1.val
+```
+</details>
+
+<details><summary><code>rbeOutAddrP</code></summary>
+
+```
+/-- Output address of the real part written by flat lane `j`. -/
+```
+```lean
+def rbeOutAddrP (pid₀ pid₁ K stride_out_batch stride_out_m stride_out_n
+    BLOCK_SIZE_M BLOCK_SIZE_K : Nat)
+    (j : Fin (BLOCK_SIZE_M * (BLOCK_SIZE_K / 2))) : Nat :=
+  pid₀ * stride_out_batch +
+    stride_out_m * rbeRowP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j +
+    stride_out_n * rbeColP pid₁ K BLOCK_SIZE_M BLOCK_SIZE_K j
+```
+</details>
+
+<details><summary><code>kCdiv</code></summary>
+
+```
+/-- `tl.cdiv(K, BLOCK_SIZE_K)` at the algorithm layer. -/
+```
+```lean
+def kCdiv (K BLOCK_SIZE_K : Nat) : Nat := (K + BLOCK_SIZE_K - 1) / BLOCK_SIZE_K
+```
+</details>
+
 <details><summary><code>pidM</code></summary>
 
 ```
@@ -220,16 +521,6 @@ def pidM (s : BlockState) (K BLOCK_SIZE_K : Nat) : Nat :=
 ```lean
 def pidN (s : BlockState) (K BLOCK_SIZE_K : Nat) : Nat :=
   s.pids 1 % kCdiv K BLOCK_SIZE_K
-```
-</details>
-
-<details><summary><code>kCdiv</code></summary>
-
-```
-/-- `tl.cdiv(K, BLOCK_SIZE_K)` at the algorithm layer. -/
-```
-```lean
-def kCdiv (K BLOCK_SIZE_K : Nat) : Nat := (K + BLOCK_SIZE_K - 1) / BLOCK_SIZE_K
 ```
 </details>
 

@@ -42,6 +42,7 @@ export default defineConfig({
           items: [
             { label: 'Overview', slug: 'overview' },
             { label: 'Project status', slug: 'status' },
+            { label: 'Proof coverage', slug: 'proofs/coverage' },
             { label: 'Roadmap', slug: 'roadmap' },
           ],
         },

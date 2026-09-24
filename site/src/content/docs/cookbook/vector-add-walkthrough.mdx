@@ -1,0 +1,136 @@
+---
+title: From Python to a checked contract
+description: Translate an aligned vector addition, read its memory contract, and reproduce proof acceptance and rejection.
+sidebar:
+  order: 1
+---
+
+import { Code } from 'astro:components';
+import { tutorial } from '../../../lib/vector-add-tutorial';
+
+This walkthrough uses the complete, executable
+[VectorAdd showcase](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd.lean).
+Every Lean excerpt below comes from that file at website build time. The
+source includes all helper proofs, imports, and audit commands; use the full
+file when running it. The displayed fragments explain its construction.
+
+## 1. Choose the translation's scope
+
+<Code code={tutorial.python} lang="python" />
+
+The example is an **aligned, unmasked program tile**. Choose a positive tile
+size `B` and require each program's whole input and output window to be in
+bounds. Unlike a typical Python vector-add wrapper, it does not mask a partial
+last tile. The Python decorator and host launch are outside the Lean theorem.
+For a masked tail, use the separate
+[FlatVectorAdd example](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FlatVectorAdd.lean).
+
+Floating values in this example are mathematical real numbers. The result
+does not establish concrete IEEE-754 addition, GPU compilation, or the
+correctness of a Python host wrapper.
+
+## 2. Put the kernel in a Lean module
+
+<Code code={tutorial.setup} lang="lean" />
+
+<Code code={tutorial.kernel} lang="lean" />
+
+`triton { ... }` is the embedded DSL. `$(blockSize)` and `$(xReg)` interpolate
+Lean parameters into it. The Python pointer names become named memory
+regions; `pid * B + arange(B)` is retained as the program's address calculation.
+Lean imports, the namespace, and the parameter types are part of this workflow.
+This is an explicit translation, not automatic verification of arbitrary
+Python source.
+
+## 3. State an independent result and the memory windows
+
+The intended value is `xs i + ys i`, defined from the inputs independently of
+kernel execution. Wire the translated kernel to its two inputs and output:
+
+<Code code={tutorial.io} lang="lean" />
+
+`read1`, `read2`, and `write` give the start of each program's `B`-cell window.
+The `KernelIO₂` constructor also requires a proof that algorithm projection
+succeeds; Lean supplies it for this supported kernel. An unsupported effect
+cannot enter the contract through an empty-program fallback.
+
+The relation `addIO B ⊨ ...` quantifies over disjoint flat-memory allocations,
+program IDs, loaded input windows, and bounds. Under those conditions it
+requires **termination, the specified output values, and preservation of
+every cell outside the output window**. It does not require all other memory
+or registers to start at zero. `B > 0` is an explicit theorem hypothesis.
+
+## 4. Assemble the proof
+
+<Code code={tutorial.proof} lang="lean" />
+
+The three obligations have different jobs:
+
+| Helper | What it establishes |
+|---|---|
+| `addKernel_flattenOk` | The kernel lies in the fragment supported by the region-to-flat-memory bridge. |
+| `addKernel_traceSafe` | Every load and store in the actual execution stays within the supplied bounds. |
+| `addKernel_region_run` | The region model terminates, stores the pointwise sum, and preserves other cells. |
+
+The complete source proves the last obligation from a value lemma and a
+scatter-store frame lemma. `Implements.intro` transports those results to the
+public flat-memory contract. The helper proofs are necessary: the short
+headline is not a tactic that proves an arbitrary kernel automatically.
+
+## 5. Run Lean and the proof audits
+
+Install the pinned Lean toolchain using the [setup instructions](/VeriTile/reference/),
+then run from the repository root:
+
+```bash
+lake build
+lake env lean bench/examples/VectorAdd.lean
+```
+
+The file includes these gates:
+
+<Code code={tutorial.gates} lang="lean" />
+
+The first rejects hidden `sorry` and additional axioms. The second checks the
+headline's project constants against the declared surface. Neither check
+proves that a translation of Python expresses the intended behavior; the
+scope and memory contract still need review.
+
+For the same comparator gate used by CI, install the tools on Linux following
+the [comparator setup guide](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/README.md#setup).
+With `comparator`, `lean4export`, and `landrun` on `PATH` and the systemd user
+service available, run:
+
+```bash
+python3 scripts/check_comparator.py --file bench/examples/VectorAdd.lean --trust
+```
+
+Success prints the accepted theorem count and a log directory. Missing tools,
+failed compilation, a rejected dependency, or failed proof replay make the
+command fail. This command freezes and replays the current sources. For an
+agent editing a proof, use `scripts/prove.sh` to compare against the task
+snapshot from before the agent's edits.
+
+## 6. Make a change that should fail
+
+The repository's recorded-demo check creates a temporary copy, changes
+`out := x + y` to `out := x - y`, and leaves the addition contract and proof
+unchanged. Run it without editing the canonical example:
+
+```bash
+python3 site/scripts/record-home-demo.py
+python3 site/scripts/record-home-demo.py --check
+```
+
+The recorder requires the original proof to succeed and the subtraction
+mutation to fail with unsolved proof obligations. It writes the diagnostics
+and source fingerprint to `site/src/lib/vector-add-record.json`. Separate
+four-lane evaluations illustrate the difference; those sample values are
+not the universal correctness proof. The homepage displays this **recorded**
+result, not a live browser proof session.
+
+When adapting the example, review the operation, mask, addresses, numeric
+model, preconditions, and mathematical target together. Keep a failing
+mutation that would expose the mistake you intend the contract to detect.
+Use the [proof coverage table](/VeriTile/proofs/coverage/) to inspect the
+corresponding scope of other ports.

@@ -41,8 +41,6 @@ specification token_softmax_bloom_correctness
 
 **Assumptions / layout contracts:**
 - `hB : 0 < BLOCK_SIZE`
-- `fun j : Fin BLOCK_SIZE =>
-        pid₁ * stride_prob_h + (m₁ + j.val) * stride_prob_bs`
 
 **Closed-form spec defs (transitive):** `tokenSoftmaxIO`, `tokenSoftmaxSpecPure`, `token_softmax_surface`
 
