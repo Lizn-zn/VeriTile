@@ -26,7 +26,7 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   (writes-equality: the two final memories agree at every cell outside the
   declared scratch regions). Both project through `toAlgorithm?` and run on
   `Kernel.Correct_without_Rounding` / `Kernel.Refine` underneath.
-- **Narrow-float / rounding-model layer** (#447): an abstract `RoundingModel`
+- **Narrow-float / rounding-model layer** (#3): an abstract `RoundingModel`
   (`round : FloatDType → ℝ → ℝ`, fields `round_real` (real-channel identity) and `round_idem` (idempotence)) threads a
   black-box rounding function through the semantics (`evalOpR` / `stepStmtR` /
   `execR`). The unqualified surfaces are the rounding-parametric ones —

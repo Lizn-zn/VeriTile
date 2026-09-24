@@ -124,8 +124,8 @@ In order:
 4. **Tackle remediation in yield order**, per
    [`tritonbench_coverage.md`](./tritonbench_coverage.md): `tl.num_programs`
    (9 files), atomic_add proof shape (6), then the larger semantic
-   investments — concurrency boundary (#12), FP8 channel, int4 packed,
-   RNG (#41), FP4.
+   investments — concurrency boundary (#5), FP8 channel, int4 packed,
+   RNG (#4), FP4.
 
 ## Trade-offs recorded
 

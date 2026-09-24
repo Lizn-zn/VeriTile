@@ -87,7 +87,7 @@ theorem。** `ComputeKernel.ComputeCorrect` 是关于投影后算法 kernel,加�
 Real / Int / Nat 算法层,Lean 证明在这一层进行。compute 层的数值行为——
 IEEE rounding、NaN propagation、denormal、hardware-dot precision、
 fast-math 等——通过外部 gap checker 进行经验验证(见 PLAN.md
-"Verification architecture" 与 #59),而不是通过 Lean theorem。
+"Verification architecture" 与 #6),而不是通过 Lean theorem。
 
 阅读 `ComputeCorrect` Lean 证书的用户应这样理解:"投影后的算法结构(在
 Real / Int / Nat 上)在 Lean 中已被证明正确。" 如果 theorem 使用了

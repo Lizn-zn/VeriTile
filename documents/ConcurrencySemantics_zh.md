@@ -1,6 +1,6 @@
 # 并发语义边界
 
-本文档记录 VeriTile 对非顺序 GPU 效应的边界划分。它是 issue #12 的设计入口。
+本文档记录 VeriTile 对非顺序 GPU 效应的边界划分。它是 issue #5 的设计入口。
 
 ## 当前的确定性边界
 
@@ -16,11 +16,11 @@ exec : Kernel -> BlockState -> Option BlockState
 
 确定性内存栈由以下部分实现:
 
-- #48 active-lane bounds safety;
-- #60 predicate frame contract;
-- #49 disjoint whole-grid merge;
-- #61 footprint extraction helper;
-- #62 unrelated-frame helper。
+- active-lane bounds safety;
+- predicate frame contract;
+- disjoint whole-grid merge;
+- footprint extraction helper;
+- unrelated-frame helper。
 
 这一栈支持确定性、disjoint、顺序的内存推理。它不建模一般的 overlapping write、
 barrier、shared memory、async/TMA、WGMMA dispatch/wait、warp specialization
@@ -57,7 +57,7 @@ compute 的公开 surface 通过 `ComputeKernel.ComputeCorrect` /
 ComputeKernel.toAlgorithm? : ComputeKernel -> Except _ AlgKernel
 ```
 
-目前这个 bridge 覆盖那些可投影到算法层的 compute-facing 构造。随着 #12
+目前这个 bridge 覆盖那些可投影到算法层的 compute-facing 构造。随着 #5
 的特性逐步落地,bridge 主要还是一步表示擦除:
 
 - 擦除 dtype 或 bit payload;
@@ -99,7 +99,7 @@ AlgKernel.atomic_add real == mathematical sum/fold
 
 只有当 `ComputeKernel.toAlgorithm?` 成功且对应的 `AlgKernel` theorem 已经
 证完时,`ComputeCorrect` / `ComputeRefine` 才可用。可选的 `GapPolicy`
-contract(#58/#59)记录那些在语法上可表达、但 bit-level compute 语义
+contract(#6)记录那些在语法上可表达、但 bit-level compute 语义
 未在内部证明的 compute-to-algorithm gap,由外部检查覆盖。
 
 ## 失败模式
@@ -112,7 +112,7 @@ contract(#58/#59)记录那些在语法上可表达、但 bit-level compute 语�
 - barrier 或 shared-memory 行为需要一个尚不存在的 trace model;
 - overlapping write 既不被 disjoint merge 也不被 atomic/reduce theorem 覆盖。
 
-本文档不要求重构当前 error type。它记录的是未来 #12 实现切片应当保留的
+本文档不要求重构当前 error type。它记录的是未来 #5 实现切片应当保留的
 分类。
 
 ## Follow-Up 顺序
@@ -121,7 +121,7 @@ contract(#58/#59)记录那些在语法上可表达、但 bit-level compute 语�
 
 1. Trace/interleaving 词汇,只覆盖 atomic 和 barrier 所需。
 2. Atomic-only 语义或算法抽象。这是 atomic 正确性工作的直接前置,
-   包括 #43 FA-1 backward dQ。
+   包括 FA-1 backward dQ。
 3. Async/TMA sequentialization theorem 家族。
 4. WGMMA、warp specialization 以及完整的 Hopper 形 kernel,推迟到
    更强的并发基础设施出现之后。
@@ -133,12 +133,12 @@ contract(#58/#59)记录那些在语法上可表达、但 bit-level compute 语�
 
 | Layer | 语义对象 | 覆盖范围 | 跟踪 |
 | --- | --- | --- | --- |
-| L1: single-cell linearized RMW | `MemCell -> RMWEvent -> Option (MemCell × RMWEvent)` 加 per-cell 有序 event list | `atomic_add`、`atomic_xchg`、`atomic_cas`、single-cell max/min/and/or/xor | #66 处理可交换 add;#82 处理 order-sensitive xchg/cas |
+| L1: single-cell linearized RMW | `MemCell -> RMWEvent -> Option (MemCell × RMWEvent)` 加 per-cell 有序 event list | `atomic_add`、`atomic_xchg`、`atomic_cas`、single-cell max/min/and/or/xor | atomic-add 处理可交换 add;single-cell RMW 处理 order-sensitive xchg/cas |
 | L2: multi-cell atomic transaction | 跨多 cell 的 state transformer | DCAS / MCAS / 事务内存式 primitive | 暂无活跃 issue;待真实 consumer 出现时再开 |
-| L3: cross-cell ordering + async | happens-before / visibility 图加 fence、barrier、async completion | memory ordering、async copy、TMA/WGMMA visibility、producer-consumer warp specialization | #12 长周期 |
+| L3: cross-cell ordering + async | happens-before / visibility 图加 fence、barrier、async completion | memory ordering、async copy、TMA/WGMMA visibility、producer-consumer warp specialization | #5 长周期 |
 | L4: 无锁数据结构 invariant | L1/L3 加上把抽象状态关联到内存的 data-structure invariant | queue / stack / set / lock-free protocol | 暂无活跃 issue;由 consumer 驱动 |
 
-#82 只实现 L1。它必须与之后的 L2/L3/L4 工作兼容,但它不能依赖
+single-cell RMW 只实现 L1。它必须与之后的 L2/L3/L4 工作兼容,但它不能依赖
 multi-cell transaction、global scheduler、async visibility 或 data-structure
 invariant。
 
@@ -173,13 +173,13 @@ order-sensitive atomic 例如 xchg/cas 可以填 `extraInput`、`observed`
 和 `result`,而不必引入第二种 event type。trace 模块不是 scheduler,
 也不会改 `exec`。
 
-## #82 PR0 历史设计检查
+## Single-cell RMW 设计检查
 
-#82 的第一步实现是在加入 `atomic_xchg` / `atomic_cas` 语义之前先做
+single-cell RMW 的第一步实现是在加入 `atomic_xchg` / `atomic_cas` 语义之前先做
 ownership/API 审计。下文所述的 xchg/cas 片段现已实现；此处记录当时的结果:
 
 ```text
-API ready; proceed to PR1.
+API ready for the return-valued RMW implementation.
 ```
 
 审计细节:
@@ -190,10 +190,10 @@ API ready; proceed to PR1.
   CAS/XCHG event type。
 - `MemoryEvent.rmw` 已经携带 `RMWEvent`,所以加入 `.xchg` / `.cas`
   语义不需要重构 constructor 形状。
-- `Stmt.atomicAdd` 仍是 #66 可交换 theorem 的独立公开 surface。#82
+- `Stmt.atomicAdd` 仍是 atomic-add 可交换 theorem 的独立公开 surface。single-cell RMW
   应当增加一个 return-valued 的 RMW constructor,而不是重载
   `Stmt.atomicAdd`。
-- `Trace.LinearizesAt` 已经提供 per-cell 的 trace hook。#82 可以加一个
+- `Trace.LinearizesAt` 已经提供 per-cell 的 trace hook。single-cell RMW 可以加一个
   通用化的 event-list linearization predicate,但不需要 global scheduler
   或 timestamp map。
 
@@ -224,7 +224,7 @@ whole-grid correctness:
 - `tl.atomic_add` 降为面向证明的 `Stmt.atomicAdd` marker;
 - 单 program 的 `stepStmt` 顺序执行 read-add-write 更新;
 - `Stmt.atomicTraceEvents` 把 active lane 记录为 `MemoryEvent.rmw ... .add value`;
-- `Kernel.mergeFramesWithAtomic` 把 #49 的 ordinary frame write 与
+- `Kernel.mergeFramesWithAtomic` 把 ordinary frame write 与
   选中的 grid-level atomic trace 合起来;
 - `Kernel.mergeFramesWithAtomic_atomicAdd_eq_finsetSum` 把 Real
   最终 cell 值的 theorem 表述为初始值加 trace payload 的 `Finset.sum`。
@@ -271,7 +271,7 @@ Contract 给出未来必需 discipline 的命名:
 也不蕴含 shared-memory、barrier 或 TMA 建模。
 
 显式 shared-memory state、TMA destination state、WGMMA operand layout
-以及 scope-tagged footprint 仍然是 #65 的触发项。
+以及 scope-tagged footprint 仍然是 scope/visibility 的触发项。
 
 ## Non-Goals
 

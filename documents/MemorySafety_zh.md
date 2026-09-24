@@ -71,12 +71,12 @@ predicate 级 write footprint 和 single-program execution 的
 `BlockState.WriteWithin` frame contract。Layer 2b 放在
 `VeriTile.Triton.Launch.Composition`:在 write footprint 两两不相交时
 合并显式的 per-program `Kernel.ExecFrame`。结构化 footprint 抽取与
-proof automation 放在 `VeriTile.Triton.Memory.Footprint`(#61)。
+proof automation 放在 `VeriTile.Triton.Memory.Footprint`。
 这一层把 `WriteFootprint := MemCellAddr -> Prop` 作为语义接口,
 并增加诸如 `WriteFootprint.tileImage`、`activeTileImage` 以及
 block-pointer address-image helper 等 smart constructor。
 
-Unrelated-memory preservation helper 放在同一个 frame stack 上(#62)。
+Unrelated-memory preservation helper 放在同一个 frame stack 上。
 在手动展开 `WriteWithin` 或 `GridWriteFootprint` 之前,
 请先用 `BlockState.WriteWithin.mem_eq_of_not_written`、
 `Kernel.ExecFrame.mem_eq_of_region_not_written`、

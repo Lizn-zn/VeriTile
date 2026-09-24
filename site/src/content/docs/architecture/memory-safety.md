@@ -80,12 +80,12 @@ for single-program executions. Layer 2b lives in
 `VeriTile.Triton.Launch.Composition`: it merges explicit per-program
 `Kernel.ExecFrame`s when their write footprints are pairwise disjoint.
 Structured footprint extraction and proof automation live in
-`VeriTile.Triton.Memory.Footprint` (#61). This layer keeps
+`VeriTile.Triton.Memory.Footprint`. This layer keeps
 `WriteFootprint := MemCellAddr -> Prop` as the semantic interface and adds
 smart constructors such as `WriteFootprint.tileImage`,
 `activeTileImage`, and block-pointer address-image helpers.
 
-Unrelated-memory preservation helpers live on the same frame stack (#62).
+Unrelated-memory preservation helpers live on the same frame stack.
 Use `BlockState.WriteWithin.mem_eq_of_not_written`,
 `Kernel.ExecFrame.mem_eq_of_region_not_written`,
 `Kernel.ExecWritesWithin.mem_eq_of_region_not_written`, and

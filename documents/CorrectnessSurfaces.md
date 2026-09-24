@@ -297,7 +297,7 @@ write map on both sides for ordinary same-buffer equivalence. `Refines` is the
 whole-memory form to reach for first; `RefinesAt` is the escape hatch when you
 genuinely need per-side values.
 
-### Rounding-model surfaces (narrow float, #447)
+### Rounding-model surfaces (narrow float, #3)
 
 The unqualified surfaces are the rounding surfaces: each is parametric over a
 `R : RoundingModel` (`round : FloatDType → ℝ → ℝ`, with idempotence a defining

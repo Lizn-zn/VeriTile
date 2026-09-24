@@ -51,7 +51,7 @@ offset 函数。
 - 完整 paged-KV 证明基础设施。存储模型现已支持核心的 indirect-addressing
   pattern——typed index load 喂入 pointer arithmetic——而 `IndirectView` 把
   read-only view 层打包好。bound、alias / page-ownership、以及 paged FA-1
-  等价证明仍是后续 consumer 工作;见 issue #42。
+  等价证明仍是后续 consumer 工作;见 issue #4。
 - 丰富的 signed/unsigned 整数 dtype lattice。当前 typed HBM 模型支持
   `.nat`(`tl.uint8/uint16/uint32/uint64`)和数学 `.int`
   (`tl.int8/int16/int32/int64`),足够 index / block-table cell 使用,
@@ -105,19 +105,19 @@ functional correctness。它不证明性能性质,也不证明 CUDA memory-syste
 
 当前模型刻意保持精简。已落地的 memory-proof 层有:
 
-- **Memory safety / bounds (#48):** 在当前 typed storage 层之上的 active-lane
+- **Memory safety / bounds (#4):** 在当前 typed storage 层之上的 active-lane
   region-bounds contract。
-- **Write footprint / frame (#60):** 用于 single-program frame reasoning 的
+- **Write footprint / frame:** 用于 single-program frame reasoning 的
   谓词级 `WriteFootprint` 和 `BlockState.WriteWithin` contract。
-- **Disjoint whole-grid composition (#49):** `Kernel.mergeFrames` 在 write
+- **Disjoint whole-grid composition:** `Kernel.mergeFrames` 在 write
   footprint 两两 disjoint 时合并显式 per-program `Kernel.ExecFrame`。
 
 同时已经实现的证明辅助工具:
 
-- **结构化 footprint 提取 (#61):** `WriteFootprint.tileImage`、
+- **结构化 footprint 提取:** `WriteFootprint.tileImage`、
   `activeTileImage` 和 address-image helper 从常见的 direct、masked、checked
   block-pointer 以及普通 store pattern 中导出谓词 footprint。
-- **Unrelated-frame helper (#62):** 便利引理,证明 single-program 或 grid
+- **Unrelated-frame helper:** 便利引理,证明 single-program 或 grid
   footprint 之外的 cell 或整个 region 保持不变。
 
 ### 布局与平铺内存：当前实现
@@ -136,11 +136,11 @@ alias 行为需要进一步建模。具体定理应保留其分配与安全前�
 
 更长期的扩展点:
 
-- **Paged KV / indirect addressing (#42):** 把当前 `IndirectView`
+- **Paged KV / indirect addressing (#4):** 把当前 `IndirectView`
   smoke/proof surface 扩展为 paged-attention 专用的逻辑 view 和
   consumer 端等价 theorem。
-- **Async 和并发 (#12):** `ConcurrencySemantics.md` 定义了 shared-memory
+- **Async 和并发 (#5):** `ConcurrencySemantics.md` 定义了 shared-memory
   state、barrier、atomic、async/TMA,以及显式 scheduling 或 trace 模型的
   边界。
-- **浮点 fidelity (#11):** 在需要时把 `R` 抽象替换或细化为 IEEE /
+- **浮点 fidelity (#3):** 在需要时把 `R` 抽象替换或细化为 IEEE /
   mixed-precision 语义。

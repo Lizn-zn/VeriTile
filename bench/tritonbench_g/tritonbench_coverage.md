@@ -49,7 +49,7 @@ capability gaps they cite have since landed in the DSL, and the first batch
 of formerly-blocked kernels is now ported **and proven** (see
 `proof_gap_manifest.tsv` for the authoritative per-kernel status):
 
-- `tl.num_programs` (#92), `tl.atomic_add` value proofs, `tl.debug_barrier`
+- `tl.num_programs`, `tl.atomic_add` value proofs, `tl.debug_barrier`
   (erases to a no-op at the algorithm layer), the `tl.math.*` /
   `tl.extra.cuda.libdevice.*` adapters (including exact `erf`), and a general
   `tl.extra.cuda.libdevice.pow` (`Op.pow` / `Real.rpow`, scalar-base ×
@@ -62,11 +62,11 @@ of formerly-blocked kernels is now ported **and proven** (see
 - **Reclassification**: `isfinite_kernel` is listed as Soft/`num_programs`
   below, but its actual blocker is the `isfinited`/`finitef` libdevice
   fp-classification intrinsics, which are degenerate under exact-ℝ semantics
-  (everything is finite in ℝ) — it belongs to the #447 floating-point
+  (everything is finite in ℝ) — it belongs to the #3 floating-point
   modeling family, not to any surface-adapter gap.
-- Still open as of this update: `int_dot` (#93), `int4_packed` (#95), `fp8`
-  and `fp4` (#447/#52 family), `RNG` (#41), `atomic(cas,xchg)` concurrency
-  (#12/#84).
+- Still open as of this update: `int_dot` (#3), `int4_packed` (#3), `fp8`
+  and `fp4` (#3 family), `RNG` (#4), `atomic(cas,xchg)` concurrency
+  (#5).
 
 ## Per-family verdict matrix
 
@@ -92,7 +92,7 @@ of formerly-blocked kernels is now ported **and proven** (see
 
 Sorted by gap reason, then file:
 
-### `tl.debug_barrier()` used as cross-tile synchronization (8) — issue #12
+### `tl.debug_barrier()` used as cross-tile synchronization (8) — issue #5
 
 Forces ordering between tiles within a program; a real semantic atom in this
 corpus, not just a profiling marker. Hard until VeriTile's concurrency
@@ -121,7 +121,7 @@ exponent/mantissa layout, not just narrower storage.
 - `rms_rbe_matmul.py` (MatMul; also debug_barrier)
 - `triton_matmul.py` (MatMul)
 
-### RNG primitives (4) — issue #41
+### RNG primitives (4) — issue #4
 
 `tl.rand`, `tl.philox`, `tl.uniform_to_normal`, `tl.uint_to_uniform_float`.
 
@@ -130,7 +130,7 @@ exponent/mantissa layout, not just narrower storage.
 - `uniform_sampling.py` (RNG/Sampling) — uses `tl.philox`, `tl.uint_to_uniform_float`
 - `layer_norm_fwd.py` (Norm) — fused layernorm + `tl.rand` dropout
 
-### `tl.atomic_cas` / `tl.atomic_xchg` spinlock loops (3) — issue #12
+### `tl.atomic_cas` / `tl.atomic_xchg` spinlock loops (3) — issue #5
 
 Lock-based reductions and cross-tile coordination. There is no
 `tl.atomic_max` / `tl.atomic_min` / `tl.atomic_or` / `tl.atomic_and` /
@@ -212,7 +212,7 @@ is well-defined and would need a typed lift.
 
 ### Reverse-direction scan (1)
 
-RESOLVED (#94): `tl.cumsum` / `tl.cumprod` / `tl.associative_scan` now accept
+RESOLVED: `tl.cumsum` / `tl.cumprod` / `tl.associative_scan` now accept
 `reverse=True/False`, lowering to the directed scan node (`ScanDirection`,
 suffix fold). The kernel below is now ported and proven
 (`reversed_cumsum_scalar/ReversedCumsumScalar.lean`); its faithful
@@ -246,11 +246,11 @@ Sorted by yield. Numbers count files moving up at least one verdict tier
 | `tl.math.*` surface adapter (`exp2/log2/rsqrt/sin`) | 24 | trivial | doc-only, no issue yet |
 | `tl.extra.cuda.libdevice.{pow,tanh,llrint}` surface adapter | 9 | small | doc-only, no issue yet |
 | `tl.num_programs(axis)` AST + semantics | 9 | small | new DSL extension |
-| `tl.atomic_add` proof shape for split-K | 6 | medium | extends #12 atomic_add theorem |
-| Concurrency boundary: `tl.debug_barrier` + `tl.atomic_cas/xchg` | 8 + 3 = 11 | large | #12 |
+| `tl.atomic_add` proof shape for split-K | 6 | medium | extends #5 atomic_add theorem |
+| Concurrency boundary: `tl.debug_barrier` + `tl.atomic_cas/xchg` | 8 + 3 = 11 | large | #5 |
 | FP8 dtype channel + `tl.dot` lift | 7 | large | needs new issue |
 | Int4 packed unpack semantics | 4 | medium | needs new issue |
-| RNG model (`tl.rand`, philox, uniform-to-float) | 4 | large | #41 |
+| RNG model (`tl.rand`, philox, uniform-to-float) | 4 | large | #4 |
 | FP4 packed unpack + `tl.interleave` | 2 | medium | needs new issue |
 | `tl.dot` over int8/int32 | 3 | medium | extends typed dot |
 | `tl.extra.cuda.libdevice.erf` primitive | 1 | small | new unary math op |

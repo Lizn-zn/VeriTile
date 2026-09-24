@@ -39,7 +39,7 @@ no completed public-repository corpus audit has been recorded yet.
 
 There are no current explicit algorithm-layer `hAlg` blockers. Any future
 proof blockers should be listed in [`proof_blockers.md`](./proof_blockers.md).
-The stronger #146 proof-status audit is tracked in
+The stronger #2 proof-status audit is tracked in
 [`proof_gap_manifest.tsv`](./proof_gap_manifest.tsv) and checked by
 [`../check_proof_gap_manifest.py`](../check_proof_gap_manifest.py). That
 manifest covers all 345 headline declarations across 173 ports. The explicit
@@ -95,7 +95,7 @@ the Python `@triton.jit` kernel body and Lean `triton { ... }` body. Ordered
 is rejected mechanically. Top-level statement left-hand-side sequences are also
 checked, including `+=`, annotated assignments, and tuple assignments.
 It also checks that `proof_gap_manifest.tsv` is fresh against the Lean source,
-so newly added or renamed `output_summary` declarations cannot bypass the #146
+so newly added or renamed `output_summary` declarations cannot bypass the #2
 proof-status classification.
 It is a mechanical gate only; line-by-line faithfulness still follows
 [`review_criteria.md`](./review_criteria.md), and unresolved proof obligations
@@ -107,7 +107,7 @@ remain tracked in [`proof_blockers.md`](./proof_blockers.md).
 |---|---|---|---|
 | 2026-05-06 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 15 (Tier 1) | initial DSL ports; no specs / theorems yet |
 | 2026-05-13 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 141 port pairs | the audited port set as of that date; see `completion_audit.md` for remaining proof obligations |
-| 2026-07-04 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 1 (`reversed_cumsum_scalar`) | reverse-range port; DSL blocker resolved by #94/#448 |
+| 2026-07-04 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 1 (`reversed_cumsum_scalar`) | reverse-range port; DSL blocker resolved by reverse-range support |
 | 2026-08-25 | [`603e28a`](https://github.com/thunlp/TritonBench/commit/603e28a) | 173 port pairs | current audited port set (`int_scaled_matmul` closed the integer family); the remaining 11 of the 184 upstream kernels are README-only scaffolds |
 
 ### Local modifications to vendored `.py` files

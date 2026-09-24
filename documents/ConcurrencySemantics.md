@@ -1,7 +1,7 @@
 # Concurrency Semantics Boundary
 
 This document records VeriTile's boundary for non-sequential GPU effects.
-It is the design entry point for issue #12.
+It is the design entry point for issue #5.
 
 ## Current Deterministic Boundary
 
@@ -17,11 +17,11 @@ and no separate shared-memory or barrier state.
 
 The deterministic memory stack is implemented through:
 
-- #48 active-lane bounds safety;
-- #60 predicate frame contracts;
-- #49 disjoint whole-grid merge;
-- #61 footprint extraction helpers;
-- #62 unrelated-frame helpers.
+- active-lane bounds safety;
+- predicate frame contracts;
+- disjoint whole-grid merge;
+- footprint extraction helpers;
+- unrelated-frame helpers.
 
 That stack supports deterministic, disjoint, sequential memory reasoning. It
 does not model general overlapping writes, barriers, shared memory, async/TMA,
@@ -63,7 +63,7 @@ ComputeKernel.toAlgorithm? : ComputeKernel -> Except _ AlgKernel
 ```
 
 Today this bridge covers compute-facing constructs that can be projected to
-the algorithm layer. As #12 features arrive, the bridge should remain mostly a
+the algorithm layer. As #5 features arrive, the bridge should remain mostly a
 representation-erasure step:
 
 - erase dtype or bit payloads;
@@ -107,7 +107,7 @@ where the mathematical laws actually hold.
 
 `ComputeCorrect` / `ComputeRefine` are available only when
 `ComputeKernel.toAlgorithm?` succeeds and the resulting `AlgKernel` theorem is
-proved. Optional `GapPolicy` contracts (#58/#59) record externally checked
+proved. Optional `GapPolicy` contracts (#6) record externally checked
 compute-to-algorithm gaps for effects that are represented syntactically but
 not internally proved as bit-level compute semantics.
 
@@ -125,7 +125,7 @@ when useful, in the error type:
   theorem.
 
 This document does not require refactoring the current error type. It records
-the categories that future #12 implementation slices should preserve.
+the categories that future #5 implementation slices should preserve.
 
 ## Follow-Up Order
 
@@ -133,7 +133,7 @@ The intended implementation order is:
 
 1. Trace/interleaving vocabulary, only as much as atomics and barriers need.
 2. Atomic-only semantics or algorithm abstraction. This is the direct
-   prerequisite for atomic correctness work, including #43 FA-1 backward dQ.
+   prerequisite for atomic correctness work, including FA-1 backward dQ.
 3. Async/TMA sequentialization theorem family.
 4. WGMMA, warp specialization, and full Hopper-shaped kernels, deferred until
    stronger concurrency infrastructure exists.
@@ -146,12 +146,12 @@ their machinery into simpler proofs.
 
 | Layer | Semantic object | Covers | Tracking |
 | --- | --- | --- | --- |
-| L1: single-cell linearized RMW | `MemCell -> RMWEvent -> Option (MemCell × RMWEvent)` plus a per-cell ordered event list | `atomic_add`, `atomic_xchg`, `atomic_cas`, single-cell max/min/and/or/xor | #66 for commutative add; #82 for order-sensitive xchg/cas |
+| L1: single-cell linearized RMW | `MemCell -> RMWEvent -> Option (MemCell × RMWEvent)` plus a per-cell ordered event list | `atomic_add`, `atomic_xchg`, `atomic_cas`, single-cell max/min/and/or/xor | atomic-add for commutative add; single-cell RMW for order-sensitive xchg/cas |
 | L2: multi-cell atomic transaction | state transformer over multiple cells | DCAS / MCAS / transactional-memory style primitives | no active issue; open when a real consumer appears |
-| L3: cross-cell ordering + async | happens-before / visibility graph plus fences, barriers, and async completion | memory ordering, async copy, TMA/WGMMA visibility, producer-consumer warp specialization | #12 long-horizon |
+| L3: cross-cell ordering + async | happens-before / visibility graph plus fences, barriers, and async completion | memory ordering, async copy, TMA/WGMMA visibility, producer-consumer warp specialization | #5 long-horizon |
 | L4: lock-free data-structure invariants | L1/L3 plus a data-structure invariant relating abstract state to memory | queue / stack / set / lock-free protocols | no active issue; consumer-driven only |
 
-#82 implements only L1. It must remain compatible with later L2/L3/L4 work,
+The single-cell RMW implementation covers only L1. It must remain compatible with later L2/L3/L4 work,
 but it must not depend on multi-cell transactions, a global scheduler, async
 visibility, or data-structure invariants.
 
@@ -186,13 +186,13 @@ fields empty. Order-sensitive atomics such as xchg/cas can fill `extraInput`,
 `observed`, and `result` without introducing a second event type. The trace
 module is not a scheduler and does not change `exec`.
 
-## Historical #82 PR0 Design Check
+## Single-cell RMW Design Check
 
 The initial ownership/API audit preceded the implemented `atomic_xchg` /
 `atomic_cas` slice described below. Its result at that stage was:
 
 ```text
-API ready; proceed to PR1.
+API ready for the return-valued RMW implementation.
 ```
 
 Audit details:
@@ -204,10 +204,10 @@ Audit details:
   not need a parallel CAS/XCHG event type.
 - `MemoryEvent.rmw` already carries `RMWEvent`, so adding `.xchg` / `.cas`
   semantics does not require a constructor-shape refactor.
-- `Stmt.atomicAdd` remains a separate public surface for #66's commutative
-  theorem. #82 should add a new return-valued RMW constructor instead of
+- `Stmt.atomicAdd` remains a separate public surface for the commutative atomic-add
+  theorem. Single-cell RMW needs a new return-valued RMW constructor instead of
   overloading `Stmt.atomicAdd`.
-- `Trace.LinearizesAt` already provides a per-cell trace hook. #82 may add a
+- `Trace.LinearizesAt` already provides a per-cell trace hook. Single-cell RMW may add a
   generalized event-list linearization predicate, but does not need a global
   scheduler or timestamp map.
 
@@ -239,7 +239,7 @@ The first concrete atomic slice is intentionally narrow:
 - `tl.atomic_add` lowers to a proof-facing `Stmt.atomicAdd` marker;
 - single-program `stepStmt` performs a sequential read-add-write update;
 - `Stmt.atomicTraceEvents` records active lanes as `MemoryEvent.rmw ... .add value`;
-- `Kernel.mergeFramesWithAtomic` combines #49 ordinary frame writes with
+- `Kernel.mergeFramesWithAtomic` combines ordinary frame writes with
   selected grid-level atomic traces;
 - `Kernel.mergeFramesWithAtomic_atomicAdd_eq_finsetSum` states the Real
   final-cell theorem as initial value plus a `Finset.sum` of trace payloads.
@@ -288,7 +288,7 @@ marker; they are not executable semantics and they do not imply shared-memory,
 barrier, or TMA modeling.
 
 Explicit shared-memory state, TMA destination state, WGMMA operand layout, and
-scope-tagged footprints remain #65 triggers.
+scope-tagged footprints remain scope/visibility triggers.
 
 ## Non-Goals
 

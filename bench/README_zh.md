@@ -105,8 +105,8 @@ lower,仍需要全新的 proof 工程。
 4. **按产出顺序攻克补救**,按
    [`tritonbench_coverage.md`](./tritonbench_coverage.md):
    `tl.num_programs`(9 文件)、atomic_add proof shape(6),然后是更大
-   的语义投资 —— concurrency 边界(#12)、FP8 channel、int4 packed、
-   RNG(#41)、FP4。
+   的语义投资 —— concurrency 边界(#5)、FP8 channel、int4 packed、
+   RNG(#4)、FP4。
 
 ## 已记录的取舍
 

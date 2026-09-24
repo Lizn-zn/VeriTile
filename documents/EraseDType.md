@@ -125,7 +125,7 @@ obligation. The formal compute-to-algorithm bridge is
 the Real / Int / Nat algorithm layer where Lean proofs run. Numeric
 compute-layer behavior — IEEE rounding, NaN propagation, denormals,
 hardware-dot precision, fast-math, etc. — is validated empirically through the
-external gap checker (see PLAN.md "Verification architecture" and #59), not
+external gap checker (see PLAN.md "Verification architecture" and #6), not
 through a Lean theorem.
 
 Users reading a `ComputeCorrect` Lean certificate should interpret it as: "the

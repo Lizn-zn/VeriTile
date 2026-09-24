@@ -265,7 +265,7 @@ ComputeRefine.RefinesAt R lhs rhs s lhsWrite rhsWrite relation
 中间件。同一 buffer 的普通等价用两边相同的 write map。首选 whole-memory 的
 `Refines`;确实需要 per-side 值时才用 `RefinesAt` 这个 escape hatch。
 
-### 舍入模型 surface(窄浮点,#447)
+### 舍入模型 surface(窄浮点,#3)
 
 不带限定词的 surface 就是舍入 surface:每个都对一个 `R : RoundingModel`
 (`round : FloatDType → ℝ → ℝ`,幂等性是它的一个 defining field)parametric,

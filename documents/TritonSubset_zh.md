@@ -24,10 +24,10 @@ Stmt : Type
 
 - `tl.program_id(axis)` 与 `tl.program_id(axis=axis)`,其中 `axis` 是数字字面量或 `$(n)`。
   运行时状态保存 `pids : Nat → Nat`,所以任意 axis 都有定义。
-- `tl.num_programs(axis)` 与 `tl.num_programs(axis=axis)`(#92):`axis` 方向的
+- `tl.num_programs(axis)` 与 `tl.num_programs(axis=axis)`:`axis` 方向的
   launch 网格维度。运行时状态保存 `numPids : Nat → Nat`(默认每个 axis 为 `1`,
   即未展开的 axis 上恰有一个 program);`BlockState.withGridIndex` 在实例化
-  per-program 状态时把它设为真实网格维度,所以在 ND launch(#88 / `Launch.Grid`)
+  per-program 状态时把它设为真实网格维度,所以在 ND launch(#5 / `Launch.Grid`)
   下 `tl.num_programs` 读到真实网格大小。
 - `tl.for i in $(n) { ... }` 与 `tl.for i in N { ... }`。
   loop 有操作语义,证明通过 `forLoop_inv`。
@@ -147,7 +147,7 @@ Stmt : Type
 `tl.where(x < 0, 0 - x, x)`。`tl.math.*` 命名空间和
 `tl.extra.cuda.libdevice.*` alias 在算法层降到同一个数学算子;它们不是
 CUDA libdevice bit-level 近似实现的证明,后者属于 ComputeCorrect gap
-contract 路径(#59)。
+contract 路径(#6)。
 
 ### Reduction
 
@@ -363,7 +363,7 @@ float-facing theorem 仍可使用 `k.eraseDType = realK` 这类 erasure 等式,�
 
 ## Operator / syntax 覆盖 checklist
 
-这个表是 GitHub issue #15 当前的 operator-coverage contract。`Supported`
+这个表是 GitHub issue #4 当前的 operator-coverage contract。`Supported`
 表示已有 Lean AST 构造或 DSL lowering、操作语义,并且覆盖当前 examples 需要的证明
 surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。`Gap` 表示使用该
 特性的 kernel 目前不在语义契约内。
@@ -398,11 +398,11 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | disjoint grid composition | Limited | `Kernel.GridFrames`、`GridWritesDisjoint` 和 `mergeFrames` 能合并 pairwise-disjoint write footprint 的 explicit per-program frame;没有 overlapping write 或 scheduling semantics |
 | tensor view | Supported | theorem surface 的 strided `TensorView.loaded` / `TensorView.observe` wrapper |
 | integer memory | Limited | typed cell 加 typed load/store 支持 Nat/index 和数学 signed-Int HBM value;还没有更完整的 signed/unsigned width lattice |
-| randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#41) |
-| indirection | Limited | typed index load 可以参与 pointer arithmetic,表达 gather / paged-KV 风格 data-dependent address (#42);还没有 alias/bounds/page-ownership proof layer |
+| randomness | Gap | 还没有 `tl.rand` 或 RNG state model (#4) |
+| indirection | Limited | typed index load 可以参与 pointer arithmetic,表达 gather / paged-KV 风格 data-dependent address (#4);还没有 alias/bounds/page-ownership proof layer |
 | block pointer | Limited | `tl.make_block_ptr`、`tl.advance`、带 checked-axis zero padding / store skip 的 block-pointer load/store;没有硬件/TMA 行为 |
-| atomic / async / barrier | Limited | `tl.atomic_add` 已有 AlgKernel `Stmt.atomicAdd` marker、单程序顺序语义、trace payload 词汇和 Real grid-merge sum theorem;`tl.atomic_xchg` / `tl.atomic_cas` 现在会 project 到 return-valued `Stmt.atomicRMW` marker,并已有 single-cell RMW fold 语义、可执行 statement 语义、stateful trace emission 和带 explicit linearization witness 的 single-cell grid launcher relation;其他 `tl.atomic_*`、`tl.async_copy`、`tl.async_wait`、`tl.debug_barrier` 目前只会 lowering 到 compute-facing failure marker;async/TMA discipline 仍只是文档 contract,没有实现;还没有完整 scheduler、可执行 barrier、可执行 async copy 语义、TMA AST 或 IEEE atomic 语义 (#12/#67/#68/#69/#71/#72/#76/#82) |
-| floating-point fidelity | Limited | 数学实数语义与抽象 cast/store 舍入模型；无完整 IEEE-754 硬件语义 (#11) |
+| atomic / async / barrier | Limited | `tl.atomic_add` 已有 AlgKernel `Stmt.atomicAdd` marker、单程序顺序语义、trace payload 词汇和 Real grid-merge sum theorem;`tl.atomic_xchg` / `tl.atomic_cas` 现在会 project 到 return-valued `Stmt.atomicRMW` marker,并已有 single-cell RMW fold 语义、可执行 statement 语义、stateful trace emission 和带 explicit linearization witness 的 single-cell grid launcher relation;其他 `tl.atomic_*`、`tl.async_copy`、`tl.async_wait`、`tl.debug_barrier` 目前只会 lowering 到 compute-facing failure marker;async/TMA discipline 仍只是文档 contract,没有实现;还没有完整 scheduler、可执行 barrier、可执行 async copy 语义、TMA AST 或 IEEE atomic 语义 (#5) |
+| floating-point fidelity | Limited | 数学实数语义与抽象 cast/store 舍入模型；无完整 IEEE-754 硬件语义 (#3) |
 
 ## 表达力矩阵
 
@@ -418,17 +418,17 @@ surface。`Limited` 表示 VeriTile 有意只支持 Triton 特性的窄子集。
 | block pointer / `boundary_check` | Limited | surface + sequential semantics | 支持 `tl.make_block_ptr`、`tl.advance`、zero-padded checked load、checked store-skip;没有 `order`、非 zero padding、TMA 或硬件行为。 |
 | typed floating memory | Limited | semantic abstraction | `dtype=tl.float32/fp16/bf16` 会生成 typed floating node,算法证明擦除到 real;没有 IEEE rounding。 |
 | integer / bool tensor memory | Limited | dtype coverage | typed cell 加 typed load/store 支持 Nat/index 和数学 signed-Int HBM value;还没有完整 Triton integer-width lattice。 |
-| indirect / gather addressing | Limited | surface + view semantics (#42) | typed index tensor load 可以驱动 pointer arithmetic 和普通 masked load;alias analysis、bounds proof、page ownership、paged FA-1 等价还没建模。 |
-| active-lane memory bounds | Limited | Lean proof predicate (#48) | `Kernel.MemorySafe` 按 `RegionBounds` 检查 direct region offset、dynamic pointer address、mask activeness 和 `boundary_check` block-pointer lane;没有 race freedom、frame theorem 或 permission accounting。 |
-| single-program write footprint/frame | Limited | predicate-level frame contract + extraction helpers (#60/#61) | `WriteFootprint := (RegionName × Nat) → Prop` 和 `BlockState.WriteWithin` 表达一次 execution 只修改 supplied footprint 内的 cell;`tileImage` / `activeTileImage` helper 可提取 direct、masked、checked block-pointer store footprint。 |
-| RNG / dropout | Gap | state/probabilistic semantics (#41) | 阻塞 faithful dropout 和随机 kernel。 |
-| atomics / async / shared memory / barriers | Limited | atomic-add slice + concurrency boundary (#12/#82) | `tl.atomic_add` 已有 proof-facing marker 和 Real trace/grid-sum theorem;`tl.atomic_xchg` / `tl.atomic_cas` 有 return-valued algorithm marker、single-cell RMW fold 语义、statement/trace 集成和 single-cell grid launcher relation;剩余不支持的 atomic family 成员和 async/barrier surface 会显式 projection failure;async/TMA、shared memory、barrier、完整 scheduling、IEEE atomic 行为仍是 gap。 |
-| whole-grid launch semantics | Limited | ND grid theorem surface + disjoint/atomic merge (#5/#49/#12) | `GridIndex`、`BlockState.withGridIndex`、`Kernel.ForAllPrograms`、`ForAllProgramsSome` 支持 per-program correctness 量化;`Kernel.mergeFrames` 处理 pairwise-disjoint footprint,`Kernel.mergeFramesWithAtomic` 处理选定 Real atomic-add contribution,`Kernel.GridLaunchedRMW` 用 explicit linearization witness 处理一个 order-sensitive RMW cell;没有完整 race/scheduler/interleaved executor。 |
-| Python/Triton source ingestion | Gap | front-end/lifter (#10) | 用户必须写 Lean `triton { ... }`;decorator、Python-side constexpr execution、一般 Python control flow 还不能解析。 |
-| type checking / pointer provenance | Limited | optional checker (#46) | `Kernel.check` / `checkStrict` 跟踪 register dtype/shape、pointer 和 block-pointer provenance、dtype mismatch、基本 block-pointer metadata;不证明 bounds、alias、launch 或 page ownership。 |
+| indirect / gather addressing | Limited | surface + view semantics (#4) | typed index tensor load 可以驱动 pointer arithmetic 和普通 masked load;alias analysis、bounds proof、page ownership、paged FA-1 等价还没建模。 |
+| active-lane memory bounds | Limited | Lean proof predicate (#4) | `Kernel.MemorySafe` 按 `RegionBounds` 检查 direct region offset、dynamic pointer address、mask activeness 和 `boundary_check` block-pointer lane;没有 race freedom、frame theorem 或 permission accounting。 |
+| single-program write footprint/frame | Limited | predicate-level frame contract + extraction helpers | `WriteFootprint := (RegionName × Nat) → Prop` 和 `BlockState.WriteWithin` 表达一次 execution 只修改 supplied footprint 内的 cell;`tileImage` / `activeTileImage` helper 可提取 direct、masked、checked block-pointer store footprint。 |
+| RNG / dropout | Gap | state/probabilistic semantics (#4) | 阻塞 faithful dropout 和随机 kernel。 |
+| atomics / async / shared memory / barriers | Limited | atomic-add slice + concurrency boundary (#5) | `tl.atomic_add` 已有 proof-facing marker 和 Real trace/grid-sum theorem;`tl.atomic_xchg` / `tl.atomic_cas` 有 return-valued algorithm marker、single-cell RMW fold 语义、statement/trace 集成和 single-cell grid launcher relation;剩余不支持的 atomic family 成员和 async/barrier surface 会显式 projection failure;async/TMA、shared memory、barrier、完整 scheduling、IEEE atomic 行为仍是 gap。 |
+| whole-grid launch semantics | Limited | ND grid theorem surface + disjoint/atomic merge (#5) | `GridIndex`、`BlockState.withGridIndex`、`Kernel.ForAllPrograms`、`ForAllProgramsSome` 支持 per-program correctness 量化;`Kernel.mergeFrames` 处理 pairwise-disjoint footprint,`Kernel.mergeFramesWithAtomic` 处理选定 Real atomic-add contribution,`Kernel.GridLaunchedRMW` 用 explicit linearization witness 处理一个 order-sensitive RMW cell;没有完整 race/scheduler/interleaved executor。 |
+| Python/Triton source ingestion | Gap | front-end/lifter (#8) | 用户必须写 Lean `triton { ... }`;decorator、Python-side constexpr execution、一般 Python control flow 还不能解析。 |
+| type checking / pointer provenance | Limited | optional checker (#4) | `Kernel.check` / `checkStrict` 跟踪 register dtype/shape、pointer 和 block-pointer provenance、dtype mismatch、基本 block-pointer metadata;不证明 bounds、alias、launch 或 page ownership。 |
 
 近期表达力优先级应先消除 core semantic gap,再做完整 Python lifter:RNG/dropout
-(#41)、atomics/async/concurrency (#12)、bounds/memory-safety assumption (#48)。
+(#4)、atomics/async/concurrency (#5)、bounds/memory-safety assumption (#4)。
 如果 kernel 的操作本身还不可表达,lifter 提早做收益不大。
 
 ## 尚不支持或尚未真实建模

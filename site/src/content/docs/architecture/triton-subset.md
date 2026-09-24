@@ -30,12 +30,12 @@ values have shape `[]`; a matrix `[M, D]` has index shape
 - `tl.program_id(axis)` and `tl.program_id(axis=axis)` where `axis` is a
   numeric literal or `$(n)`. The runtime state stores `pids : Nat → Nat`,
   so every axis is total.
-- `tl.num_programs(axis)` and `tl.num_programs(axis=axis)` (#92): the
+- `tl.num_programs(axis)` and `tl.num_programs(axis=axis)`: the
   launch-grid dimension along `axis`. The runtime state stores
   `numPids : Nat → Nat` (default `1` on every axis — one program per
   unspanned axis); `BlockState.withGridIndex` sets it to the actual grid
   dimensions when instantiating per-program states, so under an ND launch
-  (#88 / `Launch.Grid`) `tl.num_programs` reads the true grid extent.
+  (#5 / `Launch.Grid`) `tl.num_programs` reads the true grid extent.
 - `tl.for i in $(n) { ... }` and `tl.for i in N { ... }`.
   The loop is operationally modeled and proved through `forLoop_inv`.
 - `tl.static_range i in $(n) { ... }` and `tl.static_range i in N { ... }`
@@ -125,7 +125,7 @@ Supported channels:
   over comparable channels. Branch broadcasting is currently limited to
   scalar-to-tile lifting, matching `tl.where`.
 - Directed scans: `tl.cumsum`, `tl.cumprod`, and `tl.associative_scan(x, op,
-  axis=N)` on `.real` tiles, each accepting `reverse=True/False` (#94):
+  axis=N)` on `.real` tiles, each accepting `reverse=True/False`:
   `forward` is the prefix fold, `reverse` the suffix fold along the scanned
   axis. The supported associative op names are the closed enum `sum`, `prod`,
   `max`, `min`; arbitrary user functions are not embedded in the AST.
@@ -172,7 +172,7 @@ These operate on the `.real` channel. `tl.abs(x)` is desugared to
 The `tl.math.*` namespace and `tl.extra.cuda.libdevice.*` aliases lower to
 the same mathematical operator at the algorithm layer; they are not proofs
 of CUDA libdevice's bit-level approximation, which belongs to the
-ComputeCorrect gap contract path (#59).
+ComputeCorrect gap contract path (#6).
 
 ### Reductions
 
@@ -415,7 +415,7 @@ policy.
 
 ## Operator and Syntax Coverage Checklist
 
-This table is the current operator-coverage contract for GitHub issue #15.
+This table is the current operator-coverage contract for GitHub issue #4.
 `Supported` means the syntax has a Lean AST constructor or accepted DSL
 lowering, operational semantics, and at least the proof surface needed by the
 current examples. `Limited` means VeriTile has a deliberately narrow version
@@ -452,11 +452,11 @@ current semantic contract.
 | Disjoint grid composition | Limited | `Kernel.GridFrames`, `GridWritesDisjoint`, and `mergeFrames` merge explicit per-program frames with pairwise-disjoint write footprints; no overlapping writes or scheduling semantics |
 | Tensor views | Supported | Strided `TensorView.loaded` / `TensorView.observe` wrappers for theorem statements |
 | Integer memory | Limited | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no richer signed/unsigned width lattice yet |
-| Randomness | Gap | No `tl.rand` or RNG state model yet (#41) |
-| Indirection | Limited | Typed index loads can feed pointer arithmetic for gather/paged-KV style data-dependent addresses (#42); no alias/bounds/page-ownership proof layer yet |
+| Randomness | Gap | No `tl.rand` or RNG state model yet (#4) |
+| Indirection | Limited | Typed index loads can feed pointer arithmetic for gather/paged-KV style data-dependent addresses (#4); no alias/bounds/page-ownership proof layer yet |
 | Block pointers | Limited | `tl.make_block_ptr`, `tl.advance`, block-pointer load/store with checked-axis zero padding / store skip; no hardware/TMA behavior |
-| Atomics / async / barriers | Limited | `tl.atomic_add` has an AlgKernel `Stmt.atomicAdd` marker, sequential single-program semantics, trace payload vocabulary, and a Real grid-merge sum theorem. `tl.atomic_xchg` / `tl.atomic_cas` now project to return-valued `Stmt.atomicRMW` markers and have single-cell RMW fold semantics, executable statement semantics, stateful trace emission, and a single-cell grid launcher relation with an explicit linearization witness. Other `tl.atomic_*`, `tl.async_copy`, `tl.async_wait`, and `tl.debug_barrier` lower to compute-facing failure markers only; async/TMA discipline remains documented but not implemented; no full scheduler, executable barriers, executable async copy semantics, TMA AST, or IEEE atomic semantics (#12/#67/#68/#69/#71/#72/#76/#82) |
-| Floating point fidelity | Limited | Mathematical values and abstract cast/store rounding models; no full IEEE-754 hardware semantics (#11) |
+| Atomics / async / barriers | Limited | `tl.atomic_add` has an AlgKernel `Stmt.atomicAdd` marker, sequential single-program semantics, trace payload vocabulary, and a Real grid-merge sum theorem. `tl.atomic_xchg` / `tl.atomic_cas` now project to return-valued `Stmt.atomicRMW` markers and have single-cell RMW fold semantics, executable statement semantics, stateful trace emission, and a single-cell grid launcher relation with an explicit linearization witness. Other `tl.atomic_*`, `tl.async_copy`, `tl.async_wait`, and `tl.debug_barrier` lower to compute-facing failure markers only; async/TMA discipline remains documented but not implemented; no full scheduler, executable barriers, executable async copy semantics, TMA AST, or IEEE atomic semantics (#5) |
+| Floating point fidelity | Limited | Mathematical values and abstract cast/store rounding models; no full IEEE-754 hardware semantics (#3) |
 
 ## Expressiveness Matrix
 
@@ -473,18 +473,18 @@ faithfully in the current Lean DSL?
 | Block pointers / `boundary_check` | Limited | Surface + sequential semantics | `tl.make_block_ptr`, `tl.advance`, zero-padded checked loads, and checked store-skip work; no `order`, non-zero padding, TMA, or hardware behavior. |
 | Typed floating memory | Limited | Semantic abstraction | `dtype=tl.float32/fp16/bf16` creates typed floating nodes and erases to real for algorithm proofs; IEEE rounding is not modeled. |
 | Integer / bool tensor memory | Limited | Dtype coverage | Typed cells plus typed load/store support Nat/index and mathematical signed-Int HBM values; no complete Triton integer-width lattice yet. |
-| Indirect / gather addressing | Limited | Surface + view semantics (#42) | Typed index tensor loads can drive pointer arithmetic and ordinary masked loads; alias analysis, bounds proof, page ownership, and paged FA-1 equivalence are not modeled yet. |
-| Active-lane memory bounds | Limited | Lean proof predicate (#48) | `Kernel.MemorySafe` checks direct region offsets, dynamic pointer addresses, mask activeness, and `boundary_check` block-pointer lanes against `RegionBounds`; no race freedom, frame theorem, or permission accounting. |
-| Single-program write footprint/frame | Limited | Predicate-level frame contract + extraction helpers (#60/#61) | `WriteFootprint := (RegionName × Nat) → Prop` and `BlockState.WriteWithin` state that an execution only modified cells inside a supplied footprint; `tileImage` / `activeTileImage` helpers extract direct, masked, and checked block-pointer store footprints. |
-| RNG / dropout | Gap | State/probabilistic semantics (#41) | Blocks faithful dropout and stochastic kernels. |
-| Atomics / async / shared memory / barriers | Limited | Atomic-add slice + concurrency boundary (#12/#82) | `tl.atomic_add` has a proof-facing marker and Real trace/grid-sum theorem; `tl.atomic_xchg` / `tl.atomic_cas` have return-valued algorithm markers, single-cell RMW fold semantics, executable statement/trace integration, and a single-cell grid launcher relation; remaining unsupported atomic family members and async/barrier surfaces fail projection explicitly; async/TMA, shared memory, barriers, full scheduling, and IEEE atomic behavior remain gaps. |
-| Whole-grid launch semantics | Limited | ND grid theorem surface + disjoint/atomic merge (#5/#49/#12) | `GridIndex`, `BlockState.withGridIndex`, `Kernel.ForAllPrograms`, and `ForAllProgramsSome` quantify per-program correctness; `Kernel.mergeFrames` handles pairwise-disjoint footprints, `Kernel.mergeFramesWithAtomic` handles selected Real atomic-add contributions, and `Kernel.GridLaunchedRMW` handles one order-sensitive RMW cell with an explicit linearization witness. No full race/scheduler/interleaved executor. |
-| Python/Triton source ingestion | Gap | Front-end/lifter (#10) | Users must write Lean `triton { ... }`; decorators, Python-side constexpr execution, and general Python control flow are not parsed. |
-| Type checking / pointer provenance | Limited | Optional checker (#46) | `Kernel.check` / `checkStrict` track register dtype/shape, pointer and block-pointer provenance, dtype mismatches, and basic block-pointer metadata; no bounds, alias, launch, or page-ownership proof. |
+| Indirect / gather addressing | Limited | Surface + view semantics (#4) | Typed index tensor loads can drive pointer arithmetic and ordinary masked loads; alias analysis, bounds proof, page ownership, and paged FA-1 equivalence are not modeled yet. |
+| Active-lane memory bounds | Limited | Lean proof predicate (#4) | `Kernel.MemorySafe` checks direct region offsets, dynamic pointer addresses, mask activeness, and `boundary_check` block-pointer lanes against `RegionBounds`; no race freedom, frame theorem, or permission accounting. |
+| Single-program write footprint/frame | Limited | Predicate-level frame contract + extraction helpers | `WriteFootprint := (RegionName × Nat) → Prop` and `BlockState.WriteWithin` state that an execution only modified cells inside a supplied footprint; `tileImage` / `activeTileImage` helpers extract direct, masked, and checked block-pointer store footprints. |
+| RNG / dropout | Gap | State/probabilistic semantics (#4) | Blocks faithful dropout and stochastic kernels. |
+| Atomics / async / shared memory / barriers | Limited | Atomic-add slice + concurrency boundary (#5) | `tl.atomic_add` has a proof-facing marker and Real trace/grid-sum theorem; `tl.atomic_xchg` / `tl.atomic_cas` have return-valued algorithm markers, single-cell RMW fold semantics, executable statement/trace integration, and a single-cell grid launcher relation; remaining unsupported atomic family members and async/barrier surfaces fail projection explicitly; async/TMA, shared memory, barriers, full scheduling, and IEEE atomic behavior remain gaps. |
+| Whole-grid launch semantics | Limited | ND grid theorem surface + disjoint/atomic merge (#5) | `GridIndex`, `BlockState.withGridIndex`, `Kernel.ForAllPrograms`, and `ForAllProgramsSome` quantify per-program correctness; `Kernel.mergeFrames` handles pairwise-disjoint footprints, `Kernel.mergeFramesWithAtomic` handles selected Real atomic-add contributions, and `Kernel.GridLaunchedRMW` handles one order-sensitive RMW cell with an explicit linearization witness. No full race/scheduler/interleaved executor. |
+| Python/Triton source ingestion | Gap | Front-end/lifter (#8) | Users must write Lean `triton { ... }`; decorators, Python-side constexpr execution, and general Python control flow are not parsed. |
+| Type checking / pointer provenance | Limited | Optional checker (#4) | `Kernel.check` / `checkStrict` track register dtype/shape, pointer and block-pointer provenance, dtype mismatches, and basic block-pointer metadata; no bounds, alias, launch, or page-ownership proof. |
 
 Recommended near-term priority for expressiveness is to remove core semantic
-gaps before building a full Python lifter: RNG/dropout (#41),
-atomics/async/concurrency (#12), and bounds/memory-safety assumptions (#48).
+gaps before building a full Python lifter: RNG/dropout (#4),
+atomics/async/concurrency (#5), and bounds/memory-safety assumptions (#4).
 A lifter is only useful for kernels whose operations are already representable.
 
 ## Unsupported or Not Yet Faithfully Modeled

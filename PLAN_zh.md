@@ -272,9 +272,9 @@ block-local 任意 mask `_block_*` 对偶;
 - 切第一个 release(至今未打过任何 tag),覆盖 FA-1 forward(3-A)、FA-2 forward + headline
   推论 `fa1_eq_fa2_two_block_forward4D`(3-B)、FA-1/FA-2 backward + headline
   推论 `fa1_backward_eq_fa2_backward(_4D)`(3-C)
-- Pre-Tier-4 cleanup checklist(已闭合:见 issue #108)
+- Pre-Tier-4 cleanup checklist(已完成)
 - causal launcher-witness 的 ergonomic 改进(§进行中)
-- 流式 reduction helper 抽取 —— Tier 4 prerequisite,#108 的延伸 issue
+- 流式 reduction helper 抽取 —— Tier 4 prerequisite,已完成清理工作的后续事项
 
 ### 中期 — Whole-grid `multiBlockExec` 与任意 block 数提升
 

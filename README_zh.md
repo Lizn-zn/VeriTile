@@ -25,7 +25,7 @@ VeriTile 把一个 typed Triton 风格 kernel DSL 嵌入到 Lean 4,然后证明�
   `ComputeRefine.Refines`(*一个 kernel refine 另一个* —— writes-equality:两个
   终态 memory 在所有非 scratch cell 上逐格相等)。两者都通过 `toAlgorithm?`
   投影,底层走 `Kernel.Correct_without_Rounding` / `Kernel.Refine`。
-- **窄浮点 / rounding-model 层**(#447):抽象的 `RoundingModel`
+- **窄浮点 / rounding-model 层**(#3):抽象的 `RoundingModel`
   (`round : FloatDType → ℝ → ℝ`,约束 `round_real`（实数通道恒等）与 `round_idem`（幂等性）)把一个 black-box
   rounding 函数穿过语义(`evalOpR` / `stepStmtR` / `execR`)。unqualified surface
   就是 rounding-parametric 的那些 —— `ComputeRefine.Realizes`(单 kernel 对照

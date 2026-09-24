@@ -302,10 +302,9 @@ ergonomic, not functional:
 - Cut a first release (no tag has been cut yet) covering FA-1 forward (3-A), FA-2 forward + the
   `fa1_eq_fa2_two_block_forward4D` headline corollary (3-B), and FA-1/FA-2
   backward + `fa1_backward_eq_fa2_backward(_4D)` headline corollary (3-C)
-- Pre-Tier-4 cleanup checklist (closed: see issue #108)
+- Pre-Tier-4 cleanup checklist (completed)
 - Causal launcher-witness ergonomics (§In progress)
-- Streaming reduction helper extraction — Tier 4 prerequisite, follow-up
-  issue from #108
+- Streaming reduction helper extraction — Tier 4 prerequisite, follow-up to the completed cleanup
 
 ### Mid-term — Whole-grid `multiBlockExec` and arbitrary-block lift
 

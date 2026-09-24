@@ -2,10 +2,10 @@
 
 This follows the eight findings and six product/documentation suggestions in
 `VeriTile-author-feedback-2026-09-23.zip`, which reviewed revision `bb54250b`.
-The initial fixes landed in #649; #650 extended projection-failure preservation,
-elaborated-environment discovery, and mandatory official comparator checks.
-The follow-up adds explicit statement-scope reviews, a browsable table, the
-complete tutorial, and corrections to historical proof claims.
+The fixes cover projection-failure preservation, elaborated-environment
+discovery, and mandatory official comparator checks. They also add explicit
+statement-scope reviews, a browsable table, the complete tutorial, and
+corrections to historical proof claims.
 
 ## Findings
 
