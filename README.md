@@ -40,12 +40,12 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   see the [per-theorem coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)
   for configured models, slices, and remaining gaps) plus FlashAttention-1
   forward, online softmax, Welford, LayerNorm, log-sum-exp.
-- **CI gates**: `.github/workflows/bench-audit.yml` runs
-  `bench/audit_tritonbench_g.sh` — per-port elaboration
-  (`bench/check_ports.sh`), the Python↔Lean faithfulness scans, the proof-gap
-  manifest, and both trust audits (`#axiomsClean` over the library via
-  `VeriTile.Meta.TrustReport`, and over the standalone bench corpus via
-  `bench/audit_trust.sh`). `.github/workflows/artifact.yml` runs `lake build` +
+- **CI gates**: `.github/workflows/bench-audit.yml` runs the full library build,
+  Python↔Lean faithfulness scans, proof-gap manifest checks, and library
+  comparator once, then checks the standalone corpus in four shards through
+  `bench/audit_trust.sh`. Each file must pass elaboration, Lean trust/spec
+  checks, and official comparator replay. The final gate requires the global
+  job and all four shards to succeed. `.github/workflows/artifact.yml` runs `lake build` +
   `scripts/check-artifact.sh` (no `sorry`, axiom whitelist, manifest schema,
   doc-drift checks). `.github/workflows/site.yml` builds and deploys the docs
   site to GitHub Pages on every push touching `site/`.
@@ -55,6 +55,28 @@ detailed concurrency (atomics / async-copy serialization, beyond the
 projection boundary), Python wrapper execution.
 
 ## Quick Start
+
+### Run a checked example
+
+Install Git and [Lean's toolchain manager (`elan`)](https://lean-lang.org/install/),
+then run:
+
+```bash
+git clone https://github.com/Lizn-zn/VeriTile.git
+cd VeriTile
+lake exe cache get
+lake build
+lake env lean bench/examples/VectorAdd.lean
+```
+
+The repository pins the Lean and Mathlib versions. The cache command downloads
+precompiled dependencies; `lake build` builds the default library target.
+The last command compiles the complete vector-add example and checks its
+proofs in Lean. For the additional official comparator audit, follow the
+[verification setup](./scripts/README.md#setup). An agent CLI is optional.
+
+The steps below outline how to write a new kernel; the proof sketch uses
+`...` where the linked complete example supplies the proof.
 
 ### 1. Write a `ComputeKernel`
 
@@ -183,16 +205,15 @@ verso/                     Slide deck / overview
 - `lake env lean bench/examples/VectorAdd.lean` — quick example smoke check after building
 - `scripts/check-artifact.sh` — `lake build` ∧ `no sorry` ∧ axiom
   whitelist ∧ kernel-manifest schema ∧ README/doc-term drift
-- `bench/check_ports.sh` — per-port build of the TritonBench-G ports
-  (also run inside `bench/audit_tritonbench_g.sh`, the bench-audit CI gate)
-- `bench/audit_tritonbench_g.sh` — the full bench gate: the per-port build
-  above ∧ faithfulness scans ∧ proof-gap manifest ∧ both trust audits
+- `bench/check_ports.sh` — per-port elaboration and official comparator replay
+- `bench/audit_tritonbench_g.sh` — the full bench gate: structural scans,
+  proof-gap manifest, library comparator, and standalone trust/comparator audit
 - `bench/audit_trust.sh` — trust gates and comparator replay for every standalone bench file
 
 ## Environment
 
 - Lean 4 (`v4.29.0`) + Mathlib
-- [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) +
+- Optional, for agent-assisted proof automation: [Claude Code CLI](https://docs.claude.com/en/docs/claude-code) +
   [`lean4-skills`](https://github.com/lean4-skills/lean4-skills)
 - For artifact/bench verification and proof automation: Python 3 and the official comparator, lean4export,
   and landrun on Linux with a systemd user service; see
