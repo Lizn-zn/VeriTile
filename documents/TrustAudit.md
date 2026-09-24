@@ -19,9 +19,17 @@ python3 scripts/check_comparator.py --library
 bash bench/audit_trust.sh                    # whole corpus
 bash bench/audit_trust.sh swiglu_fwd         # just named kernels
 
-# both, plus the port-completion checks, in one CI step
+# both, plus the port-completion checks, in one local command
 bash bench/audit_tritonbench_g.sh
 ```
+
+CI runs `bench/audit_tritonbench_g.sh --global-only` once for the structural
+and library gates, then four dependent `bench/audit_trust.sh` corpus shards.
+The final completion check requires the global job and all four shards to
+succeed, including their official comparator checks. A global-only result
+does not claim that the standalone corpus passed. Local runs without options
+still execute every gate. See the [CI stage commands](../scripts/README.md#shared-comparator-gate)
+to reproduce the split locally.
 
 Each exits `0` only after every selected file reports a result and all checks
 pass. Invalid concurrency, a launcher failure, and missing/duplicate results

@@ -115,14 +115,27 @@ require the official comparator and the sandbox tools installed above. Missing
 tools, export failures, and comparator rejections fail the gate. CI installs
 the same pinned tools through `.github/actions/setup-comparator`.
 
-The public Bench audit workflow uses four GitHub-hosted runners. Each runs all
-static and library gates and a disjoint shard of the standalone trust audit;
-the workflow succeeds only after all four shards pass. Local runs still audit
-the whole corpus by default. To reproduce one CI shard, set
-`AUDIT_TRUST_SHARD_COUNT=4 AUDIT_TRUST_SHARD_INDEX=0` when running
-`bench/audit_tritonbench_g.sh` (indices are 0–3). Both variables are required,
-and sharding cannot be combined with named targets. A single shard's result
-is not a completed corpus audit.
+The public Bench audit workflow first runs one global job: the full library
+build, structural checks, and library comparator. Four dependent jobs build
+the lite `VeriTile` target and audit disjoint shards of the standalone corpus.
+Each runner keeps its own mutable comparator workspace. The final
+`TritonBench-G audit complete` check requires both the global job and every
+shard to succeed; failed, cancelled, or skipped dependencies fail that check.
+
+Local `bench/audit_tritonbench_g.sh` runs still cover all gates and the whole
+corpus by default. To reproduce the CI stages separately:
+
+```bash
+bench/audit_tritonbench_g.sh --global-only
+AUDIT_TRUST_SHARD_COUNT=4 AUDIT_TRUST_SHARD_INDEX=0 bench/audit_trust.sh
+```
+
+Shard indices are 0–3; run every index for a complete corpus audit. Both shard
+variables are required, and sharding cannot be combined with named targets or
+`--global-only`. A global-only result or a single shard is not a completed
+audit. The existing sharded aggregate command also remains available: setting
+the two variables on `bench/audit_tritonbench_g.sh` runs the global gates and
+the selected shard together.
 
 ```bash
 python3 scripts/check_comparator.py --library

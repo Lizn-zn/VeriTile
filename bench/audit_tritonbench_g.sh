@@ -6,8 +6,26 @@
 # This does not prove line-by-line semantic faithfulness. That still requires
 # review_criteria.md-driven human review, and the remaining proof obligations
 # are tracked in bench/tritonbench_g/proof_blockers.md.
+#
+# Usage:
+#   bench/audit_tritonbench_g.sh                # all gates and the full corpus
+#   bench/audit_tritonbench_g.sh --global-only  # structural and library gates
+# CI runs the global gates once, then bench/audit_trust.sh on each corpus shard.
 
 set -uo pipefail
+
+global_only=false
+if [ "$#" -gt 1 ] || { [ "$#" -eq 1 ] && [ "$1" != '--global-only' ]; }; then
+  printf 'Usage: %s [--global-only]\n' "$0" >&2
+  exit 2
+fi
+if [ "$#" -eq 1 ]; then
+  global_only=true
+  if [[ -v AUDIT_TRUST_SHARD_COUNT || -v AUDIT_TRUST_SHARD_INDEX ]]; then
+    printf 'Global-only audit cannot be combined with corpus sharding\n' >&2
+    exit 2
+  fi
+fi
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 PROJECT_ROOT="$(dirname "${SCRIPT_DIR}")"
@@ -1802,6 +1820,14 @@ if python3 scripts/check_comparator.py --library; then
 else
   printf 'FAIL official comparator: library proof verification failed\n'
   failures=$((failures + 1))
+fi
+
+if "${global_only}"; then
+  if [ "${failures}" -gt 0 ]; then
+    exit 1
+  fi
+  printf 'TritonBench-G global gates passed; corpus audit is separate\n'
+  exit 0
 fi
 
 if bench/audit_trust.sh; then
