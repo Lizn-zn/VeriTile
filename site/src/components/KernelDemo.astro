@@ -109,7 +109,7 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
 </script>
 
 <style>
-  .vt-demo { margin-bottom: 3.6rem; }
+  .vt-demo { --vt-text-body: var(--vt-text-small); font-size: var(--vt-text-body); margin-bottom: 3.6rem; }
   .vt-demo-heading { margin-bottom: 1.4rem; }
   .vt-demo-heading h2 { margin: 0; font: 500 clamp(1.1rem, 2.5vw, 1.35rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
   .vt-demo-heading p { margin: .5rem 0 0; color: var(--vt-ink-2); font-size: var(--vt-text-body); line-height: 1.7; }
@@ -128,7 +128,7 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
   .vt-demo-switch button:hover { color: var(--vt-seal-ink); border-color: var(--vt-rule-2); }
   .vt-demo-body { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
   .vt-demo-code { min-width: 0; align-self: center; }
-  .vt-demo :global(pre) { margin: 0; background: transparent !important; border: 0; border-radius: 0; font: var(--vt-text-small)/1.95 'IBM Plex Mono', monospace; }
+  .vt-demo :global(pre) { margin: 0; background: transparent !important; border: 0; border-radius: 0; font: var(--vt-text-code)/1.7 'IBM Plex Mono', monospace; }
   .vt-demo :global(code) { font: inherit; }
   .vt-demo-code :global(pre) { padding: 1.5rem 1rem; }
   .vt-demo-code :global(.line:nth-child(6)) { display: inline-block; width: 100%; background: var(--vt-seal-soft); }
@@ -148,7 +148,7 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
   .vt-sample-result > span { font-size: 1rem; line-height: 1.1; }
   .vt-demo-contract { display: flex; gap: 1rem; align-items: baseline; padding: .8rem 1rem; border-block: 1px solid var(--vt-rule); }
   .vt-demo-contract > span { color: var(--vt-ink-3); font-size: var(--vt-text-small); white-space: nowrap; }
-  .vt-demo-contract :global(pre) { min-width: 0; font-size: var(--vt-text-small); }
+  .vt-demo-contract :global(pre) { min-width: 0; font-size: var(--vt-text-code); }
   .vt-demo-verdict { display: flex; align-items: flex-start; gap: .7rem; padding: 1.15rem 1rem; }
   .vt-verdict-icon { color: var(--vt-verified); font-size: 1.1rem; }
   .vt-demo-verdict h3 { margin: 0; color: var(--vt-verified); font-size: var(--vt-text-body); font-weight: 500; line-height: 1.6; }

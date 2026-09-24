@@ -151,7 +151,7 @@ const tabs = [
 </script>
 
 <style>
-  .fa-example { margin-top: 1.6rem; border: 1px solid var(--vt-rule-2); border-radius: 4px; scroll-margin-top: 5rem; }
+  .fa-example { --vt-text-body: var(--vt-text-small); font-size: var(--vt-text-body); margin-top: 1.6rem; border: 1px solid var(--vt-rule-2); border-radius: 4px; scroll-margin-top: 5rem; }
   .fa-example > summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; cursor: pointer; padding: 1rem 1.2rem; list-style: none; background: var(--vt-paper-2); border-radius: 4px; }
   .fa-example > summary::-webkit-details-marker { display: none; }
   .fa-summary { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; gap: .2rem 1rem; }
@@ -175,12 +175,12 @@ const tabs = [
   .fa-variant { font-size: var(--vt-text-small); color: var(--vt-ink-3); }
   .fa-scope { margin: 0; padding: .8rem 1.2rem; background: var(--vt-paper-2); color: var(--vt-ink-3); font-size: var(--vt-text-body); }
   .fa-panel-title { margin: 1rem 1.2rem 0; font-size: var(--vt-text-body); }
-  [data-ready] .fa-panel-title { font-size: var(--vt-text-body); display: none; }
+  [data-ready] .fa-panel-title { display: none; }
   .fa-kernel-pair, .fa-spec-pair { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 1.5rem; padding: 1.2rem; }
   .fa-kernel-pair > div, .fa-spec-pair > div { min-width: 0; }
   .fa-reader h4 { margin: 0 0 .6rem; color: var(--vt-ink); font-size: var(--vt-text-small); font-weight: 500; }
   .fa-reader .fa-caption { margin: .4rem 0 .7rem; font-size: var(--vt-text-small); color: var(--vt-ink-3); overflow-wrap: anywhere; }
-  .fa-reader .fa-code :global(pre) { margin: 0; padding: .8rem; background: var(--vt-paper-2) !important; border: 0; border-radius: 0; overflow: auto; font: var(--vt-text-small)/1.95 'IBM Plex Mono', monospace; }
+  .fa-reader .fa-code :global(pre) { margin: 0; padding: .8rem; background: var(--vt-paper-2) !important; border: 0; border-radius: 0; overflow: auto; font: var(--vt-text-code)/1.7 'IBM Plex Mono', monospace; }
   .fa-reader :global(code) { font: inherit; }
   :global(html[data-theme='dark']) .fa-reader :global(.astro-code),
   :global(html[data-theme='dark']) .fa-reader :global(.astro-code span) { color: var(--shiki-dark) !important; }

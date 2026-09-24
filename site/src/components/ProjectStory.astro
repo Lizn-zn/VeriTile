@@ -155,7 +155,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
   p { margin: .6rem 0; color: var(--vt-ink-2); }
   header p { max-width: 49rem; margin-bottom: 0; }
   .language-emphasis { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .2em; }
-  .vt-story :global(pre) { background: transparent !important; margin: 0; font: var(--vt-text-small)/1.9 'IBM Plex Mono', monospace; }
+  .vt-story :global(pre) { background: transparent !important; margin: 0; font: var(--vt-text-code)/1.7 'IBM Plex Mono', monospace; }
   .vt-story :global(code) { font: inherit; }
   :global(html[data-theme='dark']) .vt-story :global(.astro-code),
   :global(html[data-theme='dark']) .vt-story :global(.astro-code span) { color: var(--shiki-dark) !important; }
@@ -186,7 +186,7 @@ const source = (path: string) => `${github}/blob/main/${path}`;
   .proof-example h4 span { color: var(--vt-ink-3); font-weight: 400; }
   .proof-example > p { margin: .4rem 0 0; font-size: var(--vt-text-body); }
   .proof-visual { display: flex; align-items: center; min-height: 5.75rem; padding: 1rem; background: var(--vt-paper-2); border-radius: 3px; }
-  .proof-details { margin: .9rem 0; font-size: var(--vt-text-small); }
+  .proof-details { --vt-text-body: var(--vt-text-small); margin: .9rem 0; font-size: var(--vt-text-small); }
   .proof-details summary { cursor: pointer; color: var(--vt-ink-2); }
   .proof-details .proof-visual { margin-top: .8rem; }
   .proof-details p { margin: .6rem 0; font-size: var(--vt-text-body); }
