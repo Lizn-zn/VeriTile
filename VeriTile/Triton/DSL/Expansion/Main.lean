@@ -62,6 +62,7 @@ import VeriTile.Triton.DSL.Inference
 import VeriTile.Triton.DSL.Expansion.Common
 import VeriTile.Triton.DSL.Expansion.Memory
 import VeriTile.Triton.DSL.Expansion.Compute
+import VeriTile.Triton.DSL.Expansion.DType
 import VeriTile.Triton.DSL.Expansion.Control
 import VeriTile.Triton.DSL.Syntax
 import VeriTile.Triton.DSL.Typing
@@ -757,37 +758,6 @@ partial def natBlockPtrOffsets (env : Env) (ctx : String)
         `($d :: $tail)
   pure (← natListTerm staticOffsets.toList, ← opListTerm offsetOps.toList, hasDynamic)
 
-partial def expandFullDTypeTerm (expandExpr : ExprExpander) (env : Env)
-    (dims : Array (TSyntax `tritonExpr)) (v : TSyntax `tritonExpr)
-    (dt : TSyntax `term) : MacroM EOut := do
-  let dtString := toString dt.raw
-  if dtString.contains "OUT_DTYPE" then
-    let dtypeStx ← `(tritonDType| OUT_DTYPE)
-    return ← expandComputeFull expandExpr env dims v dtypeStx
-  if dtString.contains "dtype" && dtString.contains "element_ty" then
-    expandFull expandExpr env dims v
-  else if dtString.contains "tl.float32" then
-    let dt ← `(tritonDType| tl.float32)
-    expandComputeFull expandExpr env dims v dt
-  else if dtString.contains "tl.float64" then
-    expandFull expandExpr env dims v (dtypeHint := some .real)
-  else if dtString.contains "tl.float16" then
-    expandFull expandExpr env dims v (dtypeHint := some .fp16)
-  else if dtString.contains "tl.bfloat16" then
-    expandFull expandExpr env dims v (dtypeHint := some .bf16)
-  else if dtString.contains "tl.float8e4nv" then
-    expandFull expandExpr env dims v (dtypeHint := some .f8e4)
-  else if dtString.contains "tl.float8e5" then
-    expandFull expandExpr env dims v (dtypeHint := some .f8e5)
-  else if dtString.contains "tl.int1" then
-    expandFull expandExpr env dims v (dtypeHint := some .bool)
-  else if dtString.contains "tl.int" then
-    expandFull expandExpr env dims v (dtypeHint := some .int)
-  else if dtString.contains "tl.uint" then
-    expandFull expandExpr env dims v (dtypeHint := some .nat)
-  else
-    Macro.throwError "tl.full: expected `dtype=<ptr>.dtype.element_ty` or a Triton dtype"
-
 partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := do
   if stx.raw.getKind == ``tritonDottedIdentMethodCast then
     let args := stx.raw.getArgs
@@ -841,14 +811,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
     let args := stx.raw.getArgs
     if h : 0 < args.size then
       let e : TSyntax `tritonExpr := ⟨args[0]⟩
-      let raw := toString stx.raw
-      if raw.contains "tl.int" then
-        expandIntExpectedExpr env e
-      else if raw.contains "tl.uint" then
-        expandNatExpectedExpr env e
-      else
-        let e' ← expandExpr env e
-        pure e'
+      match ← methodCastTargetDType? stx with
+      | some .int => expandIntExpectedExpr env e
+      | some .nat => expandNatExpectedExpr env e
+      | _ => expandExpr env e
     else
       Macro.throwUnsupported
   else
@@ -1657,15 +1623,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           ("tl.zeros: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
       expandComputeZeros expandExpr env dims.getElems dt
   | `(tritonExpr| tl.zeros([$dims:tritonExpr,*], $name:ident=$dt:term)) => do
-      let dtString := toString dt.raw
-      if name.getId.getString! == "dtype" && dtString.contains "OUT_DTYPE" then
-        let dtypeStx ← `(tritonDType| OUT_DTYPE)
-        return ← expandComputeZeros expandExpr env dims.getElems dtypeStx
-      unless name.getId.getString! == "dtype" &&
-          dtString.contains "dtype" && dtString.contains "element_ty" do
-        Macro.throwError ("tl.zeros: expected `dtype=<ptr>.dtype.element_ty`; got " ++ dtString)
-      let zero ← `(tritonExpr| 0)
-      expandFull expandExpr env dims.getElems zero
+      unless name.getId.getString! == "dtype" do
+        Macro.throwError
+          ("tl.zeros: unknown kwarg `" ++ name.getId.toString ++ "`. Only `dtype=` is recognized.")
+      expandZerosDTypeTerm expandExpr env dims.getElems dt
   | `(tritonExpr| tl.zeros_like($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let zero ←

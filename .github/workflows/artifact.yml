@@ -59,6 +59,7 @@ jobs:
         run: |
           lake env lean bench/tests/StatementAudit.lean
           lake env lean bench/tests/KernelIOProjection.lean
+          lake env lean bench/tests/DTypeResolution.lean
           lake env lean bench/tests/ModuleSpecAudit.lean
           lake env lean bench/tests/ModuleHeadlineAudit.lean
           python3 -m unittest discover -s scripts -p 'test_audit_gates.py'

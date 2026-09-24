@@ -148,9 +148,9 @@ VeriTile/
     Semantics/              Typed operational semantics: exec, step, tiled
                             indexing, masked reduction, streaming accumulator, …
     Memory/                 BlockState, tensor views, readback. Also the
-                            flat-memory bridge (Flatten*) and KernelSpec.lean
-                            — the `KernelIO` signatures behind the `⊨` headline
-                            surface (see documents/CorrectnessSurfaces.md).
+                            flat-memory bridge (Flatten*) and KernelSpec/
+                            — contract families behind the `⊨` headline surface.
+                            KernelSpec.lean remains the compatibility import.
     DSL/                    `triton { ... }` macro front-end.
     Math/                   Pure `(Fin N → ℝ) → ...` operators (see three-layer
                             rule). Math/Erf is split: lightweight
@@ -177,6 +177,36 @@ VeriTile/
                             GridFrames, mergeFrames, GridWritesDisjoint.
     Concurrency/            Grid-wide atomic-add correctness.
 ```
+
+### Kernel contract families
+
+`Memory/KernelSpec.lean` imports the full contract surface. Focused clients can
+instead import a module under `VeriTile.Triton.Memory.KernelSpec`:
+
+| Modules | Responsibility |
+| --- | --- |
+| `Base` | Shared rounding bridge and scratch-buffer vocabulary |
+| `Basic`, `Masked`, `MaskedND`, `BooleanMasked` | Fixed-window and masked IO signatures |
+| `Metadata`, `Scatter`, `Gather`, `Grouped` | Metadata-dependent, indirect, and grouped IO |
+| `Stream`, `StreamEmit`, `StreamAttention`, `StreamAttentionMetadata` | Streaming reads, emitted writes, and attention contracts |
+| `TileIndex` | Shared tile-enumeration bridges |
+| `Tile`, `TileND`, `TileMetadata`, `TileGather` | Tile-indexed footprints and their metadata/gather variants |
+
+Each family retains its public `VeriTile.Triton` namespaces and scoped notation.
+Its private adapters stay next to the contracts they assemble. The families
+depend on `Base`; tile families additionally share `TileIndex`. Adding one
+family must not require importing the compatibility module back into it.
+
+### DSL dtype resolution
+
+`DSL/Expansion/DType.lean` resolves constructor dtype names and cast targets
+from syntax. Both `tl.full` and `tl.zeros` use the same exact-name decoder;
+`tl.int1` and `tl.int16` are distinct entries. An identifier merely containing
+`OUT_DTYPE`, `dtype`, or `element_ty` does not declare a dtype. Attribute casts
+inspect their target separately from the expression being cast.
+
+`bench/tests/DTypeResolution.lean` covers accepted spellings, rejected lookalikes,
+constructor keyword order, and preservation of the fp32 compute projection.
 
 ### Dependency direction
 
