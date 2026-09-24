@@ -206,6 +206,11 @@ minimal modification. Live roadmap:
 [#1](https://github.com/Lizn-zn/VeriTile/issues/1). Architecture and
 decision log: [PLAN.md](./PLAN.md).
 
+## Team
+
+VeriTile is a collaboration between Zenan Li, Kaiyu Yang, Ziran Yang,
+Zhaoyu Li, Mike He, and Aarti Gupta.
+
 ## License
 
 [MIT](./LICENSE) © 2026 Zenan Li.
