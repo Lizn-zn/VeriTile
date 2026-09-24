@@ -37,7 +37,7 @@ The end-to-end project plan and roadmap live in the repo root:
 
 - [`../PLAN.md`](../PLAN.md) — architecture, decision log, phase status
 - Live roadmap: GitHub issue
-  [`#91`](https://github.com/Lizn-zn/VeriTile/issues/91)
+  [`#1`](https://github.com/Lizn-zn/VeriTile/issues/1)
 
 ## Archive
 

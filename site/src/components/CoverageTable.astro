@@ -7,8 +7,10 @@ const counts = Object.entries(coverageLabels).map(([key, label]) => ({
 
 <section class="coverage-browser" aria-label="Browse proof coverage" data-coverage>
   <p>Reviewed {coverage.rows.length} statements across {new Set(coverage.rows.map((row) => row.port)).size} ports on {coverage.reviewed_on}.</p>
-  <p>Latest recorded completed corpus check: <a href={corpusCheck.url}><code>{corpusCheck.commit.slice(0, 8)}</code></a>, {corpusCheck.completed_at}.
+  {corpusCheck ? <p>Latest recorded completed corpus check: <a href={corpusCheck.url}><code>{corpusCheck.commit.slice(0, 8)}</code></a>, {corpusCheck.completed_at}.
     This historical result applies to that commit. Source review and website builds do not certify later commits; <a href="https://github.com/Lizn-zn/VeriTile/actions/workflows/bench-audit.yml">check newer runs</a>.</p>
+    : <p>No completed corpus audit has been recorded in this public repository yet.
+      Source review and website builds do not certify the corpus; <a href="https://github.com/Lizn-zn/VeriTile/actions/workflows/bench-audit.yml">check the full audit status</a>.</p>}
   <ul class="coverage-counts">{counts.map(({ label, count }) => <li><strong>{count}</strong>{' '}{label}</li>)}</ul>
   <div class="coverage-filters" data-coverage-controls hidden>
     <label>Find a kernel, theorem, or limitation
@@ -55,7 +57,7 @@ const counts = Object.entries(coverageLabels).map(([key, label]) => ({
                 <summary>Python source</summary>
                 <ul>{row.python_functions.map((ref) => <li><a href={sourceLink(row.python_file, ref.line)}><code>{ref.name}</code> (line {ref.line})</a></li>)}</ul>
               </details>
-              <a href={corpusCheck.url}>Recorded check: <code>{corpusCheck.commit.slice(0, 8)}</code></a>
+              {corpusCheck && <a href={corpusCheck.url}>Recorded check: <code>{corpusCheck.commit.slice(0, 8)}</code></a>}
             </td>
           </tr>
         ))}

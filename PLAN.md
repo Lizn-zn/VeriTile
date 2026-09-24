@@ -32,7 +32,7 @@ Real Triton verification requires four axes advancing together:
 
 This is an open roadmap, **not "deliver N theorems and stop"**. The §Status,
 §In progress, and §Roadmap sections below organize work along these four axes.
-The live issue-tracked roadmap is GitHub issue #91; this document records the
+The live issue-tracked roadmap is GitHub issue #1; this document records the
 architecture, status, and decision log.
 
 ## Verification architecture (permanent, locked since v0.2)
@@ -558,7 +558,7 @@ To make the close-rate metric reproducible:
 
 ## Implementation plans
 
-Active execution is tracked in pinned roadmap issue #91 (layered) and the
+Active execution is tracked in pinned roadmap issue #1 (layered) and the
 linked per-task issues. Long-form design documents that survive an
 implementation phase are filed under [`documents/`](./documents); closed-phase
 design notes live in [`documents/archive/`](./documents/archive/).

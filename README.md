@@ -205,7 +205,7 @@ verso/                     Slide deck / overview
 Long-running project. Goal: bring real Triton kernels (forward, backward,
 concurrency, production layouts / autograd) into Lean's proof scope with
 minimal modification. Live roadmap:
-[#91](https://github.com/Lizn-zn/VeriTile/issues/91). Architecture and
+[#1](https://github.com/Lizn-zn/VeriTile/issues/1). Architecture and
 decision log: [PLAN.md](./PLAN.md).
 
 ## License

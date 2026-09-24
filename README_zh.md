@@ -192,7 +192,7 @@ verso/                     幻灯片 / 概览
 
 长期项目。目标:把真实 Triton kernel(forward / backward / 并发 /
 生产级 layout / autograd)以最小修改纳入 Lean 的证明范围。当前 roadmap:
-[#91](https://github.com/Lizn-zn/VeriTile/issues/91)。架构与决策记录:
+[#1](https://github.com/Lizn-zn/VeriTile/issues/1)。架构与决策记录:
 [PLAN.md](./PLAN.md)。
 
 ## License

@@ -27,7 +27,7 @@ Triton verification 真正落地需要四个轴同时推进:
    trace/refinement、ND general 框架(无 ad-hoc 维度 shortcut)全部 production-grade
 
 这是开放路线图,**不是固定 N 个定理交付即结束**。下面的 §状态、§进行中、§路线图按
-这四个轴展开。实时 issue 路线图在 GitHub issue #91;本文档记录架构、状态和决策日志。
+这四个轴展开。实时 issue 路线图在 GitHub issue #1;本文档记录架构、状态和决策日志。
 
 ## 验证架构(永久,自 v0.2 起锁定)
 
@@ -482,6 +482,6 @@ PyTorch 量级)。
 
 ## Implementation plan
 
-主线执行追踪在 pinned roadmap issue #91(分层)+ 各 per-task issue。跨 phase
+主线执行追踪在 pinned roadmap issue #1(分层)+ 各 per-task issue。跨 phase
 仍有价值的长文档归到 [`documents/`](./documents) 下;阶段已关闭的设计笔记
 归入 [`documents/archive/`](./documents/archive/)。

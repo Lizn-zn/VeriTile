@@ -33,7 +33,7 @@ VeriTile 嵌入的 Triton 子集、语义模型,以及 trusted-boundary 策略�
 
 - [`../PLAN.md`](../PLAN.md) —— 架构、决策日志、phase 状态
 - 实时 roadmap:GitHub issue
-  [`#91`](https://github.com/Lizn-zn/VeriTile/issues/91)
+  [`#1`](https://github.com/Lizn-zn/VeriTile/issues/1)
 
 ## Archive
 

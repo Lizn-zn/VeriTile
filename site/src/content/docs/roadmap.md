@@ -3,14 +3,14 @@ title: Roadmap
 description: Where to find VeriTile's active priorities and design decisions.
 ---
 
-The [project roadmap](https://github.com/Lizn-zn/VeriTile/issues/91) tracks
+The [project roadmap](https://github.com/Lizn-zn/VeriTile/issues/1) tracks
 VeriTile's direction: bringing more real Triton kernel behavior into the
 scope of Lean proofs. Priorities and active work are maintained in the
 repository so this page does not duplicate a changing issue backlog.
 
 ## Follow development
 
-- [Roadmap tracker](https://github.com/Lizn-zn/VeriTile/issues/91): project direction and linked work.
+- [Roadmap tracker](https://github.com/Lizn-zn/VeriTile/issues/1): project direction and linked work.
 - [Open issues](https://github.com/Lizn-zn/VeriTile/issues): current tasks and discussions.
 - [Design plan](https://github.com/Lizn-zn/VeriTile/blob/main/PLAN.md): architecture and decisions.
 - [Completion audit](https://github.com/Lizn-zn/VeriTile/blob/main/bench/tritonbench_g/completion_audit.md): corpus evidence and documented gaps.

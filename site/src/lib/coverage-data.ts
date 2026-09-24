@@ -2,12 +2,17 @@ import { execFileSync } from 'node:child_process';
 import { resolve } from 'node:path';
 import checkedRun from './coverage-ci.json';
 
-if (checkedRun.schema !== 1 || checkedRun.conclusion !== 'success'
-    || !/^[0-9a-f]{40}$/.test(checkedRun.commit)
-    || checkedRun.url !== `https://github.com/Lizn-zn/VeriTile/actions/runs/${checkedRun.run_id}`) {
+type CorpusCheck = {
+  schema: number; conclusion: string; commit: string; run_id: number;
+  url: string; completed_at: string;
+};
+const recordedCheck = checkedRun as CorpusCheck | null;
+if (recordedCheck !== null && (recordedCheck.schema !== 1 || recordedCheck.conclusion !== 'success'
+    || !/^[0-9a-f]{40}$/.test(recordedCheck.commit)
+    || recordedCheck.url !== `https://github.com/Lizn-zn/VeriTile/actions/runs/${recordedCheck.run_id}`)) {
   throw new Error('Invalid recorded corpus-check evidence.');
 }
-export const corpusCheck = checkedRun;
+export const corpusCheck = recordedCheck;
 
 type Reference = { name: string; line: number };
 export type CoverageRow = {

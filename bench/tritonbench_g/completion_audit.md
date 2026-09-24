@@ -63,8 +63,10 @@ requires compilation and official comparator replay. `lake build` alone does
 not cover the standalone corpus or all of these gates.
 
 The website's
-[recorded completed corpus audit](../../site/src/lib/coverage-ci.json) pins the
-successful run URL, commit, and completion time. Check that commit and its
+[recorded completed corpus audit](../../site/src/lib/coverage-ci.json), when
+present, pins the successful run URL, commit, and completion time. A `null`
+record means no completed public-repository audit has been recorded yet.
+Check that commit and its
 workflow when using the record as release evidence: an earlier success does
 not establish that later changes passed newly added gates. Only a completed,
 successful full run can be recorded with

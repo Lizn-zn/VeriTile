@@ -34,7 +34,8 @@ The current sweep is tracked in [`completion_audit.md`](./completion_audit.md).
 official comparator replay. The aggregate audit also checks comment-stripped
 sources for placeholder proofs. Completed CI evidence is pinned to a specific
 run and commit in [`coverage-ci.json`](../../site/src/lib/coverage-ci.json);
-it does not certify later revisions or pending runs.
+it does not certify later revisions or pending runs. A `null` record means
+no completed public-repository corpus audit has been recorded yet.
 
 There are no current explicit algorithm-layer `hAlg` blockers. Any future
 proof blockers should be listed in [`proof_blockers.md`](./proof_blockers.md).
