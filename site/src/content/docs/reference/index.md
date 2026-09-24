@@ -22,6 +22,10 @@ lake env lean bench/examples/VectorAdd.lean
 ```
 
 The first build needs network access to fetch the toolchain and dependencies.
+Budget several gigabytes for Lean/Mathlib caches and build output. The September
+2026 audit used about 11 GB including website dependencies and recorded an
+approximately eight-minute library build after the Mathlib cache download;
+these are one machine's measurements, not a timing guarantee.
 The final command should exit with code 0 and report that the example's axiom
 and statement-surface checks pass. Existing linter warnings may still appear.
 

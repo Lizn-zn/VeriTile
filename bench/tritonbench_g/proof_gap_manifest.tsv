@@ -1,346 +1,346 @@
 file	declaration	coverage_level	blocker_family	issue	evidence
-bench/tritonbench_g/adam_update_triton/AdamUpdateTriton.lean	update_fn_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/add_example/AddExample.lean	add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/apply_penalty/ApplyPenalty.lean	apply_penalty_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_forward_triton/AttentionForwardTriton.lean	attention_forward_triton_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_forward_triton/AttentionForwardTriton.lean	attention_forward_triton_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton2/AttentionFwdTriton2.lean	attention_fwd_triton2_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton2/AttentionFwdTriton2.lean	attention_fwd_triton2_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case2_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case3_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case4_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case3_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case2_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case4_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_genuine_output_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_llama/AttentionLlama.lean	attention_llama_fwd_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_llama/AttentionLlama.lean	attention_llama_fwd_causal_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_python_case1_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_case1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	bgmv_full_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	bgmv_expand_slice_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_kernel_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_closed_form_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_stores_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_stores_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/bmm_optimized/BmmOptimized.lean	bmm_o_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	decoding_cache_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cache_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_bwd_dqkg/ChunkBwdDqkg.lean	chunk_bwd_dqkg_exec_genuine	full_value_candidate	none		end-to-end
-bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_block_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_block_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_fwd_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_h_state_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_h_state_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_recurrence_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_recurrence_forward_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_recurrence_forward_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_cum_slice_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_state_stores_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_state_stores_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gla_fwd/ChunkGlaFwd.lean	chunk_gla_fwd_o_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_linear_attn/ChunkLinearAttn.lean	cla_fwd_h_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_linear_attn/ChunkLinearAttn.lean	cla_bwd_dh_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_retention/ChunkRetention.lean	crh_fwd_h_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_retention/ChunkRetention.lean	crh_bwd_dh_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_retention_ops/ChunkRetentionOps.lean	cro_fwd_h_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunk_retention_ops/ChunkRetentionOps.lean	cro_bwd_dh_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_bloom/ContextAttnBloom.lean	context_attn_bloom_surface_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_bloom/ContextAttnBloom.lean	context_attn_bloom_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_fwd/ContextAttnFwd.lean	context_attn_fwd_surface_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_fwd/ContextAttnFwd.lean	context_attn_fwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_llama/ContextAttnLlama.lean	context_attn_llama_surface_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_llama/ContextAttnLlama.lean	context_attn_llama_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_mistral/ContextAttnMistral.lean	context_attn_mistral_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_mistral/ContextAttnMistral.lean	context_attn_mistral_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_nopad/ContextAttnNopad.lean	context_attn_nopad_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/context_attn_nopad/ContextAttnNopad.lean	context_attn_nopad_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cosine_compute/CosineCompute.lean	cos_func_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cross_entropy1/CrossEntropy1.lean	cross_entropy_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cross_entropy2/CrossEntropy2.lean	cross_entropy_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/cross_entropy_ops/CrossEntropyOps.lean	cross_entropy_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	decay_cumsum_backward_closed_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	fwd_decay_cumsum_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	prepare_qg_kg_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	bwd_decay_global_cumsum_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/dequantize_matmul/DequantizeMatmul.lean	dequantize_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/dequantize_rowwise/DequantizeRowwise.lean	dequantize_rowwise_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/destindex_copy/DestindexCopy.lean	destindex_copy_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/destindex_copy_kv1/DestindexCopyKv1.lean	fwd_kernel_destindex_copy_kv_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/destindex_copy_kv2/DestindexCopyKv2.lean	fwd_kernel_destindex_copy_kv_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_forward_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_forward_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_backward_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/dropout_triton/DropoutTriton.lean	dropout_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_body_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_body_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_kernel_whole_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/f8_conversion_utils/F8ConversionUtils.lean	f16_to_f8_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/f8_conversion_utils/F8ConversionUtils.lean	f8_to_f16_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	cross_entropy_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	chunked_cross_entropy_forward_output_summary	full_value_candidate	none		end-to-end
-bench/tritonbench_g/fast_layernorm/FastLayernorm.lean	layernorm_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	rms_layernorm_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	gemma_rms_layernorm_forward_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fast_rope_embedding/FastRopeEmbedding.lean	rope_embedding_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fast_rope_embedding/FastRopeEmbedding.lean	fast_rope_embedding_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fifth_order_sph_harmonics/FifthOrderSphHarmonics.lean	fifth_order_fwd_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_genuine_output_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_genuine_l_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_python_case1_genuine_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_python_case2_genuine_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_normalization_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_running_max_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_final_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_final_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_masked_accumulator_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_running_max_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_normalization_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_final_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_final_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_activation/FusedActivation.lean	fused_add_mul_activation_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_layernorm_triton/FusedLayernormTriton.lean	fused_layernorm_triton_output_summary_general	full_value_candidate	none		end-to-end
-bench/tritonbench_g/fused_layernorm_triton/FusedLayernormTriton.lean	fused_layernorm_triton_normalize_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_recurrent_delta/FusedRecurrentDelta.lean	fused_recurrent_delta_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_recurrent_delta/FusedRecurrentDelta.lean	fused_recurrent_delta_output_step_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_recurrent_hgrn/FusedRecurrentHgrn.lean	fused_recurrent_hgrn_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_recurrent_hgrn/FusedRecurrentHgrn.lean	fused_recurrent_hgrn_bwd_dx_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused_recurrent_retention_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused_recurrent_retention_seed_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused_recurrent_retention_seed_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_rotary_embedding/FusedRotaryEmbedding.lean	decoding_fused_rotary_embedding_q_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_rotary_embedding/FusedRotaryEmbedding.lean	decoding_fused_rotary_embedding_vcache_chain_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_state_step_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/geglu_tanh_triton/GegluTanhTriton.lean	geglu_tanh_forward_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/geglu_tanh_triton/GegluTanhTriton.lean	geglu_tanh_backward_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/index_select_bwd/IndexSelectBwd.lean	index_select_cat_bwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/index_select_cat/IndexSelectCat.lean	index_select_cat_fwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/int4_matmul/Int4Matmul.lean	int4_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/int8_dequant_matmul/Int8DequantMatmul.lean	int8_dequant_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/int8_matmul_kernel/Int8MatmulKernel.lean	int8_matmul_kernel_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/int8_matmul_quantization/Int8MatmulQuantization.lean	int8_matmul_quantization_quantize_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/int8_matmul_quantization/Int8MatmulQuantization.lean	int8_matmul_quantization_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/int8_quantization/Int8Quantization.lean	per_block_int8_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/int_scaled_matmul/IntScaledMatmul.lean	int_scaled_matmul_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/int_scaled_matmul/IntScaledMatmul.lean	int_scaled_matmul_scaled_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/iv_dependent_matmul/IvDependentMatmul.lean	iv_dependent_matmul_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/iv_dependent_matmul/IvDependentMatmul.lean	iv_dependent_matmul_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kcache_copy_triton/KcacheCopyTriton.lean	copy_to_kcache_seqlen_n1_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_compute/KldivCompute.lean	kldivergence_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_backward_default_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_backward_log_target_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_forward_default_none_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_forward_log_target_none_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_forward_log_target_none_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_forward_default_none_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_backward_default_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_backward_log_target_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_backward_default_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_backward_log_target_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_forward_default_none_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_forward_log_target_none_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_forward_default_none_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/ksoftmax_triton/KsoftmaxTriton.lean	ksoftmax_forward_plain_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kv_cache_copy/KvCacheCopy.lean	kv_cache_copy_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kv_cache_filling/KvCacheFilling.lean	fill_kv_cache_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/kv_cache_filling/KvCacheFilling.lean	fill_quant_meta_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/l2_norm_bwd/L2NormBwd.lean	l2_norm_bwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/l2_norm_triton1/L2NormTriton1.lean	l2_norm_fwd_1pass_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/l2_norm_triton2/L2NormTriton2.lean	l2_norm_fwd_1pass_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/l2_norm_triton2/L2NormTriton2.lean	l2_norm_bwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_liger/LayerNormLiger.lean	layer_norm_liger_forward_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_liger/LayerNormLiger.lean	layer_norm_liger_scalar_stores_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_liger/LayerNormLiger.lean	layer_norm_liger_scalar_stores_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_rms_core_outputs_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_scalar_stores_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_scalar_stores_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layer_norm_welfold/LayerNormWelfold.lean	layer_norm_welfold_output_summary_general	full_value_candidate	none		end-to-end
-bench/tritonbench_g/layer_norm_welfold/LayerNormWelfold.lean	layer_norm_welfold_normalize_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layernorm_fwd_triton/LayernormFwdTriton.lean	layernorm_fwd_triton_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/layernorm_fwd_triton/LayernormFwdTriton.lean	layernorm_fwd_triton_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_bwd_grad_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_bwd_grad_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/llama_ff_triton/LlamaFfTriton.lean	ff_llama_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_backward_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_dequant_int4/MatmulDequantInt4.lean	matmul_dequant_int4_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_matmul4_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_matmul_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_dequantize_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_dequantize_int4/MatmulDequantizeInt4.lean	matmul_dequantize_int4_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f32_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f16_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f32_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f16_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_triton1/MatmulTriton1.lean	matmul_triton1_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_triton1/MatmulTriton1.lean	matmul_triton1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_triton2/MatmulTriton2.lean	matmul_triton2_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_triton2/MatmulTriton2.lean	matmul_triton2_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matrix_reduction/MatrixReduction.lean	load_reduce_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matrix_reduction/MatrixReduction.lean	matrix_reduction_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matrix_transpose/MatrixTranspose.lean	kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matrix_vector_multip/MatrixVectorMultip.lean	mv_kernel_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/matrix_vector_multip/MatrixVectorMultip.lean	mv_one_block_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/max_reduction/MaxReduction.lean	max_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/max_reduction/MaxReduction.lean	max_kernel_1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/mean_reduction/MeanReduction.lean	mean_dim_kernel_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/mean_reduction/MeanReduction.lean	mean_dim_kernel_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/mixed_sparse_attention/MixedSparseAttention.lean	mixed_sparse_attention_output_closed_form_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/mixed_sparse_attention/MixedSparseAttention.lean	mixed_sparse_attention_epilogue_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/mul_exponent_compensator/MulExponentCompensator.lean	mul_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_first_a1_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_first_a1_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/parallel_attention/ParallelAttention.lean	pa_fwd_o_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/parallel_attention/ParallelAttention.lean	pa_bwd_dkv_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/parallel_retention_attention/ParallelRetentionAttention.lean	pra_fwd_o_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/parallel_retention_attention/ParallelRetentionAttention.lean	pra_bwd_dkv_exec_genuine	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_output_summary_general	full_value_candidate	none		end-to-end
-bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_one_tile_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/adam_update_triton/AdamUpdateTriton.lean	update_fn_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/add_example/AddExample.lean	add_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/add_value/AddValue.lean	puzzle1_kernel_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/apply_penalty/ApplyPenalty.lean	apply_penalty_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_forward_triton/AttentionForwardTriton.lean	attention_forward_triton_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_forward_triton/AttentionForwardTriton.lean	attention_forward_triton_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton1/AttentionFwdTriton1.lean	attention_fwd_triton1_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton2/AttentionFwdTriton2.lean	attention_fwd_triton2_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton2/AttentionFwdTriton2.lean	attention_fwd_triton2_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case1_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case2_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case3_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_python_case4_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case3_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case1_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case2_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_fwd_triton3/AttentionFwdTriton3.lean	attention_fwd_triton3_case4_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_genuine_output_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_kernel/AttentionKernel.lean	attention_kernel_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_kernel_aligned/AttentionKernelAligned.lean	attention_kernel_aligned_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_llama/AttentionLlama.lean	attention_llama_fwd_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_llama/AttentionLlama.lean	attention_llama_fwd_causal_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_python_case1_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attention_score/AttentionScore.lean	attention_score_case1_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attn_fwd_causal/AttnFwdCausal.lean	attn_fwd_causal_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/attn_fwd_triton/AttnFwdTriton.lean	attn_fwd_triton_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean	batched_vecmat_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	bgmv_full_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bgmv_expand_slice/BgmvExpandSlice.lean	bgmv_expand_slice_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_kernel_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bgmv_shrink_kernel/BgmvShrinkKernel.lean	bgmv_shrink_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_closed_form_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_stores_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/block_sparse_attn/BlockSparseAttn.lean	block_sparse_attn_output_stores_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bmm_chunk_bwd/BmmChunkBwd.lean	bmm_chunk_bwd_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bmm_chunk_fwd/BmmChunkFwd.lean	bmm_chunk_fwd_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/bmm_optimized/BmmOptimized.lean	bmm_o_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	decoding_cache_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean	prefill_cache_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_bwd_dqkg/ChunkBwdDqkg.lean	chunk_bwd_dqkg_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_cumsum_kernel/ChunkCumsumKernel.lean	chunk_cumsum_scalar_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_block_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_cumsum_vector/ChunkCumsumVector.lean	chunk_cumsum_vector_block_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_fwd_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_h_state_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_delta_fwd/ChunkDeltaFwd.lean	chunk_delta_h_state_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_recurrence_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_recurrence_forward_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean	chunk_gate_recurrence_forward_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_cum_slice_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_state_stores_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gated_attention/ChunkGatedAttention.lean	chunk_gated_attention_state_stores_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gla_fwd/ChunkGlaFwd.lean	chunk_gla_fwd_o_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_gla_simple/ChunkGlaSimple.lean	chunk_gla_simple_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_linear_attn/ChunkLinearAttn.lean	cla_fwd_h_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_linear_attn/ChunkLinearAttn.lean	cla_bwd_dh_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_retention/ChunkRetention.lean	crh_fwd_h_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_retention/ChunkRetention.lean	crh_bwd_dh_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_retention_ops/ChunkRetentionOps.lean	cro_fwd_h_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunk_retention_ops/ChunkRetentionOps.lean	cro_bwd_dh_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/chunked_cumsum_fwd/ChunkedCumsumFwd.lean	chunked_cumsum_fwd_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_bloom/ContextAttnBloom.lean	context_attn_bloom_surface_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_bloom/ContextAttnBloom.lean	context_attn_bloom_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_fwd/ContextAttnFwd.lean	context_attn_fwd_surface_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_fwd/ContextAttnFwd.lean	context_attn_fwd_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_llama/ContextAttnLlama.lean	context_attn_llama_surface_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_llama/ContextAttnLlama.lean	context_attn_llama_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_mistral/ContextAttnMistral.lean	context_attn_mistral_genuine_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_mistral/ContextAttnMistral.lean	context_attn_mistral_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_nopad/ContextAttnNopad.lean	context_attn_nopad_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/context_attn_nopad/ContextAttnNopad.lean	context_attn_nopad_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/cosine_compute/CosineCompute.lean	cos_func_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/cross_entropy1/CrossEntropy1.lean	cross_entropy_fwd_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/cross_entropy2/CrossEntropy2.lean	cross_entropy_fwd_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/cross_entropy_ops/CrossEntropyOps.lean	cross_entropy_fwd_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	decay_cumsum_backward_closed_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	fwd_decay_cumsum_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	prepare_qg_kg_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/decay_cumsum/DecayCumsum.lean	bwd_decay_global_cumsum_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/dequantize_matmul/DequantizeMatmul.lean	dequantize_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/dequantize_rowwise/DequantizeRowwise.lean	dequantize_rowwise_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/destindex_copy/DestindexCopy.lean	destindex_copy_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/destindex_copy_kv1/DestindexCopyKv1.lean	fwd_kernel_destindex_copy_kv_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/destindex_copy_kv2/DestindexCopyKv2.lean	fwd_kernel_destindex_copy_kv_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_forward_kernel_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_forward_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean	diag_ssm_backward_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/dropout_triton/DropoutTriton.lean	dropout_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_kernel_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_body_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_body_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean	embedding_kernel_whole_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/f8_conversion_utils/F8ConversionUtils.lean	f16_to_f8_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/f8_conversion_utils/F8ConversionUtils.lean	f8_to_f16_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	cross_entropy_forward_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fast_ce_loss/FastCeLoss.lean	chunked_cross_entropy_forward_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fast_layernorm/FastLayernorm.lean	layernorm_forward_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	rms_layernorm_forward_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fast_rms_layernorm/FastRmsLayernorm.lean	gemma_rms_layernorm_forward_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fast_rope_embedding/FastRopeEmbedding.lean	rope_embedding_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fast_rope_embedding/FastRopeEmbedding.lean	fast_rope_embedding_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fifth_order_sph_harmonics/FifthOrderSphHarmonics.lean	fifth_order_fwd_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_genuine_output_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_genuine_l_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_python_case1_genuine_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_python_case2_genuine_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_attn/FlashAttn.lean	flash_attn_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_normalization_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_running_max_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_final_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_llama/FlashDecode2Llama.lean	flash_decode2_llama_final_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_masked_accumulator_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_running_max_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_normalization_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_final_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/flash_decode2_phi/FlashDecode2Phi.lean	flash_decode2_phi_final_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_activation/FusedActivation.lean	fused_add_mul_activation_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_layernorm_triton/FusedLayernormTriton.lean	fused_layernorm_triton_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_layernorm_triton/FusedLayernormTriton.lean	fused_layernorm_triton_normalize_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_recurrent_delta/FusedRecurrentDelta.lean	fused_recurrent_delta_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_recurrent_delta/FusedRecurrentDelta.lean	fused_recurrent_delta_output_step_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_recurrent_hgrn/FusedRecurrentHgrn.lean	fused_recurrent_hgrn_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_recurrent_hgrn/FusedRecurrentHgrn.lean	fused_recurrent_hgrn_bwd_dx_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused_recurrent_retention_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused_recurrent_retention_seed_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_recurrent_retention/FusedRecurrentRetention.lean	fused_recurrent_retention_seed_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_rotary_embedding/FusedRotaryEmbedding.lean	decoding_fused_rotary_embedding_q_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_rotary_embedding/FusedRotaryEmbedding.lean	decoding_fused_rotary_embedding_vcache_chain_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/fused_rwkv6_kernel/FusedRwkv6Kernel.lean	fused_recurrent_rwkv6_state_step_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/geglu_tanh_triton/GegluTanhTriton.lean	geglu_tanh_forward_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/geglu_tanh_triton/GegluTanhTriton.lean	geglu_tanh_backward_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/index_select_bwd/IndexSelectBwd.lean	index_select_cat_bwd_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/index_select_cat/IndexSelectCat.lean	index_select_cat_fwd_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/int4_matmul/Int4Matmul.lean	int4_matmul_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/int8_dequant_matmul/Int8DequantMatmul.lean	int8_dequant_matmul_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/int8_matmul_kernel/Int8MatmulKernel.lean	int8_matmul_kernel_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/int8_matmul_quantization/Int8MatmulQuantization.lean	int8_matmul_quantization_quantize_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/int8_matmul_quantization/Int8MatmulQuantization.lean	int8_matmul_quantization_matmul_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/int8_quantization/Int8Quantization.lean	per_block_int8_correctness	precomputed_input_slice	quantization-semantic-followup	#158	Q/K store slice with ScalePre input; scale reduction and bias/int8 rounding are not proved
+bench/tritonbench_g/int_scaled_matmul/IntScaledMatmul.lean	int_scaled_matmul_matmul_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/int_scaled_matmul/IntScaledMatmul.lean	int_scaled_matmul_scaled_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/iv_dependent_matmul/IvDependentMatmul.lean	iv_dependent_matmul_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/iv_dependent_matmul/IvDependentMatmul.lean	iv_dependent_matmul_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kcache_copy_triton/KcacheCopyTriton.lean	copy_to_kcache_seqlen_n1_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_compute/KldivCompute.lean	kldivergence_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_backward_default_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_backward_log_target_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_forward_default_none_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_forward_log_target_none_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_forward_log_target_none_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_forward_default_none_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_backward_default_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_ops/KldivOps.lean	kldiv_backward_log_target_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_backward_default_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_backward_log_target_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_forward_default_none_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_forward_log_target_none_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kldiv_triton/KldivTriton.lean	kldiv_forward_default_none_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/ksoftmax_triton/KsoftmaxTriton.lean	ksoftmax_forward_plain_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kv_cache_copy/KvCacheCopy.lean	kv_cache_copy_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kv_cache_filling/KvCacheFilling.lean	fill_kv_cache_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/kv_cache_filling/KvCacheFilling.lean	fill_quant_meta_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/l2_norm_bwd/L2NormBwd.lean	l2_norm_bwd_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/l2_norm_triton1/L2NormTriton1.lean	l2_norm_fwd_1pass_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/l2_norm_triton2/L2NormTriton2.lean	l2_norm_fwd_1pass_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/l2_norm_triton2/L2NormTriton2.lean	l2_norm_bwd_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_liger/LayerNormLiger.lean	layer_norm_liger_forward_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_liger/LayerNormLiger.lean	layer_norm_liger_scalar_stores_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_liger/LayerNormLiger.lean	layer_norm_liger_scalar_stores_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_fwd_rms_bias_all_outputs_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_fwd_residual_bias_all_outputs_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_rms_core_outputs_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_plain_bias_core_outputs_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_bwd_residual_add_all_outputs_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_scalar_stores_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean	layer_norm_ops_scalar_stores_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_welfold/LayerNormWelfold.lean	layer_norm_welfold_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layer_norm_welfold/LayerNormWelfold.lean	layer_norm_welfold_normalize_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layernorm_fwd_triton/LayernormFwdTriton.lean	layernorm_fwd_triton_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/layernorm_fwd_triton/LayernormFwdTriton.lean	layernorm_fwd_triton_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_bwd_grad_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/lightning_attention/LightningAttention.lean	lightning_attention_bwd_grad_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/llama_ff_triton/LlamaFfTriton.lean	ff_llama_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_backward_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/log_softmax/LogSoftmax.lean	log_softmax_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean	logsumexp_fwd_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/lora_expand_gemv/LoraExpandGemv.lean	gemv_full_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean	masked_add_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/masked_select/MaskedSelect.lean	masked_select_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_dequant_int4/MatmulDequantInt4.lean	matmul_dequant_int4_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_matmul4_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_matmul_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_dequantize/MatmulDequantize.lean	matmul_dequantize_dequantize_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_dequantize_int4/MatmulDequantizeInt4.lean	matmul_dequantize_int4_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_kernel/MatmulKernel.lean	matmul_kernel_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_leakyrelu/MatmulLeakyrelu.lean	matmul_leakyrelu_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_leakyrelu_fp8/MatmulLeakyreluFp8.lean	matmul_leakyrelu_fp8_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f32_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f16_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f32_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_tma/MatmulTma.lean	matmul_tma_f16_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_triton1/MatmulTriton1.lean	matmul_triton1_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_triton1/MatmulTriton1.lean	matmul_triton1_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_triton2/MatmulTriton2.lean	matmul_triton2_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_triton2/MatmulTriton2.lean	matmul_triton2_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matmul_triton_autotune/MatmulTritonAutotune.lean	matmul_autotune_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matrix_reduction/MatrixReduction.lean	load_reduce_kernel_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matrix_reduction/MatrixReduction.lean	matrix_reduction_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matrix_transpose/MatrixTranspose.lean	kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matrix_vector_multip/MatrixVectorMultip.lean	mv_kernel_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/matrix_vector_multip/MatrixVectorMultip.lean	mv_one_block_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/max_reduction/MaxReduction.lean	max_kernel_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/max_reduction/MaxReduction.lean	max_kernel_1_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/mean_reduction/MeanReduction.lean	mean_dim_kernel_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/mean_reduction/MeanReduction.lean	mean_dim_kernel_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/mixed_sparse_attention/MixedSparseAttention.lean	mixed_sparse_attention_output_closed_form_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/mixed_sparse_attention/MixedSparseAttention.lean	mixed_sparse_attention_epilogue_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/mul_exponent_compensator/MulExponentCompensator.lean	mul_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_first_a1_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/nested_loops_processing/NestedLoopsProcessing.lean	nested3_first_a1_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/parallel_attention/ParallelAttention.lean	pa_fwd_o_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/parallel_attention/ParallelAttention.lean	pa_bwd_dkv_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/parallel_retention_attention/ParallelRetentionAttention.lean	pra_fwd_o_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/parallel_retention_attention/ParallelRetentionAttention.lean	pra_bwd_dkv_exec_genuine	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/pow_scalar_tensor/PowScalarTensor.lean	pow_scalar_tensor_one_tile_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
 bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quantize_global_transpose_blocked_output_summary_general	blocked_summary	fixed-width-int8-cast-semantics	#154	blocked_output_summary
-bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quant_transpose_scaled_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	destindex_copy_quantize_kv_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	quantize_copy_kv_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	destindex_copy_quantize_kv_group_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	quantize_kv_copy_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	destindex_copy_quantize_kv_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	quantize_kv_transform_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rbe_triton_transform/RbeTritonTransform.lean	rbe_triton_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean	relu_strided_buffer_output_summary_general	full_value_candidate	none		end-to-end
-bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean	relu_strided_buffer_one_tile_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean	relu_strided_buffer_grid_stride_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/relu_triton_kernel/ReluTritonKernel.lean	relu_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_block_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_block_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_output_summary_general	full_value_candidate	none		end-to-end
-bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_vec_store_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_vec_store_io_correctnessR	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rms_matmul_rbe/RmsMatmulRbe.lean	rms_matmul_rbe_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rms_matmul_rbe/RmsMatmulRbe.lean	rms_matmul_rbe_qkv_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rms_norm_triton/RmsNormTriton.lean	rms_norm_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rms_rbe_matmul/RmsRbeMatmul.lean	rms_matmul_rbe_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_fused_llama/RmsnormFusedLlama.lean	rms_norm_fwd_fused_llama_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_fused_llama/RmsnormFusedLlama.lean	rms_norm_fwd_fused_llama_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_implementation/RmsnormImplementation.lean	rmsnorm_implementation_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_implementation/RmsnormImplementation.lean	rmsnorm_implementation_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_full_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_full_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rope_backward_transform/RopeBackwardTransform.lean	rope_backward_python_backward_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_forward_backward_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rope_transform/RopeTransform.lean	rope_transform_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rotary_emb/RotaryEmb.lean	rotary_emb_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rotary_emb_nopad/RotaryEmbNopad.lean	rotary_emb_nopad_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rotary_transform/RotaryTransform.lean	rotary_transform_python_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rotary_transform/RotaryTransform.lean	rotary_transform_meta_implements	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rotary_transform_ops/RotaryTransformOps.lean	rotary_transform_ops_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rotary_transform_ops/RotaryTransformOps.lean	rotary_transform_ops_meta_implements	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/rowwise_quantization_triton/RowwiseQuantizationTriton.lean	quantize_rowwise_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_one_row_block_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/sin_computation/SinComputation.lean	sin_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/sin_kernel/SinKernel.lean	kernel_function_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_kernel_inner_one_tile_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_kernel_non_inner_one_tile_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_backward_kernel_inner_one_tile_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_backward_kernel_non_inner_one_tile_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_kernel_inner_one_tile_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_one_tile_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_one_tile_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_reducev/SoftmaxReducev.lean	softmax_reducev_genuine_output_compute_correct_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_reducev/SoftmaxReducev.lean	softmax_reducev_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean	softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_triton2/SoftmaxTriton2.lean	softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_triton3/SoftmaxTriton3.lean	softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/softmax_triton3/SoftmaxTriton3.lean	softmax_kernel_masked_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/square_matrix/SquareMatrix.lean	square_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/swiglu_backward/SwigluBackward.lean	swiglu_bwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/swiglu_fwd/SwigluFwd.lean	swiglu_fwd_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_forward_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_backward_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_attn_mistral/TokenAttnMistral.lean	token_attn_mistral_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_attn_mistral/TokenAttnMistral.lean	token_attn_mistral_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_attn_reduceV/TokenAttnReduceV.lean	token_attn_reducev_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_attn_reduceV/TokenAttnReduceV.lean	token_attn_reducev_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_softmax_bloom/TokenSoftmaxBloom.lean	token_softmax_bloom_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/token_softmax_llama/TokenSoftmaxLlama.lean	token_softmax_llama_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_1_value_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_1_index_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_2_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_dim_single_block_compute_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_1_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_preprocess_genuine_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_genuine_output_summary_general	full_value_candidate	none		end-to-end
-bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	triton_conv2d_fwd_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_output_summary_general	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f16_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f8_closed_form_correct	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f16_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f8_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_inplace_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/triton_softmax/TritonSoftmax.lean	softmax_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/var_len_copy/VarLenCopy.lean	var_len_copy_kernel_triton_small_length_output_summary	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/var_len_copy/VarLenCopy.lean	var_len_copy_one_chunk_io_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/vector_addition/VectorAddition.lean	add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
-bench/tritonbench_g/vector_addition_custom/VectorAdditionCustom.lean	add_kernel_correctness	full_value_candidate	none		no proof-gap marker in summary context
+bench/tritonbench_g/quant_transpose_kernel/QuantTransposeKernel.lean	quant_transpose_scaled_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	destindex_copy_quantize_kv_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/quantize_copy_kv/QuantizeCopyKv.lean	quantize_copy_kv_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/quantize_global/QuantizeGlobal.lean	quantize_global_correctness	pre_rounding_slice	quantization-semantic-followup	#158	scaled real-valued store slice; faithful CUDA llrint/int8 surface does not project
+bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	destindex_copy_quantize_kv_group_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/quantize_kv_copy/QuantizeKvCopy.lean	quantize_kv_copy_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	destindex_copy_quantize_kv_transform_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/quantize_kv_transform/QuantizeKvTransform.lean	quantize_kv_transform_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rbe_triton_transform/RbeTritonTransform.lean	rbe_triton_transform_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean	relu_strided_buffer_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean	relu_strided_buffer_one_tile_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean	relu_strided_buffer_grid_stride_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/relu_triton_kernel/ReluTritonKernel.lean	relu_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_block_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/reversed_cumsum/ReversedCumsum.lean	reversed_cumsum_block_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_vec_store_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/reversed_cumsum_scalar/ReversedCumsumScalar.lean	reversed_cumsum_scalar_vec_store_io_correctnessR	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rms_matmul_rbe/RmsMatmulRbe.lean	rms_matmul_rbe_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rms_matmul_rbe/RmsMatmulRbe.lean	rms_matmul_rbe_qkv_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rms_norm_triton/RmsNormTriton.lean	rms_norm_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rms_rbe_matmul/RmsRbeMatmul.lean	rms_matmul_rbe_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rmsnorm_fused/RmsnormFused.lean	rms_norm_fwd_fused_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rmsnorm_fused_llama/RmsnormFusedLlama.lean	rms_norm_fwd_fused_llama_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rmsnorm_fused_llama/RmsnormFusedLlama.lean	rms_norm_fwd_fused_llama_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rmsnorm_implementation/RmsnormImplementation.lean	rmsnorm_implementation_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rmsnorm_implementation/RmsnormImplementation.lean	rmsnorm_implementation_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_full_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rmsnorm_triton/RmsnormTriton.lean	rmsnorm_full_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rope_backward_transform/RopeBackwardTransform.lean	rope_backward_python_backward_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_forward_backward_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rope_embedding/RopeEmbedding.lean	rope_embedding_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rope_transform/RopeTransform.lean	rope_transform_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rotary_emb/RotaryEmb.lean	rotary_emb_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rotary_emb_nopad/RotaryEmbNopad.lean	rotary_emb_nopad_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rotary_transform/RotaryTransform.lean	rotary_transform_python_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rotary_transform/RotaryTransform.lean	rotary_transform_meta_implements	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rotary_transform_ops/RotaryTransformOps.lean	rotary_transform_ops_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rotary_transform_ops/RotaryTransformOps.lean	rotary_transform_ops_meta_implements	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/rowwise_quantization_triton/RowwiseQuantizationTriton.lean	quantize_rowwise_correctness	pre_rounding_slice	quantization-semantic-followup	#158	row maximum is computed; CUDA llrint/int8 output rounding is omitted
+bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_one_row_block_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/sgmv_expand_slice/SgmvExpandSlice.lean	sgmv_expand_slice_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/sin_computation/SinComputation.lean	sin_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/sin_kernel/SinKernel.lean	kernel_function_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_kernel_inner_one_tile_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_kernel_non_inner_one_tile_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_backward_kernel_inner_one_tile_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_backward_kernel_non_inner_one_tile_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean	softmax_kernel_inner_one_tile_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_one_tile_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_optimize/SoftmaxOptimize.lean	softmax_kernel_online_v2_one_tile_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_reducev/SoftmaxReducev.lean	softmax_reducev_genuine_output_compute_correct_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_reducev/SoftmaxReducev.lean	softmax_reducev_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean	softmax_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_triton2/SoftmaxTriton2.lean	softmax_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_triton3/SoftmaxTriton3.lean	softmax_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/softmax_triton3/SoftmaxTriton3.lean	softmax_kernel_masked_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/square_matrix/SquareMatrix.lean	square_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/swiglu_backward/SwigluBackward.lean	swiglu_bwd_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/swiglu_fwd/SwigluFwd.lean	swiglu_fwd_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_forward_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/swiglu_triton/SwigluTriton.lean	swiglu_backward_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/token_attn_llama2/TokenAttnLlama2.lean	token_attn_llama2_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/token_attn_mistral/TokenAttnMistral.lean	token_attn_mistral_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/token_attn_mistral/TokenAttnMistral.lean	token_attn_mistral_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/token_attn_reduceV/TokenAttnReduceV.lean	token_attn_reducev_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/token_attn_reduceV/TokenAttnReduceV.lean	token_attn_reducev_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/token_softmax_bloom/TokenSoftmaxBloom.lean	token_softmax_bloom_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/token_softmax_llama/TokenSoftmaxLlama.lean	token_softmax_llama_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_1_value_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_1_index_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_2_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_dim_single_block_compute_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_argmax/TritonArgmax.lean	argmax_kernel_1_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_preprocess_genuine_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_bwd_grads_genuine_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_attention/TritonAttention.lean	triton_attention_forward_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	conv2d_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_conv2d_fwd/TritonConv2dFwd.lean	triton_conv2d_fwd_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_output_summary_general	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_linear_activation/TritonLinearActivation.lean	triton_linear_activation_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f16_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f8_closed_form_correct	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f16_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_matmul/TritonMatmul.lean	triton_matmul_f8_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_mul2/TritonMul2.lean	mul2_inplace_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/triton_softmax/TritonSoftmax.lean	softmax_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/var_len_copy/VarLenCopy.lean	var_len_copy_kernel_triton_small_length_output_summary	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/var_len_copy/VarLenCopy.lean	var_len_copy_one_chunk_io_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/vector_addition/VectorAddition.lean	add_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim
+bench/tritonbench_g/vector_addition_custom/VectorAdditionCustom.lean	add_kernel_correctness	unreviewed	none		coverage not explicitly reviewed; no full-kernel claim

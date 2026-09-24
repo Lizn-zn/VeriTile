@@ -2155,8 +2155,11 @@ The windows and masks are *declared*, not parsed from the kernel; the headlines
 **prove** the kernel's actual addressing and masking match them. -/
 def ropeHeadIO (kernel : ComputeKernel) (Buf COS SIN : RegionName)
     (HEAD_IDX COS_ROW_IDX row_stride cos_row_stride sin_row_stride hd n_h
-      HEAD_HALF BLOCK_HALF writeShift : Nat) : GroupedMasked2DKernelIO where
+      HEAD_HALF BLOCK_HALF writeShift : Nat)
+    (projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+      first | rfl | simp [ComputeKernel.toAlgKernel]) : GroupedMasked2DKernelIO where
   kernel := kernel
+  projection := projection
   nIn := 4
   nOut := 1
   bufs := [Buf, COS, SIN]

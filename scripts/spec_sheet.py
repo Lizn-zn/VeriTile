@@ -362,6 +362,20 @@ def make_sheet(file_path, manifest):
     return "\n".join(out), stat
 
 
+def sheet_name(file):
+    """Include the port slug so distinct ports cannot collide by Lean casing."""
+    return os.path.basename(os.path.dirname(file)) + "__" + os.path.splitext(os.path.basename(file))[0] + ".md"
+
+
+def check_output_names(files):
+    seen = {}
+    for file in files:
+        name = sheet_name(file).casefold()
+        if name in seen:
+            raise ValueError(f"case-insensitive spec-sheet collision: {seen[name]} and {file}")
+        seen[name] = file
+
+
 def main():
     args = sys.argv[1:]
     outdir = None
@@ -372,6 +386,8 @@ def main():
         files = sorted(glob.glob(os.path.join(BENCH, "*", "*.lean")))
         if outdir is None:
             outdir = os.path.join(BENCH, "_spec-sheets")
+    # Check the whole batch before writing anything, including on Linux.
+    check_output_names(files)
     manifest = load_manifest()
     stats = []
     for f in files:
@@ -379,7 +395,7 @@ def main():
         stats.append(stat)
         if outdir:
             os.makedirs(outdir, exist_ok=True)
-            name = os.path.splitext(os.path.basename(f))[0] + ".md"
+            name = sheet_name(f)
             open(os.path.join(outdir, name), "w", encoding="utf-8").write(sheet)
         else:
             print(sheet); print("\n" + "=" * 80 + "\n")
@@ -402,7 +418,7 @@ def main():
         idx.append("| score | kernel | defs | flat-reads | stmt-lines | hyps | flags |")
         idx.append("|---:|---|---:|---:|---:|---:|---|")
         for s in sorted(stats, key=lambda x: (-x["score"], x["file"])):
-            base = os.path.splitext(os.path.basename(s["file"]))[0] + ".md"
+            base = sheet_name(s["file"])
             flag = ("⚠" + ",".join(s["selfref"])) if s["selfref"] else ""
             if s["headline"] == 0:
                 flag = (flag + " ❓no-summary").strip()

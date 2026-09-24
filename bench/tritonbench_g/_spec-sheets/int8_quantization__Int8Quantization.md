@@ -17,7 +17,7 @@ the `[BLK, C]` block holds `perBlockInt8ValSpec … = (preScale · xs j) / ys j`
 the cell `Scale[off_b · scale_stride + off_blk]` holds the scale `ys`, and every
 other memory cell is unchanged.
 
-`preScale` is symbolic, so this one theorem covers **both** Python kernels:
+`preScale` is symbolic, so this one slice theorem represents the pre-scaling choices of both Python kernels:
 `preScale = C**-0.5 · 1.44269504` is `q_kernel_per_block_int8` and
 `preScale = 1` is `k_kernel_per_block_int8`.
 
@@ -29,9 +29,11 @@ store). No separate `0 < C` is needed: the `Lane2D` row-major bijection
 `j ↦ (j / C, j % C)` gets its positivity from the lane itself. The per-block
 scale is an
 **input**, not a computed value — see the module docstring: the Python
-reduction reads uninitialized memory at a partial tail block, so it has no pure
-spec. Proof: `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
-masked triple with the flat-memory bridge side conditions. -/
+reduction and its partial-tail behavior are outside this slice theorem. Proof: `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
+masked triple with the flat-memory bridge side conditions.
+
+coverage: precomputed_input_slice family=quantization-semantic-followup -- Q/K store slice with ScalePre input; scale reduction and bias/int8 rounding are not proved
+-/
 ```
 </details>
 

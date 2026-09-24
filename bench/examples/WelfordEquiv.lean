@@ -837,7 +837,8 @@ def welfordTwoPassIO (blockSize rowStride : Nat) : KernelIO₁ₓ₂ where
 verbatim), with the online kernel plugged in. -/
 def welfordOnlineIO (blockSize rowStride : Nat) : KernelIO₁ₓ₂ :=
   { welfordTwoPassIO blockSize rowStride with
-    kernel := onlineWelfordKernel ⟨"x"⟩ ⟨"mean"⟩ ⟨"var"⟩ blockSize rowStride }
+    kernel := onlineWelfordKernel ⟨"x"⟩ ⟨"mean"⟩ ⟨"var"⟩ blockSize rowStride
+    projection := by rfl }
 
 /-- **The headline**: the two-pass Welford kernel is equivalent to the online
 (one-pass recurrence) kernel on their shared one-input / two-output IO
@@ -957,4 +958,3 @@ trusted statement) the file stops compiling. See
 
 
 end VeriTile.Bench.Examples.Welford
-

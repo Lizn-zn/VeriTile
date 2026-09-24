@@ -13,7 +13,7 @@
 #
 # For each file it emits a TEMP COPY (via bench/audit_trust_prep.py) that adds
 # `import VeriTile.Meta.StatementAudit` and appends `#axiomsClean` on every
-# headline theorem (+ `#specNonCircular` on discoverable specs), then compiles
+# headline theorem plus `#auditModuleSpecs` for environment-based discovery, then compiles
 # the copy with `lake env lean`. The port files themselves are never modified —
 # the corpus stays clean.
 #
@@ -73,30 +73,52 @@ default_jobs() {
 }
 
 JOBS="${AUDIT_TRUST_JOBS:-$(default_jobs)}"
+if [[ ! "${JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'AUDIT_TRUST_JOBS must be a positive integer: %s\n' "${JOBS}" >&2
+  exit 2
+fi
 
 TMPDIR_AUDIT="$(mktemp -d)"
 trap 'rm -rf "${TMPDIR_AUDIT}"' EXIT
 
 target_list="$(select_targets "$@")" || exit "$?"
+if [ -z "${target_list}" ]; then
+  printf 'No trust audit targets selected\n' >&2
+  exit 2
+fi
 
 export PROJECT_ROOT TMPDIR_AUDIT PREP
 
+launcher_status=0
 results="$(printf '%s\n' "${target_list}" | xargs -P "${JOBS}" -I{} bash -c '
   src="{}"
   rel="${src#'"${PROJECT_ROOT}"'/}"
   # a unique temp name: <parent-dir>__<basename>
   tag="$(basename "$(dirname "${src}")")__$(basename "${src}")"
   tmp="${TMPDIR_AUDIT}/${tag}"
-  if ! python3 "${PREP}" "${src}" > "${tmp}" 2>/dev/null; then
+  if ! python3 "${PREP}" "${src}" > "${tmp}"; then
     printf "  FAIL  %s   (prep error)\n" "${rel}"
     exit 0
   fi
-  if lake env lean "${tmp}" >/dev/null 2>&1; then
+  if lake env lean "${tmp}" > "${tmp}.log" 2>&1; then
+    summary=$(sed -n "/^Spec audit:/p" "${tmp}.log")
+    printf "%s: %s\n" "${rel}" "${summary}" >&2
     printf "  ok    %s\n" "${rel}"
   else
+    cat "${tmp}.log" >&2
     printf "  FAIL  %s\n" "${rel}"
   fi
-')"
+')" || launcher_status=$?
+
+if [ "${launcher_status}" -ne 0 ]; then
+  printf 'Trust worker launcher failed (exit %s)\n' "${launcher_status}" >&2
+  exit 1
+fi
+
+expected="$(printf '%s\n' "${target_list}" | sed "s|^${PROJECT_ROOT}/||")"
+if ! python3 "${SCRIPT_DIR}/check_worker_results.py" "${expected}" "${results}"; then
+  exit 1
+fi
 
 printf '%s\n' "${results}" | sort
 
@@ -106,7 +128,7 @@ failed=$(printf '%s\n' "${results}" | grep -c '^  FAIL  ' || true)
 printf '\nTrust audit (bench corpus): %d ok, %d fail\n' "${passed}" "${failed}"
 
 if [ "${failed}" -gt 0 ]; then
-  printf 'Files whose trust gate FAILED (real soundness finding — investigate):\n'
+  printf 'Files whose trust gate FAILED (inspect diagnostics for proof or infrastructure failure):\n'
   printf '%s\n' "${results}" | awk '/^  FAIL  / {print "  - " $2}'
   exit 1
 fi

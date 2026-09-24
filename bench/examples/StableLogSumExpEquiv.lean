@@ -253,7 +253,9 @@ def lseStableIO (B : Nat) : KernelIO₁ where
 (structure update of `lseStableIO` — buffers and windows shared verbatim),
 with the direct kernel plugged in. -/
 def lseDirectIO (B : Nat) : KernelIO₁ :=
-  { lseStableIO B with kernel := directLSEKernel ⟨"x"⟩ ⟨"y"⟩ B }
+  { lseStableIO B with
+    kernel := directLSEKernel ⟨"x"⟩ ⟨"y"⟩ B
+    projection := by rfl }
 
 /-! Private plumbing for the headline's region-model obligation: `≡[R]` runs
 both kernels from **any** state (no input hypotheses), so termination cannot

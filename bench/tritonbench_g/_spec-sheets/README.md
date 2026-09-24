@@ -39,7 +39,11 @@ arithmetic the reviewer must decode against the kernel strides).
 These sheets are **generated artifacts**; do not hand-edit them. After changing
 any kernel spec, regenerate:
 
-    python3 scripts/spec_sheet.py            # → bench/tritonbench_g/spec-sheets/
+    python3 scripts/spec_sheet.py            # → bench/tritonbench_g/_spec-sheets/
+
+Filenames include the port-directory slug (`<port>__<LeanFile>.md`). The
+generator checks for case-insensitive collisions before writing any sheet,
+so both RMSNorm ports remain distinct on macOS as well as Linux.
 
 To print a single kernel's sheet to stdout (e.g. while reviewing a diff):
 

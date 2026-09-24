@@ -24,7 +24,10 @@ active mask is pid-dependent, so a tail program with no active lanes still
 reads `absmax_inv_ptr[0]`, whose bound only the unconditional `read2Mask`
 clause supplies — via a lane witness, hence `0 < BLOCK_SIZE`. It holds for
 every real launch. Proof: `Masked2DKernelIO₂.Implements.intro` assembles the
-region-model masked triple with the flat-memory bridge side conditions. -/
+region-model masked triple with the flat-memory bridge side conditions.
+
+coverage: pre_rounding_slice family=quantization-semantic-followup -- scaled real-valued store slice; faithful CUDA llrint/int8 surface does not project
+-/
 ```
 </details>
 

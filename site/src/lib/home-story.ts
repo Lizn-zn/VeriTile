@@ -1,6 +1,6 @@
 // The project's contributions and their evidence, adapted from the deck.
 export const homeStory = {
-  intro: 'VeriTile embeds Triton in Lean 4 for kernel verification, with explicit semantics, mathematical specifications, and proof generation using agents.',
+  intro: 'Lean-checked contracts for a typed Triton-style model, with explicit semantics, mathematical specifications, and proof generation using agents.',
   promise: 'Theorems cover inputs and parameters that satisfy their stated preconditions.',
   pillars: [
     { label: 'Triton embedded in Lean', href: '#language', symbol: '{ }' },
@@ -9,8 +9,8 @@ export const homeStory = {
   ],
   languageTitle: 'Triton embedded in Lean',
   languageLead: 'VeriTile embeds Triton in Lean, so users can',
-  languageEmphasis: 'write kernels in Triton syntax without learning Lean',
-  languageText: 'The framework automatically handles the formal representation and execution semantics used for verification.',
+  languageEmphasis: 'write kernels in familiar Triton-style syntax',
+  languageText: 'The DSL supplies the formal representation and execution semantics. Lean wrappers and explicit translation choices connect a kernel to its specification; agents can help construct the proof.',
   pythonLabel: 'TRITON KERNEL', leanLabel: 'INTERNAL LEAN REPRESENTATION',
   pythonRole: 'Written by the kernel author', leanRole: 'Used internally for verification',
   languageNote: 'Aligned vector addition (no masked tail). Names matched for comparison.',

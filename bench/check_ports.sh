@@ -71,13 +71,22 @@ default_jobs() {
 }
 
 JOBS="${CHECK_PORTS_JOBS:-$(default_jobs)}"
+if [[ ! "${JOBS}" =~ ^[1-9][0-9]*$ ]]; then
+  printf 'CHECK_PORTS_JOBS must be a positive integer: %s\n' "${JOBS}" >&2
+  exit 2
+fi
 
 # Materialize the list first so a select_ports failure (unknown kernel name,
 # exit 2) propagates instead of vanishing in a pipeline subshell.
 port_list="$(select_ports "$@")" || exit "$?"
+if [ -z "${port_list}" ]; then
+  printf 'No benchmark ports selected\n' >&2
+  exit 2
+fi
 
 # Each worker prints exactly one status line; single short printf writes are
 # atomic within PIPE_BUF, so interleaved output stays line-accurate.
+launcher_status=0
 results="$(printf '%s\n' "${port_list}" | xargs -P "${JOBS}" -I{} bash -c '
   port="{}"
   kernel="$(basename "$(dirname "${port}")")"
@@ -86,7 +95,17 @@ results="$(printf '%s\n' "${port_list}" | xargs -P "${JOBS}" -I{} bash -c '
   else
     printf "  FAIL  %s\n" "${kernel}"
   fi
-')"
+')" || launcher_status=$?
+
+if [ "${launcher_status}" -ne 0 ]; then
+  printf 'Port worker launcher failed (exit %s)\n' "${launcher_status}" >&2
+  exit 1
+fi
+
+expected="$(printf '%s\n' "${port_list}" | while IFS= read -r port; do basename "$(dirname "${port}")"; done)"
+if ! python3 "${SCRIPT_DIR}/check_worker_results.py" "${expected}" "${results}"; then
+  exit 1
+fi
 
 printf '%s\n' "${results}"
 

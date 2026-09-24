@@ -682,6 +682,7 @@ through memory). -/
 def siluFusedIO (B : Nat) : KernelIO₃ :=
   { siluUnfusedIO B with
     kernel := fusedSiLUKernel ⟨"x"⟩ ⟨"gate"⟩ ⟨"residual"⟩ ⟨"out"⟩ B
+    projection := by rfl
     scratch := [] }
 
 /-- **The headline**: fused SiLU is equivalent to the unfused three-step

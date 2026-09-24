@@ -4,7 +4,9 @@ VeriTile.Triton.Memory.KernelSpec
 The **KernelIO spec surface**: a kernel's headline correctness statement is
 `io ⊨ f` — "the kernel described by the IO signature `io` implements the
 mathematical function `f`" — a full Hoare triple packaged as one audited
-definition:
+definition. Every IO signature carries `projection`, a proof that its compute
+kernel projects successfully. Unsupported effects cannot enter any exact,
+rounding, or equivalence contract through the legacy empty-program fallback:
 
 * **Precondition** (all universally quantified): any program id whose window
   is in bounds; any disjoint flat allocation of the declared buffers (∀ base
@@ -257,6 +259,10 @@ kernel-specific audit surface of an `io ⊨ f` headline. -/
 structure KernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -325,6 +331,7 @@ block bounds `w + B ≤ extent` carried as the masked per-lane bounds
 `w + B - 1 < extent` gated on `0 < w + B` — one output, no scratch). -/
 private def toU (io : KernelIO₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 5
   nOut := 1
   nScr := 0
@@ -598,6 +605,10 @@ active lanes and frame everywhere else. -/
 structure MaskedKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -681,6 +692,7 @@ def Implements (io : MaskedKernelIO₂)
 window is lane-masked by `mask`, so no bound-witness channels are needed). -/
 private def toU (io : MaskedKernelIO₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 1
   nScr := io.scratch.length
@@ -1173,6 +1185,10 @@ defaults to `mask`. -/
 structure MaskedKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer. -/
   inp : RegionName
   /-- Output buffer. -/
@@ -1242,6 +1258,7 @@ def Implements (io : MaskedKernelIO₁)
 windows are lane-masked, reads by `mask` and writes by `writeMask`). -/
 private def toU (io : MaskedKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 1
   nOut := 1
   nScr := io.scratch.length
@@ -1502,6 +1519,10 @@ Two generalizations over the 1D family, both forced by real ports:
 structure Masked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer. -/
   inp : RegionName
   /-- Output buffer. -/
@@ -1570,6 +1591,7 @@ def Implements (io : Masked2DKernelIO₁)
 (one float channel, one output, scratch as contract-free channels). -/
 private def toU (io : Masked2DKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 1
   nOut := 1
   nScr := io.scratch.length
@@ -1827,6 +1849,10 @@ for the two generalizations over the 1D family). -/
 structure Masked2DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -1903,6 +1929,7 @@ def Implements (io : Masked2DKernelIO₂)
 contract-free channels). -/
 private def toU (io : Masked2DKernelIO₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 1
   nScr := io.scratch.length
@@ -2320,6 +2347,10 @@ consumer appears. -/
 structure Masked2DKernelIO₂ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -2405,6 +2436,7 @@ def Implements (io : Masked2DKernelIO₂ₓ₂)
 per-output write gates, no scratch). -/
 private def toU (io : Masked2DKernelIO₂ₓ₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 2
   nScr := 0
@@ -2755,6 +2787,10 @@ its own read gate and each output its own write gate, all defaulting to
 structure Masked3DKernelIO₂ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -2842,6 +2878,7 @@ def Implements (io : Masked3DKernelIO₂ₓ₂)
 write gates, no scratch; every window/mask threads all three program ids). -/
 private def toU (io : Masked3DKernelIO₂ₓ₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 2
   nScr := 0
@@ -3184,6 +3221,10 @@ consumer appears. -/
 structure Masked2DKernelIO₃ₓ₃ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -3295,6 +3336,7 @@ def Implements (io : Masked2DKernelIO₃ₓ₃)
 per-output write gates, no scratch). -/
 private def toU (io : Masked2DKernelIO₃ₓ₃) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 3
   nScr := 0
@@ -3742,6 +3784,10 @@ yet: it will be added when a consumer appears. -/
 structure BoolMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer (ℝ channel). -/
   inp : RegionName
   /-- Boolean input buffer (`.bool` channel). -/
@@ -3820,6 +3866,7 @@ trace-safety obligation needs them at the static `mask` — the witness
 channel's `imask := mask` carries that wider bound through. -/
 private def toU (io : BoolMasked2DKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 1
   nScr := 0
@@ -3950,6 +3997,10 @@ yet: it will be added when a consumer appears. -/
 structure BoolMasked2DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer (ℝ channel). -/
   in1 : RegionName
   /-- Second input buffer (ℝ channel). -/
@@ -4027,6 +4078,7 @@ a contract-free bound witness on the output window (see
 write bound). -/
 private def toU (io : BoolMasked2DKernelIO₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 4
   nOut := 1
   nScr := 0
@@ -4185,6 +4237,10 @@ signature content. -/
 structure KernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer. -/
   inp : RegionName
   /-- Output buffer. -/
@@ -4242,6 +4298,7 @@ carried as the masked per-lane bounds `w + L - 1 < extent` gated on
 `0 < w + L` — one output, scratch as contract-free channels). -/
 private def toU (io : KernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3 + io.scratch.length
   nOut := 1
   nScr := io.scratch.length
@@ -4596,6 +4653,10 @@ buffer sizes are not signature content. -/
 structure KernelIO₃ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -4670,6 +4731,7 @@ input, the output, and every scratch buffer — see `KernelIO₁.toU` — one
 output, scratch as contract-free channels). -/
 private def toU (io : KernelIO₃) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 7 + io.scratch.length
   nOut := 1
   nScr := io.scratch.length
@@ -5095,6 +5157,10 @@ frames would each (falsely) claim the other output untouched. -/
 structure KernelIO₃ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -5175,6 +5241,7 @@ def Implements (io : KernelIO₃ₓ₂)
 input and output buffer — see `KernelIO₁.toU` — two outputs, no scratch). -/
 private def toU (io : KernelIO₃ₓ₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 8
   nOut := 2
   nScr := 0
@@ -5429,6 +5496,10 @@ carry no obligations on either side of the triple. -/
 structure MaskedKernelIO₃ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The allocation list: every buffer the kernel touches, each exactly
   once. The role fields below point into this list; for an in-place kernel
   an output names the same buffer as an input. -/
@@ -5517,6 +5588,7 @@ threaded through as arguments. -/
 private def toU (io : MaskedKernelIO₃ₓ₂)
     (hout1 : io.out1 ∈ io.bufs) (hout2 : io.out2 ∈ io.bufs) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 2
   nScr := 0
@@ -5875,6 +5947,10 @@ can be added alongside when a showcase needs it. -/
 structure KernelIO₁ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer. -/
   inp : RegionName
   /-- First output buffer. -/
@@ -6110,6 +6186,10 @@ values (`m₁`/`m₂`) parametrize the data window, the masks, and the spec. -/
 structure MetaMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First scalar slot's buffer (one `.nat` cell per program). -/
   mbuf1 : RegionName
   /-- Second scalar slot's buffer. -/
@@ -6180,6 +6260,7 @@ def Implements (io : MetaMasked2DKernelIO₁)
 slots' pinned values. -/
 private def toU (io : MetaMasked2DKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 1
   nScr := 0
@@ -6496,6 +6577,10 @@ consumers: the TritonBench-G cross-entropy forward family
 structure MetaGatherMasked2DKernelIO₂ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Label slot's buffer (one `.int` cell per program). -/
   mbufL : RegionName
   /-- Data input buffer — both the masked row and the gather cell read it. -/
@@ -6586,6 +6671,7 @@ def Implements (io : MetaGatherMasked2DKernelIO₂ₓ₂)
 pinned value; the two outputs are 1-lane gated cells. -/
 private def toU (io : MetaGatherMasked2DKernelIO₂ₓ₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 2
   nScr := 0
@@ -6797,6 +6883,10 @@ lanes, so they hold with or without injectivity. -/
 structure BoolScatterMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer (ℝ channel). -/
   inp : RegionName
   /-- Boolean input buffer (`.bool` channel — the select gate). -/
@@ -6891,6 +6981,7 @@ channel shadows the same cells with the *ungated* write gate, carrying
 the unconditional frame exclusion and write bound. -/
 private def toU (io : BoolScatterMasked2DKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 1
   nScr := 1
@@ -7066,6 +7157,10 @@ stay at the ungated `writeMask` lanes via the core scratch shadow. -/
 structure MetaScatterMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First float scalar slot's buffer (one ℝ cell per program). -/
   fbuf1 : RegionName
   /-- Second float scalar slot's buffer. -/
@@ -7196,6 +7291,7 @@ the index channel and its mask is the write gate conjoined with
 `WriteInj`; a scratch channel shadows the same cells ungated. -/
 private def toU (io : MetaScatterMasked2DKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 8
   nOut := 1
   nScr := 1
@@ -7492,6 +7588,10 @@ stay at the ungated `writeMask` lanes via core scratch shadows. -/
 structure ChainMetaMasked2DKernelIO₂ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First `.nat` scalar slot's buffer (the context-length array). -/
   mbuf1 : RegionName
   /-- Second `.nat` scalar slot's buffer (the block table); its cell
@@ -7615,6 +7715,7 @@ write gate conjoined with its `WriteInj`; two scratch channels shadow
 the same cells with the ungated gates. -/
 private def toU (io : ChainMetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 4
   nOut := 2
   nScr := 2
@@ -7880,6 +7981,10 @@ constexpr-gated store (the genre's `SPLIT`-guarded z-loss) puts the Lean
 structure MetaMasked2DKernelIO₂ₓ₃ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Label slot's buffer (one `.int` cell per program). -/
   mbufL : RegionName
   /-- Data input buffer — both the masked row and the gather cell read it. -/
@@ -7985,6 +8090,7 @@ def Implements (io : MetaMasked2DKernelIO₂ₓ₃)
 pinned value; the three outputs are 1-lane gated cells. -/
 private def toU (io : MetaMasked2DKernelIO₂ₓ₃) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 3
   nScr := 0
@@ -8478,6 +8584,10 @@ backward is `nIn = 14, nOut = 3`). -/
 structure GroupedMasked2DKernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Number of input channels (a field, never a name subscript). -/
   nIn : Nat
   /-- Number of output channels. -/
@@ -8554,6 +8664,7 @@ and masks ignore the pinned context. -/
 private def toU (io : GroupedMasked2DKernelIO)
     (hout : ∀ o, io.out o ∈ io.bufs) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := io.nIn
   nOut := io.nOut
   nScr := 0
@@ -8810,6 +8921,10 @@ out2DType (f …))`. `quantize_copy_kv`'s fp16 scale store lives there. -/
 structure MetaMasked2DKernelIO₁ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Scalar slot's buffer (one `.nat` cell per program). -/
   mbuf1 : RegionName
   /-- Input buffer. -/
@@ -8915,6 +9030,7 @@ slot's pinned value; the two outputs carry the two lane counts through the
 core's per-output `oarity`. -/
 private def toU (io : MetaMasked2DKernelIO₁ₓ₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 2
   nScr := 0
@@ -9379,6 +9495,10 @@ would be dead here and is omitted. -/
 structure MetaMasked2DKernelIO₂ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Scalar slot's buffer (one `.nat` cell per program). -/
   mbuf1 : RegionName
   /-- First input buffer — the `B1`-lane tile. -/
@@ -9477,6 +9597,7 @@ slot's pinned value; the two outputs carry the two lane counts (`B1`/`B2`)
 through the core's per-output `oarity`. -/
 private def toU (io : MetaMasked2DKernelIO₂ₓ₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 2
   nScr := 0
@@ -9676,6 +9797,10 @@ field until a consumer needs one. -/
 structure MetaGroupedMasked2DKernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Number of input channels (a field, never a name subscript). -/
   nIn : Nat
   /-- Number of output channels. -/
@@ -9764,6 +9889,7 @@ windows/masks read the two slots' pinned values; the membership side condition
 private def toU (io : MetaGroupedMasked2DKernelIO)
     (hout : ∀ o, io.out o ∈ io.bufs) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := io.nIn + 2
   nOut := io.nOut
   nScr := 0
@@ -10118,6 +10244,10 @@ bound. A pure-gather consumer discharges `WriteInj` from its static
 structure GatherMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer (ℝ channel). -/
   inp : RegionName
   /-- Index buffer (`.nat` channel — the per-lane gather/scatter rows). -/
@@ -10208,6 +10338,7 @@ eats the same values and its mask is the write gate **conjoined with
 write gate, carrying the unconditional frame exclusion and write bound. -/
 private def toU (io : GatherMasked2DKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 1
   nScr := 1
@@ -10376,6 +10507,10 @@ pure-gather consumer discharges both `WriteInj`s from its window geometry. -/
 structure GatherMasked2DKernelIO₂ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer (ℝ channel — e.g. `cos_cache`). -/
   in1 : RegionName
   /-- Second input buffer (ℝ channel — e.g. `sin_cache`). -/
@@ -10494,6 +10629,7 @@ with `WriteInj`**; two scratch channels shadow the same cells with the ungated
 gates, carrying the unconditional frame exclusions and write bounds. -/
 private def toU (io : GatherMasked2DKernelIO₂ₓ₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 2
   nScr := 2
@@ -10727,6 +10863,10 @@ trace-safety write bounds. -/
 structure ChainMetaGroupedMasked2DKernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Number of input channels (a field, never a name subscript). -/
   nIn : Nat
   /-- Number of output channels. -/
@@ -10830,6 +10970,7 @@ the declared allocation list. -/
 private def toU (io : ChainMetaGroupedMasked2DKernelIO)
     (hout : ∀ o, io.out o ∈ io.bufs) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := io.nIn + 2
   nOut := io.nOut
   nScr := io.nOut
@@ -11022,6 +11163,10 @@ rounding-as-default doctrine. -/
 structure StreamMasked2DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -11221,6 +11366,10 @@ the ₂ structure's design note). -/
 structure StreamMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The streamed input buffer. -/
   inp1 : RegionName
   /-- Output buffer. -/
@@ -11422,6 +11571,10 @@ is this relation's `R := .triv` degeneration) — see the
 structure StreamMetaMasked3DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -11720,6 +11873,10 @@ value rounded **once**. -/
 structure StreamEmitMasked2DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -11918,6 +12075,10 @@ prefix sum `∑ u ≤ t` of its stream). -/
 structure StreamEmitMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The streamed input buffer. -/
   inp1 : RegionName
   /-- Output buffer. -/
@@ -12141,6 +12302,10 @@ note). -/
 structure StreamGridStrideEmitMasked2DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The streamed input buffer. -/
   inp1 : RegionName
   /-- Output buffer. -/
@@ -12355,6 +12520,10 @@ the `StreamMasked2DKernelIO₂` structure's design note). -/
 structure StreamEmitMasked2DKernelIO₃ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -12576,6 +12745,10 @@ its chunk by `(i_k, i_c, i_bh)` and its `f t j` is the prefix sum
 structure StreamEmitMasked3DKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The streamed input buffer. -/
   inp1 : RegionName
   /-- Output buffer. -/
@@ -12785,6 +12958,10 @@ the `StreamMasked2DKernelIO₂` design note. -/
 structure StreamMetaEmitMasked3DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -13131,6 +13308,10 @@ losslessly (see the `StreamMasked2DKernelIO₂` design note). -/
 structure StreamGroupedEmitMasked3DKernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Number of input channels (a field, never a name subscript). -/
   nIn : Nat
   /-- Number of output channels. -/
@@ -13357,6 +13538,10 @@ see the `StreamMasked2DKernelIO₂` design note. -/
 structure StreamMasked3DKernelIO₃ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -13658,6 +13843,10 @@ channels). -/
 structure StreamMasked3DKernelIO₆ₓ₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -14030,6 +14219,10 @@ one `O` store). -/
 structure StreamMasked3DKernelIO₃ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -14269,6 +14462,10 @@ Intended consumers: the bias-augmented single-store attention family
 structure StreamMasked3DKernelIO₄ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -14533,6 +14730,10 @@ attn_fwd_causal: Q/K/V + Q_scale/K_scale). -/
 structure StreamMasked3DKernelIO₅ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -14848,6 +15049,10 @@ inherited verbatim from `StreamMetaMasked3DKernelIO₂`. -/
 structure StreamMetaMasked3DKernelIO₃ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -15152,6 +15357,10 @@ dischargeable because `gother` is an io-record field). -/
 structure StreamMetaGatherMasked3DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer (its window eats the gathered tile). -/
@@ -15438,6 +15647,10 @@ context_attn_llama / context_attn_bloom (`Req_to_tokens` page table). -/
 structure StreamMetaGatherMasked3DKernelIO₃ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer (window does not eat the gather). -/
   inp1 : RegionName
   /-- Second streamed input buffer (gather-addressed). -/
@@ -15757,6 +15970,10 @@ single-surface `⊨[R]`) carries over verbatim. -/
 structure StreamMasked3DKernelIO₃ₓ₃ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First streamed input buffer. -/
   inp1 : RegionName
   /-- Second streamed input buffer. -/
@@ -16086,6 +16303,10 @@ windows are full address functions. -/
 structure MaskedTileKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer. -/
   inp : RegionName
   /-- Output buffer. -/
@@ -16195,6 +16416,7 @@ def Implements (io : MaskedTileKernelIO₁)
 addresses verbatim. -/
 private def toU (io : MaskedTileKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 1
   nOut := 1
   nScr := 0
@@ -16473,6 +16695,10 @@ Scratch channels are omitted, as in `MaskedTileKernelIO₁`. -/
 structure MaskedTile2DKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -16543,6 +16769,7 @@ windows and masks, one output, no scratch. Lanes are enumerated by
 `TileShape.allIndices`. -/
 private def toU (io : MaskedTile2DKernelIO₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 1
   nScr := 0
@@ -16727,6 +16954,10 @@ carries its own tile shape**. -/
 structure MaskedTileShapedKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -16799,6 +17030,7 @@ def Implements (io : MaskedTileShapedKernelIO₂)
 arities**, one output with its own arity, no scratch. -/
 private def toU (io : MaskedTileShapedKernelIO₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 1
   nScr := 0
@@ -17178,6 +17410,10 @@ written at one, `aux1` / `aux2` are read-only. -/
 structure InPlaceMaskedTileKernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The buffer that is both read and written. -/
   main : RegionName
   /-- First read-only auxiliary buffer. -/
@@ -17256,6 +17492,7 @@ one output whose buffer **is** the first two channels' buffer, no scratch. All
 four arities coincide, so the per-channel matches need no `Fin` refinement. -/
 private def toU (io : InPlaceMaskedTileKernelIO) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 4
   nOut := 1
   nScr := 0
@@ -17464,6 +17701,10 @@ three-region list), so it disappears from the headline. -/
 structure ValueIndexTileKernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer. -/
   inp : RegionName
   /-- The real-valued output buffer. -/
@@ -17531,6 +17772,7 @@ def Implements (io : ValueIndexTileKernelIO)
 **different** types, no scratch. -/
 private def toU (io : ValueIndexTileKernelIO) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 1
   nOut := 2
   nScr := 0
@@ -17695,6 +17937,10 @@ of three `.nat` metadata scalars read at the program's own cell. -/
 structure Meta3MaskedTileKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First `.nat`-read metadata buffer (a plain region; the `.nat` typing lives
   on the channel, not on the region). -/
   mbuf1 : RegionName
@@ -17774,6 +18020,7 @@ Every per-channel match enumerates all four `Fin 4` patterns: the channel type
 *and* arity differ across channels, so a catch-all would leave both unreduced. -/
 private def toU (io : Meta3MaskedTileKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 4
   nOut := 1
   nScr := 0
@@ -17996,6 +18243,10 @@ axes. -/
 structure Masked3DTileKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Input buffer. -/
   inp : RegionName
   /-- Output buffer. -/
@@ -18052,6 +18303,7 @@ def Implements (io : Masked3DTileKernelIO₁)
 /-- Embed into the unified core. -/
 private def toU (io : Masked3DTileKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 1
   nOut := 1
   nScr := 0
@@ -18332,6 +18584,10 @@ form, whereas here they are simply the values the kernel loaded. -/
 structure Scalar2Tile3KernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First scalar buffer. -/
   sbuf1 : RegionName
   /-- Second scalar buffer. -/
@@ -18416,6 +18672,7 @@ def Implements (io : Scalar2Tile3KernelIO)
 differ (1, 1, then the tile's lane count three times), one `.float` output. -/
 private def toU (io : Scalar2Tile3KernelIO) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 5
   nOut := 1
   nScr := 0
@@ -18640,6 +18897,10 @@ program axes. -/
 structure Masked3DTileShapedKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -18718,6 +18979,7 @@ patterns — a catch-all leaves `i` unrefined, so `Fin (iarity i)` does not redu
 and the two different arities cannot typecheck. -/
 private def toU (io : Masked3DTileShapedKernelIO₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 1
   nScr := 0
@@ -18915,6 +19177,10 @@ program axes. -/
 structure Masked3DTileShaped4KernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- First input buffer. -/
   in1 : RegionName
   /-- Second input buffer. -/
@@ -19012,6 +19278,7 @@ def Implements (io : Masked3DTileShaped4KernelIO)
 arities, one output with its own arity, no scratch. -/
 private def toU (io : Masked3DTileShaped4KernelIO) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 4
   nOut := 1
   nScr := 0
@@ -19263,6 +19530,10 @@ the one-scalar narrowing. -/
 structure Meta1MaskedTileKernelIO₁ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The `.nat`-read metadata buffer (a plain region; the `.nat` typing lives on
   the channel, not on the region). -/
   mbuf : RegionName
@@ -19329,6 +19600,7 @@ matches enumerate every `Fin 2` pattern — type *and* arity differ across the t
 channels, so a catch-all would leave both unreduced. -/
 private def toU (io : Meta1MaskedTileKernelIO₁) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 1
   nScr := 0
@@ -19497,6 +19769,10 @@ another thin wrapper. -/
 structure GatherTileKernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The `.nat` index buffer (a plain region; the `.nat` typing lives on the
   channel, not on the region). -/
   idxbuf : RegionName
@@ -19569,6 +19845,7 @@ enumerate every `Fin 2` pattern — type *and* arity differ across the two
 channels, so a catch-all would leave both unreduced. -/
 private def toU (io : GatherTileKernelIO) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 2
   nOut := 1
   nScr := 0
@@ -19945,6 +20222,10 @@ one float tile output, over two program axes. -/
 structure Meta1MaskedTileShapedKernelIO₂ where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- The `.nat` metadata buffer. -/
   mbuf : RegionName
   /-- First float input buffer. -/
@@ -20025,6 +20306,7 @@ channels with independent arities, one `.float` output. Every per-channel match
 enumerates all four `Fin 3` patterns — type *and* arity vary. -/
 private def toU (io : Meta1MaskedTileShapedKernelIO₂) : UKernelIO where
   kernel := io.kernel
+  projection := io.projection
   nIn := 3
   nOut := 1
   nScr := 0

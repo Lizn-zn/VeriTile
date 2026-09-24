@@ -5,7 +5,7 @@
 #   ./site/scripts/dev.sh build     # one-shot production build
 #   ./site/scripts/dev.sh preview   # build + serve the production output
 #
-# Requires Bun (https://bun.sh) and Node.js 22.12+ (Astro 6).
+# Requires Bun (https://bun.sh) and Node.js 22.12+ (Astro 7).
 
 set -euo pipefail
 cd "$(dirname "$0")/.."

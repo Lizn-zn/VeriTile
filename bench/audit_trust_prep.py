@@ -7,7 +7,7 @@ stdout a copy that:
 
   1. adds `import VeriTile.Meta.StatementAudit` to the import block, and
   2. appends, at end of file, a `#axiomsClean <fully-qualified-thm>` command for
-     every headline theorem, plus `#specNonCircular` for discoverable specs.
+     every headline theorem, plus Lean's `#auditModuleSpecs` discovery gate.
 
 Compiling the emitted copy with `lake env lean` therefore both re-checks the
 port AND runs the trust audit — an external gate that never touches the port
@@ -32,6 +32,14 @@ HEADLINE_SUFFIXES = (
     "_output_summary_general",
     "_output_summary",
 )
+
+# These fixtures deliberately contain rejected specs inside #guard_msgs.
+# Their own commands assert those failures; re-auditing the final fixture
+# environment would reject the intentionally retained negative examples.
+NEGATIVE_SPEC_FIXTURES = {
+    "bench/tests/StatementAudit.lean",
+    "bench/tests/ModuleSpecAudit.lean",
+}
 
 def strip_lean_comments(text: str) -> str:
     """Blank out `--` line comments and (nested) `/- ... -/` block comments,
@@ -73,11 +81,10 @@ ns_re = re.compile(r"^\s*namespace\s+([A-Za-z_][A-Za-z0-9_'\.]*)")
 end_named_re = re.compile(r"^\s*end\s+([A-Za-z_][A-Za-z0-9_'\.]*)\s*$")
 end_bare_re = re.compile(r"^\s*end\s*$")
 sec_re = re.compile(r"^\s*section\b")
-kernel_re = re.compile(r":\s*ComputeKernel\b")
 
 
 def parse_decls(lines):
-    """Yield (kind, bare_name, fq_name, is_kernel) tracking namespace nesting."""
+    """Yield declaration names for axiom checks; kernel types are read by Lean."""
     stack = []  # entries: ('ns', name) or ('sec', None/name)
     out = []
     for line in lines:
@@ -96,8 +103,7 @@ def parse_decls(lines):
             kind, name = m.group(1), m.group(2)
             nsparts = [s[1] for s in stack if s[0] == "ns"]
             fq = ".".join(nsparts + [name]) if nsparts else name
-            is_kernel = bool(kernel_re.search(line))
-            out.append((kind, name, fq, is_kernel))
+            out.append((kind, name, fq))
     return out
 
 
@@ -128,7 +134,7 @@ def main():
     # public surface), plus the legacy suffix net (kept as a superset so the
     # gate only ever widens, never narrows)
     headline = []
-    for kind, name, fq, _ in decls:
+    for kind, name, fq in decls:
         if kind == "specification" or (
             kind in ("theorem", "lemma") and name.endswith(HEADLINE_SUFFIXES)):
             headline.append(fq)
@@ -137,11 +143,6 @@ def main():
     # dedupe, keep order
     seen = set()
     axioms_targets = [n for n in headline if not (n in seen or seen.add(n))]
-
-    # spec / kernel discovery for #specNonCircular
-    specs = [fq for kind, name, fq, _ in decls
-             if kind in ("def", "abbrev") and name.endswith("Spec")]
-    kernels = [fq for kind, name, fq, isk in decls if kind == "def" and isk]
 
     # ---- build the temp copy: insert import after the import block ----
     last_import = -1
@@ -157,15 +158,18 @@ def main():
     footer = ["", "-- ==== external trust audit (appended by bench/audit_trust.sh) ===="]
     for t in axioms_targets:
         footer.append(f"#axiomsClean {t}")
-    if specs and kernels:
-        klist = ", ".join(kernels)
-        for s in specs:
-            footer.append(f"#specNonCircular {s} avoiding [{klist}]")
+    # Lean discovers definitions by elaborated result type, rather than a
+    # first-line regex that mistakes `(kernel : ComputeKernel)` parameters
+    # for return types. The command prints its actual coverage inventory.
+    if rel in NEGATIVE_SPEC_FIXTURES:
+        footer.append('#eval IO.println "Spec audit: negative-test fixture; guarded checks executed in source"')
+    else:
+        footer.append("#auditModuleSpecs")
 
     sys.stdout.write("\n".join(new_lines + footer) + "\n")
 
     # a manifest of what we audited, to stderr (for the driver's diagnostics)
-    sys.stderr.write(f"{rel}\taxiomsClean={len(axioms_targets)}\tspecNonCircular={len(specs) if (specs and kernels) else 0}\n")
+    sys.stderr.write(f"{rel}\taxiomsClean={len(axioms_targets)}\tspecNonCircular=Lean-environment\n")
 
 
 if __name__ == "__main__":

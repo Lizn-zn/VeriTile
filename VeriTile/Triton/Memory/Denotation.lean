@@ -278,7 +278,7 @@ end DenoteSlot
 canonical end-to-end allocation of the region table `regs`, run it from the
 flattened canonical state loaded with the slot table `slots` for program
 `pid`, and read one flat output address back — offset `outOff` of region
-`outRegion`. `none` exactly when the (flattened) kernel gets stuck.
+`outRegion`. `none` when projection fails or the flattened kernel gets stuck.
 
 This definition is the audited trust point of a denotation-style
 specification: it packages the canonical allocation (`FlatAlloc.ofList`),
@@ -291,10 +291,13 @@ per-kernel audit surface. -/
 noncomputable def denoteKernel (k : ComputeKernel) (flat : RegionName)
     (regs : List (RegionName × Nat)) (pid : Nat) (slots : List DenoteSlot)
     (outRegion : RegionName) (outOff : Nat) : Option ℝ :=
-  (exec ((FlatAlloc.ofList flat regs).flattenKernel k.toAlgKernel)
-      ((FlatAlloc.ofList flat regs).flattenState
-        (DenoteSlot.state pid slots))).map
-    (fun sF => sF.readMem (FlatAlloc.ofList flat regs).flat
-      ((FlatAlloc.ofList flat regs).addr outRegion outOff))
+  match k.toAlgorithm? with
+  | .error _ => none
+  | .ok alg =>
+    (exec ((FlatAlloc.ofList flat regs).flattenKernel alg)
+        ((FlatAlloc.ofList flat regs).flattenState
+          (DenoteSlot.state pid slots))).map
+      (fun sF => sF.readMem (FlatAlloc.ofList flat regs).flat
+        ((FlatAlloc.ofList flat regs).addr outRegion outOff))
 
 end VeriTile.Triton

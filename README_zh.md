@@ -164,7 +164,10 @@ verso/                     幻灯片 / 概览
 
 ## 验证
 
-- `lake build` —— 类型检查 + 构建完整库与示例
+- `lake build` —— 构建默认的 `VeriTile` 库；独立 benchmark/showcase、GeLU
+  和信任报告需要单独构建
+- `lake build VeriTile VeriTileFull` —— 同时构建完整分析目标和库信任报告
+- `lake env lean bench/examples/VectorAdd.lean` —— 构建后的快速示例检查
 - `scripts/check-artifact.sh` —— `lake build` ∧ 无 `sorry` ∧ 公理白名单 ∧
   kernel-manifest schema ∧ README/文档术语漂移检查
 - `bench/check_ports.sh` —— TritonBench-G 端口逐个构建

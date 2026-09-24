@@ -138,7 +138,8 @@ SPEC_LINE_RE = re.compile(
 # gap keywords (that heuristic misfiled genuine summaries whose docstrings
 # merely *describe* slices or trusted boundaries).
 COVERAGE_ANNOTATION_RE = re.compile(
-    r"coverage:\s*(full_value_candidate|public_summary_with_proof_gap|blocked_summary)"
+    r"coverage:\s*(full_value_candidate|public_summary_with_proof_gap|blocked_summary|"
+    r"precomputed_input_slice|pre_rounding_slice|specialization|projection_only|unreviewed)"
     r"(?:\s+family=([A-Za-z0-9_-]+))?"
     r"(?:\s*--\s*([^\n]*))?")
 
@@ -379,6 +380,8 @@ def family_for(name: str, text: str) -> str:
 
 def evidence_for(text: str, level: str, self_ref: bool = False) -> str:
     lower = text.lower()
+    if level == "unreviewed":
+        return "coverage not explicitly reviewed; no full-kernel claim"
     if level == "blocked_summary":
         for marker in ("blocked_output_summary", "current arithmetic layer", "llrint"):
             if marker in lower:
@@ -401,7 +404,7 @@ def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, st
     2. an explicit `blocked_output_summary` declaration name;
     3. a genuinely self-referential `expected` (the one hard value-gap signal,
        shared with `scripts/spec_sheet.py`);
-    4. otherwise `full_value_candidate`.
+    4. otherwise `unreviewed` (absence of a marker is not coverage evidence).
 
     Docstring prose is deliberately NOT sniffed for gap keywords: honest
     docstrings of genuine summaries routinely *describe* proof slices,
@@ -414,7 +417,7 @@ def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, st
     ann = COVERAGE_ANNOTATION_RE.search(text)
     if ann:
         level = ann.group(1)
-        if level == "full_value_candidate":
+        if level in ("full_value_candidate", "unreviewed", "specialization", "projection_only"):
             family = "none"
         else:
             family = ann.group(2) or family_for(name, text)
@@ -426,9 +429,9 @@ def classify(name: str, text: str, self_ref: bool = False) -> tuple[str, str, st
     elif self_ref:
         level = "public_summary_with_proof_gap"
     else:
-        level = "full_value_candidate"
+        level = "unreviewed"
 
-    if level == "full_value_candidate":
+    if level in ("full_value_candidate", "unreviewed"):
         family = "none"
     else:
         family = family_for(name, text)
@@ -544,7 +547,7 @@ def print_summary(rows: list[Summary]) -> None:
     files = {row.file for row in rows}
     for row in rows:
         by_level[row.coverage_level] = by_level.get(row.coverage_level, 0) + 1
-        if row.coverage_level != "full_value_candidate":
+        if row.blocker_family != "none":
             by_family[row.blocker_family] = by_family.get(row.blocker_family, 0) + 1
 
     print(f"proof-gap manifest summaries: {len(rows)} declarations across {len(files)} files")
@@ -561,6 +564,11 @@ def validate_rows(rows: list[Summary]) -> list[str]:
         "full_value_candidate",
         "public_summary_with_proof_gap",
         "blocked_summary",
+        "unreviewed",
+        "precomputed_input_slice",
+        "pre_rounding_slice",
+        "specialization",
+        "projection_only",
     }
     for row in rows:
         key = (row.file, row.declaration)
@@ -569,11 +577,11 @@ def validate_rows(rows: list[Summary]) -> list[str]:
         seen.add(key)
         if row.coverage_level not in valid_levels:
             errors.append(f"{row.file}::{row.declaration}: bad coverage_level {row.coverage_level}")
-        if row.coverage_level == "full_value_candidate":
+        if row.coverage_level in ("full_value_candidate", "unreviewed", "specialization", "projection_only"):
             if row.issue:
-                errors.append(f"{row.file}::{row.declaration}: full candidate should not link an issue")
+                errors.append(f"{row.file}::{row.declaration}: this coverage category should not link a blocker issue")
             if row.blocker_family != "none":
-                errors.append(f"{row.file}::{row.declaration}: full candidate should use blocker_family=none")
+                errors.append(f"{row.file}::{row.declaration}: this coverage category should use blocker_family=none")
         else:
             if row.blocker_family == "none":
                 errors.append(f"{row.file}::{row.declaration}: proof gap needs blocker_family")

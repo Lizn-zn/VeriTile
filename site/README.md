@@ -4,7 +4,7 @@ Public project homepage and documentation, built with Astro +
 [Starlight](https://starlight.astro.build/).
 Published in English, deployed to
 [lizn-zn.github.io/VeriTile/](https://lizn-zn.github.io/VeriTile/) via the
-`Deploy docs site` GitHub Actions workflow.
+`Website` GitHub Actions workflow.
 
 ## Quick start
 
@@ -15,8 +15,16 @@ Published in English, deployed to
 ```
 
 Requires [Bun](https://bun.sh) for dependency installation and Node.js 22.12+
-for Astro 6. Run from a complete repository checkout: the homepage reads
+for Astro 7. Run from a complete repository checkout: the homepage reads
 the benchmark inventory and vector-add example at build time.
+
+The lockfile uses Astro 7 / Starlight 0.42 / Sharp 0.35. Compatible transitive
+overrides keep devalue, js-yaml, postcss-selector-parser, and smol-toml above
+their patched minimums; remove an override only after the upstream dependency
+graph resolves to patched versions without it. Run `bun audit` and the build
+and link checks after dependency changes. Registry severity is not evidence
+of a deployed exploit: this site serves static output, while build-time input
+processing remains part of the dependency review.
 
 ## Layout
 
@@ -61,8 +69,7 @@ The status pages use the same inventory and link to the full audit records.
 
 The homepage uses warm paper colors, an amber accent, restrained monospace
 typography, and a narrower reading column. Its three main topics follow the
-original deck: Triton embedded in Lean without requiring Lean knowledge to write
-kernels, mathematical correctness and optimization equivalence, and a lemma
+original deck: Triton-style kernel syntax embedded in Lean with explicit translation choices, mathematical correctness and optimization equivalence, and a lemma
 library with agent proof tooling. Each has an accompanying source example or
 workflow; detailed semantics and assumptions live in the documentation.
 FlashAttention and the benchmark audit provide concrete results.

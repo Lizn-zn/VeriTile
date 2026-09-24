@@ -98,7 +98,10 @@ def strip_lean_comments(text: str) -> str:
     return "".join(out)
 
 
-decl = re.compile(r"^[ \t]*axiom[ \t]+([^\s:({\[]+)", re.M)
+decl = re.compile(
+    r"^[ \t]*(?:@\[[^\]]*\]\s*)*"
+    r"(?:(?:private|protected|noncomputable|unsafe|local|scoped)\s+)*"
+    r"axiom\s+([^\s:({\[]+)", re.M)
 rows = set()
 for path in Path(sys.argv[1]).rglob("*.lean"):
     code = strip_lean_comments(path.read_text(encoding="utf-8"))

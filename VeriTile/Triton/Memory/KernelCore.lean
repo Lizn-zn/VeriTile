@@ -99,6 +99,10 @@ named-field family in `Memory/KernelSpec.lean`. -/
 structure UKernelIO where
   /-- The kernel being specified. -/
   kernel : ComputeKernel
+  /-- The contract executes only a successfully projected kernel. The default
+  discharges transparent supported kernels; abstract kernels need a witness. -/
+  projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+    first | rfl | simp [ComputeKernel.toAlgKernel]
   /-- Number of input channels. -/
   nIn : Nat
   /-- Number of output channels. -/

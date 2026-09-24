@@ -21,9 +21,22 @@ bash bench/audit_trust.sh swiglu_fwd         # just named kernels
 bash bench/audit_tritonbench_g.sh
 ```
 
-Each exits `0` iff everything passes. A failure on a `proven` theorem is a
-**real soundness finding** (a `sorry`/axiom leaked in) — fix the proof, never
-weaken the gate.
+Each exits `0` only after every selected file reports a result and all checks
+pass. Invalid concurrency, a launcher failure, and missing/duplicate results
+are gate failures too. An `#axiomsClean` rejection on a `proven` theorem means
+an unapproved axiom reached the proof; an infrastructure failure is reported
+separately and does not establish a bad proof.
+
+The bench audit appends `#auditModuleSpecs`. Lean discovers compute kernels
+from their elaborated result types (including multiline and parameterized
+definitions), and checks every `*Spec` definition against them. Use
+`@[kernel_spec]` to register independent mathematical specs with other names.
+Use `@[kernel_denotation]` on execution denotations, including declarations
+written with `denotation`; these are inventoried separately because they
+intentionally depend on the kernel. Do not use that attribute to exempt a
+mathematical correctness target. The per-file inventory reports kernel, spec,
+and denotation counts; zero independent specs means no independence check was
+performed for that file. Discovered specs without any kernel are an error.
 
 ## Audit one theorem yourself
 
@@ -34,7 +47,7 @@ weaken the gate.
 -- ✓ my_theorem: axiom footprint ⊆ standard base
 ```
 
-The four commands:
+The commands:
 
 | Command | Checks |
 |---|---|
@@ -42,6 +55,7 @@ The four commands:
 | `#stmtSurfaceSubset T ⊆ [a, b, …]` | `T`'s statement mentions no project constant outside the list |
 | `#specNonCircular s avoiding [k, …]` | spec `s`'s definition never references a kernel `k` |
 | `#auditStmt T` | inspection — lists the project constants in `T`'s statement |
+| `#auditModuleSpecs` | discover current-module kernels/specs in Lean, check transitive independence, and report coverage |
 
 ## Add a self-audit to a file
 

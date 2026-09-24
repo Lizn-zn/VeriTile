@@ -357,7 +357,9 @@ def softmaxStableIO (B : Nat) : KernelIO₁ where
 (structure update of `softmaxStableIO` — buffers and windows shared
 verbatim), with the naive kernel plugged in. -/
 def softmaxNaiveIO (B : Nat) : KernelIO₁ :=
-  { softmaxStableIO B with kernel := naiveSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B }
+  { softmaxStableIO B with
+    kernel := naiveSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B
+    projection := by rfl }
 
 /-- **The headline**: naive softmax is equivalent to stable softmax on their
 shared one-input IO signature, for **every** rounding model — see the module

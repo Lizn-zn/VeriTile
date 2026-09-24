@@ -1,7 +1,7 @@
 import VeriTile.Triton
 
 /-!
-# `int8_quantization` — strict per-kernel correctness
+# `int8_quantization` — Q/K precomputed-scale store-slice correctness
 
 `q_kernel_per_block_int8` / `k_kernel_per_block_int8` process a `[BLK, C]` block
 of the query / key matrix into int8: each program loads its block (row-masked by
@@ -12,21 +12,18 @@ pre-scales `x` by `C**-0.5 * 1.44269504`.
 
 ## Scope
 
-This file verifies **the Triton kernels themselves** — the per-program
-`@triton.jit` bodies for both Q and K. The host launch
-(`q_kernel_per_block_int8[grid](...)`, the 2-D grid `((L+BLK-1)//BLK, B)`, the
-host-side `view`/reshape and scale-tensor allocation, the runtime composition of
-per-program writes) is the *trusted boundary*, not a proof obligation. The two
-program ids (`off_blk`, `off_b`) are universally quantified, so the per-program
-statements cover every program of the grid.
+This file proves a **precomputed-scale, pre-rounding store slice**, not full
+value correctness of the original Q/K Triton kernels. The verified
+`per_block_int8_store_slice` reads `ScalePre` and stores real-valued scaled
+inputs. Computing `max(abs(x))/127`, the sign-dependent bias, and the final
+int8 result are outside this value theorem. The transcribed full surfaces
+have separate projection facts; projection alone is not a value proof.
+Host launch, allocation, and composition across programs remain trusted.
 
 ## Proof architecture
 
 ```
 per_block_int8_correctness                       ← TOP THEOREM (perBlockInt8IO ⊨ (value-spec, scale-spec))
-  ├─ q_kernel_per_block_int8_surface_toAlgorithm_supported   full Q surface lowers
-  ├─ k_kernel_per_block_int8_surface_toAlgorithm_supported   full K surface lowers
-  ├─ per_block_int8_scale_compute_store_slice_toAlgorithm_supported  scale-compute surface lowers
   ├─ per_block_int8_flattenOk                    bridge fragment membership
   ├─ per_block_int8_traceSafe                    per-execution lane-wise safety walk
   └─ per_block_int8_region_run                   region-model masked Hoare triple
@@ -38,7 +35,7 @@ per_block_int8_correctness                       ← TOP THEOREM (perBlockInt8IO
 
 The headline is the masked two-output Hoare-triple combinator
 `perBlockInt8IO … ⊨ f` (`Masked2DKernelIO₂ₓ₂.Implements`), stated over a
-symbolic `preScale`, so **one** theorem covers both Python kernels:
+symbolic `preScale`, so one slice theorem covers both pre-scaling choices:
 `preScale = C**-0.5 · 1.44269504` is the Q kernel and `preScale = 1` the K
 kernel.
 
@@ -47,25 +44,19 @@ kernel.
 Arithmetic is over `ℝ`, not bit-accurate IEEE float. Both full Python surfaces
 are transcribed and shown to lower through algorithm erasure (including the
 `x += 0.5 · sign(x)` rounding bias and the fixed-width `(x).to(tl.int8)` cast
-annotation); the bit-accurate effect of the half-ULP bias and of the int8
-saturating cast is **not** numerically modeled — post-erasure all dtypes unify
-to `ℝ`, so `to(tl.int8)` is the identity at the algorithm layer.
+annotation). These projection facts do not prove the original kernels' output
+values. The value theorem concerns the real-valued store slice and omits the
+bias/int8 result.
 
-**The per-block scale is an input, not a computed value, and this is forced.**
-The Python kernels compute `scale = tl.max(tl.abs(x)) / 127.` over the *whole*
-`[BLK, C]` tile, but the `x` load is masked (`offs_m[:, None] < L`) with **no
-`other=`**: at a partial tail block the masked-off lanes hold *uninitialized*
-memory, which VeriTile models as `s.undef`. The reduction therefore reads
-`s.undef`, so the stored scale is **not a function of the block's real inputs**
-— it cannot be given a pure spec in the `⊨` form (whose `f` sees only the
-loaded input windows), and it is a genuine defect of the Python kernel, not of
-the model. Accordingly the verified kernel `per_block_int8_store_slice` takes
-the per-block scale from a separate input buffer `ScalePre`, keeps the original
-row mask, and proves the two writebacks: the quantized value
-`(preScale · X) / scale` at every active lane, and the scalar `scale` at
-`Scale[off_b · scale_stride + off_blk]`. The `max(|x|)/127` computation itself
-is the honest, unclosed blocker; that it *lowers* is recorded by
-`per_block_int8_scale_compute_store_slice_toAlgorithm_supported`.
+**The current proof takes the per-block scale as input.** The Python kernels
+compute `scale = tl.max(tl.abs(x)) / 127.` over the whole `[BLK, C]` tile. Their
+masked load has no `other=` value, so partial-tail behavior needs an explicit
+undefined-lane policy or a full-tile restriction. The IO model's zero `undef`
+pin is a modeling assumption, not a hardware guarantee. This file does not
+prove that scale producer: `per_block_int8_store_slice` reads `ScalePre`, keeps
+the original row mask, and proves the real-valued store `(preScale · X) / scale`
+and the scalar scale writeback. The producer's projection is recorded by
+`per_block_int8_scale_compute_store_slice_toAlgorithm_supported` separately.
 
 `0 < BLK * C` is genuinely forced: the `Scale` store is **unmasked** in the
 kernel, so its safety bound and single-cell frame exclusion are carried by the
@@ -518,7 +509,7 @@ the `[BLK, C]` block holds `perBlockInt8ValSpec … = (preScale · xs j) / ys j`
 the cell `Scale[off_b · scale_stride + off_blk]` holds the scale `ys`, and every
 other memory cell is unchanged.
 
-`preScale` is symbolic, so this one theorem covers **both** Python kernels:
+`preScale` is symbolic, so this one slice theorem represents the pre-scaling choices of both Python kernels:
 `preScale = C**-0.5 · 1.44269504` is `q_kernel_per_block_int8` and
 `preScale = 1` is `k_kernel_per_block_int8`.
 
@@ -530,9 +521,11 @@ store). No separate `0 < C` is needed: the `Lane2D` row-major bijection
 `j ↦ (j / C, j % C)` gets its positivity from the lane itself. The per-block
 scale is an
 **input**, not a computed value — see the module docstring: the Python
-reduction reads uninitialized memory at a partial tail block, so it has no pure
-spec. Proof: `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
-masked triple with the flat-memory bridge side conditions. -/
+reduction and its partial-tail behavior are outside this slice theorem. Proof: `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model
+masked triple with the flat-memory bridge side conditions.
+
+coverage: precomputed_input_slice family=quantization-semantic-followup -- Q/K store slice with ScalePre input; scale reduction and bias/int8 rounding are not proved
+-/
 specification per_block_int8_correctness
     (X ScalePre XInt8 Scale : RegionName)
     (L C BLK scale_stride : Nat) (preScale : ℝ)

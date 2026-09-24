@@ -25,7 +25,10 @@ store's bound and frame exclusion are carried by the lane-`0` gate
 `writeMask2`, which needs a lane) and `output_ptr ≠ output_maxs` (the unmasked
 scalar max store must not alias the masked row store). Proof:
 `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model masked triple
-with the flat-memory bridge side conditions. -/
+with the flat-memory bridge side conditions.
+
+coverage: pre_rounding_slice family=quantization-semantic-followup -- row maximum is computed; CUDA llrint/int8 output rounding is omitted
+-/
 ```
 </details>
 

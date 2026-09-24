@@ -673,6 +673,7 @@ nothing through memory). -/
 def swigluFusedIO (ncols B : Nat) : MaskedKernelIO₂ :=
   { swigluUnfusedIO ncols B with
     kernel := swiglu_fused ⟨"X"⟩ ⟨"Y"⟩ ⟨"OUT"⟩ ncols B
+    projection := by rfl
     scratch := [] }
 
 /-- **The headline**: fused SwiGLU is equivalent to the unfused two-step

@@ -20,7 +20,7 @@
   /* Ink */
   --vt-ink:     #15171B;
   --vt-ink-2:   #3A3F46;
-  --vt-ink-3:   #6B7280;
+  --vt-ink-3:   #505764;
   /* Rules */
   --vt-rule:    #C9BFA9;
   --vt-rule-2:  #B8AC91;
@@ -42,7 +42,7 @@
   --vt-paper-3: #1E2330;
   --vt-ink:     #E8DEC6;
   --vt-ink-2:   #B7AC92;
-  --vt-ink-3:   #7B7565;
+  --vt-ink-3:   #A09A89;
   --vt-rule:    #2A2F3A;
   --vt-rule-2:  #353C49;
   --vt-seal:        #E34A2D;
@@ -304,7 +304,7 @@ html[data-has-hero][data-theme='light'] {
   --vt-paper-3: #DCD6CA;
   --vt-ink: #34332E;
   --vt-ink-2: #57554E;
-  --vt-ink-3: #716C61;
+  --vt-ink-3: #605B51;
   --vt-rule: #DFD9CD;
   --vt-rule-2: #CDC5B7;
   --vt-seal: #936126;
@@ -322,7 +322,7 @@ html[data-has-hero][data-theme='dark'] {
   --vt-paper-3: #36382F;
   --vt-ink: #EAE5DA;
   --vt-ink-2: #C0BCB1;
-  --vt-ink-3: #A09C90;
+  --vt-ink-3: #AAA698;
   --vt-rule: #373A31;
   --vt-rule-2: #505347;
   --vt-seal: #D5AD72;

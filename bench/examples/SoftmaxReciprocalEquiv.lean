@@ -360,7 +360,9 @@ def softmaxDivIO (B : Nat) : KernelIO₁ where
 construction** (structure update of `softmaxDivIO` — buffers and windows
 shared verbatim), with the reciprocal-multiply kernel plugged in. -/
 def softmaxRecipIO (B : Nat) : KernelIO₁ :=
-  { softmaxDivIO B with kernel := softmaxRecipKernel ⟨"x"⟩ ⟨"y"⟩ B }
+  { softmaxDivIO B with
+    kernel := softmaxRecipKernel ⟨"x"⟩ ⟨"y"⟩ B
+    projection := by rfl }
 
 /-- **The headline**: the per-element-divide softmax is equivalent to the
 precomputed-reciprocal softmax on their shared IO signature, for **every**

@@ -86,6 +86,10 @@ def fifthOrderFwdIO (coord_ptr output_ptr : RegionName)
     GroupedMasked2DKernelIO where
   kernel := fifth_order_fwd_surface coord_ptr output_ptr block_size coord_numel
     output_numel col_offset output_stride
+  projection := by
+    obtain ⟨alg, h⟩ := fifth_order_fwd_surface_toAlgorithm_supported coord_ptr
+      output_ptr block_size coord_numel output_numel col_offset output_stride
+    simp only [ComputeKernel.toAlgKernel, h]
   nIn := 3
   nOut := 11
   bufs := [coord_ptr, output_ptr]

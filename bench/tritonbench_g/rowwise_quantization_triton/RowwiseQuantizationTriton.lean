@@ -1,7 +1,7 @@
 import VeriTile.Triton
 
 /-!
-# `rowwise_quantization_triton` — strict per-kernel correctness
+# `rowwise_quantization_triton` — pre-rounding row-slice correctness
 
 `_quantize_rowwise` is a per-row int8 quantizer: program `pid` loads one row of
 `x` (a `P2`-wide tile masked to the first `BLOCK_SIZE` lanes), computes
@@ -11,18 +11,16 @@ CUDA `llrint`, stores the row to `output_ptr`, and writes `max_val` to
 
 ## Scope
 
-This file verifies **the Triton kernel itself** — the per-program `@triton.jit`
-body. The host launch (`_quantize_rowwise[grid](...)`, the grid size
-`x.shape[0]`, the host-side `BLOCK_SIZE`/`P2` choice, and how the runtime
-composes per-program writes into one buffer) is the *trusted boundary*, not a
-proof obligation here. Because `pid` is universally quantified, the per-program
-statement covers every program of the grid.
+This file proves a **pre-rounding slice** of `_quantize_rowwise`. The verified
+kernel computes the masked row maximum and both stores, but the value theorem
+omits CUDA `llrint` and the final int8 result. The faithful surface's projection
+failure is recorded separately. Host launch, allocation, and composition
+across programs remain trusted.
 
 ## Proof architecture
 
 ```
 quantize_rowwise_correctness                     ← TOP THEOREM (quantizeRowwiseIO ⊨ (row-spec, max-spec))
-  ├─ quantize_rowwise_real_surface_toAlgorithm_blocked   faithful surface blocked at erasure (llrint)
   ├─ quantize_rowwise_flattenOk                  bridge fragment membership
   ├─ quantize_rowwise_traceSafe                  per-execution lane-wise safety walk
   └─ quantize_rowwise_region_run                 region-model masked Hoare triple
@@ -485,7 +483,10 @@ store's bound and frame exclusion are carried by the lane-`0` gate
 `writeMask2`, which needs a lane) and `output_ptr ≠ output_maxs` (the unmasked
 scalar max store must not alias the masked row store). Proof:
 `Masked2DKernelIO₂ₓ₂.Implements.intro` assembles the region-model masked triple
-with the flat-memory bridge side conditions. -/
+with the flat-memory bridge side conditions.
+
+coverage: pre_rounding_slice family=quantization-semantic-followup -- row maximum is computed; CUDA llrint/int8 output rounding is omitted
+-/
 specification quantize_rowwise_correctness
     (x_ptr inert output_ptr output_maxs : RegionName)
     (n_elements BLOCK_SIZE P2 : Nat) (hP : 0 < P2)

@@ -481,6 +481,7 @@ kernel: the headline **proves** the kernel's actual addressing matches
 them. -/
 def floatSoftmaxDivIO (B : Nat) : KernelIO₁ where
   kernel := (floatStableSoftmaxKernel ⟨"x"⟩ ⟨"y"⟩ B).eraseDType
+  projection := by simp [ComputeKernel.eraseDType, ComputeKernel.toAlgKernel]
   inp := ⟨"x"⟩
   out := ⟨"y"⟩
   Bin := B
@@ -494,7 +495,8 @@ windows shared verbatim), with the erased reciprocal-multiply kernel
 plugged in. -/
 def floatSoftmaxRecipIO (B : Nat) : KernelIO₁ :=
   { floatSoftmaxDivIO B with
-    kernel := (floatSoftmaxRecipKernel ⟨"x"⟩ ⟨"y"⟩ B).eraseDType }
+    kernel := (floatSoftmaxRecipKernel ⟨"x"⟩ ⟨"y"⟩ B).eraseDType
+    projection := by simp [ComputeKernel.eraseDType, ComputeKernel.toAlgKernel] }
 
 /-- **The headline**: the fp32-annotated per-element-divide softmax and the
 fp32-annotated precomputed-reciprocal softmax, projected through

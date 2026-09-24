@@ -176,7 +176,10 @@ verso/                     Slide deck / overview
 
 ## Verification
 
-- `lake build` — typecheck + build full library and examples
+- `lake build` — build the default `VeriTile` library target; standalone
+  benchmarks/showcases and the GeLU/trust-report target are separate
+- `lake build VeriTile VeriTileFull` — also build the full analysis and library trust report
+- `lake env lean bench/examples/VectorAdd.lean` — quick example smoke check after building
 - `scripts/check-artifact.sh` — `lake build` ∧ `no sorry` ∧ axiom
   whitelist ∧ kernel-manifest schema ∧ README/doc-term drift
 - `bench/check_ports.sh` — per-port build of the TritonBench-G ports

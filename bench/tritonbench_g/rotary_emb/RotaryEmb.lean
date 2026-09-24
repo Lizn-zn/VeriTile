@@ -760,8 +760,11 @@ extents cover the active lanes. -/
 def rotaryStoreIO (kernel : ComputeKernel) (Buf Cos Sin : RegionName)
     (stride_bs stride_h stride_d stride_cosbs stride_cosd stride_sinbs
       stride_sind max_total_len HEAD BLOCK_HALF : Nat)
-    (storeDim : Fin BLOCK_HALF → Nat) : GroupedMasked2DKernelIO where
+    (storeDim : Fin BLOCK_HALF → Nat)
+    (projection : kernel.toAlgorithm? = Except.ok kernel.toAlgKernel := by
+      first | rfl | simp [ComputeKernel.toAlgKernel]) : GroupedMasked2DKernelIO where
   kernel := kernel
+  projection := projection
   nIn := 4
   nOut := 1
   bufs := [Buf, Cos, Sin]

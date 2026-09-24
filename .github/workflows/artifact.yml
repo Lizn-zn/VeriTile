@@ -57,4 +57,15 @@ jobs:
       - name: Check audit and documentation regressions
         run: |
           lake env lean bench/tests/StatementAudit.lean
+          lake env lean bench/tests/KernelIOProjection.lean
+          lake env lean bench/tests/ModuleSpecAudit.lean
+          python3 -m unittest discover -s scripts -p 'test_audit_gates.py'
           python3 -m unittest discover -s scripts -p 'test_doc_api.py'
+
+      - name: Check representative standalone ports after library changes
+        env:
+          CHECK_PORTS_JOBS: 2
+          AUDIT_TRUST_JOBS: 2
+        run: |
+          bash bench/check_ports.sh vector_addition mean_reduction quantize_global
+          bash bench/audit_trust.sh vector_addition mean_reduction quantize_global

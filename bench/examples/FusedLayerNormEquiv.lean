@@ -963,7 +963,8 @@ lengths shared verbatim), with the fused kernel plugged in. Also no
 scratch — the single-pass (M, S) state is register-resident. -/
 def layerNormFusedIO (N rowStride : Nat) (ε : ℝ) : KernelIO₃ :=
   { layerNormTwoPassIO N rowStride ε with
-    kernel := fusedLayerNormKernel ⟨"x"⟩ ⟨"γ"⟩ ⟨"β"⟩ ⟨"y"⟩ N rowStride ε }
+    kernel := fusedLayerNormKernel ⟨"x"⟩ ⟨"γ"⟩ ⟨"β"⟩ ⟨"y"⟩ N rowStride ε
+    projection := by rfl }
 
 /-- **The headline**: two-pass LayerNorm is equivalent to the fused
 single-pass kernel on their shared three-input IO signature, for **every**
@@ -1062,4 +1063,3 @@ trusted statement) the file stops compiling. See
 -- self-referential spec is impossible by construction.)
 
 end VeriTile.Bench.Examples.LayerNorm
-

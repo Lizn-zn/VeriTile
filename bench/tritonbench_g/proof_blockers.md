@@ -10,17 +10,28 @@ The stronger proof-status inventory for #146 lives in
 `proof_gap_manifest.tsv` and is checked by
 `bench/check_proof_gap_manifest.py`. It classifies every current
 `output_summary` declaration and links each remaining non-full proof gap to a
-specific follow-up issue plus a blocker family. The manifest is intentionally conservative:
-`full_value_candidate` means no local proof-gap marker was found in the summary
-context, not that future human review is forbidden from downgrading it.
-The broad #147 quantization bucket has been split. Real-to-int8 cast semantics
-track under #154 and now have an executable DSL/AST semantics path. The
-now-discharged #158 quantization scale/value coupling rows connect the checked
-int8, quantize-copy-kv, grouped quantize-kv-copy, and quantize-kv-transform
-outputs directly to their full Python-shape surfaces. Rows whose local blocker
-is primarily attention, matmul,
-recurrence, reduction, or explicit blocked-summary work track under the
-corresponding family issue.
+specific follow-up issue plus a blocker family. Unannotated declarations are
+`unreviewed`: their checked proofs remain valid, but the inventory makes no
+full-original-kernel coverage claim. `full_value_candidate` now requires an
+explicit `coverage:` annotation and still denotes a candidate for human review.
+
+The inventory distinguishes `specialization`, `precomputed_input_slice`,
+`pre_rounding_slice`, `projection_only`, and `blocked_summary`. These describe
+proof scope separately from axiom cleanliness. For each reviewed headline,
+the annotation's evidence should name the source kernel, mathematical target,
+and any excluded operations.
+
+Known quantization gaps (#158): `int8_quantization` proves a store slice with
+`ScalePre` as input, not the original Q/K scale reduction and rounded int8
+result. `quantize_global` and `rowwise_quantization_triton` prove real-valued
+pre-rounding slices; the faithful CUDA `llrint`/int8 surfaces remain blocked.
+The latter does compute its row maximum. Projection facts for a full surface
+must not be read as value correctness of that surface. Fixed-width cast gaps
+also remain tracked under #154.
+
+The historical completion notes below describe particular proof work. They
+are not explicit coverage reviews for the current declarations; the manifest
+is authoritative about which rows still require review.
 The broad #150 recurrent/cumsum bucket has been split by mechanism:
 the now-discharged `chunk-cumsum-carry-fold` (#185) tracks chunk cumsum
 summaries now connected to full scalar, vector, and chunked forward surfaces,
@@ -84,11 +95,11 @@ The #175 path states and proves the Python test-shape running `max_logic`
 recurrence, #176 carries the Python test-shape masked `Mid_O` load through the
 `AccOut` and `SumExpOut` recurrence step, and #177 connects the Python
 test-shape `Acc` and `SumExp` outputs to the final masked `Out` writeback; all
-three are full-value candidates in `proof_gap_manifest.tsv`.
+three are historically described as full-value candidates (current coverage is unreviewed unless explicitly annotated).
 The broad #148 matmul/dot bucket is now discharged: GEMV, BMM, dequantization,
 IV-dependent matmul, plain matmul, activation-tail, and TMA summaries connect
 their checked outputs directly to full Python-shape surfaces and are
-full-value candidates in `proof_gap_manifest.tsv`.
+historically described as full-value candidates (current coverage is unreviewed unless explicitly annotated).
 The #191 layer-norm backward residual/recompute paths now connect the checked
 Python test-shape outputs to the full backward surface for DX, recomputed Y,
 and partial DW/DB, so the affected `layer_norm_ops.py` summaries are

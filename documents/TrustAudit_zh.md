@@ -20,8 +20,17 @@ bash bench/audit_trust.sh swiglu_fwd         # 只指定 kernel
 bash bench/audit_tritonbench_g.sh
 ```
 
-各自 exit `0` 当且仅当全部通过。一条 `proven` 定理若没通过,那是**真的 soundness
-发现**(有 `sorry`/公理漏进去了)——去修证明,绝不削弱门禁。
+只有每个选定文件都有结果且全部检查通过时才返回 `0`。非法并发参数、启动失败、
+结果缺失或重复也会使门禁失败。`#axiomsClean` 拒绝一条 `proven` 定理表示证明
+依赖了未经允许的公理；基础设施失败会单独报告，不能据此认定证明错误。
+
+bench 审计会追加 `#auditModuleSpecs`，从 Lean 编译后的返回类型发现 kernel，
+支持多行和带参数的声明，并检查所有 `*Spec` 定义。其他名称的数学规格用
+`@[kernel_spec]` 注册。执行语义定义（包括 `denotation` 声明）用
+`@[kernel_denotation]` 标明角色，单独计数；它们有意依赖 kernel，不能与独立数学
+规格混淆，也不能借这个属性豁免数学正确性目标。输出逐文件列出 kernel、规格和
+执行语义数量；独立规格数为零表示该文件没有进行独立性检查。发现规格但没有
+发现 kernel 时检查失败。
 
 ## 自己审一条定理
 
@@ -32,7 +41,7 @@ bash bench/audit_tritonbench_g.sh
 -- ✓ my_theorem: axiom footprint ⊆ standard base
 ```
 
-四个 command:
+可用 command:
 
 | Command | 检查 |
 |---|---|
@@ -40,6 +49,7 @@ bash bench/audit_tritonbench_g.sh
 | `#stmtSurfaceSubset T ⊆ [a, b, …]` | `T` 的陈述不得出现白名单外的项目常量 |
 | `#specNonCircular s avoiding [k, …]` | spec `s` 的定义不得引用 kernel `k` |
 | `#auditStmt T` | 检视 —— 列出 `T` 陈述里的项目常量 |
+| `#auditModuleSpecs` | 在 Lean 环境中发现本模块 kernel/规格，检查传递依赖并报告覆盖情况 |
 
 ## 给一个文件加自审计
 
