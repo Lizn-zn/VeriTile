@@ -21,7 +21,7 @@ The Lean filename is the **CamelCase form** of the directory name (e.g. `vector_
 
 A port goes through three stages, tracked per-kernel in `README.md`:
 
-1. **DSL port** — `<KernelName>.lean` is a **faithful 1:1 transcription** of the upstream `.py` kernel into `triton { ... }` syntax. Allowed mechanical Lean-syntax changes are documented in [`review_criteria.md`](./review_criteria.md). The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Compiles today: 173 / 173 port pairs; 11 of the 184 work directories are README-only scaffolds and are not counted as completed ports.**
+1. **DSL port** — `<KernelName>.lean` follows the **faithful 1:1 transcription** contract for the upstream `.py` kernel in `triton { ... }` syntax. Allowed mechanical Lean-syntax changes are documented in [`review_criteria.md`](./review_criteria.md); explicit translation exceptions are registered in [`completion_audit.md`](./completion_audit.md#remaining-blockers). The port may not compile if it uses DSL surface that has not yet landed — failing-to-compile is the intended signal that the DSL surface needs extension. **Inventory: 173 Python/Lean port pairs; 11 of the 184 work directories are README-only scaffolds.** Compilation and audit evidence is described below.
 2. **Spec** — Real-valued mathematical specification of the kernel's intended output is written.
 3. **Verification** — `ComputeCorrect.Realizes` / `ComputeRefine.Realizes` theorem is proved and registered in `scripts/kernel-manifest.tsv`.
 
@@ -30,23 +30,26 @@ Stage 1 is the verbatim transcription contract; reaching stage 3 (verification) 
 ## Current audit state
 
 The current sweep is tracked in [`completion_audit.md`](./completion_audit.md).
-`bench/check_ports.sh` compiles every Python/Lean port pair and currently
-reports `TritonBench-G ports: 173 ok, 0 fail`. The placeholder scan
-`rg -n "True := by|trivial|sorry|admit" bench/tritonbench_g -g '*.lean'`
-currently reports no matches.
+`bench/check_ports.sh` compiles every Python/Lean port pair and requires
+official comparator replay. The aggregate audit also checks comment-stripped
+sources for placeholder proofs. Completed CI evidence is pinned to a specific
+run and commit in [`coverage-ci.json`](../../site/src/lib/coverage-ci.json);
+it does not certify later revisions or pending runs.
 
 There are no current explicit algorithm-layer `hAlg` blockers. Any future
 proof blockers should be listed in [`proof_blockers.md`](./proof_blockers.md).
 The stronger #146 proof-status audit is tracked in
 [`proof_gap_manifest.tsv`](./proof_gap_manifest.tsv) and checked by
 [`../check_proof_gap_manifest.py`](../check_proof_gap_manifest.py). That
-manifest classifies every public headline theorem (each `*output_summary*`
-declaration plus the spec-sheet-style headline tier per file, so all 173
-kernels are covered) as either a conservative `full_value_candidate`, a
-`public_summary_with_proof_gap` linked to a specific follow-up issue and
-blocker family, or an explicit `blocked_summary`. Classification uses hard
-signals only (explicit `coverage:` docstring annotations, `blocked_*` names,
-self-referential `expected`); docstring prose is not keyword-sniffed.
+manifest covers all 345 headline declarations across 173 ports. The explicit
+2026-09-24 review records 8 `full_value_candidate`, 296 `specialization`,
+37 `precomputed_input_slice`, 3 `pre_rounding_slice`, and 1 `blocked_summary`
+rows. [`coverage_review.json`](./coverage_review.json) records each headline's
+actual scope and checks it against Lean/Python source fingerprints and Python
+function links. Explicit source annotations remain binding; source changes
+require a new review. A candidate label does not certify GPU execution, and
+historical issue links do not imply that the issue is currently open or that
+closing it completed a proof.
 
 ## Build
 
@@ -59,15 +62,18 @@ bench/check_ports.sh
 # mechanical audit gates for the current TritonBench-G sweep
 bench/audit_tritonbench_g.sh
 
-# proof-level classification for every output_summary
+# reviewed scope classification for every headline declaration
 python3 bench/check_proof_gap_manifest.py
 
 # subset by kernel name
 bench/check_ports.sh vector_addition softmax_triton1
 ```
 
-The script runs `lake env lean` against each `<KernelName>.lean` independently, reports per-kernel pass/fail, and exits non-zero on any failure (CI-friendly).
-The audit script wraps this port-build gate with Python/Lean count matching,
+The port-check script elaborates each `<KernelName>.lean` and requires official
+comparator export/replay, reports per-kernel pass/fail, and exits non-zero on
+any failure. The aggregate audit combines compilation, Lean trust/statement
+checks, and comparator replay in `bench/audit_trust.sh`, avoiding a duplicate
+port-build pass. Its other gates include Python/Lean count matching,
 placeholder-proof scanning, correctness-surface scanning, compiled-port README
 status checks, and a documented-scope check for Python `.to(tl.float32)` casts
 that are outside a Lean proof slice. It also rejects Lean-only
