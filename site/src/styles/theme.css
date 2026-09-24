@@ -13,6 +13,9 @@
 
 :root,
 [data-theme='light'] {
+  /* Shared readable sizes; narrow layouts wrap instead of shrinking text. */
+  --vt-text-body: 1rem;
+  --vt-text-small: .875rem;
   /* Paper */
   --vt-paper:   #F2EBDC;
   --vt-paper-2: #EADFC6;
@@ -60,6 +63,8 @@
   --sl-font-system: 'Source Serif 4 Variable', 'Iowan Old Style', 'Palatino', Georgia, serif;
   --sl-font-system-mono: 'IBM Plex Mono', 'JetBrains Mono', ui-monospace, monospace;
   /* CJK fallback layered after the latin stack */
+  --sl-text-2xs: var(--vt-text-small);
+  --sl-text-xs: var(--vt-text-small);
   --sl-text-h1: 2.6rem;
   --sl-text-h2: 1.7rem;
   --sl-text-h3: 1.25rem;
@@ -182,7 +187,7 @@ code, kbd, samp, pre,
   border: 1px solid var(--vt-rule);
   border-radius: 2px;
   padding: 0 0.35em;
-  font-size: 0.88em;
+  font-size: max(var(--vt-text-small), 0.88em);
 }
 
 /* ── Nav & sidebar restyle ─────────────────────────────────────────────── */
@@ -201,7 +206,7 @@ nav.sidebar { background: var(--vt-paper); }
 .sidebar-content details > summary,
 .sidebar-content .group-label > .large {
   font-family: 'Fragment Mono', monospace !important;
-  font-size: 0.72rem !important;
+  font-size: var(--vt-text-small) !important;
   font-weight: 400 !important;
   letter-spacing: 0.14em;
   text-transform: uppercase;
@@ -219,7 +224,7 @@ nav.sidebar { background: var(--vt-paper); }
 starlight-toc nav h2,
 nav.right-sidebar > h2 {
   font-family: 'Fragment Mono', monospace;
-  font-size: 0.7rem;
+  font-size: var(--vt-text-small);
   letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--vt-ink-3);
@@ -247,7 +252,7 @@ nav.right-sidebar > h2 {
   font-family: 'Fragment Mono', monospace;
   font-weight: 400;
   text-transform: uppercase;
-  font-size: 0.72rem;
+  font-size: var(--vt-text-small);
   letter-spacing: 0.1em;
   color: var(--vt-ink-3);
   border-bottom: 1px solid var(--vt-ink-2);

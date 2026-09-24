@@ -112,60 +112,60 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
   .vt-demo { margin-bottom: 3.6rem; }
   .vt-demo-heading { margin-bottom: 1.4rem; }
   .vt-demo-heading h2 { margin: 0; font: 500 clamp(1.1rem, 2.5vw, 1.35rem)/1.5 'IBM Plex Mono', monospace; letter-spacing: -.035em; }
-  .vt-demo-heading p { margin: .5rem 0 0; color: var(--vt-ink-2); font-size: .82rem; line-height: 1.7; }
-  .vt-demo-heading .vt-demo-generality { color: var(--vt-ink-3); font-size: .72rem; }
+  .vt-demo-heading p { margin: .5rem 0 0; color: var(--vt-ink-2); font-size: var(--vt-text-body); line-height: 1.7; }
+  .vt-demo-heading .vt-demo-generality { color: var(--vt-ink-3); font-size: var(--vt-text-small); }
   .vt-demo-frame { border: 1px solid var(--vt-rule-2); border-radius: 4px; overflow: hidden; }
   .vt-demo [hidden] { display: none !important; }
   .vt-demo a { color: var(--vt-seal-ink); text-decoration: none; }
   .vt-demo a:hover { text-decoration: underline; text-underline-offset: .2em; }
   .vt-demo :is(a, button, summary, [tabindex]):focus-visible, .vt-demo :global(pre:focus-visible) { outline: 2px solid var(--vt-seal); outline-offset: -3px; }
   .vt-demo-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: .65rem 1rem; border-bottom: 1px solid var(--vt-rule); background: var(--vt-paper-2); }
-  .vt-demo-filename { font-size: .72rem; white-space: nowrap; }
+  .vt-demo-filename { font-size: var(--vt-text-small); white-space: nowrap; }
   .vt-demo-filename > span { color: var(--vt-seal); margin-right: .3rem; }
   .vt-demo-switch { display: flex; gap: .25rem; }
-  .vt-demo-switch button { min-height: 2.35rem; padding: .4rem .7rem; border: 1px solid transparent; border-radius: 3px; color: var(--vt-ink-2); background: transparent; font: 500 .71rem/1.5 'IBM Plex Mono', monospace; cursor: pointer; }
+  .vt-demo-switch button { min-height: 2.35rem; padding: .4rem .7rem; border: 1px solid transparent; border-radius: 3px; color: var(--vt-ink-2); background: transparent; font: 500 var(--vt-text-small)/1.5 'IBM Plex Mono', monospace; cursor: pointer; }
   .vt-demo-switch button[aria-selected='true'] { background: var(--vt-paper); border-color: var(--vt-rule-2); color: var(--vt-ink); }
   .vt-demo-switch button:hover { color: var(--vt-seal-ink); border-color: var(--vt-rule-2); }
   .vt-demo-body { display: grid; grid-template-columns: minmax(0, 1.6fr) minmax(0, 1fr); }
   .vt-demo-code { min-width: 0; align-self: center; }
-  .vt-demo :global(pre) { margin: 0; background: transparent !important; border: 0; border-radius: 0; font: .75rem/1.95 'IBM Plex Mono', monospace; }
+  .vt-demo :global(pre) { margin: 0; background: transparent !important; border: 0; border-radius: 0; font: var(--vt-text-small)/1.95 'IBM Plex Mono', monospace; }
   .vt-demo :global(code) { font: inherit; }
   .vt-demo-code :global(pre) { padding: 1.5rem 1rem; }
   .vt-demo-code :global(.line:nth-child(6)) { display: inline-block; width: 100%; background: var(--vt-seal-soft); }
   :global(html[data-theme='dark']) .vt-demo :global(.astro-code),
   :global(html[data-theme='dark']) .vt-demo :global(.astro-code span) { color: var(--shiki-dark) !important; }
   .vt-sample { border-left: 1px solid var(--vt-rule); padding: 1.4rem 1rem; }
-  .vt-sample table { width: 100%; border-collapse: collapse; font: .8rem/1.6 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
-  .vt-sample caption { text-align: left; margin-bottom: .9rem; color: var(--vt-ink-3); font-size: .6rem; letter-spacing: .025em; }
-  .vt-sample thead { color: var(--vt-ink-3); font-size: .59rem; }
+  .vt-sample table { width: 100%; border-collapse: collapse; font: var(--vt-text-small)/1.6 'IBM Plex Mono', monospace; font-variant-numeric: tabular-nums; }
+  .vt-sample caption { text-align: left; margin-bottom: .9rem; color: var(--vt-ink-3); font-size: var(--vt-text-small); letter-spacing: .025em; }
+  .vt-sample thead { color: var(--vt-ink-3); font-size: var(--vt-text-small); }
   .vt-sample th { font-weight: 400; text-align: left; white-space: nowrap; }
   .vt-sample th, .vt-sample td { padding: .4rem .2rem; }
   .vt-sample td, .vt-sample thead th:not(:first-child) { text-align: center; }
   .vt-actual { border-top: 1px solid var(--vt-rule); }
   .vt-actual td { color: var(--vt-verified); font-weight: 500; background: var(--vt-success-soft); }
   .vt-expected { color: var(--vt-ink-3); }
-  .vt-sample-result { display: flex; gap: .5rem; margin: .8rem 0 0; color: var(--vt-verified); font-size: .66rem; line-height: 1.7; }
+  .vt-sample-result { display: flex; gap: .5rem; margin: .8rem 0 0; color: var(--vt-verified); font-size: var(--vt-text-small); line-height: 1.7; }
   .vt-sample-result > span { font-size: 1rem; line-height: 1.1; }
   .vt-demo-contract { display: flex; gap: 1rem; align-items: baseline; padding: .8rem 1rem; border-block: 1px solid var(--vt-rule); }
-  .vt-demo-contract > span { color: var(--vt-ink-3); font-size: .58rem; white-space: nowrap; }
-  .vt-demo-contract :global(pre) { min-width: 0; font-size: .72rem; }
+  .vt-demo-contract > span { color: var(--vt-ink-3); font-size: var(--vt-text-small); white-space: nowrap; }
+  .vt-demo-contract :global(pre) { min-width: 0; font-size: var(--vt-text-small); }
   .vt-demo-verdict { display: flex; align-items: flex-start; gap: .7rem; padding: 1.15rem 1rem; }
   .vt-verdict-icon { color: var(--vt-verified); font-size: 1.1rem; }
-  .vt-demo-verdict h3 { margin: 0; color: var(--vt-verified); font-size: .85rem; font-weight: 500; line-height: 1.6; }
-  .vt-demo-verdict p { margin: .3rem 0 0; font-size: .77rem; color: var(--vt-ink-2); line-height: 1.7; }
-  .vt-record-label { display: flex; flex-direction: column; gap: .15rem; margin-left: auto; flex-shrink: 0; text-align: right; color: var(--vt-ink-3); font-size: .61rem; line-height: 1.8; }
+  .vt-demo-verdict h3 { margin: 0; color: var(--vt-verified); font-size: var(--vt-text-body); font-weight: 500; line-height: 1.6; }
+  .vt-demo-verdict p { margin: .3rem 0 0; font-size: var(--vt-text-body); color: var(--vt-ink-2); line-height: 1.7; }
+  .vt-record-label { display: flex; flex-direction: column; gap: .15rem; margin-left: auto; flex-shrink: 0; text-align: right; color: var(--vt-ink-3); font-size: var(--vt-text-small); line-height: 1.8; }
   [data-variant='subtract'] :is(.vt-demo-verdict h3, .vt-verdict-icon, .vt-sample-result, .vt-actual td) { color: var(--vt-error); }
   [data-variant='subtract'] .vt-actual td { background: var(--vt-error-soft); }
   [data-variant='subtract'] .vt-demo-code :global(.line:nth-child(6)) { background: var(--vt-error-soft); }
-  .vt-proof-details { border-top: 1px solid var(--vt-rule); font-size: .75rem; }
+  .vt-proof-details { border-top: 1px solid var(--vt-rule); font-size: var(--vt-text-small); }
   .vt-proof-details summary { cursor: pointer; padding: .85rem 1rem; color: var(--vt-ink-2); }
   .vt-proof-details summary:hover { color: var(--vt-seal-ink); }
-  .vt-proof-content { padding: 0 1rem 1rem; line-height: 1.8; color: var(--vt-ink-2); }
+  .vt-proof-content { font-size: var(--vt-text-body); padding: 0 1rem 1rem; line-height: 1.8; color: var(--vt-ink-2); }
   .vt-proof-content :global(pre) { padding: .8rem; background: var(--vt-paper-2) !important; overflow-x: auto; }
-  .vt-proof-content h4 { margin: 1rem 0 .5rem; font-size: .75rem; font-weight: 500; }
+  .vt-proof-content h4 { margin: 1rem 0 .5rem; font-size: var(--vt-text-small); font-weight: 500; }
   .vt-diagnostics { max-height: 17rem; white-space: pre; }
-  .vt-demo-links { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .7rem; margin-top: .9rem; font-size: .7rem; }
-  .vt-no-script { padding: 1rem; font-size: .75rem; }
+  .vt-demo-links { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .7rem; margin-top: .9rem; font-size: var(--vt-text-small); }
+  .vt-no-script { padding: 1rem; font-size: var(--vt-text-small); }
   .vt-sr-only { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip: rect(0,0,0,0); white-space: nowrap; border: 0; }
   @media (max-width: 48rem) {
     .vt-demo-body { grid-template-columns: 1fr; }
@@ -178,7 +178,6 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
     .vt-demo-contract { flex-direction: column; gap: .3rem; }
     .vt-demo-toolbar { flex-wrap: wrap; gap: .6rem; }
     .vt-demo-switch { margin-left: auto; }
-    .vt-demo-code :global(pre) { font-size: .72rem; }
   }
   @media (max-width: 25rem) { .vt-demo-switch { margin-left: 0; width: 100%; } .vt-demo-switch button { flex: 1; } }
 </style>

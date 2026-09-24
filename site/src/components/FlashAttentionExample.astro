@@ -152,12 +152,12 @@ const tabs = [
 
 <style>
   .fa-example { margin-top: 1.6rem; border: 1px solid var(--vt-rule-2); border-radius: 4px; scroll-margin-top: 5rem; }
-  .fa-example > summary { display: flex; justify-content: space-between; align-items: center; gap: 1rem; cursor: pointer; padding: 1rem 1.2rem; list-style: none; background: var(--vt-paper-2); border-radius: 4px; }
+  .fa-example > summary { display: flex; flex-wrap: wrap; justify-content: space-between; align-items: center; gap: 1rem; cursor: pointer; padding: 1rem 1.2rem; list-style: none; background: var(--vt-paper-2); border-radius: 4px; }
   .fa-example > summary::-webkit-details-marker { display: none; }
-  .fa-summary { display: flex; align-items: baseline; flex-wrap: wrap; gap: .2rem 1rem; }
-  .fa-summary strong { font-weight: 500; color: var(--vt-ink); font-size: .8rem; }
-  .fa-summary > span { font-size: .67rem; color: var(--vt-ink-3); }
-  .fa-action { display: flex; align-items: center; gap: .8rem; color: var(--vt-seal-ink); font-size: .7rem; white-space: nowrap; }
+  .fa-summary { display: flex; align-items: baseline; flex-wrap: wrap; min-width: 0; overflow-wrap: anywhere; gap: .2rem 1rem; }
+  .fa-summary strong { font-weight: 500; color: var(--vt-ink); font-size: var(--vt-text-body); }
+  .fa-summary > span { font-size: var(--vt-text-small); color: var(--vt-ink-3); }
+  .fa-action { display: flex; align-items: center; gap: .8rem; color: var(--vt-seal-ink); font-size: var(--vt-text-small); white-space: nowrap; }
   .fa-toggle { font-size: 1.1rem; line-height: 1; }
   .fa-example .when-open, .fa-example[open] .when-closed { display: none; }
   .fa-example[open] .when-open { display: inline; }
@@ -169,58 +169,55 @@ const tabs = [
   .fa-reader [hidden] { display: none !important; }
   .fa-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 1rem; padding: 0 1.2rem; border-bottom: 1px solid var(--vt-rule); }
   .fa-tabs { display: flex; gap: 1.3rem; }
-  .fa-tabs button { min-height: 3.2rem; padding: .8rem 0; border: 0; border-bottom: 2px solid transparent; color: var(--vt-ink-3); background: transparent; font: 500 .75rem/1.5 'IBM Plex Mono', monospace; cursor: pointer; }
+  .fa-tabs button { min-height: 3.2rem; padding: .8rem 0; border: 0; border-bottom: 2px solid transparent; color: var(--vt-ink-3); background: transparent; font: 500 var(--vt-text-small)/1.5 'IBM Plex Mono', monospace; cursor: pointer; }
   .fa-tabs button[aria-selected='true'] { color: var(--vt-seal-ink); border-bottom-color: var(--vt-seal); }
   .fa-tabs button:hover { color: var(--vt-ink); }
-  .fa-variant { font-size: .75rem; color: var(--vt-ink-3); }
-  .fa-scope { margin: 0; padding: .8rem 1.2rem; background: var(--vt-paper-2); color: var(--vt-ink-3); font-size: .8rem; }
-  .fa-panel-title { margin: 1rem 1.2rem 0; font-size: .85rem; }
-  [data-ready] .fa-panel-title { display: none; }
+  .fa-variant { font-size: var(--vt-text-small); color: var(--vt-ink-3); }
+  .fa-scope { margin: 0; padding: .8rem 1.2rem; background: var(--vt-paper-2); color: var(--vt-ink-3); font-size: var(--vt-text-body); }
+  .fa-panel-title { margin: 1rem 1.2rem 0; font-size: var(--vt-text-body); }
+  [data-ready] .fa-panel-title { font-size: var(--vt-text-body); display: none; }
   .fa-kernel-pair, .fa-spec-pair { display: grid; grid-template-columns: minmax(0, 1.7fr) minmax(0, 1fr); gap: 1.5rem; padding: 1.2rem; }
   .fa-kernel-pair > div, .fa-spec-pair > div { min-width: 0; }
-  .fa-reader h4 { margin: 0 0 .6rem; color: var(--vt-ink); font-size: .74rem; font-weight: 500; }
-  .fa-reader .fa-caption { margin: .4rem 0 .7rem; font-size: .75rem; color: var(--vt-ink-3); overflow-wrap: anywhere; }
-  .fa-reader .fa-code :global(pre) { margin: 0; padding: .8rem; background: var(--vt-paper-2) !important; border: 0; border-radius: 0; overflow: auto; font: .7rem/1.95 'IBM Plex Mono', monospace; }
+  .fa-reader h4 { margin: 0 0 .6rem; color: var(--vt-ink); font-size: var(--vt-text-small); font-weight: 500; }
+  .fa-reader .fa-caption { margin: .4rem 0 .7rem; font-size: var(--vt-text-small); color: var(--vt-ink-3); overflow-wrap: anywhere; }
+  .fa-reader .fa-code :global(pre) { margin: 0; padding: .8rem; background: var(--vt-paper-2) !important; border: 0; border-radius: 0; overflow: auto; font: var(--vt-text-small)/1.95 'IBM Plex Mono', monospace; }
   .fa-reader :global(code) { font: inherit; }
   :global(html[data-theme='dark']) .fa-reader :global(.astro-code),
   :global(html[data-theme='dark']) .fa-reader :global(.astro-code span) { color: var(--shiki-dark) !important; }
-  .fa-explanation { margin: 0; border-left: 1px solid var(--vt-rule); padding-left: 1.2rem; font-size: .7rem; line-height: 1.8; }
+  .fa-explanation { margin: 0; border-left: 1px solid var(--vt-rule); padding-left: 1.2rem; font-size: var(--vt-text-body); line-height: 1.8; }
   .fa-explanation > div + div { margin-top: 1rem; }
   .fa-explanation dt { color: var(--vt-ink); font-weight: 500; }
   .fa-explanation dd { margin: .3rem 0 0; color: var(--vt-ink-2); }
   .fa-reference .fa-formula { margin: .8rem 0 1.2rem; color: var(--vt-seal-ink); font-size: 1.1rem; line-height: 1.6; letter-spacing: -.035em; }
   .fa-details-group { padding: 0 1.2rem 1.2rem; }
-  .fa-code-details { border-top: 1px solid var(--vt-rule); font-size: .7rem; }
+  .fa-code-details { border-top: 1px solid var(--vt-rule); font-size: var(--vt-text-small); }
   .fa-code-details > summary { padding: .75rem 0; cursor: pointer; color: var(--vt-ink-2); }
   .fa-code-details > summary:hover, .fa-source > summary:hover { color: var(--vt-seal-ink); }
-  .fa-code-details > summary > span, .fa-source > summary > span:last-child { float: right; color: var(--vt-ink-3); font-size: .62rem; }
+  .fa-code-details > summary > span, .fa-source > summary > span:last-child { float: right; color: var(--vt-ink-3); font-size: var(--vt-text-small); }
   .fa-reader .fa-code-details :global(pre) { max-height: 28rem; margin-bottom: .8rem; }
   .fa-proof { padding: 1.2rem; }
-  .fa-proof > p { margin: .5rem 0 .8rem; font-size: .72rem; color: var(--vt-ink-2); }
-  .fa-reader .fa-support-title { margin: .1rem 0 .7rem; color: var(--vt-ink-3); font-size: .65rem; font-weight: 400; }
+  .fa-proof > p { margin: .5rem 0 .8rem; font-size: var(--vt-text-body); color: var(--vt-ink-2); }
+  .fa-reader .fa-support-title { margin: .1rem 0 .7rem; color: var(--vt-ink-3); font-size: var(--vt-text-small); font-weight: 400; }
   .fa-source { border-top: 1px solid var(--vt-rule); }
-  .fa-source > summary { padding: .85rem 1.2rem; cursor: pointer; color: var(--vt-ink-2); font-size: .7rem; }
+  .fa-source > summary { padding: .85rem 1.2rem; cursor: pointer; color: var(--vt-ink-2); font-size: var(--vt-text-small); }
   .fa-reader .fa-source > p { margin: 0 1.2rem .8rem; }
   .fa-reader .fa-source :global(pre) { max-height: 32rem; padding: 1.2rem; }
-  .fa-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .7rem; border-top: 1px solid var(--vt-rule); padding: .8rem 1.2rem; color: var(--vt-ink-3); font-size: .64rem; }
-  .fa-footer a { color: var(--vt-seal-ink); text-decoration: none; font-size: .64rem; }
+  .fa-footer { display: flex; justify-content: space-between; flex-wrap: wrap; gap: .7rem; border-top: 1px solid var(--vt-rule); padding: .8rem 1.2rem; color: var(--vt-ink-3); font-size: var(--vt-text-small); }
+  .fa-footer a { color: var(--vt-seal-ink); text-decoration: none; font-size: var(--vt-text-small); }
   .fa-footer a:hover { text-decoration: underline; text-underline-offset: .2em; }
   @media (max-width: 48rem) {
     .fa-example > summary { padding: .9rem 1rem; }
     .fa-summary { flex-direction: column; gap: .2rem; }
     .fa-toolbar { flex-wrap: wrap; padding-inline: 1rem; gap: 0 .7rem; }
     .fa-tabs { gap: 1rem; }
-    .fa-tabs button { font-size: .68rem; }
     .fa-variant { padding-bottom: .5rem; }
     .fa-kernel-pair, .fa-spec-pair { grid-template-columns: 1fr; padding: 1rem; gap: 1rem; }
     .fa-explanation { border-left: 0; border-top: 1px solid var(--vt-rule); padding: 1rem 0 0; }
     .fa-scope, .fa-proof, .fa-details-group, .fa-footer, .fa-source > summary { padding-inline: 1rem; }
-    .fa-summary strong { font-size: .73rem; }
-    .fa-action { font-size: .65rem; gap: .5rem; }
+    .fa-action { gap: .5rem; }
   }
   @media (max-width: 25rem) {
     .fa-tabs { width: 100%; justify-content: space-between; }
-    .fa-variant { font-size: .59rem; }
     .fa-example > summary { gap: .6rem; }
     .fa-source > summary > span:last-child { float: none; margin-left: .6rem; }
   }

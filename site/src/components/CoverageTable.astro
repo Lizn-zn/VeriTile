@@ -128,9 +128,9 @@ const counts = Object.entries(coverageLabels).map(([key, label]) => ({
   .coverage-scroll th[scope='row'] { font-family: inherit; text-transform: none; letter-spacing: normal; font-size: inherit; font-weight: 400; overflow-wrap: anywhere; }
   td p { margin-block: .5rem; }
   .coverage-theorem, .coverage-numeric { display: block; margin-top: .65rem; }
-  .coverage-numeric { color: var(--vt-ink-2); font-size: .85rem; }
+  .coverage-numeric { color: var(--vt-ink-2); font-size: var(--vt-text-small); }
   summary { cursor: pointer; padding-block: .35rem; }
-  pre { max-width: 44rem; max-height: 32rem; overflow: auto; font-size: .85rem; white-space: pre; background: var(--vt-paper-2); padding: .75rem; }
+  pre { max-width: 44rem; max-height: 32rem; overflow: auto; font-size: var(--vt-text-small); white-space: pre; background: var(--vt-paper-2); padding: .75rem; }
   tr:target { outline: 2px solid var(--vt-seal-ink); outline-offset: -2px; scroll-margin-top: 5rem; }
   [hidden] { display: none !important; }
   :focus-visible { outline: 2px solid var(--vt-seal-ink); outline-offset: 3px; }

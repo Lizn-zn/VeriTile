@@ -142,9 +142,9 @@ const source = (path: string) => `${github}/blob/main/${path}`;
 </script>
 
 <style>
-  .vt-story { font-size: .8rem; line-height: 1.8; }
+  .vt-story { font-size: var(--vt-text-body); line-height: 1.8; }
   .vt-story * { box-sizing: border-box; }
-  .vt-story a { color: var(--vt-seal-ink); text-decoration: none; font-size: .73rem; }
+  .vt-story a { color: var(--vt-seal-ink); text-decoration: none; font-size: var(--vt-text-small); }
   .vt-story a:hover { text-decoration: underline; text-underline-offset: .2em; }
   .vt-story :is(a, summary):focus-visible, .vt-story :global(pre:focus-visible) { outline: 2px solid var(--vt-seal); outline-offset: 3px; }
   .story-section { padding: 2.6rem 0; border-top: 1px solid var(--vt-rule); scroll-margin-top: 5rem; }
@@ -155,94 +155,94 @@ const source = (path: string) => `${github}/blob/main/${path}`;
   p { margin: .6rem 0; color: var(--vt-ink-2); }
   header p { max-width: 49rem; margin-bottom: 0; }
   .language-emphasis { text-decoration: underline; text-decoration-thickness: 1px; text-underline-offset: .2em; }
-  .vt-story :global(pre) { background: transparent !important; margin: 0; font: .72rem/1.9 'IBM Plex Mono', monospace; }
+  .vt-story :global(pre) { background: transparent !important; margin: 0; font: var(--vt-text-small)/1.9 'IBM Plex Mono', monospace; }
   .vt-story :global(code) { font: inherit; }
   :global(html[data-theme='dark']) .vt-story :global(.astro-code),
   :global(html[data-theme='dark']) .vt-story :global(.astro-code span) { color: var(--shiki-dark) !important; }
   .language-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 1.25rem; }
   .language-pair > div { min-width: 0; border: 1px solid var(--vt-rule-2); border-radius: 3px; overflow: hidden; }
   .language-code-heading { padding: .65rem 1rem; background: var(--vt-paper-2); border-bottom: 1px solid var(--vt-rule); }
-  .language-code-heading h3 { margin: 0; font-size: .64rem; color: var(--vt-ink); letter-spacing: .045em; }
-  .language-code-heading p { margin: .2rem 0 0; font-size: .64rem; color: var(--vt-ink-3); }
+  .language-code-heading h3 { margin: 0; font-size: var(--vt-text-small); color: var(--vt-ink); letter-spacing: .045em; }
+  .language-code-heading p { margin: .2rem 0 0; font-size: var(--vt-text-small); color: var(--vt-ink-3); }
   .language-pair :global(pre) { padding: 1rem; }
   .source-caption { display: flex; flex-wrap: wrap; align-items: baseline; justify-content: space-between; gap: .2rem 1.2rem; margin-top: .6rem; }
-  .source-caption p { font-size: .66rem; color: var(--vt-ink-3); }
-  .source-caption a { white-space: nowrap; font-size: .66rem; }
+  .source-caption p { font-size: var(--vt-text-small); color: var(--vt-ink-3); }
+  .source-caption a { white-space: nowrap; font-size: var(--vt-text-small); }
   .source-links { display: flex; flex-wrap: wrap; gap: .5rem 1.2rem; }
-  .scope-note { color: var(--vt-ink-3); font-size: .65rem; }
+  .scope-note { color: var(--vt-ink-3); font-size: var(--vt-text-small); }
   .inline-links { display: flex; flex-wrap: wrap; gap: .6rem 1.6rem; margin-top: .7rem; }
   .proof-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.25rem; }
   .proof-card { display: grid; grid-template-rows: subgrid; grid-row: span 7; row-gap: 0; min-width: 0; padding: 1.2rem; border: 1px solid var(--vt-rule-2); border-radius: 3px; }
-  .proof-description { margin: .6rem 0 1.2rem; font-size: .78rem; }
+  .proof-description { margin: .6rem 0 1.2rem; font-size: var(--vt-text-body); }
   .proof-relation { display: flex; align-items: center; margin-bottom: 1.2rem; padding: 1rem; background: var(--vt-paper-2); border-radius: 3px; color: var(--vt-ink); font-size: .9rem; line-height: 1.8; }
   .proof-relation code > span { white-space: nowrap; }
   .relation-operator { color: var(--vt-seal-ink); }
   .proof-criteria { display: grid; grid-template-rows: subgrid; grid-row: span 2; row-gap: 0; margin: 0; }
   .proof-criteria > div { padding-bottom: 1rem; }
-  .proof-criteria dt { color: var(--vt-ink); font-size: .73rem; font-weight: 500; }
-  .proof-criteria dd { margin: .3rem 0 0; color: var(--vt-ink-2); font-size: .73rem; }
+  .proof-criteria dt { color: var(--vt-ink); font-size: var(--vt-text-small); font-weight: 500; }
+  .proof-criteria dd { margin: .3rem 0 0; color: var(--vt-ink-2); font-size: var(--vt-text-body); }
   .proof-example { border-top: 1px solid var(--vt-rule); padding-top: 1rem; }
-  .proof-example h4 { margin: 0; font-size: .73rem; font-weight: 500; color: var(--vt-ink); }
+  .proof-example h4 { margin: 0; font-size: var(--vt-text-small); font-weight: 500; color: var(--vt-ink); }
   .proof-example h4 span { color: var(--vt-ink-3); font-weight: 400; }
-  .proof-example > p { margin: .4rem 0 0; font-size: .7rem; }
+  .proof-example > p { margin: .4rem 0 0; font-size: var(--vt-text-body); }
   .proof-visual { display: flex; align-items: center; min-height: 5.75rem; padding: 1rem; background: var(--vt-paper-2); border-radius: 3px; }
-  .proof-details { margin: .9rem 0; font-size: .68rem; }
+  .proof-details { margin: .9rem 0; font-size: var(--vt-text-small); }
   .proof-details summary { cursor: pointer; color: var(--vt-ink-2); }
   .proof-details .proof-visual { margin-top: .8rem; }
-  .proof-details p { margin: .6rem 0; }
-  .kicker { margin: 0 0 .4rem; font-size: .6rem; letter-spacing: .025em; color: var(--vt-seal-ink); }
-  .proof-source { align-self: end; padding-top: .2rem; font-size: .68rem; }
+  .proof-details p { margin: .6rem 0; font-size: var(--vt-text-body); }
+  .kicker { margin: 0 0 .4rem; font-size: var(--vt-text-small); letter-spacing: .025em; color: var(--vt-seal-ink); }
+  .proof-source { align-self: end; padding-top: .2rem; font-size: var(--vt-text-small); }
   #proof-relation-note { margin: .8rem 0 0; }
   .formula { display: flex; flex-direction: column; margin: 0; color: var(--vt-ink); font-size: 1.1rem; letter-spacing: -.04em; }
   .try-example { margin-top: 1.8rem; border-block: 1px solid var(--vt-rule); }
   .try-example > summary { cursor: pointer; padding: .95rem 0; }
-  .try-example > summary > span:first-child { font-weight: 500; color: var(--vt-ink); font-size: .78rem; }
-  .try-example > summary > span:last-child { display: inline; margin-left: 1rem; font-size: .67rem; color: var(--vt-ink-3); }
+  .try-example > summary > span:first-child { font-weight: 500; color: var(--vt-ink); font-size: var(--vt-text-small); }
+  .try-example > summary > span:last-child { display: inline; margin-left: 1rem; font-size: var(--vt-text-small); color: var(--vt-ink-3); }
   .try-example > div { padding-top: 1rem; }
   .try-example :global(.vt-demo) { margin-bottom: 1.5rem; }
   .agent-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 0 1.25rem; }
   .agent-panel { display: grid; grid-template-rows: subgrid; grid-row: span 3; row-gap: 0; min-width: 0; padding: 1.2rem; border: 1px solid var(--vt-rule-2); border-radius: 3px; }
-  .agent-description { margin: .6rem 0 1.2rem; font-size: .73rem; }
+  .agent-description { margin: .6rem 0 1.2rem; font-size: var(--vt-text-body); }
   .lemma-groups { list-style: none; margin: 0; padding: 0; }
   .lemma-groups li { padding: .9rem 0; border-top: 1px solid var(--vt-rule); }
   .lemma-groups li:first-child { padding-top: 0; border-top: 0; }
   .lemma-groups li:last-child { padding-bottom: 0; }
-  .agent-panel h4 { margin: 0; font-size: .73rem; font-weight: 500; color: var(--vt-ink); }
+  .agent-panel h4 { margin: 0; font-size: var(--vt-text-small); font-weight: 500; color: var(--vt-ink); }
   .lemma-groups a { color: var(--vt-ink); }
   .lemma-groups a > span { color: var(--vt-seal-ink); }
-  .lemma-groups p { margin: .3rem 0 0; font-size: .7rem; }
+  .lemma-groups p { margin: .3rem 0 0; font-size: var(--vt-text-body); }
   .proof-process { align-self: start; padding: 1rem; background: var(--vt-paper-2); border-radius: 3px; }
-  .process-input { margin: 0; text-align: center; color: var(--vt-ink); font-size: .7rem; }
+  .process-input { margin: 0; text-align: center; color: var(--vt-ink); font-size: var(--vt-text-small); }
   .process-arrow { display: block; margin: .4rem 0; text-align: center; color: var(--vt-ink-3); }
   .agent-cycle { display: grid; grid-template-columns: 1fr 1fr; gap: 1.5rem; list-style: none; margin: 0; padding: 0; }
   .agent-cycle li { position: relative; min-width: 0; padding: .75rem; background: var(--vt-paper); border: 1px solid var(--vt-rule); border-radius: 3px; }
   .agent-cycle li + li::before { content: '→'; position: absolute; top: .65rem; left: -1.25rem; color: var(--vt-seal-ink); }
-  .agent-cycle h4 { font-size: .68rem; }
-  .agent-cycle p { margin: .3rem 0 0; font-size: .65rem; }
-  .process-feedback { display: flex; align-items: center; gap: .4rem; margin: .6rem 0 1rem; color: var(--vt-seal-ink); font-size: .6rem; }
+  .agent-cycle h4 { font-size: var(--vt-text-small); }
+  .agent-cycle p { margin: .3rem 0 0; font-size: var(--vt-text-small); }
+  .process-feedback { display: flex; align-items: center; gap: .4rem; margin: .6rem 0 1rem; color: var(--vt-seal-ink); font-size: var(--vt-text-small); }
   .process-feedback > span { font-size: 1rem; }
   .process-output { padding-top: .8rem; border-top: 1px solid var(--vt-rule); }
-  .process-output > span { color: var(--vt-ink-3); font-size: .55rem; letter-spacing: .025em; }
-  .process-output p { display: flex; align-items: baseline; gap: .5rem; margin: .2rem 0 0; color: var(--vt-ink); font-size: .75rem; }
+  .process-output > span { color: var(--vt-ink-3); font-size: var(--vt-text-small); letter-spacing: .025em; }
+  .process-output p { display: flex; align-items: baseline; gap: .5rem; margin: .2rem 0 0; color: var(--vt-ink); font-size: var(--vt-text-small); }
   .process-output p > span { color: var(--vt-verified); }
   .results-pair { display: grid; grid-template-columns: 1.45fr 1fr; gap: 2.4rem; }
   .attention-formula { margin: 1.2rem 0; color: var(--vt-seal-ink); font-size: 1.5rem; letter-spacing: -.035em; }
-  .attention-parts { display: flex; flex-wrap: wrap; gap: .45rem 1.1rem; list-style: none; padding: 0; margin: 0 0 1rem; font-size: .68rem; color: var(--vt-ink-2); }
+  .attention-parts { display: flex; flex-wrap: wrap; gap: .45rem 1.1rem; list-style: none; padding: 0; margin: 0 0 1rem; font-size: var(--vt-text-small); color: var(--vt-ink-2); }
   .attention-parts span { color: var(--vt-verified); margin-right: .4rem; }
   .attention > a { display: inline-block; margin-top: .5rem; }
   .corpus { border-left: 1px solid var(--vt-rule); padding-left: 1.6rem; }
-  .corpus h3 { font-size: .8rem; }
+  .corpus h3 { font-size: var(--vt-text-small); }
   .corpus-count { display: flex; align-items: baseline; gap: .7rem; margin: .7rem 0 0; }
   .corpus-count strong { color: var(--vt-ink); font-weight: 500; font-size: 2.8rem; line-height: 1.1; letter-spacing: -.07em; }
-  .corpus-count > span { font-size: .72rem; color: var(--vt-ink-3); }
-  .count-label { margin: .4rem 0 .9rem; font-size: .65rem; }
+  .corpus-count > span { font-size: var(--vt-text-small); color: var(--vt-ink-3); }
+  .count-label { margin: .4rem 0 .9rem; font-size: var(--vt-text-small); }
   .corpus-grid { display: grid; grid-template-columns: repeat(23, 1fr); gap: 3px; }
   .corpus-grid span { aspect-ratio: 1; background: var(--vt-paper-3); }
   .corpus-grid .paired { background: var(--vt-seal); opacity: .6; }
-  .statement-count { font-size: .7rem; margin-top: 1rem; }
+  .statement-count { font-size: var(--vt-text-small); margin-top: 1rem; }
   .statement-count strong { font-weight: 500; color: var(--vt-ink); }
-  .corpus > p:not(.corpus-count, .scope-note, .statement-count) { font-size: .7rem; }
-  .corpus > a { display: block; margin-top: .55rem; font-size: .69rem; }
+  .corpus > p:not(.corpus-count, .scope-note, .statement-count) { font-size: var(--vt-text-body); }
+  .corpus > a { display: block; margin-top: .55rem; font-size: var(--vt-text-small); }
   .all-examples { display: inline-block; margin-top: 1rem; }
   @media (max-width: 48rem) {
     .story-section { padding-block: 2rem; }
@@ -258,12 +258,12 @@ const source = (path: string) => `${github}/blob/main/${path}`;
   @media (min-width: 40rem) and (max-width: 48rem) {
     .language-pair { gap: .9rem; }
     .proof-pair, .agent-pair { column-gap: .9rem; }
-    .language-pair :global(pre) { padding: 1rem .75rem; font-size: .66rem; }
+    .language-pair :global(pre) { padding: 1rem .75rem; }
     .language-code-heading { padding-inline: .75rem; }
     .proof-card, .agent-panel { padding: 1rem .75rem; }
     .proof-process { padding: .75rem; }
     .agent-cycle li { padding: .55rem; }
-    .proof-relation { padding: .75rem; font-size: .8rem; }
+    .proof-relation { padding: .75rem; }
     .proof-visual { padding: .75rem; }
     .formula { font-size: 1rem; }
   }

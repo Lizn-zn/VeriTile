@@ -244,3 +244,9 @@ runs. Building the coverage table does not replay proofs.
 checked DSL/IO contract, full proof, trust checks, and rejected mutation. Its
 code excerpts are extracted from the executable `bench/examples/VectorAdd.lean`
 by `src/lib/vector-add-tutorial.ts`; missing anchors fail the site build.
+
+Typography uses `--vt-text-body` (1rem) for reading paragraphs and
+`--vt-text-small` (0.875rem) for supporting text, controls, and code. With the
+browser's default root size these are 16px and 14px; they scale with user font
+preferences. Mobile layouts wrap or stack content rather than shrinking type.
+Starlight's small text tokens and inline code use the same minimum size.
