@@ -1510,34 +1510,6 @@ per-channel-shape skin's degenerate case is. -/
 
 section IOFace
 
-/-- Cell-level frame of a masked scatter (private copy — `bench` files are
-standalone). -/
-private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
-    (R : RegionName) (off : Nat) :
-    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
-      ∀ s : BlockState,
-        ((l.foldl (fun acc k =>
-            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
-            s).mem R off) = s.mem R off := by
-  intro l
-  induction l with
-  | nil => intro _ s; rfl
-  | cons hd tl ih =>
-      intro hc s
-      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
-        rcases hc with h | h
-        · exact Or.inl h
-        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
-      rw [List.foldl_cons, ih htl]
-      by_cases hP : P hd
-      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
-        rintro ⟨h1, h2⟩
-        rcases hc with h | h
-        · exact h h1
-        · exact h hd List.mem_cons_self hP h2.symm
-      · rw [if_neg hP]
-
 /-- `Op.SafeAt` of a masked region load, unfolded once. Used as a *term*: the
 per-case equation does not fire under `simp` on a `.load` node whose dtype is the
 computed `ComputeDType.fp32.eraseDType`. -/

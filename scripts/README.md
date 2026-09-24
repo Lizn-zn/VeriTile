@@ -151,6 +151,17 @@ trust pass. Batch workers share one independent snapshot, with separate output
 modules, and concurrency accounts for export/replay memory. Raw `lake build`
 remains the build step; use these gates for proof acceptance.
 
+The structural rules in `bench/audit_tritonbench_g.sh` share source extraction
+through `bench/audit_source.py`. Kernel selection and call formatting are explicit
+options: checks covering every JIT helper must not silently switch to the
+primary-kernel policy. These text scans complement the Lean/comparator gates;
+they do not discover proof obligations. Run their parser and failure regressions
+with `python3 -m unittest discover -s scripts -p 'test_audit_source.py'`.
+
+In the same checkout, run `test_audit_gates.py` and a full corpus audit
+sequentially. The regression suite creates deliberately invalid temporary ports
+under `bench/tritonbench_g/`, which a concurrent full scan would also select.
+
 Logs under `Logs/comparator-check-*` record source hashes, selected targets,
 generated source, comparator configuration, diagnostics, binary hash, and exit
 status. Temporary build-cache copies are removed when a batch finishes.

@@ -143,28 +143,6 @@ def geglu_tanh_backward_kernel
 def gegluTanhOffset (s : BlockState) (stride : Nat) (i : Fin BLOCK_SIZE) : Nat :=
   s.pids 0 * stride + i.val
 
-/-- A masked scatter-store `foldl` leaves every memory cell it does not
-actively hit unchanged (cell-level frame for the masked stores). -/
-private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
-    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
-    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
-    (l.foldl (fun acc k =>
-        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
-      s).mem r o = s.mem r o := by
-  induction l generalizing s with
-  | nil => rfl
-  | cons hd tl ih =>
-      rw [List.foldl_cons]
-      by_cases hP : P hd
-      · rw [if_pos hP,
-          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
-          BlockState.writeMem_mem]
-        exact if_neg (fun hc =>
-          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
-      · rw [if_neg hP]
-        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
-
 /-! ## Forward kernel -/
 
 /-- Algorithm-layer correctness for `_geglu_tanh_forward_kernel`. -/

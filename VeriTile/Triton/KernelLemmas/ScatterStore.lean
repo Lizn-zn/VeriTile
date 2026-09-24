@@ -275,4 +275,55 @@ theorem scatter_memcell_fp16_prop_masked_nd {region : RegionName} {shape : TileS
       (offsetFn i) l₁]
     exact h_l1_not_in
 
+
+/-- A proposition-masked scatter store preserves the full memory cell when
+no active lane writes to its region and offset. -/
+theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (r : RegionName) (o : Nat) (l : List α) (s : BlockState)
+    (hnot : ∀ k ∈ l, P k → ¬(region = r ∧ offsetFn k = o)) :
+    (l.foldl (fun acc k =>
+        if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+      s).mem r o = s.mem r o := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons hd tl ih =>
+      rw [List.foldl_cons]
+      by_cases hP : P hd
+      · rw [if_pos hP,
+          ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk)),
+          BlockState.writeMem_mem]
+        exact if_neg (fun hc =>
+          hnot hd List.mem_cons_self hP ⟨hc.1.symm, hc.2.symm⟩)
+      · rw [if_neg hP]
+        exact ih _ (fun k hk => hnot k (List.mem_cons_of_mem hd hk))
+
+/-- Full-cell frame for a proposition-masked scatter store: either the
+region differs or every active lane writes to a different offset. -/
+theorem foldl_writeMem_frame {α : Type} {region : RegionName}
+    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
+    (R : RegionName) (off : Nat) :
+    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
+      ∀ s : BlockState,
+        ((l.foldl (fun acc k =>
+            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
+            s).mem R off) = s.mem R off := by
+  intro l
+  induction l with
+  | nil => intro _ s; rfl
+  | cons hd tl ih =>
+      intro hc s
+      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
+        rcases hc with h | h
+        · exact Or.inl h
+        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
+      rw [List.foldl_cons, ih htl]
+      by_cases hP : P hd
+      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
+        rintro ⟨h1, h2⟩
+        rcases hc with h | h
+        · exact h h1
+        · exact h hd List.mem_cons_self hP h2.symm
+      · rw [if_neg hP]
+
 end VeriTile.Triton

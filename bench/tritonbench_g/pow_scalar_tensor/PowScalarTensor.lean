@@ -384,37 +384,6 @@ private theorem outAddr_tileIndex_injective (T : Nat)
     Fin.ext (Nat.add_left_cancel (Nat.eq_of_mul_eq_mul_right hStride h))
   cases hab; cases u; cases u'; rfl
 
-/-- **Cell-level** frame of a masked scatter: a cell the fold never writes —
-either because it lives in a different region, or because no active lane
-targets its offset — keeps its `mem` value verbatim (not merely its decoded
-`readMem` value). `bench` files are standalone, so this induction is a private
-copy rather than an import. -/
-private theorem foldl_writeMem_frame {α : Type} {region : RegionName}
-    (offsetFn : α → Nat) (valueFn : α → ℝ) (P : α → Prop) [DecidablePred P]
-    (R : RegionName) (off : Nat) :
-    ∀ l : List α, (R ≠ region ∨ ∀ k ∈ l, P k → offsetFn k ≠ off) →
-      ∀ s : BlockState,
-        ((l.foldl (fun acc k =>
-            if P k then acc.writeMem region (offsetFn k) (valueFn k) else acc)
-            s).mem R off) = s.mem R off := by
-  intro l
-  induction l with
-  | nil => intro _ s; rfl
-  | cons hd tl ih =>
-      intro hc s
-      have htl : R ≠ region ∨ ∀ k ∈ tl, P k → offsetFn k ≠ off := by
-        rcases hc with h | h
-        · exact Or.inl h
-        · exact Or.inr fun k hk => h k (List.mem_cons_of_mem hd hk)
-      rw [List.foldl_cons, ih htl]
-      by_cases hP : P hd
-      · rw [if_pos hP, BlockState.writeMem_mem, if_neg ?_]
-        rintro ⟨h1, h2⟩
-        rcases hc with h | h
-        · exact h h1
-        · exact h hd List.mem_cons_self hP h2.symm
-      · rw [if_neg hP]
-
 /-- Inversion of a successful `assign` step: it fixes the assigned value and
 the successor state. The exact-semantics twin of `stepStmtR_assign_inv`. -/
 private theorem stepStmt_assign_inv' {dtype : TileDType} {shape : TileShape}

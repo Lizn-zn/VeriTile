@@ -79,8 +79,10 @@ jobs:
           sudo apt-get install -y ripgrep
           command -v rg && command -v python3
 
-      - name: Check audit sharding regressions
-        run: python3 -m unittest discover -s scripts -p 'test_audit_shards.py'
+      - name: Check audit source and sharding regressions
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_audit_source.py'
+          python3 -m unittest discover -s scripts -p 'test_audit_shards.py'
 
       - name: Build Lean project
         uses: leanprover/lean-action@v1

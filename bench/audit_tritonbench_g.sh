@@ -48,37 +48,11 @@ from pathlib import Path
 import re
 import sys
 
-root = Path(sys.argv[1])
+from bench.audit_source import (
+    strip_lean_comments,
+)
 
-def strip_lean_comments(text: str) -> str:
-    """Blank out `--` line comments and (nested) `/- ... -/` block comments,
-    preserving line structure so reported line numbers stay accurate."""
-    out = []
-    i = 0
-    n = len(text)
-    depth = 0
-    while i < n:
-        two = text[i:i + 2]
-        if depth == 0 and two == "--":
-            j = text.find("\n", i)
-            i = n if j < 0 else j
-            continue
-        if two == "/-":
-            depth += 1
-            out.append("  ")
-            i += 2
-            continue
-        if depth > 0 and two == "-/":
-            depth -= 1
-            out.append("  ")
-            i += 2
-            continue
-        if depth == 0:
-            out.append(text[i])
-        else:
-            out.append(text[i] if text[i] == "\n" else " ")
-        i += 1
-    return "".join(out)
+root = Path(sys.argv[1])
 
 # `sorry` / `admit` as code tokens; `True := by` placeholder goals; `trivial`
 # standing alone as the entire proof (term-mode `:= trivial`, one-line
@@ -374,46 +348,16 @@ fi
 
 if python3 - "${PORTS_ROOT}" <<'PY'
 from pathlib import Path
-import ast
-import re
 import sys
 
+from bench.audit_source import (
+    lean_first_preamble,
+    python_jit_names,
+    target_kernel_candidates,
+    target_kernel_name,
+)
+
 root = Path(sys.argv[1])
-
-def is_triton_jit(dec: ast.expr) -> bool:
-    if isinstance(dec, ast.Call):
-        dec = dec.func
-    return (
-        isinstance(dec, ast.Attribute) and dec.attr == "jit"
-    ) or (
-        isinstance(dec, ast.Name) and dec.id == "jit"
-    )
-
-def python_jit_names(text: str) -> set[str]:
-    tree = ast.parse(text)
-    return {
-        node.name
-        for node in tree.body
-        if isinstance(node, ast.FunctionDef)
-        and any(is_triton_jit(dec) for dec in node.decorator_list)
-    }
-
-def lean_first_preamble(text: str) -> str:
-    idx = text.find("triton {")
-    return text[:idx] if idx >= 0 else text
-
-def target_kernel_candidates(preamble: str):
-    """Every ``<file>.py`'s `<name>`'' phrase in the preamble, in order."""
-    return re.findall(r"\.py`'s[^`]*`([^`]+)`", preamble, re.S)
-
-def target_kernel_name(preamble: str, jit_names):
-    """The declared target JIT: the LAST preamble phrase that names a real
-    `@triton.jit` kernel. Prose legitimately reuses the same phrasing for
-    non-kernel snippets (a transcription note quoting `labels_ptr += row_idx`,
-    say); such a phrase must not shadow the declaration, which is what taking
-    the last phrase unconditionally used to do."""
-    named = [name for name in target_kernel_candidates(preamble) if name in jit_names]
-    return named[-1] if named else None
 
 failures = []
 missing_docs = []
@@ -453,17 +397,12 @@ import ast
 import re
 import sys
 
+from bench.audit_source import (
+    is_triton_jit,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def is_triton_jit(dec: ast.expr) -> bool:
-    if isinstance(dec, ast.Call):
-        dec = dec.func
-    return (
-        isinstance(dec, ast.Attribute) and dec.attr == "jit"
-    ) or (
-        isinstance(dec, ast.Name) and dec.id == "jit"
-    )
 
 def python_first_kernel_params(text: str) -> list[str]:
     tree = ast.parse(text)
@@ -608,110 +547,14 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    strip_comments,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
 def cast_sequence(text: str) -> list[str]:
     casts = re.findall(r"\.to\(\s*(?:tl\.)?([A-Za-z0-9_\.]+)\s*\)",
@@ -752,158 +595,19 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    split_top_level_args,
+    tl_calls,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
 
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
-
-def tl_calls(text: str, fn: str) -> list[str]:
-    text = strip_comments(text)
-    pattern = re.compile(rf"tl\s*\.\s*{fn}\s*\(")
-    calls = []
-    pos = 0
-    while True:
-        match = pattern.search(text, pos)
-        if not match:
-            break
-        k = match.end()
-        depth = 1
-        while k < len(text) and depth > 0:
-            if text[k] == "(":
-                depth += 1
-            elif text[k] == ")":
-                depth -= 1
-            k += 1
-        calls.append(re.sub(r"\s+", " ", text[match.start():k]))
-        pos = k
-    return calls
-
-def split_top_level_args(call: str, fn: str) -> list[str]:
-    match = re.search(rf"tl\s*\.\s*{fn}\s*\(", call)
-    inside = call[match.end():-1]
-    args = []
-    cur = []
-    depth = 0
-    for ch in inside:
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            arg = "".join(cur).strip()
-            if arg:
-                args.append(arg)
-            cur = []
-            continue
-        cur.append(ch)
-    arg = "".join(cur).strip()
-    if arg:
-        args.append(arg)
-    return args
-
 def mask_presence(body: str, fn: str) -> list[bool]:
     out = []
-    for call in tl_calls(body, fn):
+    for call in tl_calls(body, fn, normalize_whitespace=True):
         args = split_top_level_args(call, fn)
         has_kw = any(re.match(r"^mask\s*=", arg) for arg in args)
         positional = (
@@ -950,131 +654,14 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    tl_calls,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
-
-def tl_calls(text: str, fn: str) -> list[str]:
-    text = strip_comments(text)
-    pattern = re.compile(rf"tl\s*\.\s*{fn}\s*\(")
-    calls = []
-    pos = 0
-    while True:
-        match = pattern.search(text, pos)
-        if not match:
-            break
-        k = match.end()
-        depth = 1
-        while k < len(text) and depth > 0:
-            if text[k] == "(":
-                depth += 1
-            elif text[k] == ")":
-                depth -= 1
-            k += 1
-        calls.append(text[match.start():k])
-        pos = k
-    return calls
 
 def normalize_shape_ctor_call(call: str) -> str:
     call = re.sub(r"\$\(([^()]+)\)", r"\1", call)
@@ -1123,110 +710,14 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    strip_comments,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
 def tl_arange_calls(text: str) -> list[str]:
     text = strip_comments(text)
@@ -1285,107 +776,14 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    strip_comments,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
 def program_id_calls(text: str) -> list[str]:
     text = strip_comments(text)
@@ -1445,153 +843,19 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    split_top_level_args,
+    tl_calls,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
 
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
-
-def tl_calls(text: str, fn: str) -> list[str]:
-    text = strip_comments(text)
-    pattern = re.compile(rf"tl\s*\.\s*{fn}\s*\(")
-    calls = []
-    pos = 0
-    while True:
-        match = pattern.search(text, pos)
-        if not match:
-            break
-        k = match.end()
-        depth = 1
-        while k < len(text) and depth > 0:
-            if text[k] == "(":
-                depth += 1
-            elif text[k] == ")":
-                depth -= 1
-            k += 1
-        calls.append(text[match.end():k - 1])
-        pos = k
-    return calls
-
-def split_top_level_args(args_text: str) -> list[str]:
-    args = []
-    cur = []
-    depth = 0
-    for ch in args_text:
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            arg = "".join(cur).strip()
-            if arg:
-                args.append(arg)
-            cur = []
-            continue
-        cur.append(ch)
-    arg = "".join(cur).strip()
-    if arg:
-        args.append(arg)
-    return args
-
 def kwarg_sequence(body: str, fn: str) -> list[list[str]]:
     out = []
-    for call_args in tl_calls(body, fn):
+    for call_args in tl_calls(body, fn, arguments_only=True):
         kwargs = []
         for arg in split_top_level_args(call_args):
             match = re.match(r"^([A-Za-z_][A-Za-z0-9_]*)\s*=", arg)
@@ -1634,152 +898,17 @@ fi
 
 if python3 - "${PORTS_ROOT}" <<'PY'
 from pathlib import Path
-import re
 import sys
+
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    split_top_level_args,
+    tl_calls,
+)
 
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
-
-def tl_calls(text: str, fn: str) -> list[str]:
-    text = strip_comments(text)
-    pattern = re.compile(rf"tl\s*\.\s*{fn}\s*\(")
-    calls = []
-    pos = 0
-    while True:
-        match = pattern.search(text, pos)
-        if not match:
-            break
-        k = match.end()
-        depth = 1
-        while k < len(text) and depth > 0:
-            if text[k] == "(":
-                depth += 1
-            elif text[k] == ")":
-                depth -= 1
-            k += 1
-        calls.append(text[match.end():k - 1])
-        pos = k
-    return calls
-
-def split_top_level_args(args_text: str) -> list[str]:
-    args = []
-    cur = []
-    depth = 0
-    for ch in args_text:
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            arg = "".join(cur).strip()
-            if arg:
-                args.append(arg)
-            cur = []
-            continue
-        cur.append(ch)
-    arg = "".join(cur).strip()
-    if arg:
-        args.append(arg)
-    return args
 
 failures = []
 for py_file in sorted(root.glob("*/*.py")):
@@ -1794,8 +923,8 @@ for py_file in sorted(root.glob("*/*.py")):
     py_body = python_first_kernel_body(py_file.read_text())
     lean_body = lean_first_triton_body(lean_text)
     for fn in ("load", "store"):
-        py_arg_counts = [len(split_top_level_args(call)) for call in tl_calls(py_body, fn)]
-        lean_arg_counts = [len(split_top_level_args(call)) for call in tl_calls(lean_body, fn)]
+        py_arg_counts = [len(split_top_level_args(call)) for call in tl_calls(py_body, fn, arguments_only=True)]
+        lean_arg_counts = [len(split_top_level_args(call)) for call in tl_calls(lean_body, fn, arguments_only=True)]
         if py_arg_counts != lean_arg_counts:
             failures.append((py_file, lean_file, fn, py_arg_counts, lean_arg_counts))
 
@@ -1818,128 +947,14 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    tl_calls,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
-
-def tl_calls(text: str, fn: str) -> list[str]:
-    text = strip_comments(text)
-    pattern = re.compile(rf"tl\s*\.\s*{fn}\s*\(")
-    calls = []
-    pos = 0
-    while True:
-        match = pattern.search(text, pos)
-        if not match:
-            break
-        k = match.end()
-        depth = 1
-        while k < len(text) and depth > 0:
-            if text[k] == "(":
-                depth += 1
-            elif text[k] == ")":
-                depth -= 1
-            k += 1
-        calls.append(text[match.start():k])
-        pos = k
-    return calls
 
 def normalize_call(call: str) -> str:
     call = call.replace("\\", "")
@@ -2006,110 +1021,15 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    split_top_level_args,
+    strip_comments,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
 
 def tl_load_calls(text: str) -> list[str]:
     text = strip_comments(text)
@@ -2132,28 +1052,6 @@ def tl_load_calls(text: str) -> list[str]:
         i = k
     return calls
 
-def split_top_level_args(call: str) -> list[str]:
-    inside = call[len("tl.load("):-1]
-    args = []
-    cur = []
-    depth = 0
-    for ch in inside:
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            arg = "".join(cur).strip()
-            if arg:
-                args.append(arg)
-            cur = []
-            continue
-        cur.append(ch)
-    arg = "".join(cur).strip()
-    if arg:
-        args.append(arg)
-    return args
-
 def normalize_other(value: str) -> str:
     value = re.sub(r"\$\(\(([^:()]+)\s*:[^)]+\)\)", r"\1", value.strip())
     value = re.sub(r"\$\(([^()]+)\)", r"\1", value)
@@ -2167,7 +1065,7 @@ def normalize_other(value: str) -> str:
 def other_values(body: str) -> list[str]:
     out = []
     for call in tl_load_calls(body):
-        for arg in split_top_level_args(call):
+        for arg in split_top_level_args(call, "load"):
             if re.match(r"^other\s*=", arg):
                 out.append(normalize_other(arg.split("=", 1)[1]))
                 break
@@ -2219,7 +1117,6 @@ from pathlib import Path
 import re
 import sys
 
-
 def kernel_spans(text: str):
     """(start, end) offsets of every `triton { … }` body, by brace depth."""
     spans, i = [], 0
@@ -2239,7 +1136,6 @@ def kernel_spans(text: str):
             k += 1
         spans.append((open_i, k))
         i = k + 1
-
 
 pattern = re.compile(r"keep_dims\s*=\s*true|keepDims|keep_dims")
 hits = []
@@ -2269,42 +1165,12 @@ if python3 - "${PORTS_ROOT}" <<'PY'
 from pathlib import Path
 import sys
 
+from bench.audit_source import (
+    python_jit_kernel_bodies,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_jit_kernel_bodies(text: str) -> list[str]:
-    lines = text.splitlines()
-    bodies = []
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            break
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        bodies.append("\n".join(body))
-        i = k
-    return bodies
 
 failures = []
 for py_file in sorted(root.glob("*/*.py")):
@@ -2314,7 +1180,7 @@ for py_file in sorted(root.glob("*/*.py")):
     lean_file = lean_files[0]
     has_iadd = any(
         "+=" in line.split("#", 1)[0]
-        for body in python_jit_kernel_bodies(py_file.read_text())
+        for body in python_jit_kernel_bodies(py_file.read_text(), all_jit=True)
         for line in body.splitlines()
     )
     if not has_iadd:
@@ -2344,6 +1210,11 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
 
@@ -2354,102 +1225,6 @@ def norm(name: str) -> str:
             return name[: -len(suffix)]
     return name
 
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store", "tl.make_block_ptr")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
 failures = []
 for py_file in sorted(root.glob("*/*.py")):
     lean_files = sorted(py_file.parent.glob("*.lean"))
@@ -2459,7 +1234,7 @@ for py_file in sorted(root.glob("*/*.py")):
     py_lhs = {
         norm(match.group(1))
         for match in re.finditer(r"^\s*([A-Za-z_][A-Za-z0-9_]*)\s*\+=",
-            python_first_kernel_body(py_file.read_text()), re.M)
+            python_first_kernel_body(py_file.read_text(), include_block_pointers=True), re.M)
     }
     if not py_lhs:
         continue
@@ -2517,38 +1292,13 @@ fi
 # not an unannotated extra statement).
 if python3 - "${PORTS_ROOT}" <<'PY'
 from pathlib import Path
-import re
 import sys
 
-root = Path(sys.argv[1])
+from bench.audit_source import (
+    strip_lean_comments,
+)
 
-def strip_lean_comments(text: str) -> str:
-    out = []
-    i = 0
-    n = len(text)
-    depth = 0
-    while i < n:
-        two = text[i:i + 2]
-        if depth == 0 and two == "--":
-            j = text.find("\n", i)
-            i = n if j < 0 else j
-            continue
-        if two == "/-":
-            depth += 1
-            out.append("  ")
-            i += 2
-            continue
-        if depth > 0 and two == "-/":
-            depth -= 1
-            out.append("  ")
-            i += 2
-            continue
-        if depth == 0:
-            out.append(text[i])
-        else:
-            out.append(text[i] if text[i] == "\n" else " ")
-        i += 1
-    return "".join(out)
+root = Path(sys.argv[1])
 
 blocker_marker = "translation-surface blocker:"
 
@@ -2586,6 +1336,12 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_triton_body,
+    python_first_kernel_body,
+    strip_comments,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
 call_re = re.compile(r"\btl(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s*\(")
@@ -2601,108 +1357,6 @@ ignored = {
     "tl.for",
 }
 
-def python_first_kernel_body(text: str) -> str:
-    lines = text.splitlines()
-
-    def body_for_name(target: str) -> str:
-        i = 0
-        while i < len(lines):
-            if not lines[i].strip().startswith("@triton.jit"):
-                i += 1
-                continue
-            i += 1
-            while i < len(lines) and lines[i].strip().startswith("@"):
-                i += 1
-            if i >= len(lines) or not lines[i].strip().startswith("def " + target + "("):
-                i += 1
-                continue
-
-            start = None
-            parens = 0
-            for j in range(i, len(lines)):
-                parens += lines[j].count("(") - lines[j].count(")")
-                if parens <= 0 and lines[j].rstrip().endswith(":"):
-                    start = j + 1
-                    break
-            if start is None:
-                return ""
-
-            body = []
-            k = start
-            while k < len(lines):
-                line = lines[k]
-                if line and not line.startswith((" ", "\t")):
-                    break
-                body.append(line)
-                k += 1
-            body_text = "\n".join(body)
-            if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-                return body_text
-            i = k
-        return ""
-
-    preferred = body_for_name("_attn_fwd")
-    if preferred:
-        return preferred
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            parens += lines[j].count("(") - lines[j].count(")")
-            if parens <= 0 and lines[j].rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            return ""
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store", "tl.make_block_ptr")):
-            return body_text
-        i = k
-    return ""
-
-def lean_first_triton_body(text: str) -> str:
-    idx = text.find("triton {")
-    if idx < 0:
-        return ""
-    start = text.find("{", idx)
-    depth = 0
-    out = []
-    for ch in text[start:]:
-        if ch == "{":
-            depth += 1
-            if depth == 1:
-                continue
-        elif ch == "}":
-            depth -= 1
-            if depth == 0:
-                break
-        if depth >= 1:
-            out.append(ch)
-    return "".join(out)
-
-def strip_comments(text: str) -> str:
-    return "\n".join(line.split("#", 1)[0] for line in text.splitlines())
-
 def calls(text: str) -> set[str]:
     text = strip_comments(text)
     return {
@@ -2717,7 +1371,7 @@ for py_file in sorted(root.glob("*/*.py")):
     if not lean_files:
         continue
     lean_file = lean_files[0]
-    py_calls = calls(python_first_kernel_body(py_file.read_text()))
+    py_calls = calls(python_first_kernel_body(py_file.read_text(), include_block_pointers=True))
     lean_text = lean_file.read_text()
     lean_calls = calls(lean_first_triton_body(lean_text))
     missing = sorted(py_calls - lean_calls)
@@ -2746,42 +1400,14 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_first_preamble,
+    python_jit_names_text as python_jit_names,
+    target_kernel_name,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def lean_first_preamble(text: str) -> str:
-    idx = text.find("triton {")
-    return text[:idx] if idx >= 0 else text
-
-def python_jit_names(text: str):
-    """`@triton.jit` kernel names, read textually — this scan block has no
-    `ast` import; the walk mirrors `python_kernel_body` below."""
-    names, pending = set(), False
-    for line in text.splitlines():
-        stripped = line.strip()
-        if stripped.startswith("@triton.jit"):
-            pending = True
-            continue
-        if pending and stripped.startswith("def "):
-            names.add(stripped[4:].split("(", 1)[0].strip())
-            pending = False
-            continue
-        if pending and stripped and not stripped.startswith("@"):
-            pending = False
-    return names
-
-def target_kernel_candidates(preamble: str):
-    """Every ``<file>.py`'s `<name>`'' phrase in the preamble, in order."""
-    return re.findall(r"\.py`'s[^`]*`([^`]+)`", preamble, re.S)
-
-def target_kernel_name(preamble: str, jit_names):
-    """The declared target JIT: the LAST preamble phrase that names a real
-    `@triton.jit` kernel. Prose legitimately reuses the same phrasing for
-    non-kernel snippets (a transcription note quoting `labels_ptr += row_idx`,
-    say); such a phrase must not shadow the declaration, which is what taking
-    the last phrase unconditionally used to do."""
-    named = [name for name in target_kernel_candidates(preamble) if name in jit_names]
-    return named[-1] if named else None
 
 def python_kernel_body(text: str, target) -> str:
     lines = text.splitlines()
@@ -2901,6 +1527,11 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_triton_bodies,
+    python_jit_kernel_bodies,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
 call_re = re.compile(r"\btl(?:\.[A-Za-z_][A-Za-z0-9_]*)+\s*\(")
@@ -2915,76 +1546,6 @@ ignored = {
     "tl.tensor",
     "tl.for",
 }
-
-def python_jit_kernel_bodies(text: str) -> list[str]:
-    lines = text.splitlines()
-    bodies = []
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(def_i, len(lines)):
-            line = lines[j]
-            parens += line.count("(") - line.count(")")
-            if parens <= 0 and line.rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            break
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            name = lines[def_i].strip().split("def ", 1)[1].split("(", 1)[0]
-            if name == "_attn_fwd":
-                return [body_text]
-            bodies.append(body_text)
-        i = k
-    return bodies
-
-def lean_triton_bodies(text: str) -> list[str]:
-    bodies = []
-    pos = 0
-    while True:
-        idx = text.find("triton {", pos)
-        if idx < 0:
-            break
-        start = text.find("{", idx)
-        depth = 0
-        out = []
-        end = start
-        for off, ch in enumerate(text[start:], start):
-            if ch == "{":
-                depth += 1
-                if depth == 1:
-                    continue
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = off + 1
-                    break
-            if depth >= 1:
-                out.append(ch)
-        bodies.append("".join(out))
-        pos = end
-    return bodies
 
 def tl_call_sequence(text: str) -> list[str]:
     text = "\n".join(line.split("#", 1)[0] for line in text.splitlines())
@@ -3029,78 +1590,13 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_triton_bodies,
+    python_jit_kernel_bodies,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
-
-def python_jit_kernel_bodies(text: str) -> list[str]:
-    lines = text.splitlines()
-    bodies = []
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            line = lines[j]
-            parens += line.count("(") - line.count(")")
-            if parens <= 0 and line.rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            break
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            name = lines[def_i].strip().split("def ", 1)[1].split("(", 1)[0]
-            if name == "_attn_fwd":
-                return [body_text]
-            bodies.append(body_text)
-        i = k
-    return bodies
-
-def lean_triton_bodies(text: str) -> list[str]:
-    bodies = []
-    pos = 0
-    while True:
-        idx = text.find("triton {", pos)
-        if idx < 0:
-            break
-        start = text.find("{", idx)
-        depth = 0
-        out = []
-        end = start
-        for off, ch in enumerate(text[start:], start):
-            if ch == "{":
-                depth += 1
-                if depth == 1:
-                    continue
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = off + 1
-                    break
-            if depth >= 1:
-                out.append(ch)
-        bodies.append("".join(out))
-        pos = end
-    return bodies
 
 def norm_name(name: str) -> str:
     name = name.strip().split(":", 1)[0].strip().lower()
@@ -3198,80 +1694,16 @@ from pathlib import Path
 import re
 import sys
 
+from bench.audit_source import (
+    lean_triton_bodies,
+    python_jit_kernel_bodies,
+    split_top_level_args,
+)
+
 root = Path(sys.argv[1])
 blocker_marker = "translation-surface blocker:"
 reduce_call_head_re = re.compile(r"\btl\.(sum|max)\s*\(")
 axis_kw_re = re.compile(r"(?:^|,)\s*axis\s*=\s*([0-9]+)\s*(?:,|$)")
-
-def python_jit_kernel_bodies(text: str) -> list[str]:
-    lines = text.splitlines()
-    bodies = []
-    i = 0
-    while i < len(lines):
-        if not lines[i].strip().startswith("@triton.jit"):
-            i += 1
-            continue
-        i += 1
-        while i < len(lines) and lines[i].strip().startswith("@"):
-            i += 1
-        if i >= len(lines) or not lines[i].strip().startswith("def "):
-            continue
-
-        def_i = i
-        start = None
-        parens = 0
-        for j in range(i, len(lines)):
-            line = lines[j]
-            parens += line.count("(") - line.count(")")
-            if parens <= 0 and line.rstrip().endswith(":"):
-                start = j + 1
-                break
-        if start is None:
-            break
-
-        body = []
-        k = start
-        while k < len(lines):
-            line = lines[k]
-            if line and not line.startswith((" ", "\t")):
-                break
-            body.append(line)
-            k += 1
-        body_text = "\n".join(body)
-        if any(token in body_text for token in ("tl.program_id", "tl.load", "tl.store")):
-            name = lines[def_i].strip().split("def ", 1)[1].split("(", 1)[0]
-            if name == "_attn_fwd":
-                return [body_text]
-            bodies.append(body_text)
-        i = k
-    return bodies
-
-def lean_triton_bodies(text: str) -> list[str]:
-    bodies = []
-    pos = 0
-    while True:
-        idx = text.find("triton {", pos)
-        if idx < 0:
-            break
-        start = text.find("{", idx)
-        depth = 0
-        out = []
-        end = start
-        for off, ch in enumerate(text[start:], start):
-            if ch == "{":
-                depth += 1
-                if depth == 1:
-                    continue
-            elif ch == "}":
-                depth -= 1
-                if depth == 0:
-                    end = off + 1
-                    break
-            if depth >= 1:
-                out.append(ch)
-        bodies.append("".join(out))
-        pos = end
-    return bodies
 
 def logical_lines(text: str) -> list[str]:
     out = []
@@ -3314,27 +1746,6 @@ def tl_reduce_calls(line: str) -> list[tuple[str, str]]:
             calls.append((match.group(1), line[match.end():k - 1]))
         pos = max(k, match.end())
     return calls
-
-def split_top_level_args(args_text: str) -> list[str]:
-    args = []
-    cur = []
-    depth = 0
-    for ch in args_text:
-        if ch in "([{":
-            depth += 1
-        elif ch in ")]}":
-            depth -= 1
-        if ch == "," and depth == 0:
-            arg = "".join(cur).strip()
-            if arg:
-                args.append(arg)
-            cur = []
-            continue
-        cur.append(ch)
-    arg = "".join(cur).strip()
-    if arg:
-        args.append(arg)
-    return args
 
 def reduce_axis_styles(text: str) -> list[tuple[str, str, str]]:
     styles = []
