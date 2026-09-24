@@ -96,7 +96,7 @@ accepted set; the only Python-level operators on tiles are `&` on bool masks
 `tl.sum(b, 1)` positional axis is accepted verbatim (`syntax num :
 tritonReduceKwarg`).
 
-## Not yet imported: blocked on a missing primitive (19)
+## Not yet imported: blocked on a missing primitive (11)
 
 The fp8 dtype channel **landed 2026-08-13 and closed as a lever** (ports
 161–163; every remaining `tl.float8e5` mention below is a `bitcast=True`
