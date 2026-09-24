@@ -52,12 +52,12 @@ def _triton_mixed_sparse_attn_fwd_kernel(
 
     m_mask = offs_m[:, None] < seqlen
 
-    # 设置最大块数
-    max_num_blks = 8  # 根据实际需求调整
+    # Set the maximum block count.
+    max_num_blks = 8  # Adjust as needed.
     for block_index in range(max_num_blks):
-        # 使用条件掩码代替 break
+        # Use a conditional mask instead of break.
         cond = block_index < num_blks
-        # 仅在 cond 为 True 时执行以下操作
+        # Perform the following operations only when cond is True.
         start_n = tl.load(blks_ptr + block_index, mask=cond)
         cols = start_n + offs_n
         n_mask = (cols < seqlen) & cond[:, None]
@@ -76,10 +76,10 @@ def _triton_mixed_sparse_attn_fwd_kernel(
         l_i = l_i * alpha + tl.sum(p, 1)
         m_i = m_i_new
 
-    # 设置最大列数
-    max_num_cols = 16  # 根据实际需求调整
+    # Set the maximum column count.
+    max_num_cols = 16  # Adjust as needed.
     for start_n in range(0, max_num_cols, BLOCK_N):
-        # 使用条件掩码代替 break
+        # Use a conditional mask instead of break.
         cond = start_n < num_cols
         n_mask = (start_n + offs_n < num_cols) & cond
         cols = tl.load(cols_ptr + start_n + offs_n, mask=cond[:, None], other=0)

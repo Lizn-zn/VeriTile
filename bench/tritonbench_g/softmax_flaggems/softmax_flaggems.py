@@ -455,7 +455,7 @@ def softmax(x, dim=-1, dtype=None):
 
 
 def test_softmax():
-    # 创建一个字典用于保存每个分支的结果
+    # Create a dictionary for the results of each branch.
     result = {}
 
     # Test case 1: 1D tensor, float32, default dim=-1
@@ -535,5 +535,5 @@ def test_softmax():
 
     return result
 
-# 执行测试
+# Run the tests.
 result_gold = test_softmax()

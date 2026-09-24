@@ -34,7 +34,7 @@ def extract_names(text):
 
 def main():
     names = set()
-    pages = [p for p in (ROOT / 'documents').glob('*.md') if not p.stem.endswith('_zh')]
+    pages = list((ROOT / 'documents').glob('*.md'))
     pages.append(ROOT / 'README.md')
     pages += list((ROOT / 'site/src/content/docs/cookbook').glob('*.md'))
     for page in pages:

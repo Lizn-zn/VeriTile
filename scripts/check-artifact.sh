@@ -164,7 +164,7 @@ check_kernel_manifest() {
 
 check_readme_example_links() {
   local readme link rel missing=0
-  for readme in README.md README_zh.md; do
+  for readme in README.md; do
     [[ -f "${readme}" ]] || continue
     while IFS= read -r link; do
       rel="${link#./}"

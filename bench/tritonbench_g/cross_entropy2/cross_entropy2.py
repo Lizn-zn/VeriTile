@@ -120,12 +120,12 @@ def cross_entropy_fwd(
     
     grid = (n_rows, (n_cols + BLOCK_SIZE - 1) // BLOCK_SIZE)
     
-    # 调用前向内核，传递相关参数
+    # Launch the forward kernel with the required arguments.
     cross_entropy_fwd_kernel[grid](
         loss, lse, z_loss, logits, labels, smoothing, logit_scale, lse_square_scale, ignored_index, total_classes, class_start_idx, n_cols, n_rows, logits.stride(0), BLOCK_SIZE, HAS_SMOOTHING, SPLIT
     )
     
-    # 打印损失、LSE和z_loss，帮助调试
+    # Print the loss, LSE, and z_loss for debugging.
     print(f"Forward loss: {loss}")
     print(f"Forward LSE: {lse}")
     print(f"Forward z_loss: {z_loss}")
@@ -140,12 +140,12 @@ def cross_entropy_bwd(
     
     grid = (n_rows, (n_cols + BLOCK_SIZE - 1) // BLOCK_SIZE)
     
-    # 调用反向内核，传递相关参数
+    # Launch the backward kernel with the required arguments.
     cross_entropy_bwd_kernel[grid](
         dlogits, dloss, logits, lse, labels, smoothing, logit_scale, lse_square_scale, ignored_index, total_classes, class_start_idx, n_cols, logits.stride(0), dlogits.stride(0), dloss.stride(0), BLOCK_SIZE, HAS_SMOOTHING
     )
     
-    # 打印反向梯度，帮助调试
+    # Print the backward gradients for debugging.
     print(f"Backward dlogits: {dlogits}")
     
     return dlogits
@@ -196,4 +196,4 @@ def test_cross_entropy_kernels():
 
 # Run the test cases
 result_gold = test_cross_entropy_kernels()
-# 分支覆盖率为【3/4】
+# Branch coverage: [3/4]

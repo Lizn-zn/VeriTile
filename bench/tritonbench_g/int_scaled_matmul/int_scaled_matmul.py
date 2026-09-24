@@ -265,10 +265,10 @@ def test_matmul_kernel():
     a = torch.randint(-128, 128, (M, K), dtype=torch.int8, device='cuda')
     b = torch.randint(-128, 128, (K, N), dtype=torch.int8, device='cuda')
 
-    # 分配输出张量
+    # Allocate the output tensor.
     c = torch.empty((M, N), dtype=torch.int32, device='cuda')
 
-    # Triton kernel配置参数
+    # Triton kernel configuration
     config = Config(
         BLOCK_M=64,
         BLOCK_N=64,
@@ -276,13 +276,13 @@ def test_matmul_kernel():
         GROUP_M=8
     )
 
-    # 调用自定义的矩阵乘法内核
+    # Launch the custom matrix multiplication kernel.
     c_triton = int_matmul_kernel(a, b, c, config)
 
-    scales1 = torch.rand((M, 1), dtype=torch.float32, device='cuda')  # 假设是按行缩放
+    scales1 = torch.rand((M, 1), dtype=torch.float32, device='cuda')  # Assume scaling by row.
     c = torch.empty((M, N), dtype=torch.int32, device='cuda')
 
-    # Triton kernel配置参数
+    # Triton kernel configuration
     config = Config(
         BLOCK_M=64,
         BLOCK_N=64,
@@ -290,7 +290,7 @@ def test_matmul_kernel():
         GROUP_M=8
     )
 
-    # 调用带有scales的矩阵乘法内核
+    # Launch the matrix multiplication kernel with scales.
     c_triton_scaled = int_scaled_matmul_kernel(a, b, scales1, c, config)
 
     # Return results in a dictionary

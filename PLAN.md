@@ -1,7 +1,5 @@
 # VeriTile — Project Plan
 
-**English** | [中文](PLAN_zh.md)
-
 VeriTile is a long-running project to bring real Triton kernel verification
 into Lean 4. Not toys, not a hand-picked theorem set tuned to a deadline — the
 goal is to let a Triton engineer take the production `.py` kernels they ship
@@ -469,7 +467,7 @@ To make the close-rate metric reproducible:
   never created); the first tag is still pending
 - Each release ships with release notes (new theorems, new semantics,
   benchmark data, scope changes)
-- Bilingual README (English + Chinese) maintained
+- English documentation maintained
 - `CONTRIBUTING.md` with a kernel-pair tutorial (using Tier 1
   `log_sum_exp` as worked example)
 - `scripts/prove.sh` lives in-repo (not separately packaged); benchmark

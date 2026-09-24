@@ -38,7 +38,7 @@ def batched_vecmat(
 
     A = torch.randn(M, K, device='cuda', dtype=torch.float32)  # shape: [M, K]
     B = torch.randn(M, N, K, device='cuda', dtype=torch.float32)  # shape: [M, N, K]
-    output = torch.zeros(M, N, device='cuda', dtype=torch.float32)  # 输出张量，shape: [M, N]
+    output = torch.zeros(M, N, device='cuda', dtype=torch.float32)  # Output tensor, shape: [M, N]
 
     assert K % block_k == 0, ""
     assert M % block_m == 0, ""
@@ -46,7 +46,7 @@ def batched_vecmat(
 
     grid = (M // block_m, N // block_n)
 
-    # 调用 Triton Kernel
+    # Launch the Triton kernel.
     batched_vecmat_kernel[grid](
         A,
         B,

@@ -28,7 +28,7 @@ corrections to historical proof claims.
 | Explain the real DSL workflow | Homepage acknowledges Lean wrapping/translation choices. The complete [VectorAdd tutorial](https://lizn-zn.github.io/VeriTile/cookbook/vector-add-walkthrough/) extracts code from the executable showcase and reproduces an accepted proof and rejected mutation. |
 | Browse coverage by theorem | The [coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/) provides search, scope/numeric filters, exact theorem statements and IO definitions, Python/Lean links, limits, and an exact-commit completed audit record. It works without JavaScript. |
 | Preserve recorded-demo labels/freshness | The fixed addition/subtraction demo remains explicitly recorded; source/library/toolchain fingerprint drift fails the build. |
-| Correct build claims and resource guidance | English/Chinese READMEs distinguish the default library, full library, and standalone checks, with a smoke command and first-build estimates. |
+| Correct build claims and resource guidance | The README distinguishes the default library, full library, and standalone checks, with a smoke command and first-build estimates. |
 | Linux comparator integration and library smoke tests | Comparator integration runs on Linux with the real tools. Artifact CI checks representative vector-addition, reduction, and quantization ports after library changes. All proof-compilation audit entry points require the official comparator. |
 
 ## Evidence boundaries
@@ -36,7 +36,7 @@ corrections to historical proof claims.
 The GeLU Taylor-20 remainder is still a disclosed, whitelisted axiom. Samples
 and evaluations at polynomial extrema are now explicitly described as
 checkpoint evidence; they are not an interval certificate or a proof of the
-residual bound. The English/Chinese trust and research notes agree.
+residual bound. The trust and research notes agree.
 
 Coverage review concerns the proposition actually stated, not an independent
 proof of the Python-to-model translation. Lower-level `Realizes` claims can

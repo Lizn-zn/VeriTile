@@ -555,7 +555,7 @@
       "file": "bench/tritonbench_g/batched_vecmat_mult/BatchedVecmatMult.lean",
       "python_file": "bench/tritonbench_g/batched_vecmat_mult/batched_vecmat_mult.py",
       "lean_sha256": "a617b9e628f5709c286b4c0401d5abcd2194509111b52ef3705094c4ff99d617",
-      "python_sha256": "6408aa0027fbfdc44c92cefd7ae6e9f63b6928b1845f21d3c280647ff3a7b498",
+      "python_sha256": "bd525838a1f9c98a6a3cd0aa7f24ed54a2b03c9bedcdb918459952fabc914992",
       "declarations": [
         {
           "declaration": "batched_vecmat_closed_form_correct",
@@ -779,7 +779,7 @@
       "file": "bench/tritonbench_g/cache_transform_triton/CacheTransformTriton.lean",
       "python_file": "bench/tritonbench_g/cache_transform_triton/cache_transform_triton.py",
       "lean_sha256": "026edc9d227bad751041ba22f81fcfea3a43a551822125f77d15329dd9ec4c11",
-      "python_sha256": "f907ff535121cc47d3c10359c850a5b30a7ffc3991463339a64c13f8f3b1ec35",
+      "python_sha256": "fdf51efc7276ef2e75d12d916b3e57b5aba856e5fe39d97a065b38168ad9c98c",
       "declarations": [
         {
           "declaration": "decoding_cache_correctness",
@@ -951,7 +951,7 @@
       "file": "bench/tritonbench_g/chunk_gate_recurrence/ChunkGateRecurrence.lean",
       "python_file": "bench/tritonbench_g/chunk_gate_recurrence/chunk_gate_recurrence.py",
       "lean_sha256": "af434de4be7b05919e362a7f23ad7e9971e9a7aac379d88c521ddbb03930b9a6",
-      "python_sha256": "c5c5dfc1f1ce4b302ab84950c820476dc76855a701db18f497cd09d1c502f0bb",
+      "python_sha256": "2b82afb093691cff7920c246ca0be7f45f78c47290519cd8f550a637617a5bc8",
       "declarations": [
         {
           "declaration": "chunk_gate_recurrence_output_summary_general",
@@ -1063,7 +1063,7 @@
       "file": "bench/tritonbench_g/chunk_gla_fwd/ChunkGlaFwd.lean",
       "python_file": "bench/tritonbench_g/chunk_gla_fwd/chunk_gla_fwd.py",
       "lean_sha256": "fb64635706e165a1a8ca61c9c897b702c7cd2b66a3d14415b9bc6005553b111b",
-      "python_sha256": "581c0afb1459bb70c99887755f10f4e2281d17cf56a1ad36ef725f6a48b60dff",
+      "python_sha256": "f4a2fbe94604e4ae316b4b0125f3516ef3fb2467902880c2d7db508a101cb994",
       "declarations": [
         {
           "declaration": "chunk_gla_fwd_o_exec_genuine",
@@ -1243,7 +1243,7 @@
       "file": "bench/tritonbench_g/context_attn_bloom/ContextAttnBloom.lean",
       "python_file": "bench/tritonbench_g/context_attn_bloom/context_attn_bloom.py",
       "lean_sha256": "bc12ce270b61097327fb0e3da61a8d30e6eec34c2e39e6521be761f4dc4e1bac",
-      "python_sha256": "eb61e1b879c7a78125720123a456f91ef4e26f0db6fd1b44979c0539114e067e",
+      "python_sha256": "d74efc6e5d299280642b3587ec9b6c2f13af14474ddf0b00588d6d95d4a94985",
       "declarations": [
         {
           "declaration": "context_attn_bloom_surface_compute_correct_general",
@@ -1275,7 +1275,7 @@
       "file": "bench/tritonbench_g/context_attn_fwd/ContextAttnFwd.lean",
       "python_file": "bench/tritonbench_g/context_attn_fwd/context_attn_fwd.py",
       "lean_sha256": "d54d786daa66852f645a71266413ba82691fcb27161195a99fe9f7eb4601c43d",
-      "python_sha256": "61b63e594004b4bc3e06275b9c2946d6d9306f1c4be41c1db24108008a6b3188",
+      "python_sha256": "4540e1ffb44e922bb2aa48236b0a43af75a5f185906ffcd52d25a508fb9c1370",
       "declarations": [
         {
           "declaration": "context_attn_fwd_surface_compute_correct_general",
@@ -1307,7 +1307,7 @@
       "file": "bench/tritonbench_g/context_attn_llama/ContextAttnLlama.lean",
       "python_file": "bench/tritonbench_g/context_attn_llama/context_attn_llama.py",
       "lean_sha256": "b82c44e36fd7273734151b15eab4be6bf723f4aab73543b870f804de552d2925",
-      "python_sha256": "28020f08c12299a8d9c896e858a611fb6944c1d39b2cc7c4d33dd6f7380dbb79",
+      "python_sha256": "a2a5a76a9cf644adbb4d938c5983991d36d3a897f2dc6024313d935479ba88ed",
       "declarations": [
         {
           "declaration": "context_attn_llama_surface_compute_correct_general",
@@ -1339,7 +1339,7 @@
       "file": "bench/tritonbench_g/context_attn_mistral/ContextAttnMistral.lean",
       "python_file": "bench/tritonbench_g/context_attn_mistral/context_attn_mistral.py",
       "lean_sha256": "bb036ceda600700c047902711c1e790d25f710377cb96ebfcd203768996d68ac",
-      "python_sha256": "275d8c22fedfc5b09ca86296771129f1e89cfda10930ecb7f6e3abfa9296b253",
+      "python_sha256": "de4ee0e9235d0ead69d3fa94f00b341444e869344ca5c3f216a22ce8e44bc8b0",
       "declarations": [
         {
           "declaration": "context_attn_mistral_genuine_output_summary_general",
@@ -1371,7 +1371,7 @@
       "file": "bench/tritonbench_g/context_attn_nopad/ContextAttnNopad.lean",
       "python_file": "bench/tritonbench_g/context_attn_nopad/context_attn_nopad.py",
       "lean_sha256": "2e2a0b2743715efdeb4d36fd41fc00e8f59982cc568ebed30a50c3f68fb3f1c4",
-      "python_sha256": "83f719ab0f1e8fd40e4b66a9bda2a5bb2622123983adfb152fe27609324c0ddf",
+      "python_sha256": "5135592994e22667902175fca73221ce017294706324ef83d73110290dd1d869",
       "declarations": [
         {
           "declaration": "context_attn_nopad_output_summary_general",
@@ -1443,7 +1443,7 @@
       "file": "bench/tritonbench_g/cross_entropy2/CrossEntropy2.lean",
       "python_file": "bench/tritonbench_g/cross_entropy2/cross_entropy2.py",
       "lean_sha256": "b4eadd8104cab84198feba235afb81e72ca33db2cfa5a5cb777a9c2b2c77ca52",
-      "python_sha256": "d65f4dc207f60458484cc52abe2274d7c5c3ae3f8468f6850d73777874f693a0",
+      "python_sha256": "e225eb575476b65ea5b1f148456dda51090e9e0d6eae688da0181a30f10e8b17",
       "declarations": [
         {
           "declaration": "cross_entropy_fwd_correctness",
@@ -1611,7 +1611,7 @@
       "file": "bench/tritonbench_g/destindex_copy/DestindexCopy.lean",
       "python_file": "bench/tritonbench_g/destindex_copy/destindex_copy.py",
       "lean_sha256": "c2039c5eecac16489b8e29dd4e9975f832dde69d5d6a8eec06065391f6d4bed1",
-      "python_sha256": "bf7ad1b91a01ea6dc3522faefb4804fdc77f6f6c7f86bfa3f4eb81de5a3b44df",
+      "python_sha256": "d5910e45fbd270c72400bd5900aeb7d2674e38493c39d244327f2943129353ad",
       "declarations": [
         {
           "declaration": "destindex_copy_correctness",
@@ -1671,7 +1671,7 @@
       "file": "bench/tritonbench_g/diag_ssm_triton/DiagSsmTriton.lean",
       "python_file": "bench/tritonbench_g/diag_ssm_triton/diag_ssm_triton.py",
       "lean_sha256": "c25e0590d2ce0f936394985648f4b30d31d73b14eace49f5ddf902882cd52c10",
-      "python_sha256": "16dc1d5cb7873fc80012775864139b929a24bc8252b55edbe8d5f87744e5a3de",
+      "python_sha256": "5e03eab9359372c2d239daa54aaf869d66013e73caad8b726db99beb1bb8a33b",
       "declarations": [
         {
           "declaration": "diag_ssm_forward_kernel_output_summary",
@@ -1735,7 +1735,7 @@
       "file": "bench/tritonbench_g/embedding_triton_kernel/EmbeddingTritonKernel.lean",
       "python_file": "bench/tritonbench_g/embedding_triton_kernel/embedding_triton_kernel.py",
       "lean_sha256": "586065de595ff1da2522581e021c0caa79a3bf5240c35581afc65e52b4f388dd",
-      "python_sha256": "7cb46d20b3dcf8240c4c52ff0549602ff0c297ccc1b1cf709cab16467c9e5bbb",
+      "python_sha256": "5c9fc5962f839a407e338ed151901257ee45bfe019d85aa8f441b7febd9e5bb5",
       "declarations": [
         {
           "declaration": "embedding_kernel_output_summary",
@@ -1939,7 +1939,7 @@
       "file": "bench/tritonbench_g/fifth_order_sph_harmonics/FifthOrderSphHarmonics.lean",
       "python_file": "bench/tritonbench_g/fifth_order_sph_harmonics/fifth_order_sph_harmonics.py",
       "lean_sha256": "cf273f1bd54a5f4d2ccde46765d6dfd572e674ed83ee81c9f1a32e6db174bdea",
-      "python_sha256": "fc5ec1f011175cd92947e8229fa1ce4a3edd726d1f53231ac5b40716387ab185",
+      "python_sha256": "3879b6fb82f9f47763e3c0f059e17597f973dcf85ec1150227adbaaf1c756c0a",
       "declarations": [
         {
           "declaration": "fifth_order_fwd_correctness",
@@ -2151,7 +2151,7 @@
       "file": "bench/tritonbench_g/fused_activation/FusedActivation.lean",
       "python_file": "bench/tritonbench_g/fused_activation/fused_activation.py",
       "lean_sha256": "5242b39bbd484d5d5f1ceb6987c191ba3be045d05e0757a70b5f0df288aa5323",
-      "python_sha256": "1c380c8d934e2ef709cd4140c1091eaa4868a95dc622a7e8c1fbc0a76860268f",
+      "python_sha256": "49136061c50ce006bacbaf6108156aaceacfdcfd3f5ddd6a9eb1a3c3cfbffd7a",
       "declarations": [
         {
           "declaration": "fused_add_mul_activation_kernel_correctness",
@@ -2203,7 +2203,7 @@
       "file": "bench/tritonbench_g/fused_recurrent_delta/FusedRecurrentDelta.lean",
       "python_file": "bench/tritonbench_g/fused_recurrent_delta/fused_recurrent_delta.py",
       "lean_sha256": "dad4b501b16919da9a72cff943675a4c6f625a6bc5e907b072d2897ee6e98fe2",
-      "python_sha256": "a473c61065e266034428fc90aeee854502625182726ee45323e26197e2c1d976",
+      "python_sha256": "b7569554de0fa4562c00e8637d86d877fc2b6a794cdcf468913ac69bf1370846",
       "declarations": [
         {
           "declaration": "fused_recurrent_delta_output_summary_general",
@@ -2323,7 +2323,7 @@
       "file": "bench/tritonbench_g/fused_rotary_embedding/FusedRotaryEmbedding.lean",
       "python_file": "bench/tritonbench_g/fused_rotary_embedding/fused_rotary_embedding.py",
       "lean_sha256": "4ee05e5b78a277baf76ead094dff7390b7ddcf4ee2d077444ffcc5612cb288fc",
-      "python_sha256": "ea2b2d6fc18b06a346caa75c65b4dd06b1e6200b847511bc234d41cba743990f",
+      "python_sha256": "3581c60f75eb5314c472d4e9ccfd2c0cc8c6a089352352247258c8cbabe7f630",
       "declarations": [
         {
           "declaration": "decoding_fused_rotary_embedding_q_correctness",
@@ -2387,7 +2387,7 @@
       "file": "bench/tritonbench_g/geglu_tanh_triton/GegluTanhTriton.lean",
       "python_file": "bench/tritonbench_g/geglu_tanh_triton/geglu_tanh_triton.py",
       "lean_sha256": "45a34fb88c677128d72386702106c2d43004fb9cd0abecd61e0a381db08fcb28",
-      "python_sha256": "95d397400f6e225d8eebc6462d153d8e20294ffef7b207047ee73dfefbc62caf",
+      "python_sha256": "3be1388fc1ae85e6224e16e602077ea57e1b17e21817f41fe6281f027961aa4b",
       "declarations": [
         {
           "declaration": "geglu_tanh_forward_kernel_correctness",
@@ -2439,7 +2439,7 @@
       "file": "bench/tritonbench_g/index_select_cat/IndexSelectCat.lean",
       "python_file": "bench/tritonbench_g/index_select_cat/index_select_cat.py",
       "lean_sha256": "1e00d5a8dd7602929f0d05ba5ae383a7002782fb761289f0dd4fc9ef593d3549",
-      "python_sha256": "86684400133fcd87e3da8cc9c90c019880fcda726ae326324e9bf2f846bc2d5e",
+      "python_sha256": "225baeca0b87b4b349029cd21523eaf2b6395b759be2b93673c55c4f44aa005a",
       "declarations": [
         {
           "declaration": "index_select_cat_fwd_kernel_correctness",
@@ -2499,7 +2499,7 @@
       "file": "bench/tritonbench_g/int8_matmul_kernel/Int8MatmulKernel.lean",
       "python_file": "bench/tritonbench_g/int8_matmul_kernel/int8_matmul_kernel.py",
       "lean_sha256": "6653671079617340e310e70749b0a0187678c98ac024e9500aef506cfc130a4d",
-      "python_sha256": "9cc15b57ef2928af8435b48bfbe1ed2c16e5caf5bb37798ea6a207c758a35af7",
+      "python_sha256": "b63ca99ac3c6f1842e66031e898d87c62295ea86bb36711360576db0268bc3f9",
       "declarations": [
         {
           "declaration": "int8_matmul_kernel_exec_genuine",
@@ -2575,7 +2575,7 @@
       "file": "bench/tritonbench_g/int_scaled_matmul/IntScaledMatmul.lean",
       "python_file": "bench/tritonbench_g/int_scaled_matmul/int_scaled_matmul.py",
       "lean_sha256": "c2a89e64ffff935e43e90ac4714e79cd8dace670ddefb54e384bd80cae21c4f6",
-      "python_sha256": "61d6252b7f7b00da3fa4e76563ea7894a8a523e00ee1d2dd74d98d9d510e677c",
+      "python_sha256": "f54f5d858707e1a132f958abc72e946d366be1c3df9881df360bc7838acbf92f",
       "declarations": [
         {
           "declaration": "int_scaled_matmul_matmul_exec_genuine",
@@ -2607,7 +2607,7 @@
       "file": "bench/tritonbench_g/iv_dependent_matmul/IvDependentMatmul.lean",
       "python_file": "bench/tritonbench_g/iv_dependent_matmul/iv_dependent_matmul.py",
       "lean_sha256": "69de2d942f8f67b01ad05f251389de5df0944b572f604e6757134e8bdbfb46b6",
-      "python_sha256": "c879c3150a6c15c1ba7c1fa8f546d8a8cc2f4e6a4fd80bf1180dcfc853244f38",
+      "python_sha256": "dfd772c19ff1b007b3e6c474fa984a460d0e135593cc3d0f05d279c8746997d7",
       "declarations": [
         {
           "declaration": "iv_dependent_matmul_closed_form_correct",
@@ -3039,7 +3039,7 @@
       "file": "bench/tritonbench_g/layer_norm_ops/LayerNormOps.lean",
       "python_file": "bench/tritonbench_g/layer_norm_ops/layer_norm_ops.py",
       "lean_sha256": "eb73b9c1e52a86d4937180e9c3e8d1ff525f56ea30f1bdf0a9dedd68716bf9d1",
-      "python_sha256": "e81cf64915cbb9bc014d05c84b66dd473c782f068b1fa2494e37771c594ca69a",
+      "python_sha256": "f9c68234257d750d4b9a6950d586c2b8c9fe8347536fda6d0914f5c02a74b72c",
       "declarations": [
         {
           "declaration": "layer_norm_ops_fwd_plain_bias_all_outputs_compute_correct_general",
@@ -3207,7 +3207,7 @@
       "file": "bench/tritonbench_g/lightning_attention/LightningAttention.lean",
       "python_file": "bench/tritonbench_g/lightning_attention/lightning_attention.py",
       "lean_sha256": "d131ad0c703644696015ad102a773cf8d2b481bb739c0d8ce71f7e2d6ec38621",
-      "python_sha256": "16cd73e2412f26f70e498ef987d2e79d2c859ed2cac0676934deb60eb1a5824c",
+      "python_sha256": "e53de8325844dd0e093ab119dd5a7a83406ff8f10a41f3eab731ecf6b1fae96a",
       "declarations": [
         {
           "declaration": "lightning_attention_output_summary_general",
@@ -3287,7 +3287,7 @@
       "file": "bench/tritonbench_g/log_softmax/LogSoftmax.lean",
       "python_file": "bench/tritonbench_g/log_softmax/log_softmax.py",
       "lean_sha256": "3e77f52db7ce835caa0048c3cf79fb9aff0cf1d8da802df403614c1a39966ca6",
-      "python_sha256": "81d2a89573d9f9371ab32f2e1381e2853e8651b161df87b8b29ebc0e7c4be9eb",
+      "python_sha256": "ea7ae1e49d9dac09bb0fd692bebc73af80710370a05365f204f0a4213809ddaf",
       "declarations": [
         {
           "declaration": "log_softmax_backward_kernel_correctness",
@@ -3319,7 +3319,7 @@
       "file": "bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean",
       "python_file": "bench/tritonbench_g/logsumexp_fwd/logsumexp_fwd.py",
       "lean_sha256": "e76cdc50e2fe361c31faa1ea3d5ff6b0110141576f7b342b44f3d450497a1d57",
-      "python_sha256": "b6bd247be946911f413d71a569800ebfe8fa7f14bf755296ae9e9547cd947f3f",
+      "python_sha256": "8d5d3a23a334d4718b4d43373ae234f694a8813b50734dde79b9d878cf303550",
       "declarations": [
         {
           "declaration": "logsumexp_fwd_kernel_correctness",
@@ -3371,7 +3371,7 @@
       "file": "bench/tritonbench_g/masked_add_cuda/MaskedAddCuda.lean",
       "python_file": "bench/tritonbench_g/masked_add_cuda/masked_add_cuda.py",
       "lean_sha256": "4639eac100a7d2c3b080fe69fb9e5b3341abfde8ad157f9ccd73edcf4bf3e00c",
-      "python_sha256": "29bbd6f81f23daa8866e0de25569037995126bf988f96c05e8f52810a6eb59cc",
+      "python_sha256": "f63b770cca4f2f858a3d57614e740dd4b9d48adc777bef384160e9a57e663541",
       "declarations": [
         {
           "declaration": "masked_add_kernel_correctness",
@@ -3767,7 +3767,7 @@
       "file": "bench/tritonbench_g/matrix_reduction/MatrixReduction.lean",
       "python_file": "bench/tritonbench_g/matrix_reduction/matrix_reduction.py",
       "lean_sha256": "09d7fa0e6cf49a53a92078f38daecaeb801ee6ecae1cad6b45dee75d29508702",
-      "python_sha256": "4b604c85b58623a0f06c47ee4835691ef9fe44bd5de34a006eb9ca55e7192491",
+      "python_sha256": "892dbf360e3cfa530ca8f0b3d1532d4308b991299466dbd8fea3bac107300770",
       "declarations": [
         {
           "declaration": "load_reduce_kernel_output_summary",
@@ -3799,7 +3799,7 @@
       "file": "bench/tritonbench_g/matrix_transpose/MatrixTranspose.lean",
       "python_file": "bench/tritonbench_g/matrix_transpose/matrix_transpose.py",
       "lean_sha256": "8186f0c8217441192f3decc894f97c3e0ffc79fd8242e1f75f09086a89f7ce72",
-      "python_sha256": "531db71d391f0564c49a6a14147e2093e933ba21f7ac9cbadc127edbf4e55599",
+      "python_sha256": "0ceaf829e152415896fea92229c45c00f34ade1ff5f0da7aaefa8769a84c5957",
       "declarations": [
         {
           "declaration": "kernel_correctness",
@@ -3819,7 +3819,7 @@
       "file": "bench/tritonbench_g/matrix_vector_multip/MatrixVectorMultip.lean",
       "python_file": "bench/tritonbench_g/matrix_vector_multip/matrix_vector_multip.py",
       "lean_sha256": "a9a65b62d0a05a96f2642eb3281eaa4bbfd140aec42090d00350ed8357e3a82b",
-      "python_sha256": "702e4b4cd8203c589399e3da4a83178c04d3b024a13e4469f4cd2a45258f6689",
+      "python_sha256": "3a61edaa69bf03a48eb938a71da1fe302235dd6686dede2ee56050712d3f3551",
       "declarations": [
         {
           "declaration": "mv_kernel_output_summary_general",
@@ -3851,7 +3851,7 @@
       "file": "bench/tritonbench_g/max_reduction/MaxReduction.lean",
       "python_file": "bench/tritonbench_g/max_reduction/max_reduction.py",
       "lean_sha256": "ee2bb1dc27fe48984e2bc64324cc4afa3b3d8382a330069eba69da899cc8d8af",
-      "python_sha256": "edd614194bcd827bb73833b662fd8a7e52117de910be0e30cd54c3419d2a7ee9",
+      "python_sha256": "970003869167188c355a37442cb00bd7dd5698adfdc3f21d49c12e5d8157fd32",
       "declarations": [
         {
           "declaration": "max_kernel_output_summary",
@@ -3915,7 +3915,7 @@
       "file": "bench/tritonbench_g/mixed_sparse_attention/MixedSparseAttention.lean",
       "python_file": "bench/tritonbench_g/mixed_sparse_attention/mixed_sparse_attention.py",
       "lean_sha256": "13bdc3afda8796cbc7ecb29be816bd926997213de5d45c589a978f654dc79c96",
-      "python_sha256": "6423e5bfa1e84c40b2586e6eb60976797d41a832215af40cc4baedb7598fc96d",
+      "python_sha256": "cadf55fd56b6ac21b74cf88501ca43b90a685db901bdaad2312a1a3f42933c0e",
       "declarations": [
         {
           "declaration": "mixed_sparse_attention_output_closed_form_summary_general",
@@ -4047,7 +4047,7 @@
       "file": "bench/tritonbench_g/parallel_retention_attention/ParallelRetentionAttention.lean",
       "python_file": "bench/tritonbench_g/parallel_retention_attention/parallel_retention_attention.py",
       "lean_sha256": "f72a2282061f49d3989bafe11b493c8bd55f5f6fae2113a36fbcfa3858fb8065",
-      "python_sha256": "0ed699d8cd0a296c3ccdd6289a6fc02cbd59f57fafe0f09bc2137831c891e12b",
+      "python_sha256": "c53a98d10fb11a5d35b68d7019ac99b7bf4186ecdbc4f25d059ae510fdf78f4a",
       "declarations": [
         {
           "declaration": "pra_fwd_o_exec_genuine",
@@ -4295,7 +4295,7 @@
       "file": "bench/tritonbench_g/relu_strided_buffer/ReluStridedBuffer.lean",
       "python_file": "bench/tritonbench_g/relu_strided_buffer/relu_strided_buffer.py",
       "lean_sha256": "cb01c14632a21d30896156d0d5588a95fc5f628b7fb4de48e35d0160f87eb4d0",
-      "python_sha256": "0b925d391621faf6ec305c0b97a8e7f5a7820fd0ed2cecb79d2498badeb37259",
+      "python_sha256": "7d0b0a748a9fb80585ad145eb9b6d1ad3810a31a9d6de63d3df7637a728e7b08",
       "declarations": [
         {
           "declaration": "relu_strided_buffer_output_summary_general",
@@ -4499,7 +4499,7 @@
       "file": "bench/tritonbench_g/rms_rbe_matmul/RmsRbeMatmul.lean",
       "python_file": "bench/tritonbench_g/rms_rbe_matmul/rms_rbe_matmul.py",
       "lean_sha256": "3e1253809a91dc3628198cef9f3d04ddb6a36d7e48eb0113f88d4be09fcc4526",
-      "python_sha256": "642ece7370b59e34e200892a5c3b72f542301148205979a379b47896e6fe817f",
+      "python_sha256": "370aef7cc53d1834a2cd6891fcaf136cd2c01368008d0960336722f413a54685",
       "declarations": [
         {
           "declaration": "rms_matmul_rbe_closed_form_correct",
@@ -4667,7 +4667,7 @@
       "file": "bench/tritonbench_g/rope_embedding/RopeEmbedding.lean",
       "python_file": "bench/tritonbench_g/rope_embedding/rope_embedding.py",
       "lean_sha256": "a5fc7ec0f902feb63cd1dc6d221e7c2e584dd1435b69d30a5b2668e6e895279b",
-      "python_sha256": "0095dbba4feff53fabc4e4c9b174651e63c5f42baabfbee6e92ca4b7831f5cbc",
+      "python_sha256": "0c5e75d61c31cca84ac77e17503b23d0851f0d367ee6260bc13df808e1973766",
       "declarations": [
         {
           "declaration": "rope_embedding_forward_backward_summary_general",
@@ -4739,7 +4739,7 @@
       "file": "bench/tritonbench_g/rotary_emb_nopad/RotaryEmbNopad.lean",
       "python_file": "bench/tritonbench_g/rotary_emb_nopad/rotary_emb_nopad.py",
       "lean_sha256": "a9e95e9710c89049e1c78fe04997327017dfec83ef757f0145163bb174b99fe1",
-      "python_sha256": "298dddcb61776243efc7baa5bea83a5027a3fc1f6a328524afdfd6c888178322",
+      "python_sha256": "400ed6fbfc8e8253110683ce3f6b20b3922b371d4820682f41d4fb70a4503ab4",
       "declarations": [
         {
           "declaration": "rotary_emb_nopad_output_summary_general",
@@ -4919,7 +4919,7 @@
       "file": "bench/tritonbench_g/softmax_flaggems/SoftmaxFlaggems.lean",
       "python_file": "bench/tritonbench_g/softmax_flaggems/softmax_flaggems.py",
       "lean_sha256": "56ff673b3fb2d59473b65524379ea132fc15b362186b1a8b802ec0b8e0ceda12",
-      "python_sha256": "262b82c181900a6d85653b54a7f866ebabd64e322376cd3d6e1fe71f98dcd141",
+      "python_sha256": "11f0c747af151465286ea9e8821932f80b71513fbb2d343a304ba54f4e8013f4",
       "declarations": [
         {
           "declaration": "softmax_kernel_inner_one_tile_compute_correct",
@@ -5607,7 +5607,7 @@
       "file": "bench/tritonbench_g/triton_mul2/TritonMul2.lean",
       "python_file": "bench/tritonbench_g/triton_mul2/triton_mul2.py",
       "lean_sha256": "5d82799a6163c78ef343c877c1f2b19c96c817d47b48a8568af5e3bba40bbe54",
-      "python_sha256": "0976921fae8b828c39392aa21871c39765ff3f0554a2c9fd1e8012a1b4f4d165",
+      "python_sha256": "6a7ae6ed4f9c83c4206b78778630c25b72fd10cb785d01a85e1b9c0d19f46238",
       "declarations": [
         {
           "declaration": "mul2_kernel_correctness",
@@ -5711,7 +5711,7 @@
       "file": "bench/tritonbench_g/vector_addition_custom/VectorAdditionCustom.lean",
       "python_file": "bench/tritonbench_g/vector_addition_custom/vector_addition_custom.py",
       "lean_sha256": "a835d4c1a305a093047000c27d46d7fe0503ef39c76e9b7e861ffdb0154b2d6a",
-      "python_sha256": "2f2a906e4b8e708801f39fb0275efef4360a0f0e12958c2f715327df4b92e712",
+      "python_sha256": "a1e1a05555a7d42a6cee871847907ef6e6fbe6834ac0088d186921d994a10957",
       "declarations": [
         {
           "declaration": "add_kernel_correctness",

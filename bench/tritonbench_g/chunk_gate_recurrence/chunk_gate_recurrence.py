@@ -11,7 +11,7 @@ def _fwd_recurrence(
     NUM_HEAD, NUM_BLOCK, 
     D_MODEL_K: tl.constexpr, D_MODEL_V: tl.constexpr,
     BLOCK_MODEL_K: tl.constexpr, BLOCK_MODEL_V: tl.constexpr,
-    last_kv: tl.tensor  # 不再使用 Optional
+    last_kv: tl.tensor  # No longer Optional
 ):
     offset_bh = tl.program_id(0)
     offset_d = tl.program_id(1)
@@ -169,30 +169,30 @@ chunk_gate_recurrent = ChunkGateRecurrent.apply
 import torch
 
 def test_chunk_gate_recurrent():
-    # 定义测试参数
+    # Define the test parameters.
     B = 2        # Batch size
     H = 4        # Number of heads
     N = 64       # Number of blocks (sequence length)
     D_k = 64     # Key dimension
     D_v = 64     # Value dimension
 
-    # 创建测试输入张量
+    # Create the test input tensors.
     kv = torch.randn(B, H, N, D_k, D_v, device='cuda', dtype=torch.float32, requires_grad=True)
     cross_decay = torch.randn(B, H, N, device='cuda', dtype=torch.float32, requires_grad=True)
 
-    # 可选的 last_kv
+    # Optional last_kv
     last_kv = torch.randn(B, H, D_k, D_v, device='cuda', dtype=torch.float32, requires_grad=True)
 
-    # 前向传播
+    # Forward pass
     output1 = chunk_gate_recurrent(kv, cross_decay, last_kv)
     output2 = chunk_gate_recurrent(kv, cross_decay, None)
 
-    # 测试反向传播
-    # 对输出求和，保证所有元素都对梯度有贡献
+    # Test the backward pass.
+    # Sum the output so that every element contributes to the gradient.
     loss1 = output1.sum()
     loss1.backward()
 
-    # 检查梯度是否计算成功
+    # Check that gradients were computed.
     result = {
         "test_case_1": (kv.grad is not None, cross_decay.grad is not None, last_kv.grad is not None),
         "test_case_2": (kv.grad is not None, cross_decay.grad is not None)

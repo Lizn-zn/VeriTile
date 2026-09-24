@@ -3,7 +3,7 @@ title: "Concurrency Semantics Boundary"
 ---
 
 This document records VeriTile's boundary for non-sequential GPU effects.
-It is the design entry point for issue #5.
+It is the design entry point for issue #1.
 
 ## Current Deterministic Boundary
 
@@ -65,7 +65,7 @@ ComputeKernel.toAlgorithm? : ComputeKernel -> Except _ AlgKernel
 ```
 
 Today this bridge covers compute-facing constructs that can be projected to
-the algorithm layer. As #5 features arrive, the bridge should remain mostly a
+the algorithm layer. As #1 features arrive, the bridge should remain mostly a
 representation-erasure step:
 
 - erase dtype or bit payloads;
@@ -109,7 +109,7 @@ where the mathematical laws actually hold.
 
 `ComputeCorrect` / `ComputeRefine` are available only when
 `ComputeKernel.toAlgorithm?` succeeds and the resulting `AlgKernel` theorem is
-proved. Optional `GapPolicy` contracts (#6) record externally checked
+proved. Optional `GapPolicy` contracts (#1) record externally checked
 compute-to-algorithm gaps for effects that are represented syntactically but
 not internally proved as bit-level compute semantics.
 
@@ -127,7 +127,7 @@ when useful, in the error type:
   theorem.
 
 This document does not require refactoring the current error type. It records
-the categories that future #5 implementation slices should preserve.
+the categories that future #1 implementation slices should preserve.
 
 ## Follow-Up Order
 
@@ -150,7 +150,7 @@ their machinery into simpler proofs.
 | --- | --- | --- | --- |
 | L1: single-cell linearized RMW | `MemCell -> RMWEvent -> Option (MemCell × RMWEvent)` plus a per-cell ordered event list | `atomic_add`, `atomic_xchg`, `atomic_cas`, single-cell max/min/and/or/xor | atomic-add for commutative add; single-cell RMW for order-sensitive xchg/cas |
 | L2: multi-cell atomic transaction | state transformer over multiple cells | DCAS / MCAS / transactional-memory style primitives | no active issue; open when a real consumer appears |
-| L3: cross-cell ordering + async | happens-before / visibility graph plus fences, barriers, and async completion | memory ordering, async copy, TMA/WGMMA visibility, producer-consumer warp specialization | #5 long-horizon |
+| L3: cross-cell ordering + async | happens-before / visibility graph plus fences, barriers, and async completion | memory ordering, async copy, TMA/WGMMA visibility, producer-consumer warp specialization | #1 long-horizon |
 | L4: lock-free data-structure invariants | L1/L3 plus a data-structure invariant relating abstract state to memory | queue / stack / set / lock-free protocols | no active issue; consumer-driven only |
 
 The single-cell RMW implementation covers only L1. It must remain compatible with later L2/L3/L4 work,

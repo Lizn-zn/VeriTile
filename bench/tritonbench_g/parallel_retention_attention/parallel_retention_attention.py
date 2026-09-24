@@ -349,19 +349,19 @@ parallel_retention = ParallelRetentionFunction.apply
 import torch
 
 def test_parallel_retention():
-    # 参数设置
+    # Parameter settings
     batch_size = 2
     n_heads = 4
     seq_len = 128
     d_head_qk = 64
     d_head_v = 64
 
-    # 创建输入张量，并设置requires_grad=True以测试后向传播
+    # Create input tensors with requires_grad=True to test the backward pass.
     q = torch.randn(batch_size, n_heads, seq_len, d_head_qk, device='cuda', dtype=torch.float32, requires_grad=True)
     k = torch.randn(batch_size, n_heads, seq_len, d_head_qk, device='cuda', dtype=torch.float32, requires_grad=True)
     v = torch.randn(batch_size, n_heads, seq_len, d_head_v, device='cuda', dtype=torch.float32, requires_grad=True)
 
-    # 参数变化: 需要分别测试不同的d_head_qk, d_head_v等
+    # Parameter variations: test different d_head_qk, d_head_v, and related values separately.
     # 1. Case 1: d_head_qk and d_head_v both set to 64
     output_1 = parallel_retention(q, k, v)  # Result for default 64,64 setting
     result_gold_1 = output_1.sum().item()  # Placeholder for result validation
@@ -394,5 +394,5 @@ def test_parallel_retention():
     return test_results
 
 
-# 执行测试函数并获取结果
+# Run the test function and collect the results.
 result_gold = test_parallel_retention()

@@ -142,7 +142,7 @@ def _layer_norm_bwd_kernel(
         x = tl.load(X + cols, mask=mask, other=0).to(tl.float32)
         dy = tl.load(DY + cols, mask=mask, other=0).to(tl.float32)
         if not IS_RMS_NORM:
-            mean = tl.load(Mean + row) if Mean is not None else 0.0  # 修改此行
+            mean = tl.load(Mean + row) if Mean is not None else 0.0  # Use zero when Mean is absent.
         rstd = tl.load(Rstd + row)
         xhat = (x - mean) * rstd if not IS_RMS_NORM else x * rstd
         xhat = tl.where(mask, xhat, 0.0)
@@ -239,8 +239,8 @@ def _layer_norm_bwd(
 
 
 def test_layer_norm_fwd_bwd():
-    # 设置测试的基本参数
-    M, N = 64, 1024  # 64x1024的矩阵
+    # Set the basic test parameters.
+    M, N = 64, 1024  # 64x1024 matrix
     x = torch.randn(M, N, dtype=torch.float32, device='cuda')
     weight = torch.randn(N, dtype=torch.float32, device='cuda')
     bias = torch.randn(N, dtype=torch.float32, device='cuda')
@@ -248,7 +248,7 @@ def test_layer_norm_fwd_bwd():
 
     results = {}
 
-    # 测试不使用 RMS norm，且没有残差，且不计算输出
+    # Test without RMS norm, residuals, or output recomputation.
     y, mean, rstd, residual_out = _layer_norm_fwd(x, weight, bias, eps, residual=None, is_rms_norm=False)
     results['test_case_1'] = (y, mean, rstd, residual_out)
 
@@ -256,7 +256,7 @@ def test_layer_norm_fwd_bwd():
     dx, dw, db, dresidual_in = _layer_norm_bwd(dy, x, weight, bias, eps, mean, rstd)
     results['test_case_2'] = (dx, dw, db, dresidual_in)
 
-    # 测试使用 RMS norm，且没有残差，且不计算输出
+    # Test with RMS norm, without residuals or output recomputation.
     y, mean, rstd, residual_out = _layer_norm_fwd(x, weight, bias, eps, residual=None, is_rms_norm=True)
     results['test_case_3'] = (y, mean, rstd, residual_out)
 
@@ -264,7 +264,7 @@ def test_layer_norm_fwd_bwd():
     dx, dw, db, dresidual_in = _layer_norm_bwd(dy, x, weight, bias, eps, mean, rstd, is_rms_norm=True)
     results['test_case_4'] = (dx, dw, db, dresidual_in)
 
-    # 测试带有残差的情况，且不计算输出
+    # Test with residuals and without output recomputation.
     residual = torch.randn_like(x)
     y, mean, rstd, residual_out = _layer_norm_fwd(x, weight, bias, eps, residual=residual, is_rms_norm=False)
     results['test_case_5'] = (y, mean, rstd, residual_out)
@@ -273,13 +273,13 @@ def test_layer_norm_fwd_bwd():
     dx, dw, db, dresidual_in = _layer_norm_bwd(dy, x, weight, bias, eps, mean, rstd, dresidual=residual, is_rms_norm=False)
     results['test_case_6'] = (dx, dw, db, dresidual_in)
 
-    # 测试计算输出（recompute_output=True）
+    # Test output recomputation (recompute_output=True).
     y, mean, rstd, residual_out = _layer_norm_fwd(x, weight, bias, eps, residual=None, is_rms_norm=False)
     dy = torch.randn_like(y)
     dx, dw, db, dresidual_in, recomputed_y = _layer_norm_bwd(dy, x, weight, bias, eps, mean, rstd, recompute_output=True)
     results['test_case_7'] = (dx, dw, db, dresidual_in, recomputed_y)
 
-    # 测试带有残差的情况，计算输出
+    # Test with residuals and output recomputation.
     residual = torch.randn_like(x)
     y, mean, rstd, residual_out = _layer_norm_fwd(x, weight, bias, eps, residual=residual, is_rms_norm=False)
     dy = torch.randn_like(y)

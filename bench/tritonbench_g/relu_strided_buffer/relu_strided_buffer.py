@@ -177,42 +177,42 @@ def relu_forward_kernel_rank_1(
 
 
 def test_relu_forward():
-    # 测试用的装置 (CUDA)
+    # Test device (CUDA)
     device = torch.device('cuda')
 
     results = {}
 
-    # Test 1: 输入是1维张量，尺寸刚好为tile size的倍数 (简单场景)
+    # Test 1: A 1D tensor whose size is a multiple of the tile size.
     in0 = torch.randn(512, device=device)
     out0 = torch.empty_like(in0)
     relu_forward_wrapper_rank_1(in0, out0=out0)
     results['test_case_1'] = out0
 
-    # Test 2: 输入是1维张量，尺寸小于tile size (小输入)
+    # Test 2: A 1D tensor smaller than the tile size.
     in0 = torch.randn(100, device=device)
     out0 = torch.empty_like(in0)
     relu_forward_wrapper_rank_1(in0, out0=out0)
     results['test_case_2'] = out0
 
-    # Test 3: 输入是1维张量，尺寸大于tile size但不是倍数 (复杂大小)
+    # Test 3: A 1D tensor larger than, but not a multiple of, the tile size.
     in0 = torch.randn(1025, device=device)
     out0 = torch.empty_like(in0)
     relu_forward_wrapper_rank_1(in0, out0=out0)
     results['test_case_3'] = out0
 
-    # Test 4: 边界测试，输入维度接近边界大小 (4096)
+    # Test 4: An input size near the boundary (4096).
     in0 = torch.randn(4096, device=device)
     out0 = torch.empty_like(in0)
     relu_forward_wrapper_rank_1(in0, out0=out0)
     results['test_case_4'] = out0
 
-    # Test 5: 测试超大输入张量
+    # Test 5: A very large input tensor.
     in0 = torch.randn(10000, device=device)
     out0 = torch.empty_like(in0)
     relu_forward_wrapper_rank_1(in0, out0=out0)
     results['test_case_5'] = out0
 
-    # Test 6: 使用 StridedBuffer 的张量操作
+    # Test 6: Tensor operations using StridedBuffer.
     base = torch.randn(512, device=device)
     shape = (512,)
     strides = (1,)
@@ -223,5 +223,5 @@ def test_relu_forward():
 
     return results
 
-# 运行测试
+# Run the tests.
 result_gold = test_relu_forward()

@@ -286,10 +286,10 @@ def fused_recurrent_delta_rule(
 import torch
 
 def test_fused_recurrent_delta_rule_with_backward():
-    # 定义尺寸
+    # Define the dimensions.
     B, H, T, K, V = 2, 4, 8, 16, 32
 
-    # 确保输入张量为叶子张量，且 requires_grad=True
+    # Ensure the inputs are leaf tensors with requires_grad=True.
     q = torch.randn(B, H, T, K, dtype=torch.float32, device='cuda', requires_grad=True)
     k = torch.randn(B, H, T, K, dtype=torch.float32, device='cuda', requires_grad=True)
     v = torch.randn(B, H, T, V, dtype=torch.float32, device='cuda', requires_grad=True)

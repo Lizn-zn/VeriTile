@@ -14,7 +14,7 @@ def _fwd_kernel(
     V,
     sm_scale,
     B_Start_Loc,
-    B_Seqlen,  # B_LOC 内部记录每个batch 输入的真实位置， B_SEQ_len 记录当前输入的真实长度
+    B_Seqlen,  # B_LOC records the input positions for each batch; B_SEQ_len records the actual input lengths.
     Out,
     Req_to_tokens,
     B_req_idx,
@@ -139,7 +139,7 @@ def context_attention_fwd(
     head_dim = Lq
     BLOCK_DMODEL = triton.next_power_of_2(head_dim)
 
-    sm_scale = 1.0 / (Lq ** 0.5)  # 计算scale系数
+    sm_scale = 1.0 / (Lq ** 0.5)  # Compute the scale factor.
     batch, head = b_seq_len.shape[0], q.shape[1]
     kv_group_num = q.shape[1] // k.shape[1]
 

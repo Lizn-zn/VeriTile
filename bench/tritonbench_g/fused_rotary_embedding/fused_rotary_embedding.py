@@ -201,24 +201,24 @@ def decoding_fused_rotary_embedding(
 
 
 def test_decoding_fused_rotary_embedding():
-    # 定义测试参数
-    total_tokens = 16       # 总 token 数
-    q_head_num = 8          # Query 的头数量
-    kv_head_num = 4         # Key/Value 的头数量
-    head_dim = 64           # 每个头的维度
-    max_position_len = 128  # 最大位置长度
-    block_size = 4          # 块大小
-    num_blocks = 4          # Key/Value cache 块数量
-    batch_size = 2          # 批大小
+    # Define the test parameters.
+    total_tokens = 16       # Total token count
+    q_head_num = 8          # Number of query heads
+    kv_head_num = 4         # Number of key/value heads
+    head_dim = 64           # Head dimension
+    max_position_len = 128  # Maximum position length
+    block_size = 4          # Block size
+    num_blocks = 4          # Number of key/value cache blocks
+    batch_size = 2          # Batch size
 
-    # 初始化输入张量
+    # Initialize the input tensors.
     q = torch.randn((total_tokens, q_head_num, head_dim), dtype=torch.float32, device='cuda')  # Query
     k = torch.randn((total_tokens, kv_head_num, head_dim), dtype=torch.float32, device='cuda')  # Key
     v = torch.randn((total_tokens, kv_head_num, head_dim), dtype=torch.float32, device='cuda')  # Value
     cos = torch.randn((max_position_len, head_dim), dtype=torch.float32, device='cuda')  # Cosine
     sin = torch.randn((max_position_len, head_dim), dtype=torch.float32, device='cuda')  # Sine
 
-    # 初始化 Key/Value 缓存和辅助张量
+    # Initialize the key/value caches and auxiliary tensors.
     k_cache = torch.zeros((num_blocks, kv_head_num, block_size, head_dim), dtype=torch.float32, device='cuda')
     v_cache = torch.zeros((num_blocks, kv_head_num, block_size, head_dim), dtype=torch.float32, device='cuda')
     block_tables = torch.randint(0, num_blocks, (batch_size, num_blocks), dtype=torch.int32, device='cuda')
@@ -226,7 +226,7 @@ def test_decoding_fused_rotary_embedding():
 
     results = {}
 
-    # 测试默认 k_cache 布局
+    # Test the default k_cache layout.
     decoding_fused_rotary_embedding(
         q=q,
         k=k,
@@ -245,12 +245,12 @@ def test_decoding_fused_rotary_embedding():
         'v_cache_shape': v_cache.shape
     }
 
-    # 测试新的 k_cache 布局
-    x = 16  # 分割因子
+    # Test the new k_cache layout.
+    x = 16  # Split factor
     k_cache = torch.zeros((num_blocks, kv_head_num, head_dim // x, block_size, x), dtype=torch.float32, device='cuda')
     v_cache = torch.zeros((num_blocks, kv_head_num, block_size, head_dim), dtype=torch.float32, device='cuda')
 
-    # 测试新的 k_cache 布局
+    # Test the new k_cache layout.
     decoding_fused_rotary_embedding(
         q=q,
         k=k,

@@ -128,16 +128,16 @@ def _rope_embedding_backward_impl(dY, cos, sin, n_groups, BLOCK_SIZE, num_warps)
 
 
 def test_rope_embedding_forward():
-    # 测试_rope_embedding_forward_impl的前向传播
+    # Test the forward pass of _rope_embedding_forward_impl.
     batch, seq_len, n_heads, head_dim = 2, 16, 8, 64
     Q = torch.randn(batch, seq_len, n_heads, head_dim, device='cuda')
     cos = torch.randn(seq_len, head_dim//2, device='cuda')
     sin = torch.randn(seq_len, head_dim//2, device='cuda')
 
-    # 正向传播
+    # Forward pass
     Q_out, cos_out, sin_out, n_groups, BLOCK_SIZE, num_warps = _rope_embedding_forward_impl(Q, cos, sin)
 
-    # 反向传播
+    # Backward pass
     dY = torch.randn(batch, seq_len, n_heads, head_dim, device='cuda')
     dY_out = _rope_embedding_backward_impl(dY, cos, sin, n_groups, BLOCK_SIZE, num_warps)
 

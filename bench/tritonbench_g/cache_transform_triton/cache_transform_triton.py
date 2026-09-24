@@ -142,14 +142,14 @@ def get_xine_cache(lengths: torch.Tensor, cos_cache: torch.Tensor, sin_cache: to
 
 
 def test_get_xine_cache():
-    # 测试参数
-    num_seqs = 8            # 序列数量
-    seq_len = 10            # 每个序列的长度
-    hidden_dim = 64         # 隐藏层维度
-    max_length = 20         # 最大序列长度
+    # Test parameters
+    num_seqs = 8            # Number of sequences
+    seq_len = 10            # Length of each sequence
+    hidden_dim = 64         # Hidden dimension
+    max_length = 20         # Maximum sequence length
     is_prompts_list = [True, False]
 
-    # 创建输入张量
+    # Create the input tensors.
     lengths = torch.randint(1, max_length, (num_seqs,), dtype=torch.int32, device='cuda')
     cos_cache = torch.randn((max_length, hidden_dim), dtype=torch.float32, device='cuda')
     sin_cache = torch.randn((max_length, hidden_dim), dtype=torch.float32, device='cuda')

@@ -46,7 +46,7 @@ def load_reduce(BLOCK_M, BLOCK_N, dtype_str):
 import torch
 
 def test_reduce():
-    # 测试参数设置
+    # Test parameter settings
     test_cases = [
         {"BLOCK_M": 16, "BLOCK_N": 16, "dtype_str": "float16"},
         {"BLOCK_M": 32, "BLOCK_N": 32, "dtype_str": "float16"},

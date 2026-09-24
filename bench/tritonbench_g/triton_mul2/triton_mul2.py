@@ -56,19 +56,19 @@ def test_mul():
     N = 1024 * 1024
     x = torch.randn(N, device='cuda')
 
-    # 分支1: triton_mul2 with BLOCK_SIZE=1024
+    # Branch 1: triton_mul2 with BLOCK_SIZE=1024
     triton_mul2_result = triton_mul2(x, BLOCK_SIZE=1024)
 
-    # 分支2: triton_mul2_inplace with BLOCK_SIZE=1024
+    # Branch 2: triton_mul2_inplace with BLOCK_SIZE=1024
     triton_mul2_inplace_result = triton_mul2_inplace(x.clone(), BLOCK_SIZE=1024)
 
-    # 分支3: triton_mul2 with a different BLOCK_SIZE
+    # Branch 3: triton_mul2 with a different BLOCK_SIZE
     triton_mul2_result_case2 = triton_mul2(x, BLOCK_SIZE=512)
 
-    # 分支4: triton_mul2_inplace with a different BLOCK_SIZE
+    # Branch 4: triton_mul2_inplace with a different BLOCK_SIZE
     triton_mul2_inplace_result_case2 = triton_mul2_inplace(x.clone(), BLOCK_SIZE=512)
 
-    # 返回测试结果
+    # Return the test results.
     result_dict = {
         "test_case_1": triton_mul2_result,
         "test_case_2": triton_mul2_inplace_result,
@@ -78,5 +78,5 @@ def test_mul():
     
     return result_dict
 
-# 执行测试函数
+# Run the test function.
 result_gold = test_mul()

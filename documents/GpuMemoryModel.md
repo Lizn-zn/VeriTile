@@ -55,7 +55,7 @@ Not modeled yet:
   core indirect-addressing pattern — typed index loads feeding pointer
   arithmetic — and `IndirectView` packages the read-only view layer. Bounds,
   alias/page-ownership, and paged FA-1 equivalence proofs are still future
-  consumer work; see issue #4.
+  consumer work; see issue #1.
 - Rich signed/unsigned integer dtype lattice. The current typed HBM model
   supports `.nat` (`tl.uint8/uint16/uint32/uint64`) and mathematical `.int`
   (`tl.int8/int16/int32/int64`), enough for index/block-table cells, but not
@@ -113,7 +113,7 @@ properties or CUDA memory-system fidelity.
 
 The current model is intentionally small. The landed memory-proof layers are:
 
-- **Memory safety / bounds (#4):** active-lane region-bounds contracts on top
+- **Memory safety / bounds (#1):** active-lane region-bounds contracts on top
   of the current typed storage layer.
 - **Write footprints / frame:** predicate-level `WriteFootprint` and
   `BlockState.WriteWithin` contracts for single-program frame reasoning.
@@ -149,11 +149,11 @@ further modeling. Each theorem retains its allocation and safety assumptions.
 
 Longer-term extension points remain:
 
-- **Paged KV / indirect addressing (#4):** extend the current `IndirectView`
+- **Paged KV / indirect addressing (#1):** extend the current `IndirectView`
   smoke/proof surface into paged-attention-specific logical views and
   consumer-side equivalence theorems.
-- **Async and concurrency (#5):** `ConcurrencySemantics.md` defines the
+- **Async and concurrency (#1):** `ConcurrencySemantics.md` defines the
   boundary for shared-memory state, barriers, atomics, async/TMA, and explicit
   scheduling or trace models.
-- **Floating-point fidelity (#3):** replace or refine the `R` abstraction with
+- **Floating-point fidelity (#1):** replace or refine the `R` abstraction with
   IEEE / mixed-precision semantics where needed.

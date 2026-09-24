@@ -171,4 +171,4 @@ def test_geglu():
 
 result_gold = test_geglu()
 
-# [4/4] 分支覆盖率已实现。
+# [4/4] branch coverage achieved.

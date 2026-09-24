@@ -132,8 +132,8 @@ def context_attention_fwd_ppl_int8kv(q, k, v, o, b_start_loc, b_seq_len, max_inp
     assert Lq == Lk and Lk == Lv
     assert Lk in {16, 32, 64, 128, 256}
 
-    # 计算scale系数, 并乘以 1/log(2) = 1.4426950408889634,
-    # 算子内部使用 tl.math.exp2 来使计算与标准attention等价。
+    # Compute the scale factor and multiply by 1/log(2) = 1.4426950408889634.
+    # The kernel uses tl.math.exp2 to compute the equivalent standard attention expression.
     sm_scale = 1.0 / (Lq ** 0.5) * 1.4426950408889634
     batch, head = b_seq_len.shape[0], q.shape[1]
     kv_group_num = q.shape[1] // k.shape[1]

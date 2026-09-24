@@ -487,7 +487,7 @@ def test_fifth_order_spherical_harmonic():
     # Test for various block sizes and offsets
     test_cases = {}
     for i, (block_size, col_offset) in enumerate([(64, 0), (32, 1), (128, 2), (256, 3)], start=1):
-        # 将关键字参数改为位置参数
+        # Pass positional arguments instead of keyword arguments.
         triton_output = FifthOrderSphericalHarmonic.apply(coords, None, None, block_size, col_offset)
         test_cases[f'test_case_{i}'] = triton_output
 

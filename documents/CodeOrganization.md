@@ -1,7 +1,5 @@
 # VeriTile Code Organization
 
-**English** | [中文](CodeOrganization_zh.md)
-
 VeriTile separates three concerns into three layers. Knowing which layer
 something belongs in saves churn when adding new operators, new bridge
 lemmas, and new kernel transcriptions.

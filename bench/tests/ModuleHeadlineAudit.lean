@@ -7,7 +7,7 @@ namespace HeadlineAuditRegression
 @[simp] specification
   multiline (n : Nat) : n + 0 = n := rfl
 
-private specification «私有结论» : True := True.intro
+private specification «private headline α» : True := True.intro
 
 namespace Nested
 specification «quoted headline» : True := True.intro

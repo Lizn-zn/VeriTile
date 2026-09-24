@@ -1,7 +1,5 @@
 # Trust Audit — how to use
 
-**English** | [中文](TrustAudit_zh.md)
-
 Machine-checkable gates that prove a theorem has no hidden `sorry`, no smuggled
 axiom, and no self-referential spec. A theorem's soundness depends only on its
 *statement* and its *axiom footprint* — never on the lemmas its proof uses — and

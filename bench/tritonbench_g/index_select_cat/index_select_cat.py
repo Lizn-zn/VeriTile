@@ -111,4 +111,4 @@ def test_index_select_cat_fwd():
     return results
 
 result_gold = test_index_select_cat_fwd()
-# 分支覆盖率：[4/4]
+# Branch coverage: [4/4]

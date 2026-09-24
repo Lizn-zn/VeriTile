@@ -1,7 +1,5 @@
 # Semantic Caveats
 
-[中文](SemanticCaveats_zh.md) | **English**
-
 This note records the semantic places where VeriTile is intentionally less
 faithful than real Triton/CUDA. These are not Lean soundness issues: they are
 interpretation rules for theorem statements. A theorem proved under these

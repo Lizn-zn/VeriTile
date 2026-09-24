@@ -45,12 +45,12 @@ import torch
 def test_triton_vs_torch():
     results = {}
 
-    # 测试用例 1: 基本矩阵转置 (小矩阵)
+    # Test case 1: Basic transpose of a small matrix.
     size_m, d_head = 16, 16
     out = wrapper(size_m, d_head)
     results["test_case_1"] = out.clone()
 
-    # 测试用例 2: 非方形矩阵
+    # Test case 2: A non-square matrix.
     size_m, d_head = 32, 64
     out = wrapper(size_m, d_head)
     results["test_case_2"] = out.clone()
@@ -58,6 +58,6 @@ def test_triton_vs_torch():
     return results
 
 
-# 运行测试
+# Run the tests.
 result_gold = test_triton_vs_torch()
 print(result_gold)

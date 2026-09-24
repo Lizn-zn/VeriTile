@@ -311,15 +311,15 @@ def rotary_embedding(
 
 
 def test_rotary_embedding():
-    # 测试参数
-    total_tokens = 32  # 总 token 数
-    head_num = 8       # Query 的头数量
-    kv_head_num = 4    # Key/Value 的头数量
-    head_dim = 64      # 每个头的维度
-    max_position_len = 128  # 最大位置长度
-    block_size = 4     # 块大小
+    # Test parameters
+    total_tokens = 32  # Total token count
+    head_num = 8       # Number of query heads
+    kv_head_num = 4    # Number of key/value heads
+    head_dim = 64      # Head dimension
+    max_position_len = 128  # Maximum position length
+    block_size = 4     # Block size
 
-    # 创建输入张量
+    # Create the input tensors.
     q = torch.randn((total_tokens, head_num, head_dim), dtype=torch.float32, device='cuda')  # Query
     k = torch.randn((total_tokens, kv_head_num, head_dim), dtype=torch.float32, device='cuda')  # Key
     cos = torch.randn((max_position_len, head_dim), dtype=torch.float32, device='cuda')  # Cosine
@@ -327,18 +327,18 @@ def test_rotary_embedding():
 
     result = {}
 
-    # 调用 rotary_embedding 分支 1 (不使用 k_cache)
+    # Call rotary_embedding branch 1 (without k_cache).
     rotary_embedding(q, k, cos, sin)
     result["test_case_1"] = (q.clone(), k.clone())
 
-    # 创建附加张量用于分支 2
+    # Create additional tensors for branch 2.
     num_blocks = 4  # Number of blocks in k_cache
     batch_size = 2  # Batch size
     k_cache = torch.randn((num_blocks, kv_head_num, block_size, head_dim), dtype=torch.float32, device='cuda')  # Key cache
     block_tables = torch.randint(0, num_blocks, (batch_size, num_blocks), device='cuda')  # Block tables
     kv_lengths = torch.randint(1, total_tokens, (batch_size,), device='cuda')  # KV lengths
 
-    # 调用 rotary_embedding 分支 2 (使用 k_cache)
+    # Call rotary_embedding branch 2 (with k_cache).
     rotary_embedding(q, k, cos, sin, k_cache=k_cache, block_tables=block_tables, kv_lengths=kv_lengths)
     result["test_case_2"] = (q.clone(), k.clone(), k_cache.clone())
 

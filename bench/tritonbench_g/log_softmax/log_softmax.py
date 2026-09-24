@@ -189,23 +189,23 @@ def log_softmax(x, dim=-1, dtype=None):
 
 
 def test_log_softmax():
-    # 输入张量的形状
+    # Input tensor shape
     b, h, n, d = 2, 8, 128, 64  # batch_size, num_heads, seq_len, embed_dim
     
-    # 创建随机的输入张量
+    # Create a random input tensor.
     x = torch.randn((b, h, n, d), dtype=torch.float32, device='cuda', requires_grad=True)
     
-    # 前向传播
+    # Forward pass
     out = log_softmax(x, dim=-1)
     
-    # 反向传播
-    out.sum().backward()  # 计算总和的梯度
+    # Backward pass
+    out.sum().backward()  # Compute the gradient of the sum.
 
-    # 返回results
+    # Return the results.
     results = {
         'test_case_1': (
-            out.cpu().detach().numpy(),  # 前向传播输出
-            x.grad.cpu().detach().numpy()  # x的梯度
+            out.cpu().detach().numpy(),  # Forward output
+            x.grad.cpu().detach().numpy()  # Gradient of x
         )
     }
     

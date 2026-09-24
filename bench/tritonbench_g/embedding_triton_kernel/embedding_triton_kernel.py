@@ -71,14 +71,14 @@ def embedding(input_ids, weight: torch.Tensor, vob_start_id, vob_end_id, out: to
 import torch
 
 def test_embedding():
-    # 参数定义
-    vocab_size = 1000         # 词汇表大小
-    embedding_dim = 512       # 嵌入维度
-    sequence_length = 128     # 输入序列长度
-    vob_start_id = 10         # 词汇表起始 ID
-    vob_end_id = 1000         # 词汇表结束 ID
+    # Parameter definitions
+    vocab_size = 1000         # Vocabulary size
+    embedding_dim = 512       # Embedding dimension
+    sequence_length = 128     # Input sequence length
+    vob_start_id = 10         # Vocabulary start ID
+    vob_end_id = 1000         # Vocabulary end ID
 
-    # 创建测试输入张量
+    # Create the test input tensors.
     input_ids = torch.randint(
         vob_start_id, vob_end_id, (sequence_length,), dtype=torch.int32, device='cuda'
     )
@@ -89,21 +89,21 @@ def test_embedding():
         sequence_length, embedding_dim, dtype=torch.float32, device='cuda'
     )
 
-    # 调用嵌入函数
+    # Call the embedding function.
     embedding(input_ids, weight, vob_start_id, vob_end_id, out)
 
-    # 保存结果
+    # Save the results.
     results = {}
     results['test_case_1'] = out.clone()
 
-    # 测试不同的输入
+    # Test different inputs.
     input_ids = torch.randint(
         vob_start_id, vob_end_id, (sequence_length,), dtype=torch.int32, device='cuda'
     )
     embedding(input_ids, weight, vob_start_id, vob_end_id, out)
     results['test_case_2'] = out.clone()
 
-    # 测试不同的词汇表范围
+    # Test different vocabulary ranges.
     vob_start_id = 0
     vob_end_id = 500
     input_ids = torch.randint(
@@ -112,7 +112,7 @@ def test_embedding():
     embedding(input_ids, weight, vob_start_id, vob_end_id, out)
     results['test_case_3'] = out.clone()
 
-    # 测试不同的嵌入维度
+    # Test different embedding dimensions.
     embedding_dim = 256
     weight = torch.randn(
         vocab_size, embedding_dim, dtype=torch.float32, device='cuda'

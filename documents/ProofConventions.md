@@ -1,7 +1,5 @@
 # VeriTile Proof Conventions
 
-**English** | [中文](ProofConventions_zh.md)
-
 Tactic-level conventions that came out of repeated kernel proofs. These are
 not absolute rules — when a proof is uncomfortable, you can deviate, but the
 default choices below are what most VeriTile kernel proofs use.

@@ -48,11 +48,9 @@ def render(source):
     title = next(line[2:].strip() for line in lines if line.startswith('# '))
     body = []
     dropped_title = False
-    for index, line in enumerate(lines):
+    for line in lines:
         if not dropped_title and line.startswith('# '):
             dropped_title = True
-            continue
-        if index < 8 and 'English' in line and '中文' in line:
             continue
         body.append(line)
     # Rewrite prose links, leaving Lean and other fenced examples untouched.

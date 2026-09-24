@@ -13,7 +13,7 @@ def _fwd_kernel(
     V,
     sm_scale,
     B_Start_Loc,
-    B_Seqlen,  # B_LOC 内部记录每个batch 输入的真实位置， B_SEQ_len 记录当前输入的真实长度
+    B_Seqlen,  # B_LOC records the input positions for each batch; B_SEQ_len records the actual input lengths.
     Out,
     stride_qbs,
     stride_qh,
@@ -80,13 +80,13 @@ def _fwd_kernel(
             qk = tl.zeros([BLOCK_M, BLOCK_N], dtype=tl.float32)
             qk += tl.dot(q, k)
             qk *= sm_scale
-            # [SYM] mask outside of windows，使用大负数代替 -inf
+            # [SYM] Mask outside the windows; use a large negative value instead of -inf.
             qk = tl.where(offs_m[:, None] >= (start_n + offs_n[None, :]), qk, -1e9)
             qk = tl.where((start_n + offs_n[None, :]) > (offs_m[:, None] - sliding_window), qk, -1e9)
 
             # -- compute m_ij, p, l_ij
             m_ij = tl.max(qk, 1)
-            # 防止 m_ij 为 -1e9 导致的数值问题
+            # Avoid numerical issues when m_ij is -1e9.
             m_ij = tl.where(m_ij == -1e9, 0.0, m_ij)
             p = tl.exp(qk - m_ij[:, None])
             l_ij = tl.sum(p, 1)
@@ -96,7 +96,7 @@ def _fwd_kernel(
             alpha = tl.exp(m_i - m_i_new)
             beta = tl.exp(m_ij - m_i_new)
             l_i_new = alpha * l_i + beta * l_ij
-            l_i_new = tl.where(l_i_new == 0.0, 1e-9, l_i_new)  # 防止除零
+            l_i_new = tl.where(l_i_new == 0.0, 1e-9, l_i_new)  # Avoid division by zero.
             
             # -- update output accumulator --
             # scale p
@@ -136,7 +136,7 @@ def context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_input_len, sli
     assert Lq == Lk and Lk == Lv
     assert Lk in {16, 32, 64, 128}
 
-    sm_scale = 1.0 / (Lq ** 0.5)  # 计算scale系数
+    sm_scale = 1.0 / (Lq ** 0.5)  # Compute the scale factor.
     batch, head = b_seq_len.shape[0], q.shape[1]
     kv_group_num = q.shape[1] // k.shape[1]
 

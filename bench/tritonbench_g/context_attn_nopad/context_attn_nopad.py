@@ -4,7 +4,7 @@ import triton.language as tl
 
 @triton.jit
 def _fwd_kernel(
-    Q, K, V, sm_scale, B_Start_Loc, B_Seqlen,  # B_LOC 内部记录每个batch 输入的真实位置， B_SEQ_len 记录当前输入的真实长度
+    Q, K, V, sm_scale, B_Start_Loc, B_Seqlen,  # B_LOC records the input positions for each batch; B_SEQ_len records the actual input lengths.
     Out,
     stride_qbs, stride_qh, stride_qd,
     stride_kbs, stride_kh, stride_kd,
@@ -93,7 +93,7 @@ def context_attention_fwd(q, k, v, o, b_start_loc, b_seq_len, max_input_len):
     assert Lq == Lk and Lk == Lv
     assert Lk in {16, 32, 64, 128}
 
-    sm_scale = 1.0 / (Lq**0.5)  # 计算scale系数
+    sm_scale = 1.0 / (Lq**0.5)  # Compute the scale factor.
     batch, head = b_seq_len.shape[0], q.shape[1]
 
     grid = (batch, head, triton.cdiv(max_input_len, BLOCK))  # batch, head,

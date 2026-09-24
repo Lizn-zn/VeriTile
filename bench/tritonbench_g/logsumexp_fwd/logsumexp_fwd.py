@@ -84,8 +84,8 @@ def logsumexp_fwd(
 
 def test_logsumexp_fwd():
     batch_size = 4
-    seq_len = 64  # 最后一个维度长度
-    scale = 0.5  # 缩放因子
+    seq_len = 64  # Length of the last dimension
+    scale = 0.5  # Scale factor
 
     # Test 1: Basic Random Input
     x = torch.randn((batch_size, seq_len), device='cuda', dtype=torch.float32)

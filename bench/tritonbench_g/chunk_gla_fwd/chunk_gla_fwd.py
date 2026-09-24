@@ -318,7 +318,7 @@ def chunk_fwd_o_gated_gk_fn(q, v, g_cumsum, A, h, BT, scale):
 
 
 def test_chunk_gla_fwd():
-    # 测试正常的输入规模
+    # Test a normal input size.
     B = 2  # batch size
     H = 2  # number of heads
     T = 128  # sequence length
@@ -341,11 +341,11 @@ def test_chunk_gla_fwd():
     result = {}
     result['test_case_1'] = o.shape
 
-    # 测试 K > 256 的情况
+    # Test the K > 256 case.
     B = 2
     H = 2
     T = 128
-    K = 512  # 设置 K > 256
+    K = 512  # Set K > 256.
     V = 64
     BT = 16
     BC = 16

@@ -203,12 +203,12 @@ def matmul_kernel(
         b_ptrs = b_ptr + (offs_k[:, None] * stride_bk + offs_bn[None, :] * stride_bn)
         for j in range(0, tl.cdiv(K // 4, BLOCK_SIZE_K)):
             k = i * tl.cdiv(K // 4, BLOCK_SIZE_K) + j
-            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0).to(tl.int8)  # 转换为 int8 类型
+            a = tl.load(a_ptrs, mask=offs_k[None, :] < K - k * BLOCK_SIZE_K, other=0).to(tl.int8)  # Cast to int8.
             b_uint8 = tl.load(b_ptrs, mask=offs_k[:, None] < K, other=0)
             mask = 3 << (2 * i)
-            b = ((b_uint8 & mask) >> (2 * i)).to(tl.int8)  # 转换为 int8 类型
-            tensor_full = tl.full((1,), 1, dtype=tl.int8)  # 使用 int8 类型
-            accumulator += tl.dot(a, (b - tensor_full), out_dtype=tl.int32)  # 保持 a 和 b 为 int8
+            b = ((b_uint8 & mask) >> (2 * i)).to(tl.int8)  # Cast to int8.
+            tensor_full = tl.full((1,), 1, dtype=tl.int8)  # Use int8.
+            accumulator += tl.dot(a, (b - tensor_full), out_dtype=tl.int32)  # Keep a and b as int8.
             a_ptrs += BLOCK_SIZE_K * stride_ak
             b_ptrs += BLOCK_SIZE_K * stride_bk
     c = accumulator

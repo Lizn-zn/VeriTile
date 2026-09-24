@@ -140,37 +140,37 @@ def max_dim(inp, dim=None, keepdim=False):
 
 
 def test_max():
-    # 测试1：1维Tensor，验证max函数
-    # 使用随机生成的长度为1024的一维Tensor
+    # Test 1: Check max with a 1D tensor.
+    # Use a random 1D tensor of length 1024.
     inp1d = torch.randn(1024, device="cuda")
-    # 使用自定义max函数
+    # Use the custom max function.
     out1d_custom = max(inp1d)
 
-    # 测试2：2维Tensor，验证max_dim函数
-    # 使用随机生成的1024x1024的二维Tensor
+    # Test 2: Check max_dim with a 2D tensor.
+    # Use a random 1024x1024 2D tensor.
     inp2d = torch.randn(1024, 1024, device="cuda")
-    # 使用自定义max_dim函数，沿着dim=1计算最大值
+    # Use the custom max_dim function along dim=1.
     out2d_custom = max_dim(inp2d, dim=1)
 
-    # 测试3：3维Tensor，验证max_dim函数
-    # 使用随机生成的128x64x32的三维Tensor
+    # Test 3: Check max_dim with a 3D tensor.
+    # Use a random 128x64x32 3D tensor.
     inp3d = torch.randn(128, 64, 32, device="cuda")
-    # 使用自定义max_dim函数，沿着dim=2计算最大值
+    # Use the custom max_dim function along dim=2.
     out3d_custom = max_dim(inp3d, dim=2)
 
-    # 测试4：保持维度的测试
-    # 使用随机生成的512x256的二维Tensor
+    # Test 4: Keep dimensions.
+    # Use a random 512x256 2D tensor.
     inp2d_keepdim = torch.randn(512, 256, device="cuda")
-    # 使用自定义max_dim函数，保持维度的情况下计算最大值
+    # Use the custom max_dim function while keeping dimensions.
     out2d_custom_keepdim = max_dim(inp2d_keepdim, dim=1, keepdim=True)
 
-    # 测试5：负维度测试
-    # 使用随机生成的64x128x256的三维Tensor
+    # Test 5: Use a negative dimension.
+    # Use a random 64x128x256 3D tensor.
     inp3d_neg_dim = torch.randn(64, 128, 256, device="cuda")
-    # 使用自定义max_dim函数，沿着负的维度计算最大值（等价于dim=1）
+    # Use the custom max_dim function with a negative dimension (equivalent to dim=1).
     out3d_custom_neg_dim = max_dim(inp3d_neg_dim, dim=-2)
 
-    # 记录每个测试用例的结果
+    # Record the results of each test case.
     results = {
         "test_case_1": out1d_custom,
         "test_case_2": out2d_custom,

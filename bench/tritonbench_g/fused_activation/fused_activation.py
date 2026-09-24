@@ -50,19 +50,19 @@ def fused_add_mul_activation_torch(in_out_tensor: torch.Tensor, bias: torch.Tens
 
 
 def test_fused_add_mul_activation():
-    # 输入张量形状
-    num_elements = 8192  # 总元素数量
-    num_weights = 64     # 偏置的数量
+    # Input tensor shape
+    num_elements = 8192  # Total element count
+    num_weights = 64     # Number of biases
 
-    # 创建输入张量
-    in_out_tensor = torch.randn(num_elements, dtype=torch.float32, device='cuda')  # 输入输出张量
-    bias = torch.randn(num_weights, dtype=torch.float32, device='cuda')  # 偏置
-    in_tensor = torch.randn(num_elements, dtype=torch.float32, device='cuda')  # 额外输入张量
+    # Create the input tensors.
+    in_out_tensor = torch.randn(num_elements, dtype=torch.float32, device='cuda')  # Input/output tensor
+    bias = torch.randn(num_weights, dtype=torch.float32, device='cuda')  # Bias
+    in_tensor = torch.randn(num_elements, dtype=torch.float32, device='cuda')  # Additional input tensor
 
-    # 分支1: activation="sigmoid"
+    # Branch 1: activation="sigmoid"
     result_sigmoid = fused_add_mul_activation_torch(in_out_tensor.clone(), bias, in_tensor)
 
-    # 分支2: activation="relu"
+    # Branch 2: activation="relu"
     grid = lambda meta: (triton.cdiv(in_out_tensor.numel(), meta['BLOCK_SIZE']),)
     BLOCK_SIZE = min(2048, in_out_tensor.numel())
     fused_add_mul_activation_kernel[grid](in_out_tensor, bias, in_tensor,
@@ -73,7 +73,7 @@ def test_fused_add_mul_activation():
                                           BLOCK_SIZE=BLOCK_SIZE)
     result_relu = in_out_tensor.clone()
 
-    # 分支覆盖率【2/4】
+    # Branch coverage: [2/4]
     results = {
         "test_case_1": result_sigmoid[:10].cpu().numpy(),
         "test_case_2": result_relu[:10].cpu().numpy()

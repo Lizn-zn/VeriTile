@@ -1,7 +1,5 @@
 # TritonBench-G Translation Review Criteria
 
-**English** | [中文](review_criteria_zh.md)
-
 What gaps are tolerable, and what must be fixed, when reviewing
 `bench/tritonbench_g/<kernel>/<Kernel>.lean` against its upstream
 `<kernel>.py`.

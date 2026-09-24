@@ -106,15 +106,15 @@ def rms_matmul_rbe(
 
 def rms_matmul_rbe_wrapper(x: torch.Tensor, weight: torch.Tensor, rms_w: torch.Tensor, use_rbe: bool, start_pos: int,
                            n_heads: int, head_dim: int):
-    # 确保 weight 和 rms_w 的数据类型一致
+    # Ensure weight and rms_w have the same dtype.
     assert weight.dtype in [torch.float16, torch.int8], "Only torch.float16 or torch.int8 are supported for weight"
     
-    # 确保 rms_w 和 weight 的 dtype 一致
+    # Ensure rms_w and weight have the same dtype.
     if rms_w.dtype != weight.dtype:
         # print(f"rms_w dtype: {rms_w.dtype}, weight dtype: {weight.dtype}")
-        rms_w = rms_w.to(weight.dtype)  # 如果类型不一致，将 rms_w 转换为与 weight 一致的类型
+        rms_w = rms_w.to(weight.dtype)  # If the dtypes differ, cast rms_w to the dtype of weight.
 
-    # 创建输出张量
+    # Create the output tensor.
     batch, M, K = x.shape
     weight_t = weight.t()
     K_W, N = weight_t.shape

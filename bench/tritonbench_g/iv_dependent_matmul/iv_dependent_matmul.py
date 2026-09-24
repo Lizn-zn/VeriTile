@@ -117,9 +117,9 @@ def iv_dependent_matmul_wrapper(
 
 import torch
 
-# 封装 IV Dependent MatMul 测试的函数
+# Wrapper for the IV Dependent MatMul test
 def test_iv_dependent_matmul_kernel():
-    # 定义矩阵维度和块大小
+    # Define the matrix dimensions and block size.
     M = 256
     K = 256
     N = 256
@@ -127,10 +127,10 @@ def test_iv_dependent_matmul_kernel():
     BLOCK_SIZE_N = 32
     BLOCK_SIZE_K = 32
 
-    # 创建 CUDA 设备
+    # Create the CUDA device.
     device = torch.device('cuda')
 
-    # 定义所有类型的内核配置
+    # Define configurations for all kernel types.
     types = [
         "pre_load",
         "post_load",
@@ -139,12 +139,12 @@ def test_iv_dependent_matmul_kernel():
         "post_load_three_iters"
     ]
 
-    # 字典用于存储每个测试用例的结果
+    # Dictionary holding the results for each test case
     results = {}
 
-    # 遍历每种内核类型，进行测试
+    # Test each kernel type.
     for i, type in enumerate(types):
-        # 调用封装函数运行 Triton 核心
+        # Call the wrapper to run the Triton kernel.
         triton_output = iv_dependent_matmul_wrapper(
             M=M,
             K=K,
@@ -156,13 +156,13 @@ def test_iv_dependent_matmul_kernel():
             device=device
         )
 
-        # 确保输出的大小正确
+        # Check the output size.
         assert triton_output.shape == (M, N), f"Expected output shape {(M, N)} but got {triton_output.shape} for type {type}"
 
-        # 保存结果到字典
+        # Save the results in the dictionary.
         results[f"test_case_{i+1}"] = triton_output
 
     return results
 
-# 执行测试函数进行所有类型的验证
+# Run the test function to check all kernel types.
 result_gold = test_iv_dependent_matmul_kernel()

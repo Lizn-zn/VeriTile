@@ -1,7 +1,5 @@
 # VeriTile Reference Documentation
 
-**English** | [中文](README_zh.md)
-
 Long-form reference for VeriTile's embedded Triton subset, semantic model,
 and trusted-boundary policies. Each active doc is a *contract*: what is
 modeled, what is not, where the boundary sits.
@@ -17,10 +15,10 @@ Documentation Map):
 
 | Question | Doc |
 |---|---|
-| Which Triton constructs are supported? | [TritonSubset.md](./TritonSubset.md) ([中文](./TritonSubset_zh.md)) |
-| What semantic caveats affect theorem interpretation? | [SemanticCaveats.md](./SemanticCaveats.md) ([中文](./SemanticCaveats_zh.md)) |
-| Where does my new lemma / definition belong? | [CodeOrganization.md](./CodeOrganization.md) ([中文](./CodeOrganization_zh.md)) |
-| Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./ProofConventions.md) ([中文](./ProofConventions_zh.md)) |
+| Which Triton constructs are supported? | [TritonSubset.md](./TritonSubset.md) |
+| What semantic caveats affect theorem interpretation? | [SemanticCaveats.md](./SemanticCaveats.md) |
+| Where does my new lemma / definition belong? | [CodeOrganization.md](./CodeOrganization.md) |
+| Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./ProofConventions.md) |
 | Which theorem surface should I use? | [CorrectnessSurfaces.md](./CorrectnessSurfaces.md) |
 | Naming conventions for theorem surfaces | [TheoremSurfaces.md](./TheoremSurfaces.md) |
 | How does the kernel manifest work? | [KernelManifest.md](./KernelManifest.md) |
@@ -51,5 +49,5 @@ Closed-phase notes are preserved in [`archive/`](./archive/):
   Resolved: named regions throughout.
 - `ResearchProblemAddressTyping.md` — RP2: ℝ-uniform vs Nat-bifurcated
   `Value`. Resolved: bifurcated `Value`.
-- `Proposal.md` / `Proposal_zh.md` — initial project proposal. The
+- `Proposal.md` — initial project proposal. The
   technical content has evolved beyond it; kept for historical context.

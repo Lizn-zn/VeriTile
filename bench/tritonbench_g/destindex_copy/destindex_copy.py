@@ -56,8 +56,8 @@ def destindex_copy_kv(KV_nope, KV_rope, DestLoc, O_nope, O_rope):
     kv_nope_head_dim = KV_nope.shape[2]
     kv_rope_head_dim = KV_rope.shape[2]
 
-    aligned_d_nope = triton.next_power_of_2(kv_nope_head_dim) # 调整为2的幂次方
-    aligned_d_rope = triton.next_power_of_2(kv_rope_head_dim) # 调整为2的幂次方
+    aligned_d_nope = triton.next_power_of_2(kv_nope_head_dim) # Round up to a power of two.
+    aligned_d_rope = triton.next_power_of_2(kv_rope_head_dim) # Round up to a power of two.
 
     assert KV_nope.shape[1] == O_nope.shape[1]
     assert KV_nope.shape[2] == O_nope.shape[2]
@@ -88,8 +88,8 @@ def destindex_copy_kv(KV_nope, KV_rope, DestLoc, O_nope, O_rope):
         kv_rope_head_num,
         # BLOCK_DMODEL_NOPE=kv_nope_head_dim,
         # BLOCK_DMODEL_ROPE=kv_rope_head_dim,
-        BLOCK_DMODEL_NOPE=aligned_d_nope,  # 传递对齐后的值
-        BLOCK_DMODEL_ROPE=aligned_d_rope,  # 传递对齐后的值
+        BLOCK_DMODEL_NOPE=aligned_d_nope,  # Pass the aligned value.
+        BLOCK_DMODEL_ROPE=aligned_d_rope,  # Pass the aligned value.
         num_warps=num_warps,
         num_stages=1,
     )

@@ -185,9 +185,9 @@ upstream edits:
 cd site && ./scripts/migrate-docs.sh
 ```
 
-The script extracts the H1 as `title:`, drops the bilingual switcher line,
-and resolves relative links against the original document. Published design
-notes link to their English site pages with the `/VeriTile/` prefix; other
+The script extracts the H1 as `title:` and resolves relative links against
+the original document. Published design notes link to their English site
+pages with the `/VeriTile/` prefix; other
 repository files link to GitHub. Fenced code is preserved. It covers 13 design
 notes in English, including semantic caveats and trust audits.
 

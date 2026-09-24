@@ -478,27 +478,27 @@ lightning_attn2_no_decay = LightningAttention2NoDecay.apply
 import torch
 
 def test_lightning_attention2_no_decay():
-    # 输入张量的形状
+    # Input tensor shape
     b, h, n, d, e = 2, 8, 128, 64, 128  # batch_size, num_heads, seq_len, embed_dim, value_dim
 
-    # 创建随机的 q, k, v 张量
+    # Create random q, k, and v tensors.
     q = torch.randn((b, h, n, d), dtype=torch.float32, device='cuda', requires_grad=True)
     k = torch.randn((b, h, n, d), dtype=torch.float32, device='cuda', requires_grad=True)
     v = torch.randn((b, h, n, e), dtype=torch.float32, device='cuda', requires_grad=True)
 
-    # 前向传播
+    # Forward pass
     o = lightning_attn2_no_decay(q, k, v)
 
-    # 反向传播
-    o.sum().backward()  # 计算总和的梯度
+    # Backward pass
+    o.sum().backward()  # Compute the gradient of the sum.
 
-    # 返回results
+    # Return the results.
     results = {
         'test_case_1': (
-            o.cpu().detach().numpy(),  # 直接返回前向传播的输出
-            q.grad.cpu().detach().numpy(),  # q的梯度
-            k.grad.cpu().detach().numpy(),  # k的梯度
-            v.grad.cpu().detach().numpy()   # v的梯度
+            o.cpu().detach().numpy(),  # Return the forward output directly.
+            q.grad.cpu().detach().numpy(),  # Gradient of q
+            k.grad.cpu().detach().numpy(),  # Gradient of k
+            v.grad.cpu().detach().numpy()   # Gradient of v
         )
     }
     

@@ -364,14 +364,6 @@ while IFS= read -r readme; do
   fi
 done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name 'README.md' | sort)
 
-while IFS= read -r readme; do
-  dir="${readme%/README_zh.md}"
-  if find "${dir}" -maxdepth 1 -name '*.lean' | rg -q . &&
-      rg -q '状态:TODO' "${readme}"; then
-    stale_readmes+=("${readme}")
-  fi
-done < <(find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -name 'README_zh.md' | sort)
-
 if [ "${#stale_readmes[@]}" -gt 0 ]; then
   printf 'FAIL compiled ports with TODO README status:\n'
   printf '  %s\n' "${stale_readmes[@]}"

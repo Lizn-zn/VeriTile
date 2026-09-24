@@ -39,18 +39,18 @@ def masked_add(grad: torch.Tensor, p_data: torch.Tensor, p_mask: torch.Tensor, a
 
 import torch
 
-# 测试代码
+# Test code
 def test_masked_add():
-    # 设置随机种子以保证结果可复现
+    # Set the random seed for reproducible results.
     torch.manual_seed(0)
-    n = 10000  # 选择较大的张量大小
+    n = 10000  # Choose a larger tensor size.
 
-    # 生成随机张量
+    # Generate random tensors.
     grad = torch.randn(n, device='cuda')
     p_data = torch.randn(n, device='cuda')
-    p_mask = torch.randint(0, 2, (n,), device='cuda')  # 生成0或1的掩码
+    p_mask = torch.randint(0, 2, (n,), device='cuda')  # Generate a mask of zeros and ones.
 
-    # Triton版本
+    # Triton implementation
     results = {}
     
     # Test case 1
@@ -77,5 +77,5 @@ def test_masked_add():
 
     return results
 
-# 运行测试
+# Run the tests.
 result_gold = test_masked_add()
