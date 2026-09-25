@@ -40,6 +40,17 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      - name: Install required audit tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ripgrep
+          command -v rg && command -v python3
+
+      - name: Check audit runner regressions
+        run: |
+          python3 -m unittest discover -s scripts -p 'test_audit_source.py'
+          python3 -m unittest discover -s scripts -p 'test_audit_shards.py'
+
       - name: Build Lean project
         uses: leanprover/lean-action@v1
         with:
@@ -63,8 +74,6 @@ jobs:
           lake env lean bench/tests/ModuleSpecAudit.lean
           lake env lean bench/tests/ModuleHeadlineAudit.lean
           python3 -m unittest discover -s scripts -p 'test_audit_gates.py'
-          python3 -m unittest discover -s scripts -p 'test_audit_source.py'
-          python3 -m unittest discover -s scripts -p 'test_audit_shards.py'
           python3 -m unittest discover -s scripts -p 'test_doc_api.py'
           python3 -m unittest discover -s scripts -p 'test_coverage_review.py'
           python3 bench/coverage_review.py

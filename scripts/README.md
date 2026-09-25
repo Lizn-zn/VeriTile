@@ -7,7 +7,9 @@ to decide whether the requested theorems were proved.
 ## Setup
 
 Use Linux with Landlock support and a working systemd user service. Install
-Go 1.24+, the project's Lean toolchain, and the Claude Code `lean4` plugin.
+Go 1.24+, the project's Lean toolchain, Python 3, and ripgrep (`rg`).
+The Claude Code `lean4` plugin is needed only for agent-driven proof attempts
+through `scripts/prove.sh`; the artifact and bench audits do not need it.
 Build the judge tools once, outside the project (to avoid copying them into each
 judging workspace):
 
