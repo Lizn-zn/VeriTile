@@ -15,7 +15,7 @@ const themes = { light: 'github-light', dark: 'github-dark-dimmed' } as const;
 <div class="vt-landing">
   <section class="vt-hero" aria-labelledby="_top">
     <p class="vt-eyebrow"><span class="vt-mark" aria-hidden="true"></span>{copy.eyebrow}</p>
-    <h1 id="_top" data-page-title>{copy.titleLead}<span>{copy.titleAccent}</span></h1>
+    <h1 id="_top" data-page-title>{copy.titleLead}{' '}<span>{copy.titleAccent}</span></h1>
     <p class="vt-hero-intro"><strong>{story.introEmphasis}</strong> {story.intro}</p>
     <p class="vt-proof-promise">{story.promise}</p>
     <p class="vt-scope-note">Contracts cover the translated model and its stated arithmetic assumptions. <a href={`${docsBase}/architecture/semantic-caveats/`}>What our proofs cover →</a></p>
