@@ -82,20 +82,23 @@ class LeanExampleTests(unittest.TestCase):
                                  'bench/examples/TritonBenchVectorAdditionFP.lean'],
                                 cwd=exporter.ROOT, text=True, capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for text in ('ADD-COMMUTE [bias PASS; vars PASS]', 'Parameters / premises:',
-                     'R : Rules', 'originalKernel ≡[R] optimizedKernel',
-                     'axiom footprint ⊆ standard base', '4096', 'fp32'):
+        for text in ('FP assumptions used by vector_addition_equiv:',
+                     'ADD-COMMUTE [bias PASS; vars PASS]',
+                     '4096', 'fp32'):
             self.assertIn(text, result.stdout)
         for hidden in ('instance key:', 'EvidenceValidated', 'artifact:',
                        'Reachable execution primitives', 'Dependency boundary:',
-                       'R.assumptions', 'sorryAx', 'Nonstandard axioms:'):
+                       'R.assumptions', 'sorryAx', 'Nonstandard axioms:',
+                       'Specification:', 'Kind:', 'Claim:', 'Parameters / premises:',
+                       'R : Rules', 'originalKernel', 'unresolved FP proof',
+                       'Classical.choice', 'axiom footprint'):
             self.assertNotIn(hidden, result.stdout)
         self.assertEqual(result.stdout.count('ADD-COMMUTE ['), 1)
 
     def test_full_example_keeps_the_audit_details(self):
         source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()
-        source = '\n'.join(line + ' full' if line.startswith('#print_spec ') else line
-                           for line in source.splitlines())
+        source = source.replace('#print_fp_assumptions vector_addition_equiv',
+                                '#print_spec vector_addition_equiv full')
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'FullSpec.lean'
             path.write_text(source)

@@ -29,8 +29,8 @@ specification vector_addition_equiv (R : Rules) :
 This reuses the existing equivalence notation. Here `R` is the rule model;
 its table stores the experiment configuration and results, and its `add_comm`
 field requires admission of the atom. Neither `experiment` nor `evidence` is
-a public theorem argument. `#print_spec vector_addition_equiv` displays the
-claim, model premise and atomic rule scope. Append `full` for the audit details. Under this scope, the notation
+a public theorem argument. `#print_fp_assumptions vector_addition_equiv` lists
+only the referenced atomic assumptions, with their gate status and scope. Under this scope, the notation
 elaborates to `Spec.FloatingPoint`; historical KernelIO scopes still use their
 original `RoundingModel` relation.
 
@@ -74,12 +74,16 @@ Statistical claims about an actual use site's operands need their own sampling
 justification. The current context rule is syntactic sequence framing, not a
 proof of distribution transport.
 
-`#print_spec name` is the reader-facing view: the claim, parameters/premises,
-atomic rules, gate labels and their scope. `#print_spec name full` retains
-configuration/evidence identities, model obligations, reachable primitives,
-registered rules, axioms, project dependencies and the trusted library boundary.
-Nonstandard axiom warnings are shown in both modes. The declared atom list is
-conservative, not a minimal used-atom trace. Printing does not discharge a premise.
+`#print_fp_assumptions name` walks the FP proof and instantiated helper proofs,
+printing the referenced `Derivation.atom` entries, their gate labels and scope.
+It does not enumerate unused entries in the rule table or print the specification.
+Repeated instances are deduplicated; distinct configurations stay separate.
+Opaque FP proof premises are marked unresolved rather than assumed to use no atoms.
+Reachable proof branches are included, so this is not a minimal logical dependency set.
+The command accepts ordinary FP theorems as well as `specification` headlines.
+Printing does not discharge a premise or perform an axiom audit. The example runs
+the separate axiom audit silently on success. The older `#print_spec name full`
+remains available for the internal configuration/evidence and dependency audit.
 
 The calculus, reporting, example and rejection checks are implemented. The
 [GPU experiment runner](../experiments/floating_point/README.md) now supplies

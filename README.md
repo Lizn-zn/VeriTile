@@ -28,8 +28,9 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   implementation equivalence uses `lhs ≡[R] rhs` (`open scoped VeriTile.Spec`).
   Two-gates admits atomic rewrite assumptions; Lean checks their composition.
   `R` bundles the rule table and admissions; experiment bookkeeping stays there.
-  `#print_spec name` reports implementations, atom evidence, primitives and
-  hypotheses. The numerical runner and artifact-replay bridge remain pending. See [specification meanings](./documents/CorrectnessSurfaces.md#two-public-specification-meanings).
+  `#print_fp_assumptions name` lists the atomic assumptions referenced by an FP
+  proof, with their gate status and scope. The GPU runner and trusted-report
+  example are available. See [specification meanings](./documents/CorrectnessSurfaces.md#two-public-specification-meanings).
 - **Narrow-float / rounding-model layer** (#1): an abstract `RoundingModel`
   (`round : FloatDType → ℝ → ℝ`, fields `round_real` (real-channel identity) and `round_idem` (idempotence)) threads a
   black-box rounding function through the semantics (`evalOpR` / `stepStmtR` /
@@ -105,8 +106,8 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 For new public headlines, express correctness against the mathematical formula
 in real semantics (`Spec.Real`); use `lhs ≡[R] rhs` in the `VeriTile.Spec` scope
 for implementation equivalence derived from two-gates-admitted atomic rules. Both keep the `specification` keyword.
-After importing `VeriTile.Meta.StatementAudit`, `#print_spec name` shows the
-claim's assumptions and dependencies. The existing proof vocabulary below
+After importing `VeriTile.Meta.StatementAudit`, `#print_fp_assumptions name`
+shows only the atomic assumptions referenced by an FP proof. The existing proof vocabulary below
 retains its original mathematical/abstract-rounding meaning.
 
 | Goal | Use |

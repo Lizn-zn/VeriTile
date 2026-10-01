@@ -98,7 +98,7 @@ def addCommute : Spec.RuleEntry ComputeStmt :=
 
 /-- Trust in the published numerical result and its use-site correspondence.
 The record is concrete: the caller cannot choose the rule, gates or contract.
-This scoped premise is exactly the numerical assumption exposed by #print_spec. -/
+This scoped premise is the numerical assumption exposed by #print_fp_assumptions. -/
 structure Rules where
   add_comm : Spec.EvidenceValidated addCommute.rule addCommute.evidence
 
@@ -121,8 +121,9 @@ specification vector_addition_equiv (R : Rules) :
   rw [original_decomposition, optimized_decomposition]
   exact .frame beforeAdd afterAdd (admitted_add_commute R)
 
-#print_spec vector_addition_equiv
-#axiomsClean vector_addition_equiv
+#print_fp_assumptions vector_addition_equiv
+-- Keep the proof audit active without adding its success log to the example.
+#guard_msgs (drop info) in
 #auditModuleAxioms
 
 end VeriTile.Bench.Examples.TritonBenchVectorAdditionFP

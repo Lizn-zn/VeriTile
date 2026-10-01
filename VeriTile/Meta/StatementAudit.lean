@@ -10,6 +10,7 @@ audit:
 * `#stmtConsts T`          — every constant in `T`'s statement.
 * `#auditStmt T`           — just the project (non-core) constants: the surface
                              a human must read.
+* `#print_fp_assumptions T` — atomic assumptions referenced by an FP proof.
 * `#print_spec T`          — reader-facing claim, premises and atomic rules.
 * `#print_spec T full`     — configuration/evidence, transitive dependencies
                              and the complete trust audit.
@@ -331,6 +332,97 @@ private def shortSpecName : Name → String
   | .str _ name => name
   | name => name.toString
 
+private def printFPAtom (entry : Expr) : MetaM Unit := do
+  let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[entry]
+  let evidence ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.evidence #[entry]
+  let contract ← Meta.mkAppM ``VeriTile.Spec.AtomicRule.contract #[rule]
+  let id ← specString? ``VeriTile.Spec.Contract.ruleID contract
+  let scope ← specString? ``VeriTile.Spec.Contract.description contract
+  let status (projection : Name) : MetaM String := do
+    let gate ← Meta.mkAppM projection #[evidence]
+    return (← specString? ``VeriTile.Spec.GateStatus.label gate).getD "symbolic"
+  match id with
+  | some id => logInfo m!"  {id} [bias {← status ``VeriTile.Spec.Evidence.bias}; vars {← status ``VeriTile.Spec.Evidence.vars}]"
+  | none => logInfo m!"  {← Meta.ppExpr entry} [symbolic atom]"
+  if let some scope := scope then
+    unless scope.isEmpty do logInfo m!"    {scope}"
+
+private structure FPAssumptionState where
+  seen : Std.HashSet Expr := {}
+  entries : Array Expr := #[]
+  unresolved : Bool := false
+  remaining : Nat := 10000
+
+/-- Walk instantiated proof bodies, not theorem types or the declared table.
+We inspect all reachable proof branches, not a minimal logical dependency set.
+An opaque derivation is reported explicitly rather than guessed from its table.
+Printing within each local context also supports atoms beneath proof lambdas. -/
+private partial def visitFPAssumptions (proof : Expr) :
+    StateRefT FPAssumptionState MetaM Unit := do
+  let proof := proof.headBeta
+  if (← get).seen.contains proof then return
+  if (← get).remaining == 0 then
+    throwError "FP assumption inspection exceeded its proof traversal limit"
+  modify fun s => { s with seen := s.seen.insert proof, remaining := s.remaining - 1 }
+  match proof with
+  | .mdata _ inner => visitFPAssumptions inner
+  | .letE _ _ value body _ => visitFPAssumptions (body.instantiate1 value)
+  | .lam .. => Meta.lambdaTelescope proof fun _ body => visitFPAssumptions body
+  | _ =>
+    unless ← Meta.isProof proof do return
+    let args := proof.getAppArgs
+    if proof.isAppOf ``VeriTile.Spec.Derivation.atom then
+      let entry := args[2]!
+      -- Keep distinct instantiations even if their textual rule IDs coincide.
+      let normalized ← Meta.withTransparency .all <| Meta.whnf entry
+      unless (← get).entries.contains normalized do
+        modify fun s => { s with entries := s.entries.push normalized }
+        printFPAtom entry
+      return
+    let env ← getEnv
+    if let .const name levels := proof.getAppFn then
+      unless isCoreConst env name do
+        let info ← getConstInfo name
+        if let some value := info.value? then
+          let body := value.instantiateLevelParams info.levelParams levels
+          visitFPAssumptions (body.beta args)
+          return
+    if let .proj .. := proof.getAppFn then
+      if let some reduced ← Meta.withTransparency .all <| Meta.reduceProj? proof.getAppFn then
+        visitFPAssumptions (mkAppN reduced args)
+        return
+    -- Constructors, transports and library combinators retain their proof
+    -- arguments. Skip data arguments, including unused rule-table entries.
+    for arg in args do
+      if ← Meta.isProof arg then visitFPAssumptions arg
+    -- A local/opaque FP proof may conceal further atoms. Never print "none"
+    -- in this case. Core recursors have their branches inspected above.
+    let opaqueHead := match proof.getAppFn with
+      | .fvar .. | .proj .. => true
+      | .const name _ => match env.find? name with
+          | some (.axiomInfo _) | some (.opaqueInfo _) => true
+          | _ => false
+      | _ => false
+    if opaqueHead then
+      let type ← specConclusion (← Meta.inferType proof)
+      if type.isAppOf ``VeriTile.Spec.FloatingPoint || type.isAppOf ``VeriTile.Spec.Derivation then
+        modify fun s => { s with unresolved := true }
+        logInfo m!"  unresolved FP proof: {← Meta.ppExpr proof} (atomic assumptions unavailable)"
+
+/-- Print only the atomic assumptions referenced by a floating-point proof.
+Works on ordinary theorems as well as registered `specification` headlines. -/
+elab "#print_fp_assumptions " id:ident : command => do
+  let name ← liftCoreM <| realizeGlobalConstNoOverload id
+  let info ← liftCoreM <| getConstInfo name
+  liftTermElabM <| Meta.forallTelescope info.type fun params conclusion => do
+    let target ← specConclusion conclusion
+    unless target.isAppOf ``VeriTile.Spec.FloatingPoint || target.isAppOf ``VeriTile.Spec.Derivation do
+      throwError "{name}: expected a floating-point equivalence or derivation"
+    logInfo m!"FP assumptions used by {shortSpecName name}:"
+    let proof := mkAppN (mkConst name (info.levelParams.map Level.param)) params
+    let (_, state) ← (visitFPAssumptions proof).run {}
+    if state.entries.isEmpty && !state.unresolved then logInfo "  none"
+
 private def printCompactAtoms (assumptions : Expr) : MetaM Unit := do
   logInfo "Atomic assumptions (declared scope):"
   let mut rest := assumptions
@@ -343,19 +435,7 @@ private def printCompactAtoms (assumptions : Expr) : MetaM Unit := do
       logInfo m!"  {← Meta.ppExpr rest} (symbolic table)"
       return
     let args := reduced.getAppArgs
-    let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[args[1]!]
-    let evidence ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.evidence #[args[1]!]
-    let contract ← Meta.mkAppM ``VeriTile.Spec.AtomicRule.contract #[rule]
-    let id ← specString? ``VeriTile.Spec.Contract.ruleID contract
-    let scope ← specString? ``VeriTile.Spec.Contract.description contract
-    let status (projection : Name) : MetaM String := do
-      let gate ← Meta.mkAppM projection #[evidence]
-      return (← specString? ``VeriTile.Spec.GateStatus.label gate).getD "symbolic"
-    match id with
-    | some id => logInfo m!"  {id} [bias {← status ``VeriTile.Spec.Evidence.bias}; vars {← status ``VeriTile.Spec.Evidence.vars}]"
-    | none => logInfo m!"  rule from {← Meta.ppExpr args[1]!} [symbolic]"
-    if let some scope := scope then
-      unless scope.isEmpty do logInfo m!"    {scope}"
+    printFPAtom args[1]!
     rest := args[2]!
   logInfo "  further entries omitted; use #print_spec ... full."
 

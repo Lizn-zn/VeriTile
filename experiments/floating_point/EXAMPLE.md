@@ -36,30 +36,34 @@ lake build VeriTile.Meta.StatementAudit VeriTile.Triton.Float.Equivalence VeriTi
 lake env lean bench/examples/TritonBenchVectorAdditionFP.lean
 ```
 
-最后一条命令完成 Lean 检查并运行 `#print_spec`，其中应看到：
+最后一条命令完成 Lean 检查。查看浮点证明引用的原子假设使用：
+
+```lean
+#print_fp_assumptions vector_addition_equiv
+```
+
+输出只有原子假设及其适用配置：
 
 ```text
-Specification: vector_addition_equiv
-Kind: floating-point equivalence under atomic assumptions
-Claim: originalKernel ≡[R] optimizedKernel
-Parameters / premises:
-  R : Rules
-Atomic assumptions (declared scope):
+FP assumptions used by vector_addition_equiv:
   ADD-COMMUTE [bias PASS; vars PASS]
     shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)
 ```
 
-详细审计使用 `#print_spec vector_addition_equiv full`：它补充报告快照标识、来源文件、
-`Rules.add_comm` / `EvidenceValidated` 前提、完整配置引用和传递依赖。
-默认视图仍会显示非标准公理或 `sorryAx` 警告；规则列表是声明范围，不声称是最小使用集合。
-文件里的 `#axiomsClean` 和 `#auditModuleAxioms` 是独立的审计命令，它们的输出不属于 `#print_spec`。
+该命令沿证明及其辅助引理寻找 `Derivation.atom`，不把规则表中未引用的条目算进去；
+重复的同一实例只显示一次，不同配置的实例分开显示。它也适用于普通浮点 theorem，
+不要求使用 `specification` 关键字。不引用原子的推导显示 `none`；若证明依赖不可展开的
+浮点证明前提，则明确显示 `unresolved FP proof`，不会猜测其原子集合。
+遍历涵盖可达证明分支，不声称求出了逻辑上的最小依赖集合。
+公理审计是独立检查：示例仍执行 `#auditModuleAxioms`，只隐藏检查通过时的提示。
+原来的 `#print_spec ... full` 保留兼容，用于内部详细审计。
 `empirical_max` 保留在报告数据里，不被改写为尾部置信上界。
 
 冻结输入后的回归和现有官方 comparator 检查：
 
 ```bash
 python3 scripts/export_numerical_rules.py --trust-report --check
-python3 -m unittest scripts.test_export_numerical_rules scripts.test_specification_surface -v
+python3 -m unittest scripts.test_export_numerical_rules scripts.test_specification_surface scripts.test_fp_assumptions -v
 python3 scripts/check_comparator.py --file bench/examples/TritonBenchVectorAdditionFP.lean --trust
 ```
 
