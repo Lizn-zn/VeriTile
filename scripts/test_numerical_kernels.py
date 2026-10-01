@@ -9,7 +9,7 @@ import os
 from types import SimpleNamespace
 import unittest
 
-from scripts import fp_experiment as experiment
+from scripts import check_numerics as experiment
 
 HAS_TORCH = importlib.util.find_spec("torch") is not None
 HAS_TRITON = importlib.util.find_spec("triton") is not None
@@ -35,16 +35,36 @@ class OracleTests(unittest.TestCase):
                 experiment.oracle(torch, rule, inputs)
             self.assertEqual(error.exception.status, "INCONCLUSIVE")
 
-    def test_oracle_and_candidate_nonfinite_events_are_distinct(self):
+    def test_nonfinite_candidate_reference_and_oracle_fail(self):
         import torch
+        from scripts import numerical_gates as gates
         x = torch.ones((2, 3))
         nan = x * float("nan")
-        for reference, candidate, oracle, status in ((x, nan, x, "REJECT"),
-                                                    (nan, x, x, "INCONCLUSIVE"),
-                                                    (x, x, nan, "INCONCLUSIVE")):
-            with self.assertRaises(experiment.NumericEvent) as error:
-                experiment.observe(torch, reference, candidate, oracle, "fp32")
-            self.assertEqual(error.exception.status, status)
+        for reference, candidate, oracle in ((x, nan, x), (nan, x, x), (x, x, nan)):
+            obs = experiment.observe(torch, reference, candidate, oracle, "fp32")
+            k = gates.amplification([obs["reference_error"]], [obs["candidate_error"]], [obs["epsilon"]])
+            self.assertEqual(k[0], float("inf"))
+
+    def test_vector_buckets_do_not_cancel_and_epsilon_uses_candidate(self):
+        import torch
+        ref = torch.tensor([1., 1.])
+        cand = torch.tensor([1.25, .75])
+        obs = experiment.observe(torch, ref, cand, torch.ones(2).double(), "fp32")
+        self.assertEqual(obs["delta"].tolist(), [.25, -.25])
+        ref = torch.ones((2, 3))
+        cand = torch.full((2, 3), 2.)
+        obs = experiment.observe(torch, ref, cand, ref.double(), "fp32")
+        self.assertEqual(obs["epsilon"], 2.**-22)
+        self.assertEqual(obs["ulp"].tolist(), [2.**-22] * 3)
+
+    def test_ulp_rounds_scale_and_handles_max_finite(self):
+        import torch
+        for name, dtype in (("bf16", torch.bfloat16), ("fp32", torch.float32)):
+            maximum = torch.tensor(torch.finfo(dtype).max, dtype=dtype)
+            inward = maximum.double() - torch.nextafter(maximum, torch.zeros_like(maximum)).double()
+            self.assertEqual(experiment.ulp(torch, maximum, name).item(), inward.item())
+        # This rounds to bf16 2.0: spacing must be above that rounded value.
+        self.assertEqual(experiment.ulp(torch, torch.tensor(1.999, dtype=torch.float64), "bf16").item(), 2.**-6)
 
 
 @unittest.skipUnless(HAS_TORCH and HAS_TRITON and os.environ.get("TRITON_INTERPRET") == "1",

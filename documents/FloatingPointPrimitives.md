@@ -285,7 +285,7 @@ profile = {
 | [Core/Ast.lean](../VeriTile/Triton/Core/Ast.lean) | 当前规则只匹配固定语句片段 | 增加带变量和条件的规则实例化，保留操作顺序与各步精度；不新增通用位值解释器 |
 | [DSL/Expansion/Main.lean](../VeriTile/Triton/DSL/Expansion/Main.lean) 的 dot 展开 | acc 被代数化为额外加法，部分精度参数被擦除 | 浮点证明表示保留 DotAcc/FMA、精度模式及必要执行配置，防止未检查的数值差异变成语法相同 |
 | [Semantics/TileOps.lean](../VeriTile/Triton/Semantics/TileOps.lean) | reduceSum/dot 使用实数求和 | 数学模型保留；归约/矩阵变换需展开或建立明确的执行连接后由局部原子关系推导，不直接统计准入整个算子 |
-| [Float/EvalOpR.lean](../VeriTile/Triton/Float/EvalOpR.lean) 与 [Float/StepR.lean](../VeriTile/Triton/Float/StepR.lean) | 现有抽象 cast/store 模型 | 保留历史语义，不将其当成 GPU 执行器或新的准入结果 |
+| [Float/EvalOpR.lean](../VeriTile/Triton/Float/EvalOpR.lean) 与 [Float/StepR.lean](../VeriTile/Triton/Float/StepR.lean) | 现有抽象 cast/store 模型 | 描述抽象语义，不将其当成 GPU 执行器或新的准入结果 |
 | [Spec.lean](../VeriTile/Spec.lean) | `EvidenceValidated` 仍是未接通的验证前提 | 将已校验的 Python 规则表接入模型假设；Lean 检查形式推导，不承担统计检验的形式化证明 |
 | [prove.py](../scripts/prove.py) | 已有 agent、可信输入快照与 comparator 检查 | 在调用前固定规则集和目标；复用入口，不允许证明 agent 修改准入集合 |
 
@@ -320,14 +320,14 @@ profile = {
 | 4 | 接入现有证明 agent 与 comparator | 先冻结规则集和目标，再证明；拒绝修改目标或可信规则文件；打印依赖。依赖 3 |
 | 5 | 全流程回归、规则覆盖、TritonBench 例子和论文实验 | 配置变更重跑；记录成功、拒绝、无结论、未支持与未证明目标；核对第 10 节。依赖前述阶段 |
 
-GPU 主线已写好 [profile.py](../experiments/floating_point/profile.py)、[Triton 候选对](../experiments/floating_point/triton_rules.py)、[运行／重放入口](../scripts/fp_experiment.py) 和 [checker](../scripts/fp_two_gates.py)。默认配置为 4096×4096、独立 Normal(1, 1²)、三组 bf16/fp32 精度；均值、sigma、预算和规则选择可在运行前修改。当前执行器仅检查局部原子关系；`ACC-WIDEN` 只比较三项和的输入格式与 fp32 中间结果。自定义联合采样器与更多局部关系仍需单独实现。编译检查覆盖 masked 32×33 和 4096×4096，每个尺寸有 82 个支持的原子编译实例；实际 GPU 统计结果仍为 NOT_RUN。
+GPU 主线已写好 [config.py](../experiments/floating_point/config.py)、[Triton 候选对](../experiments/floating_point/kernels.py)、[运行／重放入口](../scripts/check_numerics.py) 和 [checker](../scripts/numerical_gates.py)。默认配置为 4096×4096、独立 Normal(1, 1²)、三组 bf16/fp32 精度；均值、sigma、预算和规则选择可在运行前修改。当前执行器仅检查局部原子关系；`ACC-WIDEN` 只比较三项和的输入格式与 fp32 中间结果。自定义联合采样器与更多局部关系仍需单独实现。编译检查覆盖 masked 32×33 和 4096×4096，每个尺寸有 82 个支持的原子编译实例；数值准入由 GPU 采样和 CPU 回放确定。
 
 可复用的其他基础如下，前三项是可选软件参考，不再是 GPU 主线的依赖阶段：
 
 - [BitValue.lean](../VeriTile/Triton/Float/BitValue.lean)：按格式索引的位值、全部类别解码、四种舍入模式、转换以及分别配置输入/输出 flush。
 - [ScalarOps.lean](../VeriTile/Triton/Float/ScalarOps.lean)：逐操作舍入的 add/sub/mul/div、单次舍入 FMA，以及数值相等和有序比较。运算精度由参数的格式确定，混合格式须显式转换。
 - [Counterexamples.lean](../VeriTile/Triton/Float/Counterexamples.lean)：六条具体反例定理，通过 Lean 内核计算检查，覆盖 bf16/fp32 的结合重排、分配和 FMA。
-- [规则目录](../experiments/floating_point/rules.json) 与 [登记工具](../scripts/fp_rule_registry.py)：14 个原子 ID、完整身份维度及初始未运行记录。目录中的严格候选仍需逐条证明，不能按类别自动接受。
+- [规则目录](../experiments/floating_point/rules.json) 与 [登记工具](../scripts/numerical_registry.py)：14 个原子 ID、完整身份维度及初始未运行记录。目录中的严格候选仍需逐条证明，不能按类别自动接受。
 
 软件标量 profile 的明确选择是：算术/转换产生 canonical quiet NaN，保留带符号零，分别配置输入与输出 subnormal flush，不观测异常 flags。它定义一套可执行值语义，尚不声称符合任何 GPU 指令。原始位值及符号操作保留 NaN payload；算术 NaN 策略与硬件的连接需在后端阶段验证。
 

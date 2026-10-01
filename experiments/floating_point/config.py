@@ -1,4 +1,4 @@
-"""Edit this file, then run scripts/fp_experiment.py run --output <new-directory>.
+"""Edit this file, then run scripts/check_numerics.py run --output <new-directory>.
 
 std is sigma, NOT sigma squared. Each replicate is a fresh entire input tuple.
 These are example parameters, not measured or calibrated acceptance results.
@@ -8,7 +8,9 @@ PROFILE = {
     "shape": [4096, 4096],
     "distribution": {"family": "normal", "mean": 1.0, "std": 1.0},
     "seed": 20261001,
-    "replicates": 4096,
+    "replicates": 4096,  # minimum before adaptive stopping
+    "replicates_max": 50000,
+    "batch": 512,
     "formats": [
         {"name": "bf16", "input": "bf16", "compute": "bf16", "accumulator": "fp32", "output": "bf16"},
         {"name": "bf16_fp32", "input": "bf16", "compute": "fp32", "accumulator": "fp32", "output": "bf16"},
@@ -18,8 +20,8 @@ PROFILE = {
     "launch": {"block": 1024, "num_warps": 4},
     "gates": {
         "bias": {"z": 5.0, "snr": 0.01, "ulp_floor": 1.0},
-        "vars": {"quantile": 0.9, "horizon": 625000, "confidence_z": 3.0,
-                 "bootstrap": 256, "min_exceedances": 64, "warn": 2.0, "fail": 10.0},
+        "vars": {"quantile": 0.9, "horizon": 625000, "alpha": 1.35e-3,
+                 "bootstrap": 1000, "min_exceedances": 40, "warn": 2.0, "fail": 10.0},
         "warning_policy": "pass_only",
     },
 }

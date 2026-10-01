@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 
-from scripts import fp_rule_registry as registry
+from scripts import numerical_registry as registry
 
 
 def fixture():
@@ -16,14 +16,14 @@ def fixture():
         "schema_version": 1, "rule_id": "ADD-ASSOC",
         "reference": {"graph_sha256": "a" * 64, "lowering_sha256": "b" * 64},
         "candidate": {"graph_sha256": "c" * 64, "lowering_sha256": "d" * 64},
-        "numerics": {"semantics_version": "test-v1", "input_formats": {"a": "bf16"},
+        "numerics": {"semantics_version": "test", "input_formats": {"a": "bf16"},
                      "node_formats": {"add0": "fp32"}, "accumulator_formats": {},
                      "output_formats": {"out": "bf16"}, "rounding": "rne",
                      "nan": "canonical", "subnormal": {"inputs": "preserve", "results": "preserve"},
                      "intrinsics": {}},
         "layout": {"shapes": {"a": [32]}, "strides": {"a": [1]},
                    "reduction": None, "scan": None, "dot": None},
-        "backend": {"kind": "software", "implementation_version": "test-v1", "target": "cpu",
+        "backend": {"kind": "software", "implementation_version": "test", "target": "cpu",
                     "compiler": None, "compile_options": {}, "launch": {}},
         "probe": {"family": "gaussian", "roles": {"a": {"mean": 0, "std": 1}},
                   "joint_distribution": "independent", "weights": None, "seed": 410,
@@ -44,7 +44,7 @@ class RegistryTests(unittest.TestCase):
         self.assertEqual(sum(r["category"] == "exact_candidate" for r in rules.values()), 4)
 
     def test_composite_and_structural_transforms_cannot_be_registered(self):
-        from scripts import fp_experiment as experiment
+        from scripts import check_numerics as experiment
         removed = ("SOFTMAX-SHIFT", "SOFTMAX-ONLINE", "LAYERNORM-WELFORD", "SWIGLU-FUSE",
                    "REDUCE-REORDER", "REDUCE-SPLIT", "SCAN-REORDER", "DOT-LOWER", "DOT-ACC-FUSE",
                    "GEMM-SPLIT-K", "LAYOUT-INVERSE", "STORE-LOAD-FORWARD")
@@ -67,7 +67,7 @@ class RegistryTests(unittest.TestCase):
         edits = [("reference", "graph_sha256", "e" * 64), ("candidate", "lowering_sha256", "f" * 64),
                  ("numerics", "rounding", "rtz"), ("numerics", "accumulator_formats", {"sum": "fp32"}),
                  ("layout", "shapes", {"a": [64]}), ("layout", "strides", {"a": [2]}),
-                 ("layout", "reduction", "tree-v2"), ("backend", "target", "another-device"),
+                 ("layout", "reduction", "another-tree"), ("backend", "target", "another-device"),
                  ("backend", "compile_options", {"fast_math": True}), ("backend", "launch", {"warps": 4}),
                  ("probe", "seed", 411), ("probe", "roles", {"a": {"mean": 2, "std": 1}}),
                  ("probe", "joint_distribution", "correlated"), ("protocol", "checker_version", "different"),
@@ -118,7 +118,7 @@ class RegistryTests(unittest.TestCase):
             config = Path(directory) / "config.json"
             output = Path(directory) / "record.json"
             config.write_text(json.dumps(fixture()))
-            command = ["python3", str(registry.ROOT / "scripts/fp_rule_registry.py"),
+            command = ["python3", str(registry.ROOT / "scripts/numerical_registry.py"),
                        "init", str(config), "--output", str(output)]
             first = subprocess.run(command, capture_output=True, text=True)
             self.assertEqual(first.returncode, 0, first.stderr)

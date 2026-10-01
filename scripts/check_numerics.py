@@ -14,17 +14,17 @@ import time
 import numpy as np
 
 if __package__:
-    from . import fp_rule_registry as registry, fp_two_gates as gates
+    from . import numerical_registry as registry, numerical_gates as gates
 else:
-    import fp_rule_registry as registry
-    import fp_two_gates as gates
+    import numerical_registry as registry
+    import numerical_gates as gates
 
 ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_PROFILE = ROOT / "experiments/floating_point/profile.py"
-KERNELS = ROOT / "experiments/floating_point/triton_rules.py"
+DEFAULT_PROFILE = ROOT / "experiments/floating_point/config.py"
+KERNELS = ROOT / "experiments/floating_point/kernels.py"
 SOURCES = [Path(__file__).resolve(), Path(gates.__file__), Path(registry.__file__), KERNELS, registry.CATALOG]
 ACCEPTED = {"ACCEPT", "ACCEPT_WITH_WARNING"}
-BUNDLE_VERSION = 1
+BUNDLE_VERSION = 2
 
 
 def sha(data):
@@ -51,14 +51,15 @@ def read_json(path):
 
 
 def load_module(path):
-    spec = importlib.util.spec_from_file_location("veritile_fp_" + path.stem, path)
+    spec = importlib.util.spec_from_file_location("veritile_numerics_" + path.stem, path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
 
 
 def validate_profile(profile):
-    expected = {"shape", "distribution", "seed", "replicates", "formats", "rules", "launch", "gates"}
+    expected = {"shape", "distribution", "seed", "replicates", "replicates_max", "batch",
+                "formats", "rules", "launch", "gates"}
     if type(profile) is not dict or set(profile) != expected:
         raise ValueError(f"profile requires exactly {sorted(expected)}")
     registry.canonical_json(profile)
@@ -70,11 +71,13 @@ def validate_profile(profile):
             or dist["family"] != "normal" or type(dist["mean"]) not in (int, float)
             or type(dist["std"]) not in (int, float) or dist["std"] <= 0):
         raise ValueError("distribution must specify normal mean and positive std (sigma)")
-    for key in ("seed", "replicates"):
+    for key in ("seed", "replicates", "replicates_max", "batch"):
         if type(profile[key]) is not int or profile[key] < 0:
             raise ValueError(f"{key} must be a nonnegative integer")
     if profile["replicates"] < 2 or profile["seed"] >= 2**63:
         raise ValueError("need >= 2 replicates and seed < 2**63")
+    if profile["replicates_max"] < profile["replicates"] or profile["batch"] < 2:
+        raise ValueError("replicates_max must be >= replicates; batch must be >= 2")
     names = set()
     if type(profile["formats"]) is not list or not profile["formats"]:
         raise ValueError("formats must be a nonempty list")
@@ -109,12 +112,12 @@ def validate_profile(profile):
         raise ValueError("gates requires bias/vars/warning_policy")
     if (type(g["bias"]) is not dict or set(g["bias"]) != {"z", "snr", "ulp_floor"}
             or type(g["vars"]) is not dict or set(g["vars"]) != {
-                "quantile", "horizon", "confidence_z", "bootstrap", "min_exceedances", "warn", "fail"}):
+                "quantile", "horizon", "alpha", "bootstrap", "min_exceedances", "warn", "fail"}):
         raise ValueError("unexpected two-gates parameters")
     if any(type(x) not in (int, float) or x <= 0 for c in (g["bias"], g["vars"]) for x in c.values()):
         raise ValueError("gate parameters must be positive finite numbers")
     v = g["vars"]
-    if not 0 < v["quantile"] < 1 or v["warn"] >= v["fail"] or v["horizon"] <= 1:
+    if not 0 < v["alpha"] < 0.5 or not 0 < v["quantile"] < 1 or v["warn"] >= v["fail"] or v["horizon"] <= 1:
         raise ValueError("invalid quantile, horizon or ordered vars thresholds")
     if (type(v["bootstrap"]) is not int or v["bootstrap"] < 2
             or type(v["min_exceedances"]) is not int or v["min_exceedances"] < 3):
@@ -153,14 +156,14 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
                   "lowering_sha256": sha(registry.canonical_json(lowerings[side]))}
            for side in ("reference", "candidate")},
         "numerics": {
-            "semantics_version": "triton-atomic-relations-v1", "input_formats": {k: fmt["input"] for k in ("a", "b", "c")},
+            "semantics_version": "triton-atomic-relations", "input_formats": {k: fmt["input"] for k in ("a", "b", "c")},
             "node_formats": {"elementwise": fmt["compute"],
                              "explicit_cast_target": "bf16", "fma_intrinsic": "fp32",
                              "template_details": "see bound Triton source for every cast and operation"},
             "accumulator_formats": {"reference": fmt["input"], "candidate": fmt["accumulator"]}
                                    if rule == "ACC-WIDEN" else {},
             "output_formats": {"out": fmt["output"]}, "rounding": "rne casts; instruction-specific intrinsics",
-            "nan": "no NaN payload equivalence; nonfinite samples stop the instance",
+            "nan": "no NaN payload equivalence; nonfinite errors produce K=inf and FAIL",
             "subnormal": "native bound GPU/compiler instruction behavior; no software flush substitution",
             "intrinsics": {"fma": "tl.fma", "sqrt": "tl.sqrt", "rsqrt": "tl.rsqrt", "div": "tl.div_rn",
                            "oracle": "torch fp64 on the same quantized input"}},
@@ -172,14 +175,15 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
                   "weights": None, "seed": seed_for(profile, fmt, rule),
                   "quantization": "torch fp64 normal -> input dtype (RNE); oracle widens those same values",
                   "special_values": "no truncation/resampling; domain/nonfinite events recorded"},
-        "protocol": {"name": "two-gates", "version": gates.VERSION, "checker_version": sources["scripts/fp_two_gates.py"],
+        "protocol": {"name": "two-gates", "version": gates.VERSION, "checker_version": sources["scripts/numerical_gates.py"],
                      "bias": {**profile["gates"]["bias"], "replicates": profile["replicates"],
-                              "buckets": "last-axis columns; 1D output has one bucket",
-                              "ulp": "mean over replicates of spacing at per-bucket max abs reference"},
+                              "buckets": "last axis; 1D output keeps each element as a bucket",
+                              "ulp": "spacing at pooled per-bucket max abs(candidate, reference), inward at max finite"},
                      "vars": {**profile["gates"]["vars"], "replicates": profile["replicates"],
-                              "epsilon": "one output-format ULP at max abs fp64 oracle",
-                              "tail": "strict exceedances, PWM, no xi clipping, conditional bootstrap",
-                              "stopping": "fixed budget; no adaptive early acceptance"},
+                              "epsilon": "one comparison/output-format ULP at max abs candidate",
+                              "tail": "PWM, xi clipped <= 0, seed-0 bootstrap, empirical-max fallback",
+                              "replicates_max": profile["replicates_max"], "batch": profile["batch"],
+                              "stopping": "full batches; min replicates then magnitude band stable or empirical fallback; nonfinite stops immediately"},
                      "decision_policy": profile["gates"]["warning_policy"]},
     }
 
@@ -240,30 +244,27 @@ def launch_pair(torch, triton, kernels, rule, inputs, profile, fmt):
 
 
 def ulp(torch, magnitude, dtype):
-    precision, minimum = (8, -133) if dtype == "bf16" else (24, -149)
-    _, exponent = torch.frexp(magnitude.double().abs())
-    spacing = torch.ldexp(torch.ones_like(magnitude, dtype=torch.float64), exponent - precision)
-    spacing = spacing.clamp_min(2.0**minimum)
-    return torch.where(magnitude == 0, 2.0**minimum, spacing)
+    """Working-format ULP, including rounding and the max-finite inward gap."""
+    comparison_dtype = torch.bfloat16 if dtype == "bf16" else torch.float32
+    scale = magnitude.detach().abs().to(comparison_dtype)
+    upper = torch.nextafter(scale, torch.full_like(scale, float("inf")))
+    lower = torch.nextafter(scale, torch.zeros_like(scale))
+    return torch.where(torch.isfinite(upper), upper.double() - scale.double(),
+                       scale.double() - lower.double())
 
 
 def observe(torch, reference, candidate, exact, output_format):
-    if not bool(torch.isfinite(exact).all()):
-        raise NumericEvent("INCONCLUSIVE", "fp64 oracle produced nonfinite values")
-    if not bool(torch.isfinite(reference).all()):
-        raise NumericEvent("INCONCLUSIVE", "reference produced nonfinite values; finite-error protocol is inapplicable")
-    if not bool(torch.isfinite(candidate).all()):
-        raise NumericEvent("REJECT", "candidate produced nonfinite values with finite reference and oracle")
+    # Keep invalid observations: both gates reject them, and replay sees them too.
     ref, cand = reference.double(), candidate.double()
-    bucket_ref = ref if ref.ndim == 2 else ref[:, None]
     delta = cand - ref
-    delta = delta if delta.ndim == 2 else delta[:, None]
+    buckets = delta.shape[-1]
+    scale = torch.maximum(candidate.abs(), reference.abs()).reshape(-1, buckets).amax(0)
     return {
-        "delta": delta.mean(dim=0).cpu().numpy(),
-        "ulp": ulp(torch, bucket_ref.abs().amax(dim=0), output_format).cpu().numpy(),
+        "delta": delta.reshape(-1, buckets).mean(0).cpu().numpy(),
+        "ulp": ulp(torch, scale, output_format).cpu().numpy(),
         "reference_error": (ref - exact).abs().max().item(),
         "candidate_error": (cand - exact).abs().max().item(),
-        "epsilon": ulp(torch, exact.abs().max(), output_format).item(),
+        "epsilon": ulp(torch, candidate.abs().max(), output_format).item(),
     }
 
 
@@ -282,7 +283,8 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
     lowerings = None
     started = time.monotonic()
     try:
-        for replicate in range(profile["replicates"]):
+        limit = ((profile["replicates_max"] + profile["batch"] - 1) // profile["batch"]) * profile["batch"]
+        for replicate in range(limit):
             dist = profile["distribution"]
             shapes = shapes_for(profile, rule)
             inputs = [(torch.randn(shapes[key], device="cuda", dtype=torch.float64, generator=generator)
@@ -308,9 +310,17 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
             for key in observations:
                 observations[key].append(sample[key])
             if replicate == 0 or (replicate + 1) % 32 == 0:
-                print(f"  {fmt['name']} {rule}: {replicate + 1}/{profile['replicates']} ({time.monotonic() - started:.1f}s)", flush=True)
+                print(f"  {fmt['name']} {rule}: {replicate + 1}/{limit} ({time.monotonic() - started:.1f}s)", flush=True)
+            if (replicate + 1) % profile["batch"] == 0:
+                var, stop = gates.checkpoint(observations, profile["gates"]["vars"],
+                                             profile["replicates"], profile["replicates_max"], profile["batch"])
+                print(f"  magnitude: {var['status']} U={var['upper']} stop={stop}", flush=True)
+                if stop:
+                    break
         arrays = {key: np.asarray(values, dtype=np.float64) for key, values in observations.items()}
-        result = gates.evaluate(arrays, profile["gates"], seed, profile["replicates"], smoke)
+        count = len(arrays["epsilon"])
+        result = gates.evaluate(arrays, profile["gates"], seed, count, smoke)
+        result.update(stopping_reason=stop, completed_replicates=count)
         np.savez_compressed(directory / "observations.npz", **arrays)
         base.update(state="COMPLETE", result=result, decision=result["decision"],
                     observations_sha256=sha((directory / "observations.npz").read_bytes()),
@@ -336,7 +346,8 @@ def run(args):
             raise ValueError("unknown --formats entry")
         profile["formats"] = [f for f in profile["formats"] if f["name"] in requested]
     if args.smoke:
-        profile["shape"], profile["replicates"] = [32, 33], 4
+        profile["shape"] = [32, 33]
+        profile["replicates"] = profile["replicates_max"] = profile["batch"] = 4
     validate_profile(profile)
     try:
         import torch
@@ -358,7 +369,7 @@ def run(args):
     backend = {"kind": "triton-cuda", "implementation_version": source_hashes()[str(KERNELS.relative_to(ROOT))],
                "target": {"device": torch.cuda.get_device_name(), "capability": list(torch.cuda.get_device_capability()),
                           "driver_versions": driver},
-               "compiler": {"torch": torch.__version__, "triton": triton.__version__, "cuda": torch.version.cuda,
+               "compiler": {"torch": str(torch.__version__), "triton": triton.__version__, "cuda": torch.version.cuda,
                             "numpy": np.__version__},
                "compile_options": {"enable_fp_fusion": False},
                "launch": profile["launch"]}
@@ -377,7 +388,7 @@ def run(args):
         source_dir.mkdir()
         for path in SOURCES:
             (source_dir / path.name).write_bytes(path.read_bytes())
-        (source_dir / "profile.py").write_bytes(args.profile.read_bytes())
+        (source_dir / "config.py").write_bytes(args.profile.read_bytes())
     errors = 0
     for fmt in profile["formats"]:
         for rule in profile["rules"]:
@@ -441,17 +452,24 @@ def replay(bundle):
                 raise ValueError(f"observation hash mismatch: {name}")
             with np.load(path, allow_pickle=False) as data:
                 arrays = {key: data[key] for key in data.files}
-            buckets = profile["shape"][1] if len(shapes_for(profile, rule)["out"]) == 2 else 1
-            count = profile["replicates"]
+            buckets = shapes_for(profile, rule)["out"][-1]
+            count = record["result"].get("completed_replicates")
+            if type(count) is not int or count < 2:
+                raise ValueError(f"invalid completed replicate count: {name}")
             if (set(arrays) != gates.OBSERVATIONS or any(a.dtype != np.float64 for a in arrays.values())
                     or any(arrays[k].shape != (count, buckets) for k in ("delta", "ulp"))
                     or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error", "epsilon"))):
                 raise ValueError(f"observation shape/dtype mismatch: {name}")
+            stop = gates.validate_stopping(arrays, profile["gates"]["vars"], profile["replicates"],
+                                           profile["replicates_max"], profile["batch"])
             result = gates.evaluate(arrays, profile["gates"], seed_for(profile, fmt, rule), count, manifest["smoke"])
+            result.update(stopping_reason=stop, completed_replicates=count)
             if result != record["result"] or result["decision"] != record["decision"]:
                 raise ValueError(f"stored decision/statistics disagree with replay: {name}")
             row = {"rule_id": rule, "format": fmt["name"], "instance_key": record["instance_key"],
-                   "decision": result["decision"], "bias": result["bias"]["status"], "vars": result["vars"]["status"]}
+                   "decision": result["decision"], "bias": result["bias"]["status"], "vars": result["vars"]["status"],
+                   "replicates": count, "stopping_reason": stop,
+                   "empirical_fallback": result["vars"]["empirical_fallback"]}
             rows.append(row)
             if result["decision"] in ACCEPTED:
                 accepted.append({**row, "config": config, "artifact": str((directory / "record.json").resolve()),

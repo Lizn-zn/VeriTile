@@ -19,8 +19,8 @@ def main():
     from triton.backends.compiler import GPUTarget
     from triton.compiler import ASTSource
 
-    path = Path(__file__).resolve().parents[1] / "experiments/floating_point/triton_rules.py"
-    spec = importlib.util.spec_from_file_location("fp_compile_templates", path)
+    path = Path(__file__).resolve().parents[1] / "experiments/floating_point/kernels.py"
+    spec = importlib.util.spec_from_file_location("numerical_kernel_templates", path)
     kernels = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(kernels)
     count = 0

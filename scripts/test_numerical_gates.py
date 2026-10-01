@@ -9,12 +9,12 @@ import sys
 
 import numpy as np
 
-from scripts import fp_experiment as experiment, fp_two_gates as gates
+from scripts import check_numerics as experiment, numerical_gates as gates
 
 
 def profile():
     result = deepcopy(experiment.load_module(experiment.DEFAULT_PROFILE).PROFILE)
-    result.update(shape=[2, 3], replicates=4, rules=["ADD-COMMUTE"])
+    result.update(shape=[2, 3], replicates=4, replicates_max=4, batch=4, rules=["ADD-COMMUTE"])
     result["formats"] = [result["formats"][-1]]
     return experiment.validate_profile(result)
 
@@ -35,18 +35,18 @@ class GateTests(unittest.TestCase):
             json.dumps(result, allow_nan=False)
 
     def test_replicates_are_rows_not_elements(self):
-        result = gates.bias_gate(np.ones((1, 10000)), np.ones((1, 10000)), self.config["bias"])
-        self.assertEqual(result["status"], "INCONCLUSIVE")
+        with self.assertRaises(ValueError):
+            gates.bias_gate(np.ones((1, 10000)), np.ones((1, 10000)), self.config["bias"])
 
     def test_nonfinite_statistics_and_invalid_scales_never_pass(self):
         for x in (np.nan, np.inf, -np.inf):
             obs = observations()
             obs["delta"][0, 0] = x
-            self.assertEqual(gates.evaluate(obs, self.config, 1, 4)["decision"], "INCONCLUSIVE")
+            self.assertEqual(gates.evaluate(obs, self.config, 1, 4)["decision"], "REJECT")
         for x in (0, -1, np.inf, np.nan):
-            self.assertEqual(gates.bias_gate(np.zeros((2, 1)), np.full((2, 1), x), self.config["bias"])["status"], "INCONCLUSIVE")
+            self.assertEqual(gates.bias_gate(np.zeros((2, 1)), np.full((2, 1), x), self.config["bias"])["status"], "FAIL")
         result = gates.bias_gate(np.array([[1e308], [-1e308]]), np.ones((2, 1)), self.config["bias"])
-        self.assertEqual(result["status"], "INCONCLUSIVE")
+        self.assertEqual(result["status"], "FAIL")
 
     def test_additive_floor_and_zero_denominator(self):
         actual = gates.amplification([0, 0, 2, 2], [0, 2, 5, 1], [1, 1, 1, 1])
@@ -54,10 +54,20 @@ class GateTests(unittest.TestCase):
         result = gates.vars_gate([0, 1], [2, 1], [1, 1], self.config["vars"], 1)
         self.assertEqual(result["status"], "FAIL")
 
-    def test_constant_positive_tail_is_not_a_fabricated_fit(self):
-        result = gates.vars_gate(np.ones(4096), np.full(4096, 2), np.ones(4096), self.config["vars"], 1)
-        self.assertEqual(result["status"], "INCONCLUSIVE")
-        self.assertNotIn("upper", result)
+    def test_empirical_fallback_keeps_large_observed_errors(self):
+        for k, expected in ((0, "PASS"), (1, "PASS"), (5, "WARN"), (31.75, "FAIL")):
+            result = gates.vars_gate(np.ones(4096), np.full(4096, k + 1), np.ones(4096), self.config["vars"])
+            self.assertEqual(result["status"], expected)
+            self.assertTrue(result["empirical_fallback"])
+            self.assertFalse(result["valid"])
+            self.assertEqual(result["upper"], k)
+
+    def test_bias_uses_pooled_max_ulp(self):
+        floors = np.ones((8, 1))
+        floors[-1] = 4
+        result = gates.bias_gate(np.full((8, 1), 2), floors, self.config["bias"])
+        self.assertEqual(result["status"], "WARN")
+        self.assertEqual(result["ulp"], [4])
 
     def test_pwm_and_return_level_against_exponential_quantiles(self):
         samples = -np.log1p(-(np.arange(10000) + 0.5) / 10000)
@@ -65,9 +75,10 @@ class GateTests(unittest.TestCase):
         self.assertAlmostEqual(xi, 0, delta=0.002)
         self.assertAlmostEqual(scale, 1, delta=0.002)
         self.assertAlmostEqual(gates.return_level(1, 0, 2, 100, 0.1), 1 + 2 * np.log(10))
-        # A positive shape remains positive; it is never capped at zero.
+        # Raw fitted xi remains positive for diagnostics; return levels clip it to zero.
         heavy = ((1 - (np.arange(10000) + 0.5) / 10000) ** -0.2 - 1) / 0.2
         self.assertGreater(gates.pwm_fit(heavy)[0], 0.15)
+        self.assertEqual(gates.return_level(1, .2, 2, 100, .1), gates.return_level(1, 0, 2, 100, .1))
 
     def test_bootstrap_is_replayable(self):
         config = {**self.config["vars"], "bootstrap": 16, "min_exceedances": 16}
@@ -108,13 +119,14 @@ def fixture_bundle(directory, smoke=False):
         data = f"synthetic {side}, not executable PTX".encode()
         (entry / f"{side}.0.ptx").write_bytes(data)
         lowerings[side] = [experiment.sha(data)]
-    manifest = {"bundle_version": 1, "profile": p, "sources": sources, "smoke": smoke,
+    manifest = {"bundle_version": experiment.BUNDLE_VERSION, "profile": p, "sources": sources, "smoke": smoke,
                 "backend": backend, "entries": [name]}
     experiment.write_json(directory / "manifest.json", manifest)
     config = experiment.contract_for(p, fmt, rule, backend, sources, lowerings)
     obs = observations()
     np.savez_compressed(entry / "observations.npz", **obs)
     result = gates.evaluate(obs, p["gates"], experiment.seed_for(p, fmt, rule), p["replicates"], smoke)
+    result.update(stopping_reason="empirical_fallback", completed_replicates=4)
     record = {"rule_id": rule, "format": fmt["name"], "state": "COMPLETE", "config": config,
               "instance_key": experiment.registry.instance_key(config), "lowerings": lowerings,
               "observations_sha256": experiment.sha((entry / "observations.npz").read_bytes()),
@@ -127,7 +139,7 @@ class ReplayTests(unittest.TestCase):
     def test_composite_rule_is_rejected_before_gpu_execution(self):
         with tempfile.TemporaryDirectory() as tmp:
             output = Path(tmp) / "must-not-exist"
-            result = subprocess.run([sys.executable, str(experiment.ROOT / "scripts/fp_experiment.py"),
+            result = subprocess.run([sys.executable, str(experiment.ROOT / "scripts/check_numerics.py"),
                                      "run", "--rules", "SOFTMAX-ONLINE", "--output", str(output)],
                                     capture_output=True, text=True)
             self.assertNotEqual(result.returncode, 0)
@@ -159,7 +171,7 @@ class ReplayTests(unittest.TestCase):
                 experiment.validate_profile(bad)
         hashes = experiment.source_hashes()
         before = experiment.graph_hash("ADD-COMMUTE", "reference", p, p["formats"][0], hashes)
-        hashes["scripts/fp_experiment.py"] = "0" * 64
+        hashes["scripts/check_numerics.py"] = "0" * 64
         self.assertNotEqual(before, experiment.graph_hash("ADD-COMMUTE", "reference", p, p["formats"][0], hashes))
 
     def test_smoke_cannot_populate_accepted_table(self):
@@ -216,7 +228,7 @@ class ReplayTests(unittest.TestCase):
                 if field == "profile":
                     manifest["profile"]["distribution"]["std"] = 2.0
                 else:
-                    manifest["sources"]["scripts/fp_two_gates.py"] = "0" * 64
+                    manifest["sources"]["scripts/numerical_gates.py"] = "0" * 64
                 experiment.write_json(root / "manifest.json", manifest)
                 with self.assertRaisesRegex(ValueError, "identity mismatch|source hashes differ"):
                     experiment.replay(root)

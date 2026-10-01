@@ -99,7 +99,7 @@ def validate_config(config):
 
 def instance_key(config):
     validate_config(config)
-    return hashlib.sha256(b"veritile.fp.instance.v1\0" + canonical_json(config)).hexdigest()
+    return hashlib.sha256(b"veritile.numerical.instance\0" + canonical_json(config)).hexdigest()
 
 
 def pending_record(config):
