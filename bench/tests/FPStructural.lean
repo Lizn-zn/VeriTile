@@ -117,4 +117,60 @@ example : ¬ Frame
     simp)
   simp [initial] at hcell
 
+private def maskedIO : MaskedKernelIO₂ where
+  kernel := .mk [] [] [.effectMarker "tl.debug_barrier"]
+  projection := by rfl
+  in1 := "x"
+  in2 := "y"
+  out := "out"
+  B := 2
+  read1 := fun _ => 0
+  read2 := fun _ => 0
+  write := fun _ => 0
+  mask := fun _ i => i.val = 0
+  scratch := [("tmp", fun _ => 0)]
+
+-- Inactive lanes remain observable even inside declared tile windows.
+theorem masked_frame_covers_inactive_output :
+    ¬ MaskedFrame maskedIO initial (initial.write "out" 1 (.mk .real 9)) := by
+  intro h
+  have hcell := h "out" 1 (Or.inr (by
+    intro i hi
+    change i.val = 0 at hi
+    simp [maskedIO, hi])) (by simp [maskedIO])
+  simp [initial] at hcell
+
+theorem masked_frame_covers_inactive_scratch :
+    ¬ MaskedFrame maskedIO initial (initial.write "tmp" 1 (.mk .real 9)) := by
+  intro h
+  have hcell := h "tmp" 1 (Or.inl (by decide)) (by
+    intro p hp _ i hi
+    simp only [maskedIO, List.mem_cons, List.not_mem_nil, or_false] at hp
+    subst p
+    change i.val = 0 at hi
+    simp [hi])
+  simp [initial] at hcell
+
+theorem masked_signature_remembers_mask :
+    maskedIOSignature maskedIO ≠ maskedIOSignature { maskedIO with mask := fun _ _ => True } := by
+  intro h
+  have hall := congrArg (fun sig : MaskedIO₂Signature => ∀ i, sig.mask 0 i) h
+  change (∀ i : Fin 2, i.val = 0) = (∀ _ : Fin 2, True) at hall
+  have impossible := (Eq.mpr hall (fun _ => True.intro)) ⟨1, by decide⟩
+  contradiction
+
+theorem masked_context_preserves_scratch :
+    ¬ Spec.ProgramSyntax.sameContext maskedIO { maskedIO with scratch := [] } := by
+  change ¬ ([("tmp", fun _ => 0)] : List (RegionName × (Nat → Nat))) = []
+  simp
+
+theorem masked_scratch_cannot_alias_input :
+    ¬ MaskedPrivateScratch { maskedIO with scratch := [("x", fun _ => 0)] } := by
+  simp [MaskedPrivateScratch, maskedIO]
+
+theorem masked_failures_not_certificates : ¬ MaskedIO₂Equiv maskedIO maskedIO := by
+  intro h
+  obtain ⟨t, _, he, _⟩ := h.2.2 Nat M initial
+  simp [maskedIO, FP.Structural.exec, run, step] at he
+
 end FPStructuralTests

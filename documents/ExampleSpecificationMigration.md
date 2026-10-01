@@ -37,17 +37,17 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | Division versus reciprocal multiplication: pending a faithful match to tested `div_rn` |
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | Original fp64 intermediate arithmetic has no admitted fp64 row |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
-| Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | Fused versus materialized pipeline: pending masked structural execution and scratch framing |
+| Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
 | Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: pending algebra and loop/reduction derivation |
 | Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: pending algebra and loop/reduction derivation |
 
-There are currently 18 correctness modules and 8 FP equivalence modules. The
-eight legacy equivalence modules remain as source references; seven of their
+There are currently 18 correctness modules and 9 FP equivalence modules. The
+eight legacy equivalence modules remain as source references; six of their
 original transformations still await FP migration. Their presence does not
 complete the pending FP entries above.
 
 The SiLU and SwiGLU materialized kernels retain the original `ComputeKernel.seq`
-scope: one concatenation of stage bodies. Their real specifications explicitly
+scope: one concatenation of stage bodies. Both real and FP specifications explicitly
 declare scratch windows and prove that every cell outside output and scratch
 windows is preserved. They do not claim a new separate-launch theorem.
 
@@ -88,12 +88,15 @@ call tree by store/load forwarding. Its assumption printer reports `none`.
 This is a structural theorem of the FP model, not an IEEE execution theorem or
 a claim that a newly measured whole-kernel numerical test passed.
 
-The pending SwiGLU proof must use the actual elaborated syntax: the intermediate
-load annotation becomes a bf16-typed load, with no additional cast. Its legacy
+The SwiGLU FP proof uses the actual elaborated syntax: the intermediate load
+annotation becomes a bf16-typed load, with no additional cast. Its legacy
 proof needed rounding idempotence because that model rounded again on a typed
 store. The structural model copies an already typed value on store and retains
-all explicit casts as opaque operations, so that legacy need alone does not
-justify adding an idempotence assumption to the new proof.
+all explicit casts as opaque operations. The new proof therefore also reports
+`none`. Its `MaskedKernelIO₂` signature preserves the complete active-lane
+predicate, and its frame preserves inactive output and scratch cells. It works
+for arbitrary element count and block size, including zero and partial blocks;
+inactive scratch values are not used as a forwarding premise.
 
 The structural evaluator currently supports straight-line assignments, typed
 loads/stores, masks and a subset of expressions; unsupported syntax fails
@@ -132,6 +135,11 @@ The checks cover:
   accidental commutation, reassociation, cast idempotence or precision erasure;
   they also check typed forwarding, register shadowing, unsupported executions,
   private scratch and cell-level framing.
+- Exact source equality for the original fused and materialized SwiGLU kernels,
+  its independent FP proof at symbolic dimensions, and its empty assumption
+  output. Masked-interface counterexamples prevent changing the public mask,
+  hiding writes to inactive output or scratch lanes, aliasing input as scratch,
+  or treating two failed executions as a structural certificate.
 - Exact source equality for both Welford and LayerNorm pairs, and applications
   of all four public real formulas without positivity restrictions. A flat
   memory consumer checks Welford's two numerical outputs and preservation of
@@ -144,10 +152,11 @@ The checks cover:
   `FusedSiLUCorrect`, `FusedSwigluCorrect`, `WelfordCorrect`,
   `FusedLayerNormCorrect` and the updated `KernelSpec/Basic` interface. The
   structural FP extension also replays `Spec`, `Float/Structural`,
-  `Float/StructuralIO`, `FusedSiLUFPEquiv` and its boundary fixture.
+  `Float/StructuralIO`, `FusedSiLUFPEquiv`, `FusedSwigluFPEquiv` and the boundary
+  fixture, including its named masked-interface counterexamples.
 
-The current regression suite has 44 passing tests: 7 example-pair/contract
-tests, 3 structural FP tests and 34 admission, assumption-printer and
+The current regression suite has 46 passing tests: 7 example-pair/contract
+tests, 5 structural FP tests and 34 admission, assumption-printer and
 specification-surface tests.
 
 Compile each changed module and run its axiom/statement audits. The

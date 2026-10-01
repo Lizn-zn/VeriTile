@@ -5,6 +5,7 @@ execution proof with a cell-level frame on each side. -/
 import VeriTile.Triton.Float.Structural
 import VeriTile.Triton.Float.Equivalence
 import VeriTile.Triton.Memory.KernelSpec.Basic
+import VeriTile.Triton.Memory.KernelSpec.Masked
 
 namespace VeriTile.Triton.FP.Structural
 
@@ -62,6 +63,51 @@ def IO₃Equiv (lhs rhs : KernelIO₃) : Prop :=
           b.mem rhs.out (rhs.write (s.pids 0) + i.val)) ∧
       Frame lhs s a ∧ Frame rhs s b
 
+/-- Mask and tile length belong to the public signature. A derivation cannot
+weaken the output obligations by changing its active lanes. -/
+structure MaskedIO₂Signature where
+  ports : List RegionName × List RegionName
+  in1 : RegionName
+  in2 : RegionName
+  out : RegionName
+  B : Nat
+  read1 : Nat → Nat
+  read2 : Nat → Nat
+  write : Nat → Nat
+  mask : Nat → Fin B → Prop
+
+def maskedIOSignature (io : MaskedKernelIO₂) : MaskedIO₂Signature where
+  ports := match io.kernel with | .mk ins outs _ => (ins, outs)
+  in1 := io.in1
+  in2 := io.in2
+  out := io.out
+  B := io.B
+  read1 := io.read1
+  read2 := io.read2
+  write := io.write
+  mask := io.mask
+
+def MaskedPrivateScratch (io : MaskedKernelIO₂) : Prop :=
+  ∀ p ∈ io.scratch, p.1 ≠ io.in1 ∧ p.1 ≠ io.in2 ∧ p.1 ≠ io.out
+
+/-- Inactive lanes are framed, even inside a declared output or scratch tile. -/
+def MaskedFrame {α : Type} (io : MaskedKernelIO₂) (before after : State α) : Prop :=
+  ∀ (r : RegionName) o,
+    (r ≠ io.out ∨ ∀ i : Fin io.B, io.mask (before.pids 0) i →
+      o ≠ io.write (before.pids 0) + i.val) →
+    (∀ p ∈ io.scratch, r = p.1 → ∀ i : Fin io.B, io.mask (before.pids 0) i →
+      o ≠ p.2 (before.pids 0) + i.val) →
+    after.mem r o = before.mem r o
+
+def MaskedIO₂Equiv (lhs rhs : MaskedKernelIO₂) : Prop :=
+  MaskedPrivateScratch lhs ∧ MaskedPrivateScratch rhs ∧
+  ∀ (α : Type) [Inhabited α] (M : Algebra α) (s : State α),
+    ∃ a b, exec M lhs.kernel s = some a ∧ exec M rhs.kernel s = some b ∧
+      (∀ i : Fin lhs.B, lhs.mask (s.pids 0) i →
+        a.mem lhs.out (lhs.write (s.pids 0) + i.val) =
+          b.mem rhs.out (rhs.write (s.pids 0) + i.val)) ∧
+      MaskedFrame lhs s a ∧ MaskedFrame rhs s b
+
 end VeriTile.Triton.FP.Structural
 
 namespace VeriTile.Triton
@@ -74,6 +120,14 @@ instance kernelIO₃FPProgramSyntax : Spec.ProgramSyntax KernelIO₃ where
   signature := FP.Structural.ioSignature
   body := fun io => io.kernel.surfaceBody
   structural := some FP.Structural.IO₃Equiv
+  sameContext := fun lhs rhs => lhs.scratch = rhs.scratch
+
+instance maskedKernelIO₂FPProgramSyntax : Spec.ProgramSyntax MaskedKernelIO₂ where
+  Statement := ComputeStmt
+  Signature := FP.Structural.MaskedIO₂Signature
+  signature := FP.Structural.maskedIOSignature
+  body := fun io => io.kernel.surfaceBody
+  structural := some FP.Structural.MaskedIO₂Equiv
   sameContext := fun lhs rhs => lhs.scratch = rhs.scratch
 
 end VeriTile.Triton

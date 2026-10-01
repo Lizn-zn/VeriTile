@@ -168,6 +168,50 @@ theorem scatter_readback {α : Type} (r : RegionName) (off : TileIndex shape →
   | nil => rfl
   | cons a rest ih => exact ih _
 
+/-- Masked stores are exactly the scatter over active lanes. Inactive lanes
+neither overwrite existing cells nor provide a value for load forwarding. -/
+theorem masked_scatter_eq_filter {α ι : Type} (r : RegionName) (off : ι → Nat)
+    (val : ι → Cell α) (active : ι → Prop) [DecidablePred active]
+    (l : List ι) (s : State α) :
+    l.foldl (fun t i => if active i then t.write r (off i) (val i) else t) s =
+      (l.filter (fun i => decide (active i))).foldl (fun t i => t.write r (off i) (val i)) s := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons a rest ih =>
+    by_cases ha : active a <;> simp [ha, ih]
+
+theorem masked_scatter_frame {α ι : Type} (r : RegionName) (off : ι → Nat)
+    (val : ι → Cell α) (active : ι → Prop) [DecidablePred active]
+    (l : List ι) (r' : RegionName) (o : Nat)
+    (hmiss : r' ≠ r ∨ ∀ i ∈ l, active i → o ≠ off i) (s : State α) :
+    (l.foldl (fun t i => if active i then t.write r (off i) (val i) else t) s).mem r' o =
+      s.mem r' o := by
+  rw [masked_scatter_eq_filter]
+  apply scatter_frame
+  rcases hmiss with hr | ho
+  · exact Or.inl hr
+  · right
+    intro i hi
+    simp only [List.mem_filter, decide_eq_true_eq] at hi
+    exact ho i hi.1 hi.2
+
+theorem masked_scatter_readback {α : Type} (r : RegionName)
+    (off : TileIndex shape → Nat) (val : TileIndex shape → Cell α)
+    (active : TileIndex shape → Prop) [DecidablePred active] (s : State α)
+    (i : TileIndex shape) (hi : active i) (hinj : Function.Injective off) :
+    ((TileShape.allIndices shape).foldl
+      (fun t k => if active k then t.write r (off k) (val k) else t) s).mem r (off i) = val i := by
+  rw [masked_scatter_eq_filter]
+  exact scatter_readback_list r off val _ s i
+    ((TileShape.allIndices_nodup shape).filter _)
+    (by simp [TileShape.mem_allIndices, hi]) hinj
+
+@[simp] theorem masked_scatter_pids {α ι : Type} (r : RegionName) (off : ι → Nat)
+    (val : ι → Cell α) (active : ι → Prop) [DecidablePred active]
+    (l : List ι) (s : State α) :
+    (l.foldl (fun t i => if active i then t.write r (off i) (val i) else t) s).pids = s.pids := by
+  rw [masked_scatter_eq_filter, scatter_pids]
+
 end State
 
 /-- Binary address arithmetic stays exact; floating arithmetic is opaque. -/
