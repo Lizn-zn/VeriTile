@@ -35,14 +35,19 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable: missing admitted elementary exp/log laws |
 | Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | Division versus reciprocal multiplication: pending a faithful match to tested `div_rn` |
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | Original fp64 intermediate arithmetic has no admitted fp64 row |
-| Fused SiLU | Pending | Fused versus materialized pipeline: pending structural memory/def-use lemmas |
-| Fused SwiGLU | Pending | Fused versus materialized pipeline: pending structural lemmas and explicit rounding-idempotence atom |
+| Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | Fused versus materialized pipeline: pending structural memory/def-use lemmas |
+| Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | Fused versus materialized pipeline: pending structural lemmas and explicit rounding-idempotence atom |
 | Welford | Pending | Two-pass versus online variance: pending algebra and loop/reduction derivation |
 | Fused layernorm | Pending | Two-pass versus online statistics: pending algebra and loop/reduction derivation |
 
-There are currently 14 correctness modules and 7 FP equivalence modules. The
+There are currently 16 correctness modules and 7 FP equivalence modules. The
 eight legacy equivalence modules remain while their original transformations
 are migrated; their presence does not complete the pending FP entries above.
+
+The SiLU and SwiGLU materialized kernels retain the original `ComputeKernel.seq`
+scope: one concatenation of stage bodies. Their real specifications explicitly
+declare scratch windows and prove that every cell outside output and scratch
+windows is preserved. They do not claim a new separate-launch theorem.
 
 ## Admission and proof boundaries
 
@@ -71,7 +76,7 @@ bf16 memory cell a real memory cell. This distinction matters for the
 
 ## Validation
 
-The current migration passes 36 regression tests. The checks cover:
+The checks cover:
 
 - `lake build TritonBenchSpecExamples` (all currently present example modules).
 - The admission, assumption-printer and specification-surface tests. Repeated
@@ -82,11 +87,17 @@ The current migration passes 36 regression tests. The checks cover:
 - Exact source equality against both original kernels in each of the four
   reduction pairs, plus their public mathematical formulas. The real proofs
   include output readback, termination, bounds safety and memory framing.
+- Exact source equality for both SiLU and SwiGLU pairs, and applications of all
+  four real correctness headlines at arbitrary dimensions, without positivity
+  or whole-tile restrictions. These checks are included in the five example
+  pair tests. The other 32 regression tests cover admission, printing and the
+  specification surface.
 - Official comparator replay with trust audits for `VectorAddFPEquiv`,
   `FlatVectorAddFPEquiv`, `FloatDTypeAddFPEquiv`, `FloatDTypeAddCorrect`,
   `SoftmaxStableCorrect`, `StableLogSumExpCorrect`, `SoftmaxReciprocalCorrect`,
   `FloatDTypeSoftmaxCorrect`, `HyperConnectionsDepthFPEquiv`,
-  `HyperConnectionsWidthFPEquiv` and `AdamUpdateGridLaunchFPEquiv`.
+  `HyperConnectionsWidthFPEquiv`, `AdamUpdateGridLaunchFPEquiv`,
+  `FusedSiLUCorrect` and `FusedSwigluCorrect`.
 
 Compile each changed module and run its axiom/statement audits. The
 `TritonBenchSpecExamples` Lake target now includes all `bench.examples` modules,

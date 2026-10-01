@@ -40,6 +40,8 @@ class ExamplePairTests(unittest.TestCase):
                    for name, _, _, _ in PAIRS for suffix in ("Correct", "FPEquiv")]
         targets += [f"bench.examples.{module}"
                     for new, old, _, _ in REDUCTIONS for module in (new, old)]
+        targets += [f"bench.examples.{name}{suffix}"
+                    for name in ("FusedSiLU", "FusedSwiglu") for suffix in ("Correct", "Equiv")]
         build = subprocess.run(["lake", "build", *targets], cwd=ROOT,
                                text=True, capture_output=True, timeout=300)
         if build.returncode:
@@ -131,6 +133,53 @@ open scoped VeriTile.Triton.KernelIO₂
 
 example : VeriTile.Spec.Real (floatAddIO 0 ⊨ fun xs ys i => xs i + ys i) :=
   float_add_correctness 0
+''')
+
+    def test_fusion_correctness_preserves_both_sources_and_full_shape_scope(self):
+        self.lean('''
+import bench.examples.FusedSiLUCorrect
+import bench.examples.FusedSiLUEquiv
+import bench.examples.FusedSwigluCorrect
+import bench.examples.FusedSwigluEquiv
+open VeriTile Triton
+open VeriTile.Bench.Examples
+
+example (x g r o : RegionName) (B : Nat) :
+    FusedSiLUCorrect.fusedSiLUKernel x g r o B =
+      FusedSiLUEquiv.fusedSiLUKernel x g r o B := rfl
+example (x g r z s o : RegionName) (B : Nat) :
+    FusedSiLUCorrect.unfusedSiLUKernel x g r z s o B =
+      FusedSiLUEquiv.unfusedSiLUKernel x g r z s o B := rfl
+example (x y o : RegionName) (n B : Nat) :
+    FusedSwigluCorrect.swiglu_fused x y o n B =
+      FusedSwigluEquiv.swiglu_fused x y o n B := rfl
+example (x y s o : RegionName) (n B : Nat) :
+    FusedSwigluCorrect.swiglu_unfused x y s o n B =
+      FusedSwigluEquiv.swiglu_unfused x y s o n B := rfl
+
+section
+open scoped VeriTile.Triton.KernelIO₃
+example (B : Nat) :
+    Spec.Real (FusedSiLUCorrect.fusedIO B ⊨ fun xs gs rs i =>
+      rs i + (xs i * gs i) * Real.sigmoid (xs i * gs i)) :=
+  FusedSiLUCorrect.fused_silu_correct B
+example (B : Nat) :
+    Spec.Real (FusedSiLUCorrect.unfusedIO B ⊨ fun xs gs rs i =>
+      rs i + (xs i * gs i) * Real.sigmoid (xs i * gs i)) :=
+  FusedSiLUCorrect.unfused_silu_correct B
+end
+
+section
+open scoped VeriTile.Triton.MaskedKernelIO₂
+example (n B : Nat) :
+    Spec.Real (FusedSwigluCorrect.fusedIO n B ⊨ fun xs ys i =>
+      (xs i * Real.sigmoid (xs i)) * ys i) :=
+  FusedSwigluCorrect.fused_swiglu_correct n B
+example (n B : Nat) :
+    Spec.Real (FusedSwigluCorrect.unfusedIO n B ⊨ fun xs ys i =>
+      (xs i * Real.sigmoid (xs i)) * ys i) :=
+  FusedSwigluCorrect.unfused_swiglu_correct n B
+end
 ''')
 
 
