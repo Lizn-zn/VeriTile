@@ -11,7 +11,7 @@ in [FloatingPointPrimitives.md](../../documents/FloatingPointPrimitives.md).
 
 ## GPU run and result return
 
-Check out `codex/fp-two-gates-dev` at the same commit on both machines. Use Linux
+Check out `codex/fp-rules` at the same commit on both machines. Use Linux
 with an NVIDIA CUDA GPU. For a fresh Python 3.11–3.13 virtual environment:
 
 ```bash
