@@ -39,11 +39,14 @@ globs = [
 name = "VeriTileMath"
 globs = ["VeriTile.Math.+"]
 
-# Make the existing TritonBench source importable by its FP specification
-# companion, so the example reuses the actual kernel and mathematical proof.
+# Separate real-correctness and FP-equivalence specifications sharing one kernel.
 [[lean_lib]]
 name = "TritonBenchSpecExamples"
-roots = ["bench.tritonbench_g.vector_addition.VectorAddition"]
+roots = [
+  "bench.tritonbench_g.vector_addition.VectorAddition",
+  "bench.examples.TritonBenchVectorAdditionCorrect",
+  "bench.examples.TritonBenchVectorAdditionFP",
+]
 
 # Full target: Lite + Math + ApproxGeLU. Build this when working on the
 # GeLU error bound or before any release tagging.

@@ -30,7 +30,9 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   `R` bundles the rule table and admissions; experiment bookkeeping stays there.
   `#print_fp_assumptions name` lists only the atomic assumption names referenced
   by an FP proof, such as `add_commute`. The GPU runner and trusted-report
-  example are available. See [specification meanings](./documents/CorrectnessSurfaces.md#two-public-specification-meanings).
+  example are available, with separate [correctness](./bench/examples/TritonBenchVectorAdditionCorrect.lean)
+  and [FP equivalence](./bench/examples/TritonBenchVectorAdditionFP.lean) specifications.
+  See [specification meanings](./documents/CorrectnessSurfaces.md#two-public-specification-meanings).
 - **Narrow-float / rounding-model layer** (#1): an abstract `RoundingModel`
   (`round : FloatDType → ℝ → ℝ`, fields `round_real` (real-channel identity) and `round_idem` (idempotence)) threads a
   black-box rounding function through the semantics (`evalOpR` / `stepStmtR` /

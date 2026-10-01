@@ -227,7 +227,10 @@ The published report can now be frozen into Lean with
 trusts the report, checks its source hashes/configuration and exports only its
 30 accepted rows. It does not pretend to replay missing raw observations.
 
-The [worked example](./EXAMPLE.md) binds its fp32 ADD-COMMUTE row to the actual
+The [worked example](./EXAMPLE.md) has separate
+[real correctness](../../bench/examples/TritonBenchVectorAdditionCorrect.lean) and
+[FP equivalence](../../bench/examples/TritonBenchVectorAdditionFP.lean) files sharing
+one source kernel. The latter binds its fp32 ADD-COMMUTE row to the actual
 TritonBench vector_addition fragments with symbolic element count and block size.
 The experiment selects the fp32 assumption; the subsequent proof does not match
 kernel dimensions against experimental dimensions. `Rules blockSize` instantiates

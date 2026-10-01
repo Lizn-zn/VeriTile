@@ -118,10 +118,15 @@ example (R : Rules 64) : originalKernel 1001 64 ≡[R] optimizedKernel 1001 64 :
 example (R : Rules 256) : originalKernel 8192 256 ≡[R] optimizedKernel 8192 256 :=
   vector_addition_equiv 8192 256 R
 
-example (n block : Nat) :
-    (originalKernel n block).toAlgorithm? =
-      (VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel
-        "x" "y" "output" n block).toAlgorithm? := real_projection n block
+example (n block : Nat) : originalKernel n block =
+    VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.originalKernel n block := rfl
+
+open Lean Elab Command in
+run_cmd do
+  let deps ← liftCoreM <| VeriTile.Meta.specDependencies (← getEnv) [``vector_addition_equiv]
+  if deps.project.contains ``VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.vector_addition_correct ||
+      deps.project.contains ``VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.real_projection then
+    throwError "FP equivalence must not depend on the real correctness proof"
 '''
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'GenericDimensions.lean'
@@ -129,6 +134,36 @@ example (n block : Nat) :
             result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=exporter.ROOT,
                                     text=True, capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_real_correctness_spec_is_independent_of_fp_assumptions(self):
+        source = '''import bench.examples.TritonBenchVectorAdditionCorrect
+open VeriTile
+open VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect
+open scoped VeriTile.Triton.MaskedKernelIO₂
+
+example (n block : Nat) :
+    Spec.Real (addIO n block ⊨ fun xs ys i => xs i + ys i) :=
+  vector_addition_correct n block
+
+example (n block : Nat) :
+    (originalKernel n block).toAlgorithm? =
+      (VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel
+        "x" "y" "output" n block).toAlgorithm? := real_projection n block
+
+open Lean Elab Command in
+run_cmd do
+  let deps ← liftCoreM <| VeriTile.Meta.specDependencies (← getEnv) [``vector_addition_correct]
+  if deps.project.contains ``Spec.EvidenceValidated || deps.project.contains ``Spec.Derivation then
+    throwError "Real correctness must not depend on FP assumptions"
+#axiomsClean vector_addition_correct
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'RealCorrectness.lean'
+            path.write_text(source)
+            result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=exporter.ROOT,
+                                    text=True, capture_output=True, timeout=180)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('axiom footprint ⊆ standard base', result.stdout)
 
     def test_atom_selection_preserves_operation_precision(self):
         source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()

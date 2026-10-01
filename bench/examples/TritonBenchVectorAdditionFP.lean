@@ -1,13 +1,13 @@
 /-
 TritonBench vector_addition, with arbitrary element count and block size.
 The source kernel is specialized to typed fp32 regions; only x+y changes to y+x.
-The real correctness theorem remains in the imported TritonBench source.
+The shared source kernel and real correctness spec live in the Correct companion.
 
 The experiment selects ADD-COMMUTE as an atomic assumption. The proof uses
 that assumption at the kernel's symbolic tile size, without matching it to
 the experiment's shape or launch configuration. No new global axiom.
 -/
-import bench.tritonbench_g.vector_addition.VectorAddition
+import bench.examples.TritonBenchVectorAdditionCorrect
 import VeriTile.Meta.StatementAudit
 import VeriTile.Triton.Float.Equivalence
 import VeriTile.Triton.Float.ReportedAdmission
@@ -19,28 +19,8 @@ open scoped VeriTile.Spec
 
 abbrev admitted := FP.ReportedAdmission.fp32_add_commute
 
-/-- Same vector_addition body, with the experiment's fp32 region types. -/
-def originalKernel (nElements blockSize : Nat) : ComputeKernel :=
-  let x_ptr : Region .fp32 := ⟨"x"⟩
-  let y_ptr : Region .fp32 := ⟨"y"⟩
-  let output_ptr : Region .fp32 := ⟨"output"⟩
-  triton {
-  pid = tl.program_id(axis=0)
-  block_start = pid * $(blockSize)
-  offsets = block_start + tl.arange(0, $(blockSize))
-  mask = offsets < $(nElements)
-  x = tl.load(x_ptr + offsets, mask=mask)
-  y = tl.load(y_ptr + offsets, mask=mask)
-  output = x + y
-  tl.store(output_ptr + offsets, output, mask=mask)
-}
-
-/-- Erasing numerical precision recovers the existing TritonBench real kernel.
-Its mathematical correctness proof can therefore be reused unchanged. -/
-theorem real_projection (nElements blockSize : Nat) :
-    (originalKernel nElements blockSize).toAlgorithm? =
-      (VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel
-        "x" "y" "output" nElements blockSize).toAlgorithm? := rfl
+/-- Reuse exactly the kernel specified in the correctness companion. -/
+abbrev originalKernel := TritonBenchVectorAdditionCorrect.originalKernel
 
 /-- The sole rewrite is output = y + x. Addresses/masks are unchanged. -/
 def optimizedKernel (nElements blockSize : Nat) : ComputeKernel :=
