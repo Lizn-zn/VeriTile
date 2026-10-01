@@ -32,7 +32,7 @@ class OracleTests(unittest.TestCase):
         inputs = [torch.tensor([-1.0, 1]), torch.tensor([0.0, 1]), torch.ones(2)]
         for rule in ("SQRT-RSQRT", "DIV-RCP"):
             with self.assertRaises(experiment.NumericEvent) as error:
-                experiment.oracle(torch, rule, inputs, 1e-5)
+                experiment.oracle(torch, rule, inputs)
             self.assertEqual(error.exception.status, "INCONCLUSIVE")
 
     def test_oracle_and_candidate_nonfinite_events_are_distinct(self):
@@ -67,13 +67,10 @@ class TemplateWiringTests(unittest.TestCase):
                     return SimpleNamespace(asm={"ptx": "interpreter-wiring-test-only"})
                 return invoke
 
-        kernels = SimpleNamespace(**{key: getattr(module, key) for key in
-                                     ("ELEMENTWISE", "ROW_RULES", "DOT_RULES", "LAYOUT_RULES")})
-        for name in ("elementwise", "multiply_stage", "copy_or_transpose", "row_kernel", "dot_kernel"):
-            setattr(kernels, name, InterpretedLaunch(getattr(module, name)))
+        kernels = SimpleNamespace(SUPPORTED=module.SUPPORTED, elementwise=InterpretedLaunch(module.elementwise))
+        self.assertEqual(module.SUPPORTED, set(experiment.registry.load_catalog()))
         profile = experiment.validate_profile(deepcopy(experiment.load_module(experiment.DEFAULT_PROFILE).PROFILE))
-        profile["shape"] = [3, 17]  # Masked row, dot tiles, transpose; non-square.
-        profile["launch"]["chunk"] = 32
+        profile["shape"] = [3, 17]  # Non-square batch with a masked final tile.
         fmt = profile["formats"][-1]
         generator = torch.Generator().manual_seed(823)
         for rule in profile["rules"]:
@@ -82,7 +79,7 @@ class TemplateWiringTests(unittest.TestCase):
             with self.subTest(rule=rule):
                 inputs = [torch.rand(experiment.shapes_for(profile, rule)[k], generator=generator) + 0.5
                           for k in ("a", "b", "c")]
-                exact = experiment.oracle(torch, rule, inputs, profile["layernorm_epsilon"])
+                exact = experiment.oracle(torch, rule, inputs)
                 outputs, _ = experiment.launch_pair(torch, triton, kernels, rule, inputs, profile, fmt)
                 for output in outputs:
                     # Cast candidates explicitly quantize to bf16 even with fp32

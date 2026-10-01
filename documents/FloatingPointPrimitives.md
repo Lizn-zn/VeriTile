@@ -1,6 +1,6 @@
 # 浮点运算原语：完整设计
 
-更新日期：2026-10-01。状态：**已实现 Python 配置、26 条 Triton 候选对、two-gates 和 CPU 结果重放；GPU 实测与 Lean 规则绑定仍待完成，证明将复用现有 agent/comparator**。
+更新日期：2026-10-01。状态：**已实现 Python 配置、14 条 Triton 原子关系、two-gates 和 CPU 结果重放；GPU 实测与 Lean 规则绑定仍待完成，证明将复用现有 agent/comparator**。
 
 用户要求交付完整的“配置 → 检查原语 → 生成规则集 → 自动证明”流程，不以标量演示代替完整流程。已确认的实现路线减少了对自研执行器的要求：实际浮点运算交给 Triton/GPU，two-gates 在 Python 中运行，Lean 检查规则假设下的推导。[TwoGatesAcceptance.md](./TwoGatesAcceptance.md) 定义变换接受协议。
 
@@ -8,7 +8,9 @@
 
 ## 1. 完整目标与架构
 
-完整目标覆盖目录中 bf16、fp32 及混合精度的候选关系，包括标量算术、转换、FMA、归约、扫描、dot 与复合操作。每条数值规则在指定 shape/config 下由真实 Triton/GPU 实现检查；不支持的格式或实现明确报告，不回退成实数或 CPU 模拟后仍标作 GPU 结果。
+准入目录只记录 bf16、fp32 及混合精度下固定规模的局部表达式关系，包括算术、转换、FMA 与三项和的局部精度提升。当前保留 14 条；每条在指定 shape/config 下由 Triton/GPU 检查。不支持的实例明确报告。
+
+归约、扫描、dot、Softmax、LayerNorm 和 SwiGLU 等完整变换是 Lean 的待推导结论，不作为 two-gates 准入原子。Layout 与 store/load 结构性质依靠索引、别名和内存证明。完整交付指从基本关系推导这些优化，不是将完整优化逐个登记成假设。
 
 ### 已确认的实现边界
 
@@ -21,7 +23,7 @@
 | 自动证明 | 复用 `scripts/prove.sh` 的证明 agent，并由 Lean/comparator 检查；不另建独立证明搜索器 |
 | 完整 Lean IEEE 执行器、位值内存和 GPU 指令语义证明 | 不作为这条交付路线的前置条件；已有标量模块保留作参考和反例工具 |
 
-后文第 2–6 节保留数值语义要求和可选软件参考设计。它们不要求新增一套完整 Lean 浮点执行器；涉及被测原语的精度、cast、执行顺序等信息仍须保留。当前交付范围以本节及第 10–11 节为准。
+后文第 2–6 节保留数值语义要求和可选软件参考设计。它们不要求新增一套完整 Lean 浮点执行器；涉及被测原语的精度、cast、执行顺序等信息仍须保留。当前交付范围以本节及第 10–11 节为准。下文的归约、DotAcc 等执行节点不因此成为准入规则；执行操作与可假设的局部关系是不同层次。
 
 保留三个独立但连接的对象：
 
@@ -242,7 +244,7 @@ profile = {
 
 系统负责以下步骤，用户入口不增加逐原语的 `experiment`、`evidence` 参数：
 
-1. **实例化预定义规则。** 候选目录固定，shape/精度/采样配置变化时重新实例化。逐元素加法可把 `(4096, 4096)` 作为三个操作数各自的 shape；归约还需要 axis、长度和树，dot 需要各操作数的兼容形状及执行计划。这些由规则模板和目标程序解析，无法确定时返回缺少配置，不能猜测。
+1. **实例化预定义规则。** 候选目录固定，shape/精度/采样配置变化时重新实例化。逐元素加法可把 `(4096, 4096)` 作为三个操作数各自的 shape。该尺寸只定义局部表达式的测试批次。归约树、dot 执行计划和循环结构属于后续 Lean 推导，不作为整体关系送入原子准入表。
 2. **逐条运行 two-gates。** 同一 replicate 内配对执行两侧及 oracle，再按固定协议给出结果。一整个张量采样是一个 replicate，不能把 `4096 × 4096` 个元素当成同样数量的独立 replicate。协议预算、分桶和阈值由选定的协议配置提供，不能看过结果再调到通过。用户已确认只按指定分布准入；系统不追加其他探针分布，也不要求它们通过。同分布导致的偏差抵消作为结果解释，不能自行变成新的拒绝条件。
 3. **自动生成规则集 `R`。** 按选定策略收集接受的条目；失败、无结论、未运行及不支持的条目保留状态但不成为可用假设。规则更新改变的是可用原子关系集合，不修改浮点加法等执行原语的定义。
 4. **复用现有 agent 自动尝试证明。** 先固定准入规则表和目标规格，再调用 `scripts/prove.sh`。Agent 使用已接受的规则模板，处理 shape、各步精度和规则附带条件，Lean/comparator 检查推导及目标未被改写。公开结论仍是 `lhs ≡[R] rhs`，`#print_spec` 展开原语及假设。Agent 不负责修改准入判决、阈值或可信规则文件；找不到推导时报告未解决目标，不自动补一个假设。
@@ -250,7 +252,7 @@ profile = {
 
 这里的输入分布默认指**原子规则的测试操作数分布**。由此得到 `R` 下的形式等价性，不要求证明程序中间值也独立同分布。若某条检查明确要代表实际 kernel 内部的使用位置，则由输入生成器执行到该位置，保留中间操作数的联合关系并另建规则实例；不能把它们重抽成独立高斯。整 kernel 的统计接受结果是可选的额外实验，不从规则组合自动推出。
 
-当前仓库已具备 Python 配置、26 条具体 Triton 候选对、two-gates runner、数值准入表导入、具体标量参考、条件等价推导、假设打印和通用 agent/comparator 入口。GPU 实测由用户在独立机器运行并回传；命令见[实验目录](../experiments/floating_point/README.md)。当前生成的是 JSON 准入表，尚未构造 Lean `Rules` 或关闭 `EvidenceValidated`；仍需绑定可实例化的 Lean 规则模板并连接已有证明入口。完整流程不以脚本编译通过代替验收。
+当前仓库已具备 Python 配置、14 条局部 Triton 实现对、two-gates runner、数值准入表导入、具体标量参考、条件等价推导、假设打印和通用 agent/comparator 入口。GPU 实测由用户在独立机器运行并回传；命令见[实验目录](../experiments/floating_point/README.md)。当前生成的是 JSON 准入表，尚未构造 Lean `Rules` 或关闭 `EvidenceValidated`；仍需绑定可实例化的 Lean 规则模板并连接已有证明入口。完整流程不以脚本编译通过代替验收。
 
 ## 8. 正确性、等价性与原子假设
 
@@ -282,7 +284,7 @@ profile = {
 | [Core/Types.lean](../VeriTile/Triton/Core/Types.lean) 与 [Semantics/Scalar.lean](../VeriTile/Triton/Semantics/Scalar.lean) | 浮点标签的数学 carrier 为 WithBot ℝ | 保留实数正确性路径；实际数值计算放在 Triton 原语实现 |
 | [Core/Ast.lean](../VeriTile/Triton/Core/Ast.lean) | 当前规则只匹配固定语句片段 | 增加带变量和条件的规则实例化，保留操作顺序与各步精度；不新增通用位值解释器 |
 | [DSL/Expansion/Main.lean](../VeriTile/Triton/DSL/Expansion/Main.lean) 的 dot 展开 | acc 被代数化为额外加法，部分精度参数被擦除 | 浮点证明表示保留 DotAcc/FMA、精度模式及必要执行配置，防止未检查的数值差异变成语法相同 |
-| [Semantics/TileOps.lean](../VeriTile/Triton/Semantics/TileOps.lean) | reduceSum/dot 使用实数求和 | 数学模型保留；原子测试运行绑定配置的 Triton 归约/矩阵实现 |
+| [Semantics/TileOps.lean](../VeriTile/Triton/Semantics/TileOps.lean) | reduceSum/dot 使用实数求和 | 数学模型保留；归约/矩阵变换需展开或建立明确的执行连接后由局部原子关系推导，不直接统计准入整个算子 |
 | [Float/EvalOpR.lean](../VeriTile/Triton/Float/EvalOpR.lean) 与 [Float/StepR.lean](../VeriTile/Triton/Float/StepR.lean) | 现有抽象 cast/store 模型 | 保留历史语义，不将其当成 GPU 执行器或新的准入结果 |
 | [Spec.lean](../VeriTile/Spec.lean) | `EvidenceValidated` 仍是未接通的验证前提 | 将已校验的 Python 规则表接入模型假设；Lean 检查形式推导，不承担统计检验的形式化证明 |
 | [prove.py](../scripts/prove.py) | 已有 agent、可信输入快照与 comparator 检查 | 在调用前固定规则集和目标；复用入口，不允许证明 agent 修改准入集合 |
@@ -296,7 +298,7 @@ profile = {
 以下条件验收整条流程；不再要求先完成通用 Lean IEEE 执行器或独立自动证明器：
 
 - [ ] Python 配置接受 shape、用户输入生成器、dtype 与累加精度，并解析双方原语的实际执行配置。
-- [ ] 候选规则目录具有可执行的 Triton 原语对及 oracle，覆盖 bf16/fp32、混合精度、标量、归约/扫描、dot 和复合规则；不支持的实例明确报告。
+- [ ] 候选规则目录具有可执行的 Triton 原语对及 oracle，只覆盖 bf16/fp32 与混合精度下固定规模的局部表达式；复合算法、归约/scan/dot 变换必须由 Lean 推导。
 - [ ] Two-gates 在 GPU 原语输出上工作；配对采样、分桶、预算、退化情形、非有限结果和尾部拟合失败有明确处理；只按指定分布准入。
 - [ ] 通过检查的规则自动进入配置专属的 `R`；旧 PASS 不跨配置复用，失败/无结论/未运行记录不能混入可用集合。
 - [ ] 规则可带变量实例化；FP 证明路径保留 shape、dtype、cast、FMA、DotAcc 与必要执行配置，不利用擦除后的语法绕过准入。
@@ -312,20 +314,20 @@ profile = {
 
 | 顺序 | 工作与产物 | 验收与依赖 |
 |---|---|---|
-| 1 | Python 配置入口、候选规则目录、Triton 原语对及 oracle | 原有 26 条目录与配置身份可复用；实际运算由 GPU 执行，形状和各步精度必须匹配 |
+| 1 | Python 配置入口、候选规则目录、Triton 原语对及 oracle | 14 条原子目录与配置身份可复用；实际运算由 GPU 执行，形状和各步精度必须匹配 |
 | 2 | 指定输入分布、配对采样、bias/vars gates、结果记录 | 不追加其他探针；处理退化数据、失败和无结论；实际运行需要可用 GPU。依赖 1 |
 | 3 | 规则集生成、可实例化原子关系和 Lean 接口简化 | 解开占位验证前提与规则导入的阻塞；只开放准入条目，保留数值操作身份。可与 1–2 的独立部分推进 |
 | 4 | 接入现有证明 agent 与 comparator | 先冻结规则集和目标，再证明；拒绝修改目标或可信规则文件；打印依赖。依赖 3 |
 | 5 | 全流程回归、规则覆盖、TritonBench 例子和论文实验 | 配置变更重跑；记录成功、拒绝、无结论、未支持与未证明目标；核对第 10 节。依赖前述阶段 |
 
-GPU 主线已写好 [profile.py](../experiments/floating_point/profile.py)、[Triton 候选对](../experiments/floating_point/triton_rules.py)、[运行／重放入口](../scripts/fp_experiment.py) 和 [checker](../scripts/fp_two_gates.py)。默认配置为 4096×4096、独立 Normal(1, 1²)、三组 bf16/fp32 精度；均值、sigma、预算和规则选择可在运行前修改。当前执行器只支持所列独立正态族及 fp32 归约／dot 累加；自定义联合采样器、其他累加格式仍为扩展项，不应称为已有支持。离线编译已覆盖 masked 32×33 和 4096×4096，各 153 个 sm_80 编译实例；实际 GPU 统计结果仍为 NOT_RUN。
+GPU 主线已写好 [profile.py](../experiments/floating_point/profile.py)、[Triton 候选对](../experiments/floating_point/triton_rules.py)、[运行／重放入口](../scripts/fp_experiment.py) 和 [checker](../scripts/fp_two_gates.py)。默认配置为 4096×4096、独立 Normal(1, 1²)、三组 bf16/fp32 精度；均值、sigma、预算和规则选择可在运行前修改。当前执行器仅检查局部原子关系；`ACC-WIDEN` 只比较三项和的输入格式与 fp32 中间结果。自定义联合采样器与更多局部关系仍需单独实现。编译检查覆盖 masked 32×33 和 4096×4096，每个尺寸有 82 个支持的原子编译实例；实际 GPU 统计结果仍为 NOT_RUN。
 
 可复用的其他基础如下，前三项是可选软件参考，不再是 GPU 主线的依赖阶段：
 
 - [BitValue.lean](../VeriTile/Triton/Float/BitValue.lean)：按格式索引的位值、全部类别解码、四种舍入模式、转换以及分别配置输入/输出 flush。
 - [ScalarOps.lean](../VeriTile/Triton/Float/ScalarOps.lean)：逐操作舍入的 add/sub/mul/div、单次舍入 FMA，以及数值相等和有序比较。运算精度由参数的格式确定，混合格式须显式转换。
 - [Counterexamples.lean](../VeriTile/Triton/Float/Counterexamples.lean)：六条具体反例定理，通过 Lean 内核计算检查，覆盖 bf16/fp32 的结合重排、分配和 FMA。
-- [规则目录](../experiments/floating_point/rules.json) 与 [登记工具](../scripts/fp_rule_registry.py)：26 个稳定 ID、完整身份维度及初始未运行记录。目录中的严格候选仍需逐条证明，不能按类别自动接受。
+- [规则目录](../experiments/floating_point/rules.json) 与 [登记工具](../scripts/fp_rule_registry.py)：14 个原子 ID、完整身份维度及初始未运行记录。目录中的严格候选仍需逐条证明，不能按类别自动接受。
 
 软件标量 profile 的明确选择是：算术/转换产生 canonical quiet NaN，保留带符号零，分别配置输入与输出 subnormal flush，不观测异常 flags。它定义一套可执行值语义，尚不声称符合任何 GPU 指令。原始位值及符号操作保留 NaN payload；算术 NaN 策略与硬件的连接需在后端阶段验证。
 

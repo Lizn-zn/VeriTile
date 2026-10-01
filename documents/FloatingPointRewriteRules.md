@@ -1,8 +1,8 @@
 # 浮点变换规则与接受结果表
 
-更新日期：2026-10-01。状态：**26 条候选规则已有目录、Triton 实现对、Python 检查及重放入口；GPU two-gates 实测尚未运行。** 六个标量反例已在具体软件浮点模型下经 Lean 内核检查，结果见第 3 节。反例只否定通用严格相等，不等于 two-gates 拒绝。
+更新日期：2026-10-01。状态：**14 条原子候选关系已有目录、Triton 实现对、Python 检查及重放入口；GPU two-gates 实测尚未运行。** 六个标量反例已在具体软件浮点模型下经 Lean 内核检查，结果见第 3 节。反例只否定通用严格相等，不等于 two-gates 拒绝。
 
-这里的“等价性原语”对应可复用的变换规则，例如结合律、分配律、FMA 融合和归约重排。它与 [浮点执行原语](./FloatingPointPrimitives.md) 分开：执行原语定义程序怎样计算，本表记录参考计算如何变成候选计算，以及允许该变换的证据。
+这里的“等价性原语”对应可复用的变换规则，只包括固定规模的局部关系，例如结合律、分配律、FMA 与具体 cast 关系。归约重排和完整算法变换是待推导结论，不是准入原子。它与 [浮点执行原语](./FloatingPointPrimitives.md) 分开：执行原语定义程序怎样计算，本表记录参考计算如何变成候选计算，以及允许该变换的证据。
 
 ## 1. 表的单位与判决
 
@@ -12,7 +12,7 @@
 
     规则 ID + 参考/候选执行图身份
     + 输入/操作/累加/输出精度及 rounding/intrinsic 配置
-    + shape/stride/归约或 dot 计划
+    + 逐元素测试张量的 shape/stride 和 launch（归约、scan、dot 计划为 null）
     + 后端与双方编译/启动配置
     + 输入域/权重/高斯探针配置
     + two-gates 协议与检查器版本
@@ -47,8 +47,6 @@
 | MUL-COMMUTE | 乘法交换 | \(ab\to ba\) | 同上；不能把数值比较相等与 NaN 位模式相同混为一谈 |
 | ROUND-IDEM | 同格式重复舍入消除 | \(q_d(q_d(x))\to q_d(x)\) | 已有抽象模型字段 round_idem；具体转换/特殊值/flush 规则仍需证明 |
 | BF16-WIDEN-RETURN | 提升后转回 | bf16 → fp32 → bf16 | 有限 bf16 值、无改变值的 flush 等前提；具体模型证明待完成 |
-| LAYOUT-INVERSE | 结构操作抵消 | inverse-remap(remap(x)) → x | 索引映射互逆、位模式保持、有效 shape；需相应结构证明 |
-| STORE-LOAD-FORWARD | 中间存取消除 | 同格式 store 后 load → 原值 | 无干扰写、别名/同步条件成立、转换位置相同；需内存与位值证明 |
 
 ### 2.2 需要按配置判定的数值变换
 
@@ -64,20 +62,22 @@
 | DIV-RCP | 除法改乘倒数 | \(a/b\to a\cdot\operatorname{rcp}(b)\) | 理想规格要求 \(b\ne0\)；rcp 实现与额外乘法舍入 |
 | SQRT-RSQRT | 倒平方根替换 | \(1/\sqrt{x}\to\operatorname{rsqrt}(x)\) | 理想规格要求 \(x>0\)；绑定函数实现及输入域 |
 | CAST-MOVE | 输入量化后移 | \(q_d(q_d(a)+q_d(b))\to q_d(a+b)\) | 明确中间加法格式和提升路径；同一份原始输入 |
-| CAST-REMOVE | 移除中间量化 | \(q_d(F(q_d(G(x))))\to q_d(F(G(x)))\) | 两边最终输出格式相同；保留 F/G 的实际运算实现 |
-| ACC-WIDEN | 提升计算/累加精度 | 低精度中间计算 → 高精度中间计算，输出格式相同 | 更高精度不自动意味着符合参考的 bias gate |
-| REDUCE-REORDER | 改变归约树 | reduction-plan A → plan B | 相同参与元素、长度、初值与 mask；实际树必须确定 |
-| REDUCE-SPLIT | 分块归约 | 单段归约 → 分块后合并 | 块大小、局部与合并精度、padding 与初始化 |
-| SCAN-REORDER | 改变 scan 计划 | serial plan → parallel plan | 每个输出的前缀/后缀语义相同；记录完整依赖图 |
-| DOT-LOWER | 改变 dot 实现 | 显式乘积归约 → 目标 dot/MMA | 输入计算模式、乘积/累加行为、tile 计划 |
-| DOT-ACC-FUSE | 累加器融合 | \(C+\operatorname{dot}(A,B)\to\operatorname{dotAcc}(A,B,C)\) | 累加器进入位置与各步舍入，不能代数化掉 |
-| GEMM-SPLIT-K | K 维分块合并 | 完整 K 归约 → split-K 合并 | shape、分块、合并精度及原子调度 |
-| SOFTMAX-SHIFT | softmax 平移 | 直接 exp/归一化 → 减去最大值后计算 | 相同数学结果；overflow/underflow 与归约实现变化 |
-| SOFTMAX-ONLINE | 在线 softmax | batch → streaming/online | 完整输出、序列长度、分块与累加精度 |
-| LAYERNORM-WELFORD | 方差算法替换 | two-pass → Welford | 相同方差定义、正长度、epsilon、归约与 affine 计算 |
-| SWIGLU-FUSE | kernel 融合 | 独立阶段 → 融合执行 | 保留中间 cast 的变体与删除 cast 的变体分别登记；launch 边界也需对应 |
+| CAST-REMOVE | 移除一个中间 cast | `q_compute(q_bf16(a+b) * c) → q_compute((a+b) * c)` | 两边使用相同输出 cast；只检查这个局部表达式，不量化任意 F/G |
+| ACC-WIDEN | 三项和的局部精度提升 | `(a+b)+c` 的输入格式中间结果 → fp32 中间结果 | 两边使用相同输出 cast；不代表整个归约或 dot 的累加器可以直接替换 |
 
 DIV-RCP、SQRT-RSQRT 等具有定义域前提的规则，需要明确从探针到合法操作数的生成方式，例如 kernel 内部生成正的平方和。条件化/变换后的分布必须登记，不能称作未经修改的标准高斯。所有规则都要处理特殊值，不得在查看差异后静默筛掉坏样本。
+
+### 2.3 不进入原子假设表的内容
+
+以下旧条目已从目录、GPU 执行入口和结果导入允许列表删除：
+
+- 完整算法：`SOFTMAX-SHIFT`、`SOFTMAX-ONLINE`、`LAYERNORM-WELFORD`、`SWIGLU-FUSE`。
+- 组合计算：`REDUCE-REORDER`、`REDUCE-SPLIT`、`SCAN-REORDER`、`DOT-LOWER`、`DOT-ACC-FUSE`、`GEMM-SPLIT-K`。
+- 结构和内存性质：`LAYOUT-INVERSE`、`STORE-LOAD-FORWARD`。
+
+前两组应由 Lean 根据已准入的局部关系和结构性推导证明；后一组需要索引、别名与内存条件的证明。整 kernel 数值实验即使通过，也不能将这些结论直接加入 `R`。例如 online softmax 若缺少某条指数关系，应明确该局部表达式并单独准入，不能改为假设整个 online 算法等价。此处并未声称现有 14 条关系已足以证明所有这些案例。
+
+`shape = [4096, 4096]` 表示对原子表达式进行逐元素批量测试，不把该表达式升级为整张量归约假设。
 
 已有证明只作为对应语义层的基础：
 
@@ -109,7 +109,7 @@ DIV-RCP、SQRT-RSQRT 等具有定义域前提的规则，需要明确从探针�
 
 正式结果表应保存下列字段，空结果使用 null/NOT_RUN，不填零：
 
-机器可读目录位于 [rules.json](../experiments/floating_point/rules.json)。登记工具初始化的记录仍为 NOT_EVALUATED。[fp_experiment.py](../scripts/fp_experiment.py) 提供 Python 配置、26 条具体 Triton 实现对、GPU 配对采样和结果导入；导入端核对完整身份、PTX 与统计文件摘要并重新运行两门，生成逐配置数值准入表。哈希与统计重放不认证远端执行真实性，也不关闭 Lean 的外部验证义务。当前尚无实际 GPU 准入结果；命令、精度支持矩阵和具体变换范围见 [实验目录说明](../experiments/floating_point/README.md)。
+机器可读目录位于 [rules.json](../experiments/floating_point/rules.json)。登记工具初始化的记录仍为 NOT_EVALUATED。[fp_experiment.py](../scripts/fp_experiment.py) 提供 Python 配置、14 条局部 Triton 实现对、GPU 配对采样和结果导入；导入端核对完整身份、PTX 与统计文件摘要并重新运行两门，生成逐配置数值准入表。哈希与统计重放不认证远端执行真实性，也不关闭 Lean 的外部验证义务。当前尚无实际 GPU 准入结果；命令、精度支持矩阵和具体变换范围见 [实验目录说明](../experiments/floating_point/README.md)。
 
 | 字段组 | 内容 |
 |---|---|
@@ -127,8 +127,6 @@ DIV-RCP、SQRT-RSQRT 等具有定义域前提的规则，需要明确从探针�
 | ADD-ASSOC | bf16 / bf16 / bf16 | 每操作数标量；单独登记的高斯配置 | NOT_RUN | NOT_RUN | NOT_EVALUATED |
 | ADD-ASSOC | bf16 / fp32 / bf16 | 同上；最终转回 bf16 | NOT_RUN | NOT_RUN | NOT_EVALUATED |
 | ADD-ASSOC | fp32 / fp32 / fp32 | 每操作数标量；单独登记的高斯配置 | NOT_RUN | NOT_RUN | NOT_EVALUATED |
-| REDUCE-REORDER | 按节点记录 | 某个确定长度与两棵确定的树 | NOT_RUN | NOT_RUN | NOT_EVALUATED |
-| DOT-ACC-FUSE | 按 dot plan 记录 | 确定 M/N/K、tile 及输入模式 | NOT_RUN | NOT_RUN | NOT_EVALUATED |
 
 每个 probe 配置实际生成独立记录，不能把不同均值或尺度的样本混起来求偏差。规则汇总只覆盖明确列出的配置；未检查的 dtype、shape、计算树、探针或后端均保持未验证。
 

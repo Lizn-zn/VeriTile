@@ -49,7 +49,7 @@ The end-to-end project plan and roadmap live in the repo root:
   boundaries, and integration tasks (in Chinese; Python checker implemented,
   GPU measurements pending).
 - [Floating-point primitives: complete design](./FloatingPointPrimitives.md) —
-  Triton/GPU candidates, mixed precision, reductions, dot/MMA, backend
+  Triton/GPU atomic relations, mixed precision, derived algorithm proofs, backend
   contracts, completion criteria, and dependency-ordered implementation plan
   (in Chinese; GPU runner and replay implemented, Lean admission binding pending).
 - [Floating-point rewrite rules and acceptance table](./FloatingPointRewriteRules.md) —

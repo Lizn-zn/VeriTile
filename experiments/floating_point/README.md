@@ -1,6 +1,6 @@
 # Floating-point rule experiments
 
-Edit [profile.py](./profile.py), run paired Triton kernels on an NVIDIA GPU,
+Edit [profile.py](./profile.py), check atomic expression pairs with Triton kernels on an NVIDIA GPU,
 then import the result directory on the development machine (Python + NumPy).
 The importer recomputes both gates instead of trusting PASS labels.
 
@@ -39,15 +39,17 @@ python3 scripts/fp_experiment.py run --rules MUL-DISTRIB,FMA-CONTRACT --formats 
 
 Default settings: `4096×4096`, independent `Normal(1, 1²)` operands, 4096
 **whole-tensor** replicates. Input/compute/output profiles are bf16/bf16/bf16,
-bf16/fp32/bf16 and fp32/fp32/fp32. Row and dot templates use **fp32 accumulation**;
-other accumulator formats are rejected, not silently widened. `ACC-WIDEN`
-explicitly compares input-format intermediates with fp32 intermediates.
+bf16/fp32/bf16 and fp32/fp32/fp32. `ACC-WIDEN` compares the two additions
+in `(a+b)+c` using input-format versus fp32 intermediates, with the same
+output cast. Its widened format is fp32; this is not an entire reduction
+or dot-accumulator replacement.
 `std` is sigma, not variance. Edit it before running to choose another variance.
 These are editable example parameters, not calibrated paper results.
 
-The full run has 78 instances. Full-size dot and serial-scan references are
-expensive; select rules to work through the table. No run is silently replaced
-by a smaller shape or cheaper schedule. Each replicate generates a fresh tuple.
+The full run has 42 rows: 14 atomic relations × 3 format profiles, including
+one unsupported fp32 BF16-WIDEN-RETURN row. Shape denotes a batch of local
+expressions. No run is silently replaced by a smaller shape. Each replicate
+generates a fresh tuple.
 
 To resume, repeat the same command with `--resume`:
 
@@ -90,7 +92,7 @@ The GPU runner, compiler, hardware and fp64 oracle remain trusted components.
 
 ## Concrete coverage
 
-All 26 catalogue IDs have template pairs in [triton_rules.py](./triton_rules.py).
+All 14 atomic catalogue IDs have template pairs in [triton_rules.py](./triton_rules.py).
 Evidence covers that exact pair/configuration, not all implementations with the
 same rule name.
 
@@ -102,17 +104,18 @@ same rule name.
 | ROUND-IDEM; BF16-WIDEN-RETURN | Repeated output-format cast; bf16→fp32→bf16 (requires bf16 input/output) |
 | Cast movement/removal | Explicit bf16 quantization around addition; remove intermediate bf16 rounding in `(a+b)*c` |
 | ACC-WIDEN | Three-term sum with input-format versus fp32 intermediates, same output format |
-| Layout; store/load | Two physical transposes versus copy; same-format intermediate buffer versus forwarding; contiguous nonaliasing allocations |
-| Reduction; scan | Sum versus reversed input; sum versus ordered chunk sums; serial prefix scan versus `tl.cumsum` |
-| Dot | Scalar product/add loop versus `tl.dot`; C added after versus as initial accumulator; full K versus two separate contiguous halves |
-| Softmax | Direct versus max-shifted; batch versus chunked online max/denominator and full output |
-| LayerNorm | Two-pass population variance versus pairwise Welford; configured epsilon, no affine parameters |
-| SwiGLU | Materialized sigmoid-product intermediate versus fused execution removing that store conversion |
 
-Dot shape `[M,N]` means A `[M,N]`, B `[N,N]`, C/output `[M,N]`, explicitly K=N.
-Dot uses `input_precision="ieee"`, no implicit TF32/autotuning. Split-K has a
-deterministic merge, no atomics. Row operations reduce axis 1; their fp32
-arithmetic is recorded separately from the elementwise `compute` setting.
+Each atom has a fixed number of scalar operations and casts. `CAST-REMOVE`
+is specifically `(a+b)*c` with one bf16 intermediate cast removed; it does not
+stand for arbitrary F/G. No whole-kernel algorithm is admitted as an atom.
+
+Softmax (including online softmax), Welford, SwiGLU fusion, reduction/scan
+reordering and dot/split-K transformations belong to Lean derivations. Layout
+and store/load properties require structural and memory proofs. They have been
+removed from the catalogue, templates and runner. Explicitly selecting an old
+composite ID is rejected before GPU execution; importing such a row is rejected
+regardless of its PASS labels. Additional scalar identities, such as an explicit
+exponential relation, must be specified and checked separately when needed.
 
 Only the selected distribution is sampled. There are no extra asymmetric probes,
 absolute-value transforms, truncation or resampling. Unconditioned normal input
@@ -121,7 +124,6 @@ A sampled zero divisor is also inconclusive. Associativity's symmetric operands
 can cancel mean delta; this does not add a new rejection criterion.
 
 Triton operation contracts: [fma](https://triton-lang.org/main/python-api/generated/triton.language.fma.html),
-[dot](https://triton-lang.org/main/python-api/generated/triton.language.dot.html),
 [div_rn](https://triton-lang.org/main/python-api/generated/triton.language.div_rn.html).
 
 ## Fixed statistical protocol
@@ -181,7 +183,7 @@ python3 scripts/check_fp_triton_compile.py
 python3 scripts/check_fp_triton_compile.py --rows 4096 --columns 4096
 ```
 
-Both shapes compile 153 specializations for sm_80 using Triton 3.5.1. Optional
+Both shapes compile 82 supported atomic specializations for sm_80 using Triton 3.5.1. Optional
 CPU indexing/formula/oracle checks use PyTorch and Triton's interpreter:
 
 ```bash

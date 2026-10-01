@@ -40,8 +40,24 @@ class RegistryTests(unittest.TestCase):
         documented = re.findall(r"^\| ([A-Z][A-Z0-9-]+) \|", (
             registry.ROOT / "documents/FloatingPointRewriteRules.md").read_text(), re.M)
         self.assertEqual(set(rules), set(documented) - {"ID"})
-        self.assertEqual(len(rules), 26)
-        self.assertEqual(sum(r["category"] == "exact_candidate" for r in rules.values()), 6)
+        self.assertEqual(len(rules), 14)
+        self.assertEqual(sum(r["category"] == "exact_candidate" for r in rules.values()), 4)
+
+    def test_composite_and_structural_transforms_cannot_be_registered(self):
+        from scripts import fp_experiment as experiment
+        removed = ("SOFTMAX-SHIFT", "SOFTMAX-ONLINE", "LAYERNORM-WELFORD", "SWIGLU-FUSE",
+                   "REDUCE-REORDER", "REDUCE-SPLIT", "SCAN-REORDER", "DOT-LOWER", "DOT-ACC-FUSE",
+                   "GEMM-SPLIT-K", "LAYOUT-INVERSE", "STORE-LOAD-FORWARD")
+        for rule_id in removed:
+            with self.subTest(rule=rule_id):
+                config = fixture()
+                config["rule_id"] = rule_id
+                with self.assertRaisesRegex(ValueError, "atomic rule"):
+                    registry.pending_record(config)
+                profile = deepcopy(experiment.load_module(experiment.DEFAULT_PROFILE).PROFILE)
+                profile["rules"] = [rule_id]
+                with self.assertRaisesRegex(ValueError, "atomic rule"):
+                    experiment.validate_profile(profile)
 
     def test_all_identity_dimensions_and_direction_are_bound(self):
         config = fixture()

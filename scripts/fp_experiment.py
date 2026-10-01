@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Run Triton two-gates experiments, or replay a returned result bundle on CPU."""
+"""Check atomic Triton expression relations, or replay their results on CPU."""
 import argparse
 from copy import deepcopy
 import hashlib
@@ -58,16 +58,13 @@ def load_module(path):
 
 
 def validate_profile(profile):
-    expected = {"shape", "distribution", "seed", "replicates", "formats", "rules", "launch",
-                "layernorm_epsilon", "gates"}
+    expected = {"shape", "distribution", "seed", "replicates", "formats", "rules", "launch", "gates"}
     if type(profile) is not dict or set(profile) != expected:
         raise ValueError(f"profile requires exactly {sorted(expected)}")
     registry.canonical_json(profile)
     shape = profile["shape"]
     if type(shape) is not list or len(shape) != 2 or any(type(n) is not int or n <= 0 for n in shape):
         raise ValueError("shape must be [rows, columns] with positive concrete integers")
-    if shape[1] > 65536:
-        raise ValueError("row templates support at most 65536 columns")
     dist = profile["distribution"]
     if (type(dist) is not dict or set(dist) != {"family", "mean", "std"}
             or dist["family"] != "normal" or type(dist["mean"]) not in (int, float)
@@ -90,24 +87,23 @@ def validate_profile(profile):
         if any(fmt[k] not in ("bf16", "fp32") for k in ("input", "compute", "output")):
             raise ValueError("input/compute/output formats must be bf16 or fp32")
         if fmt["accumulator"] != "fp32":
-            raise ValueError("the supplied reduction/dot templates use fp32 accumulation")
+            raise ValueError("the local ACC-WIDEN relation uses fp32 for widened additions")
     if profile["rules"] == "all":
         profile["rules"] = list(registry.load_catalog())
     if (type(profile["rules"]) is not list or not profile["rules"]
             or any(type(r) is not str or r not in registry.load_catalog() for r in profile["rules"])
             or len(set(profile["rules"])) != len(profile["rules"])):
-        raise ValueError("rules must be 'all' or distinct candidate IDs")
+        raise ValueError("rules must be 'all' or distinct atomic rule IDs; composite transformations are not admitted")
     launch = profile["launch"]
-    if type(launch) is not dict or set(launch) != {"block", "chunk", "num_warps", "dot_tile"}:
-        raise ValueError("launch requires block/chunk/num_warps/dot_tile")
-    for key in ("block", "chunk"):
-        n = launch[key]
-        if type(n) is not int or n < 32 or n > 65536 or n & (n - 1):
-            raise ValueError(f"{key} must be a power of two in [32, 65536]")
-    if launch["num_warps"] not in (4, 8) or launch["dot_tile"] not in (16, 32):
-        raise ValueError("num_warps must be 4/8, dot_tile must be 16/32")
-    if type(profile["layernorm_epsilon"]) not in (int, float) or profile["layernorm_epsilon"] <= 0:
-        raise ValueError("layernorm_epsilon must be positive")
+    if type(launch) is not dict or set(launch) != {"block", "num_warps"}:
+        raise ValueError("launch requires block/num_warps")
+    block = launch["block"]
+    if type(block) is not int or block < 32 or block > 65536 or block & (block - 1):
+        raise ValueError("block must be a power of two in [32, 65536]")
+    if launch["num_warps"] not in (4, 8):
+        raise ValueError("num_warps must be 4/8")
+    if ((shape[0] * shape[1] + block - 1) // block) * block > 2**31:
+        raise ValueError("elementwise offsets must fit in signed 32-bit indices")
     g = profile["gates"]
     if type(g) is not dict or set(g) != {"bias", "vars", "warning_policy"}:
         raise ValueError("gates requires bias/vars/warning_policy")
@@ -138,48 +134,38 @@ def seed_for(profile, fmt, rule):
 
 
 def shapes_for(profile, rule):
-    m, n = profile["shape"]
-    if rule in ("DOT-LOWER", "DOT-ACC-FUSE", "GEMM-SPLIT-K"):
-        return {"a": [m, n], "b": [n, n], "c": [m, n], "out": [m, n]}
-    out = [m] if rule in ("REDUCE-REORDER", "REDUCE-SPLIT") else [m, n]
-    return {"a": [m, n], "b": [m, n], "c": [m, n], "out": out}
+    # Shape describes a batch of independent local expressions, not a reduction.
+    return {name: list(profile["shape"]) for name in ("a", "b", "c", "out")}
 
 
 def graph_hash(rule, side, profile, fmt, sources):
     # Bind the host sampler/oracle and importer too, not just the JIT function.
     return sha(registry.canonical_json({"implementation_sources": sources,
                "rule": rule, "side": side, "shape": profile["shape"], "formats": fmt,
-               "launch": profile["launch"], "epsilon": profile["layernorm_epsilon"]}))
+               "launch": profile["launch"]}))
 
 
 def contract_for(profile, fmt, rule, backend, sources, lowerings):
     shapes = shapes_for(profile, rule)
-    row = rule.startswith(("REDUCE", "SCAN", "SOFTMAX", "LAYERNORM"))
-    dot = rule.startswith(("DOT", "GEMM"))
-    launch = profile["launch"]
     return {
         "schema_version": 1, "rule_id": rule,
         **{side: {"graph_sha256": graph_hash(rule, side, profile, fmt, sources),
                   "lowering_sha256": sha(registry.canonical_json(lowerings[side]))}
            for side in ("reference", "candidate")},
         "numerics": {
-            "semantics_version": "triton-templates-v1", "input_formats": {k: fmt["input"] for k in ("a", "b", "c")},
-            "node_formats": {"elementwise": fmt["compute"], "row_and_dot": "fp32",
+            "semantics_version": "triton-atomic-relations-v1", "input_formats": {k: fmt["input"] for k in ("a", "b", "c")},
+            "node_formats": {"elementwise": fmt["compute"],
                              "explicit_cast_target": "bf16", "fma_intrinsic": "fp32",
                              "template_details": "see bound Triton source for every cast and operation"},
-            "accumulator_formats": {"row_and_dot": fmt["accumulator"],
-                                    "ACC-WIDEN_reference": fmt["input"], "ACC-WIDEN_candidate": "fp32"},
+            "accumulator_formats": {"reference": fmt["input"], "candidate": fmt["accumulator"]}
+                                   if rule == "ACC-WIDEN" else {},
             "output_formats": {"out": fmt["output"]}, "rounding": "rne casts; instruction-specific intrinsics",
             "nan": "no NaN payload equivalence; nonfinite samples stop the instance",
             "subnormal": "native bound GPU/compiler instruction behavior; no software flush substitution",
-            "intrinsics": {"exp": "tl.exp", "sqrt": "tl.sqrt", "rsqrt": "tl.rsqrt", "div": "tl.div_rn",
-                           "dot_input_precision": "ieee", "oracle": "torch fp64 on the same quantized input"}},
+            "intrinsics": {"fma": "tl.fma", "sqrt": "tl.sqrt", "rsqrt": "tl.rsqrt", "div": "tl.div_rn",
+                           "oracle": "torch fp64 on the same quantized input"}},
         "layout": {"shapes": shapes, "strides": {k: [v[1], 1] if len(v) == 2 else [1] for k, v in shapes.items()},
-                   "reduction": {"axis": 1, "chunk": launch["chunk"], "rule": rule} if row else None,
-                   "scan": {"reference": "serial", "candidate": "tl.cumsum"} if rule == "SCAN-REORDER" else None,
-                   "dot": {"M": shapes["a"][0], "N": shapes["b"][1], "K": shapes["a"][1],
-                           "tile": launch["dot_tile"], "split_k": 2 if rule == "GEMM-SPLIT-K" else 1,
-                           "merge": "deterministic, no atomic addition"} if dot else None},
+                   "reduction": None, "scan": None, "dot": None},
         "backend": backend,
         "probe": {"family": "normal", "roles": {k: profile["distribution"] for k in ("a", "b", "c")},
                   "joint_distribution": "independent roles and elements; fresh whole tuple per replicate",
@@ -204,7 +190,7 @@ class NumericEvent(Exception):
         self.status = status
 
 
-def oracle(torch, rule, inputs, epsilon):
+def oracle(torch, rule, inputs):
     a, b, c = (x.double() for x in inputs)
     if rule in ("ADD-COMMUTE", "CAST-MOVE"):
         return a + b
@@ -228,25 +214,14 @@ def oracle(torch, rule, inputs, epsilon):
         if bool((a <= 0).any()):
             raise NumericEvent("INCONCLUSIVE", "sqrt domain violated; the requested normal distribution was not conditioned")
         return torch.rsqrt(a)
-    if rule.startswith("REDUCE-"):
-        return a.sum(dim=1)
-    if rule == "SCAN-REORDER":
-        return a.cumsum(dim=1)
-    if rule.startswith("SOFTMAX-"):
-        return torch.softmax(a, dim=1)
-    if rule == "LAYERNORM-WELFORD":
-        centered = a - a.mean(dim=1, keepdim=True)
-        return centered / torch.sqrt((centered * centered).mean(dim=1, keepdim=True) + epsilon)
-    if rule in ("DOT-LOWER", "GEMM-SPLIT-K"):
-        return a @ b
-    if rule == "DOT-ACC-FUSE":
-        return a @ b + c
-    if rule == "SWIGLU-FUSE":
-        return a * torch.sigmoid(a) * b
-    return a
+    if rule in ("ROUND-IDEM", "BF16-WIDEN-RETURN", "CANCEL"):
+        return a
+    raise ValueError("no oracle for atomic rule " + rule)
 
 
 def launch_pair(torch, triton, kernels, rule, inputs, profile, fmt):
+    if rule not in kernels.SUPPORTED:
+        raise ValueError("no atomic template for " + rule)
     m, n = profile["shape"]
     count = m * n
     a, b, c = inputs
@@ -257,35 +232,8 @@ def launch_pair(torch, triton, kernels, rule, inputs, profile, fmt):
     outputs, compiled = [], {}
     for side, name in enumerate(("reference", "candidate")):
         out = torch.empty(out_shape, dtype=dtype, device=a.device)
-        programs = []
-        if rule in kernels.ELEMENTWISE:
-            target = torch.empty_like(out) if rule == "SWIGLU-FUSE" and side == 0 else out
-            programs.append(kernels.elementwise[(triton.cdiv(count, block),)](
-                a, b, c, target, count, rule, side, fmt["compute"] == "bf16", fmt["input"] == "bf16", block, **options))
-            if target is not out:
-                programs.append(kernels.multiply_stage[(triton.cdiv(count, block),)](
-                    target, b, out, count, fmt["compute"] == "bf16", block, **options))
-        elif rule in kernels.LAYOUT_RULES:
-            if side == 0:
-                transpose = rule == "LAYOUT-INVERSE"
-                temp = torch.empty_like(out)
-                programs.append(kernels.copy_or_transpose[(triton.cdiv(count, block),)](
-                    a, temp, m, n, transpose, block, **options))
-                programs.append(kernels.copy_or_transpose[(triton.cdiv(count, block),)](
-                    temp, out, n if transpose else m, m if transpose else n, transpose, block, **options))
-            else:
-                programs.append(kernels.copy_or_transpose[(triton.cdiv(count, block),)](
-                    a, out, m, n, False, block, **options))
-        elif rule in kernels.ROW_RULES:
-            programs.append(kernels.row_kernel[(m,)](
-                a, out, n, rule, side, profile["layernorm_epsilon"], profile["launch"]["chunk"],
-                triton.next_power_of_2(n), **options))
-        elif rule in kernels.DOT_RULES:
-            tile = profile["launch"]["dot_tile"]
-            programs.append(kernels.dot_kernel[(triton.cdiv(m, tile), triton.cdiv(n, tile))](
-                a, b, c, out, m, n, n, rule, side, tile, **options))
-        else:
-            raise ValueError("no concrete template for " + rule)
+        programs = [kernels.elementwise[(triton.cdiv(count, block),)](
+            a, b, c, out, count, rule, side, fmt["compute"] == "bf16", fmt["input"] == "bf16", block, **options)]
         outputs.append(out)
         compiled[name] = [p.asm["ptx"] for p in programs]
     return outputs, compiled
@@ -341,7 +289,7 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
                        * dist["std"] + dist["mean"]).to(dtype) for key in ("a", "b", "c")]
             if any(not bool(torch.isfinite(x).all()) for x in inputs):
                 raise NumericEvent("INCONCLUSIVE", "input quantization produced nonfinite values")
-            exact = oracle(torch, rule, inputs, profile["layernorm_epsilon"])
+            exact = oracle(torch, rule, inputs)
             (reference, candidate), compiled = launch_pair(torch, triton, kernels, rule, inputs, profile, fmt)
             if lowerings is None:
                 lowerings = {}
@@ -412,7 +360,7 @@ def run(args):
                           "driver_versions": driver},
                "compiler": {"torch": torch.__version__, "triton": triton.__version__, "cuda": torch.version.cuda,
                             "numpy": np.__version__},
-               "compile_options": {"enable_fp_fusion": False, "dot_input_precision": "ieee"},
+               "compile_options": {"enable_fp_fusion": False},
                "launch": profile["launch"]}
     manifest = {"bundle_version": BUNDLE_VERSION, "profile": profile, "smoke": args.smoke,
                 "sources": source_hashes(), "backend": backend,

@@ -14,7 +14,7 @@
 
 > VeriTile 在实数语义下证明 kernel 与数学公式一致；在浮点优化理论中，用 two-gates 验证原子关系并将其登记为有配置和证据的假设，再由 Lean 推导实现等价性并列出依赖。Bias gate 检查方向性偏差，vars gate 检查相对高精度 oracle 的误差放大。
 
-这是正在实现的论文主线。既有实数算术与 cast/store 抽象舍入证明继续保留；新增 bf16/fp32 位值、逐操作舍入的基础标量语义、六个具体反例定理及规则登记接口。已写好 26 条具体 Triton 原语对、Python two-gates 与结果导入；实际 GPU 测量和 Lean 规则表绑定尚未完成。完整原语架构及实施计划见 [FloatingPointPrimitives.md](./FloatingPointPrimitives.md)，接受关系见 [TwoGatesAcceptance.md](./TwoGatesAcceptance.md)。交付按完整目标验收，小例子只用于验证设计和实现。
+这是正在实现的论文主线。既有实数算术与 cast/store 抽象舍入证明继续保留；新增 bf16/fp32 位值、逐操作舍入的基础标量语义、六个具体反例定理及规则登记接口。已写好 14 条局部 Triton 原子关系、Python two-gates 与结果导入；实际 GPU 测量和 Lean 规则表绑定尚未完成。完整原语架构及实施计划见 [FloatingPointPrimitives.md](./FloatingPointPrimitives.md)，接受关系见 [TwoGatesAcceptance.md](./TwoGatesAcceptance.md)。交付按完整目标验收，小例子只用于验证设计和实现。
 
 已确定的用户流程是：在 Python 中定义 shape 和输入分布，系统检查预定义原子规则、生成可用规则集 `R`，再自动尝试实现等价证明；改配置后重新生成规则集并重跑证明。dtype、累加精度和实际执行配置仍纳入检查。该流程是完整交付目标，尚不是已实现的全自动能力；规则集下的形式推导与整 kernel 的统计接受结果分开报告。具体接口及失败行为见原语设计第 7.1 节。
 
@@ -86,10 +86,10 @@ structure RoundingModel where
 - [x] 写清实数结合律与跨舍入点重排的区别，记录候选贡献表述。
 - [x] 根据用户提供的报告定义 two-gates 接受关系、判决等级与外部证据边界。
 - [x] 按完整交付目标补充浮点原语架构，覆盖值表示、混合精度、FMA、归约/scan、dot/MMA、特殊值、后端与接受接口。
-- [x] 建立 [浮点变换规则表](./FloatingPointRewriteRules.md) 和 26 条机器可读候选目录，分开记录严格关系和 two-gates 接受结果；六个严格不等见证已有 Lean 内核检查，数值门尚未运行。
+- [x] 建立 [浮点变换规则表](./FloatingPointRewriteRules.md) 和 14 条基本原子关系目录，分开记录严格关系和 two-gates 接受结果；六个严格不等见证已有 Lean 内核检查，数值门尚未运行。
 - [x] 对外区分实数正确性与基于原子假设的浮点实现等价性；实现 two-gates 原子准入条件、形式推导和 `#print_spec` 报告，外部验证仍为显式义务。
 - [ ] 接通 Python shape/输入分布配置 → 候选规则检查 → 自动生成 `R` → 自动证明尝试，并评估配置变化后的复用与重跑成本。
-- [ ] 在实际 GPU 验证 bf16/fp32 支持矩阵、26 条具体 Triton 变换与输入／执行契约；无需先构造完整 Lean IEEE 执行器。
+- [ ] 在实际 GPU 验证 bf16/fp32 支持矩阵、14 条具体 Triton 局部关系与输入／执行契约；无需先构造完整 Lean IEEE 执行器。
 - [ ] 接入或实现 two-gates checker，复现报告结果，并验证阈值、尾部拟合与停止规则；详见独立设计文档。
 - [ ] 补一组最小正反例：允许消除的同 dtype 重复舍入，以及改变中间舍入后不能保持等价的例子；反例需要具体见证或不等式证明，不能仅依靠 proof 失败。
 - [ ] 比较已有抽象舍入与 kernel 验证工作，说明本项目新增的技术和收益；完成前不宣称首创。
@@ -190,7 +190,7 @@ Attention 案例应在 M2 中按完整计算范围、参数化程度和证明成
 
 **所选 two-gates 路线需要实际 GPU 实验。** Lean 检查、验证耗时、内存使用、证明复用和人工成本仍可在 CPU 上评估；数值原语明确由 Python 调 Triton/GPU，运行测试不替代实数正确性证明或硬件语义认证。
 
-当前开发环境没有 NVIDIA GPU。按用户安排，将运行配置、26 条 Triton 候选对、checker 和结果导入推送到独立 dev 分支，由用户在 GPU 机器运行并回传完整结果目录。CPU 统计回归、解释器索引测试和离线编译不登记成 GPU 通过结果。
+当前开发环境没有 NVIDIA GPU。按用户安排，将运行配置、14 条 Triton 原子关系、checker 和结果导入推送到独立 dev 分支，由用户在 GPU 机器运行并回传完整结果目录。CPU 统计回归、解释器索引测试和离线编译不登记成 GPU 通过结果。
 
 **LLM 实验也不是默认主线。** [bench/README.md](../bench/README.md) 已记录旧 LLM proof-drafting benchmark 的退役，现有 `scripts/prove.py` 是单任务 agent-assisted proof wrapper。如果后续选择声称自动证明能力，需要另外建立固定任务、固定预算、独立判定、成功率与失败分析的实验；当前论文可以如实定位为人工辅助验证框架。
 
@@ -224,3 +224,4 @@ Attention 案例应在 M2 中按完整计算范围、参数化程度和证明成
 | 2026-10-01 | 对外只保留实数规格与 two-gates 浮点规格；实现类型、依赖／假设打印及条件接受接口，VectorAdd 接入实数标记与报告 | 接入实际数值 checker 与证据重放；参数化数学证明和具体 shape 的数值接受分别报告 |
 | 2026-10-01 | 根据用户澄清重构：正确性统一实数语义；two-gates 只准入原子等价假设，Lean 组合证明实现等价；替换整 kernel 凭证接口，TritonBench 例子改为原始/交换操作数两实现 | 接入真实原子 checker 和验证重放；未运行记录保持 NOT_RUN |
 | 2026-10-01 | 确认只按指定分布准入；Python 调 Triton/GPU，复用现有证明 agent。实现 GPU 配置、26 条候选对、fixed-budget two-gates 和 CPU 结果重放；独立 dev 分支交付 | 用户运行并回传；继续绑定 Lean 规则、接入现有 agent/comparator，完成完整流程验收 |
+| 2026-10-01 | 纠正规则粒度：删除 12 条复合算法／归约／scan／dot／结构条目及其数值执行路径，只保留 14 条局部原子关系；统计 checker 与门参数未改 | 从已准入原子关系推导复合算法；缺少的基本关系单独定义、验证，不能假设整个优化成立 |

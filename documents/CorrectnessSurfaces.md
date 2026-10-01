@@ -82,7 +82,9 @@ not a minimal used-atom trace. Printing does not discharge a premise.
 
 The calculus, reporting, example and rejection checks are implemented. The
 [GPU experiment runner](../experiments/floating_point/README.md) now supplies
-26 concrete candidate pairs, Python configuration, gates and CPU result replay.
+14 fixed-size atomic expression pairs, Python configuration, gates and CPU result replay.
+Composite algorithms, reductions, scans, dot rewrites and memory/layout properties
+are excluded from admission; their equivalences require Lean derivations.
 GPU measurements remain unrun. The replayed JSON admission table still needs
 binding to parameterized Lean fragments and the existing proof-agent entry;
 it does not itself discharge `EvidenceValidated` or construct `R`.

@@ -4,6 +4,8 @@ import json
 from pathlib import Path
 import tempfile
 import unittest
+import subprocess
+import sys
 
 import numpy as np
 
@@ -122,6 +124,31 @@ def fixture_bundle(directory, smoke=False):
 
 
 class ReplayTests(unittest.TestCase):
+    def test_composite_rule_is_rejected_before_gpu_execution(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            output = Path(tmp) / "must-not-exist"
+            result = subprocess.run([sys.executable, str(experiment.ROOT / "scripts/fp_experiment.py"),
+                                     "run", "--rules", "SOFTMAX-ONLINE", "--output", str(output)],
+                                    capture_output=True, text=True)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn("atomic rule", result.stderr)
+            self.assertFalse(output.exists())
+
+    def test_composite_pass_labels_cannot_enter_imported_assumptions(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            entry = fixture_bundle(root)
+            manifest = experiment.read_json(root / "manifest.json")
+            manifest["profile"]["rules"] = ["SOFTMAX-ONLINE"]
+            manifest["entries"] = ["fp32__SOFTMAX-ONLINE"]
+            experiment.write_json(root / "manifest.json", manifest)
+            record = experiment.read_json(entry / "record.json")
+            record["rule_id"] = "SOFTMAX-ONLINE"
+            experiment.write_json(entry / "record.json", record)
+            entry.rename(root / "fp32__SOFTMAX-ONLINE")
+            with self.assertRaisesRegex(ValueError, "atomic rule"):
+                experiment.replay(root)
+
     def test_validated_configuration_and_identity(self):
         p = profile()
         for key, value in (("shape", [1, "N"]), ("replicates", True), ("rules", ["bogus"]),

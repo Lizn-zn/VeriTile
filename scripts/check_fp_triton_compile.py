@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compile every concrete candidate without executing kernels or requiring CUDA.
+"""Compile every supported atomic relation without executing kernels or requiring CUDA.
 
 Needs Triton (tested with 3.5.1). Successful compilation is NOT a numerical gate
 result. NVIDIA architecture 80 is the default offline compilation target.
@@ -35,24 +35,12 @@ def main():
     for dtype, low in (("bf16", True), ("bf16", False), ("fp32", False)):
         ptrs = {name: "*" + dtype for name in ("A", "B", "C", "O")}
         for rule in kernels.ELEMENTWISE:
+            if rule == "BF16-WIDEN-RETURN" and dtype != "bf16":
+                continue
             for side in (0, 1):
                 compile_kernel(kernels.elementwise, ptrs,
                                dict(N=args.rows * args.columns, RULE=rule, SIDE=side, LOW=low,
                                     INPUT_LOW=dtype == "bf16", BLOCK=1024))
-        compile_kernel(kernels.multiply_stage, {k: "*" + dtype for k in ("G", "B", "O")},
-                       dict(N=args.rows * args.columns, LOW=low, BLOCK=1024))
-        for transpose in (True, False):
-            compile_kernel(kernels.copy_or_transpose, {"A": "*" + dtype, "O": "*" + dtype},
-                           dict(M=args.rows, N=args.columns, TRANSPOSE=transpose, BLOCK=1024))
-        for rule in kernels.ROW_RULES:
-            for side in (0, 1):
-                compile_kernel(kernels.row_kernel, {"A": "*" + dtype, "O": "*" + dtype},
-                               dict(N=args.columns, RULE=rule, SIDE=side, EPS=1e-5, CHUNK=256,
-                                    BLOCK=triton.next_power_of_2(args.columns)))
-        for rule in kernels.DOT_RULES:
-            for side in (0, 1):
-                compile_kernel(kernels.dot_kernel, ptrs,
-                               dict(M=args.rows, N=args.columns, K=args.columns, RULE=rule, SIDE=side, TILE=16))
         print(f"Compiled {dtype}, low={low}: {count} specializations", flush=True)
     print(f"PASS: {count} offline compilations for sm_{args.arch}; no kernels executed.")
 

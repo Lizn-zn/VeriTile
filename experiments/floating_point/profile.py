@@ -14,9 +14,8 @@ PROFILE = {
         {"name": "bf16_fp32", "input": "bf16", "compute": "fp32", "accumulator": "fp32", "output": "bf16"},
         {"name": "fp32", "input": "fp32", "compute": "fp32", "accumulator": "fp32", "output": "fp32"},
     ],
-    "rules": "all",
-    "launch": {"block": 1024, "chunk": 256, "num_warps": 4, "dot_tile": 16},
-    "layernorm_epsilon": 1e-5,
+    "rules": "all",  # Only the 14 atomic relations in rules.json.
+    "launch": {"block": 1024, "num_warps": 4},
     "gates": {
         "bias": {"z": 5.0, "snr": 0.01, "ulp_floor": 1.0},
         "vars": {"quantile": 0.9, "horizon": 625000, "confidence_z": 3.0,

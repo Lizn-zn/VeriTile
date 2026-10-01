@@ -22,16 +22,6 @@
       "source": "documents/FloatingPointRewriteRules.md"
     },
     {
-      "id": "LAYOUT-INVERSE",
-      "category": "exact_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "STORE-LOAD-FORWARD",
-      "category": "exact_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
       "id": "ADD-ASSOC",
       "category": "two_gates_candidate",
       "source": "documents/FloatingPointRewriteRules.md"
@@ -78,56 +68,6 @@
     },
     {
       "id": "ACC-WIDEN",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "REDUCE-REORDER",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "REDUCE-SPLIT",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "SCAN-REORDER",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "DOT-LOWER",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "DOT-ACC-FUSE",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "GEMM-SPLIT-K",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "SOFTMAX-SHIFT",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "SOFTMAX-ONLINE",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "LAYERNORM-WELFORD",
-      "category": "two_gates_candidate",
-      "source": "documents/FloatingPointRewriteRules.md"
-    },
-    {
-      "id": "SWIGLU-FUSE",
       "category": "two_gates_candidate",
       "source": "documents/FloatingPointRewriteRules.md"
     }

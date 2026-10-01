@@ -1,4 +1,4 @@
-"""Register floating-point rule instances; never infer acceptance from a rule ID.
+"""Register atomic floating-point relations; never admit a composite algorithm.
 
 This module validates identity dimensions and initializes pending records. It
 does not execute graphs, verify backend conformance, or manufacture gate/proof
@@ -67,7 +67,7 @@ def validate_config(config):
     if set(config) != expected or type(config["schema_version"]) is not int or config["schema_version"] != SCHEMA_VERSION:
         raise ValueError(f"configuration requires exactly these fields: {sorted(expected)}")
     if not isinstance(config["rule_id"], str) or config["rule_id"] not in load_catalog():
-        raise ValueError("unknown rule ID")
+        raise ValueError("unknown atomic rule ID; composite transformations require a Lean derivation")
     for name, fields in DIMENSIONS.items():
         if type(config[name]) is not dict or set(config[name]) != fields:
             raise ValueError(f"{name} requires exactly these fields: {sorted(fields)}")

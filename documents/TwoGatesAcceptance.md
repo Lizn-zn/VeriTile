@@ -2,9 +2,11 @@
 
 更新日期：2026-10-01。
 
-状态：**已实现 specification、依赖报告、26 条 Triton 候选对、Python two-gates 与结果重放；GPU 实测及 Lean 规则导入连接待完成。** 依据用户提供的 [tech-report-kernel-gates.md](/home/argustest/.codex/attachments/2fc372e4-f75b-4d94-8766-05f79473b646/tech-report-kernel-gates.md) 整理。该链接指向本次会话附件；附件报告中的实验结果尚未在 VeriTile 中复现，其理论保证也不作为已验证结论引用。
+状态：**已实现 specification、依赖报告、14 条局部 Triton 原子关系、Python two-gates 与结果重放；GPU 实测及 Lean 规则导入连接待完成。** 依据用户提供的 [tech-report-kernel-gates.md](/home/argustest/.codex/attachments/2fc372e4-f75b-4d94-8766-05f79473b646/tech-report-kernel-gates.md) 整理。该链接指向本次会话附件；附件报告中的实验结果尚未在 VeriTile 中复现，其理论保证也不作为已验证结论引用。
 
 交付目标为完整浮点支持与接受流程，原语架构和统一完成条件见 [FloatingPointPrimitives.md](./FloatingPointPrimitives.md)。加法重排等小例子用于核对语义，不构成缩减后的交付版本。
+
+准入表只包含固定规模的局部表达式关系。Softmax、LayerNorm、SwiGLU、归约、scan 和 dot 等完整变换需由 Lean 推导，不能将整算法的测试通过变成原子假设。
 
 候选规则与逐配置接受结果的记录方式见 [FloatingPointRewriteRules.md](./FloatingPointRewriteRules.md)。未运行两门的规则不得预填 PASS；严格不等反例与统计拒绝分别记录。
 
