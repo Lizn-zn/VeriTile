@@ -1,0 +1,53 @@
+{
+  "method": "Exact rational arithmetic and adjacent BF16/FP32 values with ties-to-even rounding; demonstrates failure of unconditional equality, not a statistical gate decision.",
+  "rows": [
+    {
+      "rule": "MUL-DISTRIB",
+      "inputs": [
+        "129/128",
+        "1",
+        "129/128"
+      ],
+      "reference": "129/64",
+      "candidate": "65/32",
+      "reference_decimal": 2.015625,
+      "candidate_decimal": 2.03125
+    },
+    {
+      "rule": "FMA-CONTRACT",
+      "inputs": [
+        "3/2",
+        "131/128",
+        "129/128"
+      ],
+      "reference": "81/32",
+      "candidate": "163/64",
+      "reference_decimal": 2.53125,
+      "candidate_decimal": 2.546875
+    },
+    {
+      "rule": "CAST-REMOVE",
+      "inputs": [
+        "1",
+        "129/128",
+        "129/128"
+      ],
+      "reference": "129/64",
+      "candidate": "65/32",
+      "reference_decimal": 2.015625,
+      "candidate_decimal": 2.03125
+    },
+    {
+      "rule": "ACC-WIDEN",
+      "inputs": [
+        "1",
+        "129/128",
+        "129/128"
+      ],
+      "reference": "3",
+      "candidate": "193/64",
+      "reference_decimal": 3.0,
+      "candidate_decimal": 3.015625
+    }
+  ]
+}

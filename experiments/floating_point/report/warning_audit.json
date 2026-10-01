@@ -1,0 +1,111 @@
+{
+  "thresholds": {
+    "bias": {
+      "snr": 0.01,
+      "ulp_floor": 1.0,
+      "z": 5.0
+    },
+    "vars": {
+      "alpha": 0.00135,
+      "bootstrap": 1000,
+      "fail": 10.0,
+      "horizon": 625000,
+      "min_exceedances": 40,
+      "quantile": 0.9,
+      "warn": 2.0
+    },
+    "warning_policy": "pass_only"
+  },
+  "rows": [
+    {
+      "rule": "MUL-DISTRIB",
+      "format": "bf16",
+      "replicates": 4096,
+      "max_z": 8.162912783956346,
+      "significant_buckets": 566,
+      "failing_buckets": 0,
+      "maximum_mean_over_ulp": 0.0001453898637866491,
+      "U": 0.36903475168300615,
+      "U_kind": "pot_pwm",
+      "bias": "WARN",
+      "vars": "PASS",
+      "decision": "WARN_NOT_ACCEPTED",
+      "accept": false
+    },
+    {
+      "rule": "FMA-CONTRACT",
+      "format": "bf16",
+      "replicates": 4096,
+      "max_z": 32.890095787889486,
+      "significant_buckets": 4096,
+      "failing_buckets": 0,
+      "maximum_mean_over_ulp": 0.00043924245426296693,
+      "U": 0.0,
+      "U_kind": "empirical_max",
+      "bias": "WARN",
+      "vars": "PASS",
+      "decision": "WARN_NOT_ACCEPTED",
+      "accept": false
+    },
+    {
+      "rule": "CAST-REMOVE",
+      "format": "bf16",
+      "replicates": 4096,
+      "max_z": 33.38984616865005,
+      "significant_buckets": 4096,
+      "failing_buckets": 0,
+      "maximum_mean_over_ulp": 0.0006067663592776995,
+      "U": 0.0,
+      "U_kind": "empirical_max",
+      "bias": "WARN",
+      "vars": "PASS",
+      "decision": "WARN_NOT_ACCEPTED",
+      "accept": false
+    },
+    {
+      "rule": "CAST-REMOVE",
+      "format": "bf16_fp32",
+      "replicates": 4096,
+      "max_z": 32.98055921371145,
+      "significant_buckets": 4096,
+      "failing_buckets": 0,
+      "maximum_mean_over_ulp": 0.0006023551534726224,
+      "U": 0.0,
+      "U_kind": "empirical_max",
+      "bias": "WARN",
+      "vars": "PASS",
+      "decision": "WARN_NOT_ACCEPTED",
+      "accept": false
+    },
+    {
+      "rule": "ACC-WIDEN",
+      "format": "bf16",
+      "replicates": 4096,
+      "max_z": 8.887007267927656,
+      "significant_buckets": 2400,
+      "failing_buckets": 0,
+      "maximum_mean_over_ulp": 0.00028625781214941526,
+      "U": 0.0,
+      "U_kind": "empirical_max",
+      "bias": "WARN",
+      "vars": "PASS",
+      "decision": "WARN_NOT_ACCEPTED",
+      "accept": false
+    },
+    {
+      "rule": "ACC-WIDEN",
+      "format": "bf16_fp32",
+      "replicates": 4096,
+      "max_z": 8.492419642990175,
+      "significant_buckets": 2435,
+      "failing_buckets": 0,
+      "maximum_mean_over_ulp": 0.00027772458724939497,
+      "U": 0.0,
+      "U_kind": "empirical_max",
+      "bias": "WARN",
+      "vars": "PASS",
+      "decision": "WARN_NOT_ACCEPTED",
+      "accept": false
+    }
+  ]
+}

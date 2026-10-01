@@ -1,0 +1,122 @@
+{
+  "profile": {
+    "batch": 512,
+    "distribution": {
+      "family": "normal",
+      "mean": 1.0,
+      "std": 1.0
+    },
+    "formats": [
+      {
+        "accumulator": "fp32",
+        "compute": "bf16",
+        "input": "bf16",
+        "name": "bf16",
+        "output": "bf16"
+      },
+      {
+        "accumulator": "fp32",
+        "compute": "fp32",
+        "input": "bf16",
+        "name": "bf16_fp32",
+        "output": "bf16"
+      },
+      {
+        "accumulator": "fp32",
+        "compute": "fp32",
+        "input": "fp32",
+        "name": "fp32",
+        "output": "fp32"
+      }
+    ],
+    "gates": {
+      "bias": {
+        "snr": 0.01,
+        "ulp_floor": 1.0,
+        "z": 5.0
+      },
+      "vars": {
+        "alpha": 0.00135,
+        "bootstrap": 1000,
+        "fail": 10.0,
+        "horizon": 625000,
+        "min_exceedances": 40,
+        "quantile": 0.9,
+        "warn": 2.0
+      },
+      "warning_policy": "pass_only"
+    },
+    "launch": {
+      "block": 1024,
+      "num_warps": 4
+    },
+    "replicates": 4096,
+    "replicates_max": 50000,
+    "rules": [
+      "ADD-COMMUTE",
+      "MUL-COMMUTE",
+      "ROUND-IDEM",
+      "BF16-WIDEN-RETURN",
+      "ADD-ASSOC",
+      "MUL-ASSOC",
+      "MUL-DISTRIB",
+      "FMA-CONTRACT",
+      "CANCEL",
+      "DIV-RCP",
+      "SQRT-RSQRT",
+      "CAST-MOVE",
+      "CAST-REMOVE",
+      "ACC-WIDEN"
+    ],
+    "seed": 20261001,
+    "shape": [
+      4096,
+      4096
+    ]
+  },
+  "hardware": {
+    "model": "H200",
+    "runtime_name": "NVIDIA L20X"
+  },
+  "backend": {
+    "compile_options": {
+      "enable_fp_fusion": false
+    },
+    "compiler": {
+      "cuda": "13.0",
+      "numpy": "2.3.5",
+      "torch": "2.13.0+cu130",
+      "triton": "3.7.1"
+    },
+    "implementation_version": "f239cb37af1eab11170c912303a82fa4201c681caa1273db7acb0e0e746aa98e",
+    "kind": "triton-cuda",
+    "launch": {
+      "block": 1024,
+      "num_warps": 4
+    },
+    "target": {
+      "capability": [
+        9,
+        0
+      ],
+      "device": "NVIDIA L20X",
+      "driver_versions": [
+        "570.133.20"
+      ]
+    }
+  },
+  "sources": {
+    "experiments/floating_point/kernels.py": "f239cb37af1eab11170c912303a82fa4201c681caa1273db7acb0e0e746aa98e",
+    "experiments/floating_point/rules.json": "bb43a240b2fa0a7599b527c320701b863329b344a14397aeedc1d1db45a7c2e7",
+    "scripts/check_numerics.py": "97e6b7bde7dd97de3c39bf78a8467acf9cae136924bfcad84448c0207c66ac96",
+    "scripts/numerical_gates.py": "d73d4692d0db6a6cfac532632d4b8d29e606e026afc45a371520521558275925",
+    "scripts/numerical_registry.py": "ad746a9603067218b288aca2d1c1119f92ea7cdc0589e2c44b78742ab01d9e54"
+  },
+  "bundle_manifest_sha256": "d30e639436878a047500e5a58e0d7ecce8b956219a3d65cfe319292a182ba73c",
+  "job": {
+    "JobId": "dlcz9npjes7fh9tp",
+    "DisplayName": "traces_kernel_equivalence_testing",
+    "Status": "Succeeded"
+  },
+  "evidence": "Summary of replayed GPU measurements. Raw observations and PTX are retained outside Git and required for independent replay."
+}

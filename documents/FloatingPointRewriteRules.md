@@ -103,13 +103,13 @@ DIV-RCP、SQRT-RSQRT 等具有定义域前提的规则，需要明确从探针�
 
 这些结果最初由 Python Fraction 计算，现在也已由 [Counterexamples.lean](../VeriTile/Triton/Float/Counterexamples.lean) 中的六条定理复现：`bf16_add_assoc_witness`、`fp32_add_assoc_witness`、`bf16_distrib_witness`、`fp32_distrib_witness`、`bf16_fma_witness`、`fp32_fma_witness`（命名空间 `VeriTile.Triton.FP`）。证明使用 `decide +kernel`，检查的是具体软件 profile 下两侧各自的精确数值输出；没有引入外部数值计算公理。这不是 GPU 符合性实验。
 
-**尚未开展规则接受的随机采样或运行 two-gates；六条记录的两门状态均为 NOT_RUN。** 标量实现的随机差分回归仅用于检查执行语义，不作为 gate 实验。
+**六条固定输入见证不属于随机采样的 two-gates 结果。** 标量实现的随机差分回归仅用于检查执行语义，不作为 gate 实验。
 
 ## 4. 按配置生成接受结果
 
 正式结果表应保存下列字段，空结果使用 null/NOT_RUN，不填零：
 
-机器可读目录位于 [rules.json](../experiments/floating_point/rules.json)。登记工具初始化的记录仍为 NOT_EVALUATED。[fp_experiment.py](../scripts/fp_experiment.py) 提供 Python 配置、14 条局部 Triton 实现对、GPU 配对采样和结果导入；导入端核对完整身份、PTX 与统计文件摘要并重新运行两门，生成逐配置数值准入表。哈希与统计重放不认证远端执行真实性，也不关闭 Lean 的外部验证义务。当前尚无实际 GPU 准入结果；命令、精度支持矩阵和具体变换范围见 [实验目录说明](../experiments/floating_point/README.md)。
+机器可读目录位于 [rules.json](../experiments/floating_point/rules.json)。登记工具初始化的记录为 NOT_EVALUATED。[check_numerics.py](../scripts/check_numerics.py) 提供 Python 配置、14 条局部 Triton 实现对、GPU 配对采样和结果导入；导入端核对完整身份、PTX 与统计文件摘要并重新运行两门，生成逐配置数值准入表。哈希与统计重放不认证远端执行真实性，也不关闭 Lean 的外部验证义务。命令、精度支持矩阵和具体变换范围见 [实验目录说明](../experiments/floating_point/README.md)。
 
 | 字段组 | 内容 |
 |---|---|
@@ -120,13 +120,10 @@ DIV-RCP、SQRT-RSQRT 等具有定义域前提的规则，需要明确从探针�
 | Vars 结果 | 逐 replicate oracle 误差和 K、return level/U、拟合诊断、门判决 |
 | 审计证据 | checker/protocol 版本、原始结果位置、停止原因、时间与最终决定 |
 
-结果展示形式如下；这些行说明记录粒度，**没有声称完成实验**。bf16-in/fp32-op 的实例明确输入转换和输出格式。
-
-| 规则 | 输入 / 运算 / 输出精度 | Shape 与探针 | Bias | Vars | 接受决定 |
-|---|---|---|---|---|---|
-| ADD-ASSOC | bf16 / bf16 / bf16 | 每操作数标量；单独登记的高斯配置 | NOT_RUN | NOT_RUN | NOT_EVALUATED |
-| ADD-ASSOC | bf16 / fp32 / bf16 | 同上；最终转回 bf16 | NOT_RUN | NOT_RUN | NOT_EVALUATED |
-| ADD-ASSOC | fp32 / fp32 / fp32 | 每操作数标量；单独登记的高斯配置 | NOT_RUN | NOT_RUN | NOT_EVALUATED |
+当前结果由 [report_numerics.py](../scripts/report_numerics.py) 写入运行目录的
+`summary.md`、`summary.csv` 和 `summary.json`，覆盖 14 条原子规则 × 3 种精度，
+逐行报告最大绝对 z、U、U 的估计类型、两门状态和是否接受。缺失的统计量留空，
+接受决定须经过 CPU 回放。每次刷新覆盖当前表，不追加历史表。
 
 每个 probe 配置实际生成独立记录，不能把不同均值或尺度的样本混起来求偏差。规则汇总只覆盖明确列出的配置；未检查的 dtype、shape、计算树、探针或后端均保持未验证。
 

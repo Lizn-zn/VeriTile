@@ -1,0 +1,78 @@
+{
+  "seed": 42,
+  "replicates": 4096,
+  "cases": [
+    {
+      "family": "zero",
+      "U": 0.0,
+      "valid": false,
+      "xi": null,
+      "return_level": 0.0,
+      "status": "PASS"
+    },
+    {
+      "family": "constant_small",
+      "U": 1.0,
+      "valid": false,
+      "xi": null,
+      "return_level": 1.0,
+      "status": "PASS"
+    },
+    {
+      "family": "constant_large",
+      "U": 31.75,
+      "valid": false,
+      "xi": null,
+      "return_level": 31.75,
+      "status": "FAIL"
+    },
+    {
+      "family": "sparse",
+      "U": 5.0,
+      "valid": false,
+      "xi": null,
+      "return_level": 5.0,
+      "status": "WARN"
+    },
+    {
+      "family": "exponential",
+      "U": 3.508765935706861,
+      "valid": true,
+      "xi": -0.026051558134200015,
+      "return_level": 2.5053148065561404,
+      "status": "WARN"
+    },
+    {
+      "family": "heavy",
+      "U": 5.116879729162851,
+      "valid": true,
+      "xi": 0.18903895810511884,
+      "return_level": 4.278590204638285,
+      "status": "WARN"
+    },
+    {
+      "family": "bounded",
+      "U": 1.0087379275329695,
+      "valid": true,
+      "xi": -1.0369431588225653,
+      "return_level": 0.9992011949829182,
+      "status": "PASS"
+    },
+    {
+      "family": "ties",
+      "U": 3.0,
+      "valid": false,
+      "xi": null,
+      "return_level": 3.0,
+      "status": "WARN"
+    },
+    {
+      "family": "nonfinite",
+      "U": "+inf",
+      "valid": false,
+      "xi": null,
+      "return_level": "+inf",
+      "status": "FAIL"
+    }
+  ]
+}
