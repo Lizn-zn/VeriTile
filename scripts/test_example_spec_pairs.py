@@ -7,9 +7,29 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 PAIRS = (
-    ("VectorAdd", "add_kernel_equiv", "VeriTile.Bench.Examples.VectorAdd.addIO"),
-    ("FlatVectorAdd", "add_kernel_masked_equiv", "VeriTile.Bench.Examples.FlatVectorAdd.addMaskedIO"),
-    ("FloatDTypeAdd", "float_add_equiv", "VeriTile.Bench.Examples.FloatDTypeAddCorrect.floatAddIO"),
+    ("VectorAdd", "add_kernel_equiv", "VeriTile.Bench.Examples.VectorAdd.addIO", "add_commute"),
+    ("FlatVectorAdd", "add_kernel_masked_equiv", "VeriTile.Bench.Examples.FlatVectorAdd.addMaskedIO", "add_commute"),
+    ("FloatDTypeAdd", "float_add_equiv", "VeriTile.Bench.Examples.FloatDTypeAddCorrect.floatAddIO", "add_commute"),
+    ("HyperConnectionsDepth", "mhc_depth_equiv", "VeriTile.Bench.Examples.HyperConnectionsDepth.mhcDepthIO", "add_commute"),
+    ("HyperConnectionsWidth", "mhc_width_equiv", "VeriTile.Bench.Examples.HyperConnectionsWidth.mhcWidthIO", "mul_commute"),
+    ("AdamUpdateGridLaunch", "adam_update_equiv", "VeriTile.Bench.Examples.AdamUpdateGridLaunch.adamIO", "add_commute"),
+)
+
+# The old files remain until the original FP transformation is derived. Check
+# that the new real proofs still describe exactly those source kernels.
+REDUCTIONS = (
+    ("SoftmaxStableCorrect", "SoftmaxStableEquiv", "Softmax",
+     (("naiveSoftmaxKernel", "naiveIO", "naive_softmax_correct"),
+      ("stableSoftmaxKernel", "stableIO", "stable_softmax_correct"))),
+    ("StableLogSumExpCorrect", "StableLogSumExpEquiv", "LogSumExp",
+     (("directLSEKernel", "directIO", "direct_logsumexp_correct"),
+      ("stableLSEKernel", "stableIO", "stable_logsumexp_correct"))),
+    ("SoftmaxReciprocalCorrect", "SoftmaxReciprocalEquiv", "SoftmaxReciprocal",
+     (("stableSoftmaxKernel", "divIO", "softmax_div_correct"),
+      ("softmaxRecipKernel", "recipIO", "softmax_reciprocal_correct"))),
+    ("FloatDTypeSoftmaxCorrect", "FloatDTypeEquiv", "FloatDTypeEquiv",
+     (("floatStableSoftmaxKernel", "divIO", "float_softmax_div_correct"),
+      ("floatSoftmaxRecipKernel", "recipIO", "float_softmax_recip_correct"))),
 )
 
 
@@ -17,7 +37,9 @@ class ExamplePairTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         targets = [f"bench.examples.{name}{suffix}"
-                   for name, _, _ in PAIRS for suffix in ("Correct", "FPEquiv")]
+                   for name, _, _, _ in PAIRS for suffix in ("Correct", "FPEquiv")]
+        targets += [f"bench.examples.{module}"
+                    for new, old, _, _ in REDUCTIONS for module in (new, old)]
         build = subprocess.run(["lake", "build", *targets], cwd=ROOT,
                                text=True, capture_output=True, timeout=300)
         if build.returncode:
@@ -35,7 +57,7 @@ class ExamplePairTests(unittest.TestCase):
     def test_same_original_implementation_in_both_files(self):
         """A correct file for one implementation cannot certify a different FP input."""
         imports = "\n".join(f"import bench.examples.{n}{s}"
-                            for n, _, _ in PAIRS for s in ("Correct", "FPEquiv"))
+                            for n, _, _, _ in PAIRS for s in ("Correct", "FPEquiv"))
         self.lean(imports + '''
 open VeriTile.Bench.Examples
 
@@ -50,10 +72,25 @@ example (n B : Nat) :
 example (B : Nat) :
     (FloatDTypeAddFPEquiv.originalKernel B).toAlgorithm? =
       (FloatDTypeAddCorrect.floatAddKernel "x" "y" "out" B).toAlgorithm? := rfl
+
+example (tau : Real) :
+    (HyperConnectionsDepthFPEquiv.originalKernel tau).toAlgorithm? =
+      (HyperConnectionsDepth.mhcDepthConnectionKernel
+        "res_mix" "branch_out" "h_post" "out" 1 1 1 0 tau).toAlgorithm? := rfl
+
+example (tau : Real) :
+    (HyperConnectionsWidthFPEquiv.originalKernel tau).toAlgorithm? =
+      (HyperConnectionsWidth.mhcWidthConnectionKernel
+        "res" "h_res" "h_pre" "res_mix" "branch_in" 1 1 1 0 tau).toAlgorithm? := rfl
+
+example (lr wd beta1 beta2 : Real) (n B : Nat) :
+    (AdamUpdateGridLaunchFPEquiv.originalKernel lr wd beta1 beta2 n B).toAlgorithm? =
+      (AdamUpdateGridLaunch.update_fn_kernel
+        "p" "grad" "exp_avg" lr wd beta1 beta2 n B).toAlgorithm? := rfl
 ''')
 
     def test_fp_files_are_independent_and_print_only_used_atoms(self):
-        for name, headline, correct_io in PAIRS:
+        for name, headline, correct_io, atom in PAIRS:
             with self.subTest(case=name):
                 source = (ROOT / f"bench/examples/{name}FPEquiv.lean").read_text()
                 source += f'''
@@ -63,7 +100,28 @@ run_cmd do
     throwError "FP example imported the correctness implementation"
 '''
                 self.assertEqual(self.lean(source),
-                                 f"FP assumptions used by {headline}:\n  add_commute\n")
+                                 f"FP assumptions used by {headline}:\n  {atom}\n")
+
+    def test_reduction_correctness_preserves_sources_and_states_the_formula(self):
+        imports = "\n".join(f"import bench.examples.{module}"
+                            for new, old, _, _ in REDUCTIONS for module in (new, old))
+        source = imports + '''
+open VeriTile.Bench.Examples
+open scoped VeriTile.Triton.KernelIO₁
+'''
+        for new, _, old_ns, kernels in REDUCTIONS:
+            for kernel, io, theorem in kernels:
+                formula = ("Real.log (∑ j, Real.exp (xs j))" if new == "StableLogSumExpCorrect"
+                           else "Real.exp (xs i) / ∑ j, Real.exp (xs j)")
+                source += f'''
+example (x y : VeriTile.Triton.RegionName) (B : Nat) :
+    {new}.{kernel} x y B = {old_ns}.{kernel} x y B := rfl
+
+example (B : Nat) (hB : 0 < B) :
+    VeriTile.Spec.Real ({new}.{io} B ⊨ fun xs i => {formula}) :=
+  {new}.{theorem} B hB
+'''
+        self.lean(source)
 
     def test_real_float_add_includes_empty_tiles(self):
         self.lean('''

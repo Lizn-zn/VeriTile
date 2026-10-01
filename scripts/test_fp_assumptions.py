@@ -79,6 +79,37 @@ theorem twoShapes (h32 : Spec.AcceptedAtom used) (h64 : Spec.AcceptedAtom other)
         self.assertEqual(output.count('  used\n'), 2)
         self.assertNotIn('shape=', output)
 
+    def test_same_admission_at_two_rewrite_sites_is_printed_once(self):
+        output = self.run_lean("""
+def renamed : Spec.RuleEntry Nat :=
+  { used with rule := { used.rule with lhs := [2], rhs := [3] } }
+theorem twoSites (h : Spec.AcceptedAtom used) (h' : Spec.AcceptedAtom renamed) :
+    Spec.Derivation [used, renamed] [0, 2] [1, 3] :=
+  .trans (.frame [] [2] (step [used, renamed] used (by simp) h))
+    (.frame [1] [] (step [used, renamed] renamed (by simp) h'))
+#print_fp_assumptions twoSites
+""")
+        self.assertEqual(output.count('  used\n'), 1)
+
+    def test_same_key_with_different_contract_or_evidence_stays_distinct(self):
+        output = self.run_lean("""
+def otherContract : Spec.RuleEntry Nat :=
+  { used with rule := { used.rule with contract :=
+    { used.rule.contract with configuration := .bool true } } }
+def otherEvidence : Spec.RuleEntry Nat :=
+  { used with evidence := { used.evidence with artifact := some "other-report" } }
+theorem threeAdmissions
+    (h : Spec.AcceptedAtom used)
+    (hc : Spec.AcceptedAtom otherContract)
+    (he : Spec.AcceptedAtom otherEvidence) :
+    Spec.Derivation [used, otherContract, otherEvidence] [0] [1] :=
+  .trans (step _ used (by simp) h)
+    (.trans (.symm (step _ otherContract (by simp) hc))
+      (step _ otherEvidence (by simp) he))
+#print_fp_assumptions threeAdmissions
+""")
+        self.assertEqual(output.count('  used\n'), 3)
+
     def test_symbolic_atom_and_opaque_derivation_stay_explicit(self):
         output = self.run_lean("""
 theorem symbolic (atom : Spec.RuleEntry Nat) (h : Spec.AcceptedAtom atom) :

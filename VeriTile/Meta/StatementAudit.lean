@@ -355,6 +355,7 @@ private def printFPAtom (entry : Expr) (details : Bool := false) : MetaM Unit :=
 private structure FPAssumptionState where
   seen : Std.HashSet Expr := {}
   entries : Array Expr := #[]
+  printedAdmissions : Array (Expr × Expr) := #[]
   unresolved : Bool := false
   remaining : Nat := 10000
 
@@ -378,11 +379,34 @@ private partial def visitFPAssumptions (proof : Expr) :
     let args := proof.getAppArgs
     if proof.isAppOf ``VeriTile.Spec.Derivation.atom then
       let entry := args[2]!
-      -- Keep distinct instantiations even if their textual rule IDs coincide.
+      -- Track each syntax instantiation, but print the same concrete admission
+      -- once when it is applied at several sites. Different experimental
+      -- contracts/evidence stay distinct even when their textual IDs coincide.
       let normalized ← Meta.withTransparency .all <| Meta.whnf entry
       unless (← get).entries.contains normalized do
         modify fun s => { s with entries := s.entries.push normalized }
-        printFPAtom entry
+        let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[entry]
+        let contract ← Meta.mkAppM ``VeriTile.Spec.AtomicRule.contract #[rule]
+        let evidence ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.evidence #[entry]
+        let concrete := (← specString? ``VeriTile.Spec.Contract.ruleID contract).isSome
+        let identity := (← Meta.withTransparency .all <| Meta.whnf contract,
+          ← Meta.withTransparency .all <| Meta.whnf evidence)
+        -- Weak-head reduction may leave record projections inside fields.
+        -- Compare closed admissions definitionally, so record updates that
+        -- only rename registers do not produce duplicate printed assumptions.
+        let closed := !identity.1.hasFVar && !identity.1.hasMVar &&
+          !identity.2.hasFVar && !identity.2.hasMVar
+        let duplicate ← if concrete && closed then
+          (← get).printedAdmissions.anyM fun previous =>
+            Meta.withTransparency .all do
+              if previous.1.hasFVar || previous.1.hasMVar ||
+                  previous.2.hasFVar || previous.2.hasMVar then return false
+              return (← Meta.isDefEq previous.1 identity.1) &&
+                (← Meta.isDefEq previous.2 identity.2)
+          else pure false
+        unless duplicate do
+          modify fun s => { s with printedAdmissions := s.printedAdmissions.push identity }
+          printFPAtom entry
       return
     let env ← getEnv
     if let .const name levels := proof.getAppFn then
