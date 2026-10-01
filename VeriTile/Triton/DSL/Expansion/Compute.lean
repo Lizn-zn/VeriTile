@@ -489,8 +489,9 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
       let outDims ←
         if keepDims then setNthOne dims axisIdx else eraseNth dims axisIdx
       let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
-      pure ⟨← `($op (⟨$axisLit, by simp⟩) $kdLit $eTerm),
-            .real, SInfo.dims outDims, none, none⟩
+      let term ← `($op (⟨$axisLit, by simp⟩) $kdLit $eTerm)
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx term e' e'
+      pure ⟨term, .real, SInfo.dims outDims, computeTerm?, computeDType?⟩
   | none =>
       -- `axis = None` (Triton default): reduce over all dimensions.
       -- Two regimes, because `keep_dims` changes how the rank evolves:
@@ -511,7 +512,8 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
           pure (List.replicate dims.length oneLit)
         else
           pure []
-      pure ⟨term, .real, SInfo.dims outDims, none, none⟩
+      let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx term e' e'
+      pure ⟨term, .real, SInfo.dims outDims, computeTerm?, computeDType?⟩
 
 /-- Lower `tl.max(...)` reductions. Real-valued tiles keep the existing
 mathematical-real path; Nat tiles lower to `Op.reduceMaxNat`, which is needed

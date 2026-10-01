@@ -145,6 +145,19 @@ theorem transported (h : Spec.AcceptedAtom used) :
         self.assertEqual(output.count('  used\n'), 1)
         self.assertNotIn('  none', output)
 
+    def test_induction_hypotheses_do_not_hide_atoms_or_appear_as_external_premises(self):
+        output = self.run_lean("""
+theorem repeated (n : Nat) (ha : Spec.AcceptedAtom used) :
+    Spec.FloatingPoint [used, unused] [0] [0] := by
+  induction n with
+  | zero => exact .refl _
+  | succ n ih => exact (helper ha).trans ((helper ha).symm.trans ih)
+#print_fp_assumptions repeated
+""")
+        self.assertEqual(output.count('  used\n'), 1)
+        self.assertNotIn('unresolved', output)
+        self.assertNotIn('  none', output)
+
     def test_structural_composition_keeps_atoms_and_opaque_steps_visible(self):
         output = self.run_lean("""
 structure Code where

@@ -123,6 +123,10 @@ class ProgramSyntax (Program : Type u) where
   supply an independently proved abstract-execution relation, including
   termination and memory framing. The default permits only syntax rules. -/
   structural : Option (Program → Program → Prop) := none
+  /-- Optional library-defined execution steps whose output expressions have
+  derivations in the selected atomic theory. As with structural steps, the
+  relation must require successful runs and preserve public observations. -/
+  numerical : Assumptions Statement → Program → Program → Prop := fun _ _ _ => False
   /-- Additional context preserved by syntax-only steps in a structural view,
   such as private scratch declarations. A structural execution proof may
   relate different private workspaces; a mere body rewrite may not. -/
@@ -148,6 +152,9 @@ inductive ProgramDerivation {Program : Type u} [view : ProgramSyntax Program]
       ProgramDerivation structural assumptions lhs rhs
   | structural {lhs rhs} (signature : view.signature lhs = view.signature rhs)
       (proof : structural lhs rhs) : ProgramDerivation structural assumptions lhs rhs
+  | numerical {lhs rhs} (signature : view.signature lhs = view.signature rhs)
+      (proof : view.numerical assumptions lhs rhs) :
+      ProgramDerivation structural assumptions lhs rhs
   | symm {lhs rhs} : ProgramDerivation structural assumptions lhs rhs →
       ProgramDerivation structural assumptions rhs lhs
   | trans {lhs middle rhs} : ProgramDerivation structural assumptions lhs middle →
@@ -202,6 +209,14 @@ theorem ofStructural {structural : Program → Program → Prop}
   refine ⟨hsig, ?_⟩
   simp only [ProgramSyntax.Derivation, hview]
   exact .structural hsig h
+
+theorem ofNumerical {structural : Program → Program → Prop}
+    (hview : view.structural = some structural)
+    (hsig : view.signature lhs = view.signature rhs)
+    (h : view.numerical assumptions lhs rhs) : FloatingPoint assumptions lhs rhs := by
+  refine ⟨hsig, ?_⟩
+  simp only [ProgramSyntax.Derivation, hview]
+  exact .numerical hsig h
 
 theorem refl (program : Program) : FloatingPoint assumptions program program := by
   refine ⟨rfl, ?_⟩

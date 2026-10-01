@@ -24,6 +24,10 @@ private def M : Algebra Nat where
     match (TileShape.allIndices shape).head? with
     | some i => values i
     | none => 0
+  reduceSum := fun _ {shape} _ _ values _ =>
+    match (TileShape.allIndices shape).head? with
+    | some i => values i
+    | none => 0
 
 private def initial : State Nat where
   mem := fun _ _ => .mk .real 0
@@ -83,6 +87,14 @@ theorem max_permutation_is_not_structural :
 theorem empty_max_fails :
     evalOp M none (.reduceMax ⟨0, by decide⟩ Bool.false (.full [0] (.const 0))) initial = none := by
   simp [evalOp_unfold, TileShape.axisDim]
+
+theorem sum_permutation_is_not_structural :
+    evalOp M none (.reduceSum ⟨0, by decide⟩ Bool.false (.ref .real [2] "left")) maxInputs ≠
+      evalOp M none (.reduceSum ⟨0, by decide⟩ Bool.false (.ref .real [2] "right")) maxInputs := by
+  intro h
+  have hscalar := congrArg (Option.map (fun v => v PUnit.unit)) h
+  simp [evalOp_unfold, maxInputs, State.setReg, M,
+    TileShape.allIndices, List.finRange_succ] at hscalar
 
 -- A register assignment shadows old bindings of the same name at other types.
 example : ((initial.setReg "v" .real [] (fun _ => 1)).setReg
@@ -221,5 +233,24 @@ theorem single_failures_not_certificates : ¬ IO₁Equiv singleIO singleIO := by
   intro h
   obtain ⟨t, _, he, _⟩ := h.2.2 Nat M initial
   simp [singleIO, FP.Structural.exec, run, step] at he
+
+private def termInitial : State (FP.Equational.Term Nat) where
+  mem := fun _ _ => .mk .real (.leaf 0)
+  regs := fun _ _ _ => none
+  pids := fun _ => 0
+  numPids := fun _ => 1
+  undef := fun d _ _ => defaultValue d
+
+theorem numerical_failures_not_certificates (R : Spec.Assumptions ComputeStmt) :
+    ¬ IO₁NumericalEquiv R singleIO singleIO := by
+  intro h
+  obtain ⟨t, _, he, _⟩ := h.2.2 Nat FP.Equational.seededSchedules termInitial
+  simp [singleIO, FP.Structural.exec, run, step] at he
+
+theorem numerical_cell_dtype_cannot_change (R : Spec.Assumptions ComputeStmt) :
+    ¬ CellRelated R (.mk .real (FP.Equational.Term.leaf (0 : Nat))) (.mk .bf16 (.leaf 0)) := by
+  rintro ⟨d, va, vb, ha, hb, _⟩
+  cases ha
+  cases hb
 
 end FPStructuralTests

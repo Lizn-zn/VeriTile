@@ -68,6 +68,11 @@ structure Algebra (α : Type) where
   reduceMax : Option ComputeDType → {shape : TileShape} →
     (axis : Fin shape.length) → (keepDims : Bool) → Values α .real shape →
     Values α .real (TileShape.reduceShape shape axis keepDims)
+  /-- A structural proof cannot change this opaque reduction's input order.
+  The equational interpreter separately expands an explicit addition tree. -/
+  reduceSum : Option ComputeDType → {shape : TileShape} →
+    (axis : Fin shape.length) → (keepDims : Bool) → Values α .real shape →
+    Values α .real (TileShape.reduceShape shape axis keepDims)
 
 inductive Cell (α : Type) where
   | mk (dtype : TileDType) (value : Value α dtype)
@@ -344,6 +349,9 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
       if 0 < TileShape.axisDim _ axis then
         return M.reduceMax p axis keepDims v
       else none
+  | .reduceSum axis keepDims e, s => do
+      let v ← evalOp M p e s
+      return M.reduceSum p axis keepDims v
   | .castRealToInt8 .., _ => none
   | .floorDiv .., _ => none
   | .mod .., _ => none
@@ -357,7 +365,6 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .ge .., _ => none
   | .ne .., _ => none
   | .reduceMaxNat .., _ => none
-  | .reduceSum .., _ => none
   | .scan .., _ => none
   | .argMax .., _ => none
   | .argMin .., _ => none

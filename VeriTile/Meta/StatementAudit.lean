@@ -234,13 +234,22 @@ private def syntaxPrimitive (env : Environment) (n : Name) : Bool :=
         `VeriTile.Triton.Stmt, `VeriTile.Triton.ComputeStmt].contains info.induct
   | _ => false
 
+private def fpProofType (name : Name) : Bool :=
+  #[``VeriTile.Spec.Derivation, ``VeriTile.Spec.ProgramDerivation,
+    ``VeriTile.Spec.FloatingPoint, ``VeriTile.Spec.ProgramSyntax.Derivation,
+    ``VeriTile.Spec.ProgramSyntax.numerical,
+    `VeriTile.Triton.FP.Equational.TermEq, `VeriTile.Triton.FP.Equational.OptionalEq,
+    `VeriTile.Triton.FP.Structural.IO₁NumericalEquiv,
+    `VeriTile.Triton.FP.Structural.CellRelated,
+    `VeriTile.Triton.FP.Structural.ValueRelated].contains name
+
 /-- Stop before unfolding either public relation. Follow aliases one step at
 a time; a bounded failure is reported as an unwrapped legacy declaration. -/
 private def specConclusion (e : Expr) : MetaM Expr := do
   let mut e := e
   for _ in [:64] do
-    if e.isAppOf ``VeriTile.Spec.Real || e.isAppOf ``VeriTile.Spec.FloatingPoint ||
-        e.isAppOf ``VeriTile.Spec.ProgramSyntax.Derivation then
+    if e.isAppOf ``VeriTile.Spec.Real ||
+        (match e.getAppFn with | .const name _ => fpProofType name | _ => false) then
       return e
     match ← Meta.unfoldDefinition? e (ignoreTransparency := true) with
     | some next => e := next
@@ -355,15 +364,12 @@ private def printFPAtom (entry : Expr) (details : Bool := false) : MetaM Unit :=
 
 private structure FPAssumptionState where
   seen : Std.HashSet Expr := {}
+  internalProofVars : Std.HashSet Expr := {}
   entries : Array Expr := #[]
   printedAdmissions : Array (Expr × Expr) := #[]
   unresolved : Bool := false
   fpConstants : Std.HashMap Name Bool := {}
   remaining : Nat := 10000
-
-private def fpProofType (name : Name) : Bool :=
-  #[``VeriTile.Spec.Derivation, ``VeriTile.Spec.ProgramDerivation,
-    ``VeriTile.Spec.FloatingPoint, ``VeriTile.Spec.ProgramSyntax.Derivation].contains name
 
 /-- Conservative reachability, including declaration types and projection
 functions. A closed dependency graph without an FP proof type cannot hide an
@@ -423,7 +429,14 @@ private partial def visitFPAssumptions (proof : Expr) :
   match proof with
   | .mdata _ inner => visitFPAssumptions inner
   | .letE _ _ value body _ => visitFPAssumptions (body.instantiate1 value)
-  | .lam .. => Meta.lambdaTelescope proof fun _ body => visitFPAssumptions body
+  | .lam .. => Meta.lambdaTelescope proof fun params body => do
+      -- These binders belong to a proof body (e.g. recursion hypotheses).
+      -- The headline's external premises have already been instantiated by
+      -- the command's outer telescope and must still be reported if opaque.
+      let previous := (← get).internalProofVars
+      modify fun s => { s with internalProofVars := params.foldl (·.insert ·) previous }
+      visitFPAssumptions body
+      modify fun s => { s with internalProofVars := previous }
   | _ =>
     unless ← Meta.isProof proof do return
     unless ← fpExprReachable proof do return
@@ -483,11 +496,12 @@ private partial def visitFPAssumptions (proof : Expr) :
           | some (.axiomInfo _) | some (.opaqueInfo _) => true
           | _ => false
       | _ => false
-    if opaqueHead then
+    let rec projectionRoot : Expr → Expr
+      | .proj _ _ base => projectionRoot base.getAppFn
+      | head => head
+    if opaqueHead && !(← get).internalProofVars.contains (projectionRoot proof.getAppFn) then
       let type ← specConclusion (← Meta.inferType proof)
-      if type.isAppOf ``VeriTile.Spec.FloatingPoint || type.isAppOf ``VeriTile.Spec.Derivation ||
-          type.isAppOf ``VeriTile.Spec.ProgramDerivation ||
-          type.isAppOf ``VeriTile.Spec.ProgramSyntax.Derivation then
+      if (match type.getAppFn with | .const name _ => fpProofType name | _ => false) then
         modify fun s => { s with unresolved := true }
         logInfo m!"  unresolved FP proof: {← Meta.ppExpr proof} (atomic assumptions unavailable)"
 
@@ -498,9 +512,7 @@ elab "#print_fp_assumptions " id:ident : command => do
   let info ← liftCoreM <| getConstInfo name
   liftTermElabM <| Meta.forallTelescope info.type fun params conclusion => do
     let target ← specConclusion conclusion
-    unless target.isAppOf ``VeriTile.Spec.FloatingPoint || target.isAppOf ``VeriTile.Spec.Derivation ||
-        target.isAppOf ``VeriTile.Spec.ProgramDerivation ||
-        target.isAppOf ``VeriTile.Spec.ProgramSyntax.Derivation do
+    unless (match target.getAppFn with | .const name _ => fpProofType name | _ => false) do
       throwError "{name}: expected a floating-point equivalence or derivation"
     logInfo m!"FP assumptions used by {shortSpecName name}:"
     let proof := mkAppN (mkConst name (info.levelParams.map Level.param)) params

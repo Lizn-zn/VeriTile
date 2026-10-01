@@ -26,7 +26,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Aligned vector addition | `VectorAddCorrect` — checked | `VectorAddFPEquiv` — checked; add commutation |
 | Masked vector addition | `FlatVectorAddCorrect` — checked | `FlatVectorAddFPEquiv` — checked; add commutation |
 | Float dtype addition | `FloatDTypeAddCorrect` — checked, including empty tiles | `FloatDTypeAddFPEquiv` — checked; add commutation; output cast retained |
-| Row-wise sum | `RowWiseSumCorrect` — checked | Pending reduction-order derivation from scalar atoms |
+| Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — derived from fp32 add commutation and association; forward versus reversed input lanes, arbitrary stride and block size including zero |
 | Row-wise max | `RowWiseMaxCorrect` — checked | `RowWiseMaxFPEquiv` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
 | Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch versus online: pending elementary exp laws and loop/reduction derivation |
 | mHC depth | `HyperConnectionsDepthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepthFPEquiv` — checked in the same scope; add commutation |
@@ -41,7 +41,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: pending algebra and loop/reduction derivation |
 | Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: pending algebra and loop/reduction derivation |
 
-There are currently 18 correctness modules and 10 FP equivalence modules. The
+There are currently 18 correctness modules and 11 FP equivalence modules. The
 eight legacy equivalence modules remain as source references; six of their
 original transformations still await FP migration. Their presence does not
 complete the pending FP entries above.
@@ -108,9 +108,30 @@ are symbolic, with the same nonempty-row condition as its Correct counterpart.
 Its one-input IO interface requires successful executions, equal output cells
 and memory framing on each side.
 
-Unsupported syntax still fails explicitly. Additional infrastructure is needed for rewriting inside
-expressions and loop bodies, reduction trees and further memory transformations.
-Real ring identities cannot be installed as structural FP rules.
+The row-wise sum proof specializes the original mathematical kernel to fp32
+input and accumulation and reverses the lane addresses before `tl.sum`. The
+DSL preserves the input's fp32 compute annotation on the reduction and its
+result. The mathematical projection still equals `RowWiseSumCorrect`'s kernel.
+
+`Float/Equational` supplies expression congruence and substitution of the exact
+scalar ADD-COMMUTE and ADD-ASSOC templates. Its reduction-tree theorem derives
+equivalence from a permutation of the leaves, without a whole-reduction atom
+or a floating additive-identity assumption. `Float/TermModel` expands sum into
+an arbitrary valid addition schedule. Each input occurs exactly once; any
+explicit padding zeros remain leaves with their multiplicity preserved. The
+schedule retains precision and layout and cannot depend on numerical inputs.
+A concrete valid schedule exists even for empty rows.
+
+The one-input IO view can now use these term derivations to relate actual
+successful abstract executions, with the same typed-output and memory-frame
+obligations as its structural steps. Other primitives stay opaque. The public
+notation remains `lhs ≡[R] rhs`, and the sum example prints only `add_assoc`
+and `add_commute`. This derives a theorem in the selected FP model; it neither
+replays the GPU report nor claims an IEEE or whole-kernel statistical guarantee.
+
+Unsupported syntax still fails explicitly. Further infrastructure is needed
+for loop bodies and additional memory transformations. Real ring identities
+cannot be installed as structural FP rules.
 
 Legacy `KernelIO.Equiv` proofs quantify over a boundary-rounding model. They
 are not proofs under the new two-gates-selected atom calculus and do not count
@@ -153,6 +174,13 @@ The checks cover:
   and positive block size. Countermodels keep max input permutations distinct
   and reject empty max reductions; the one-input interface also protects output
   windows, private scratch and successful-execution requirements.
+- Row-wise sum's original mathematical projection, its independent FP proof at
+  arbitrary dimensions including empty rows, and exact two-atom output.
+  Reduction-tree countermodels reject removing a zero leaf, erasing precision
+  or dropping repeated casts. Opaque sum interpretation does not permit input
+  permutations; numerical IO steps still reject failed executions and dtype
+  changes. Assumption auditing distinguishes internal induction hypotheses
+  from opaque external derivation or execution premises.
 - Exact source equality for both Welford and LayerNorm pairs, and applications
   of all four public real formulas without positivity restrictions. A flat
   memory consumer checks Welford's two numerical outputs and preservation of

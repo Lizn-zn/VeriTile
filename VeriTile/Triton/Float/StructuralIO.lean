@@ -3,6 +3,7 @@ kernel's declared ports, tile lengths and address functions. Private scratch
 windows are explicit and can change only through a successful structural
 execution proof with a cell-level frame on each side. -/
 import VeriTile.Triton.Float.Structural
+import VeriTile.Triton.Float.TermModel
 import VeriTile.Triton.Float.Equivalence
 import VeriTile.Triton.Memory.KernelSpec.Basic
 import VeriTile.Triton.Memory.KernelSpec.Masked
@@ -99,6 +100,30 @@ def IO₁Equiv (lhs rhs : KernelIO₁) : Prop :=
           b.mem rhs.out (rhs.write (s.pids 0) + i.val)) ∧
       IO₁Frame lhs s a ∧ IO₁Frame rhs s b
 
+/-- Floating values are related by the generated term theory; discrete values
+and dtype tags still have to agree exactly. -/
+def ValueRelated (R : Spec.Assumptions ComputeStmt) : (d : TileDType) →
+    Value (Equational.Term α) d → Value (Equational.Term α) d → Prop
+  | .real | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 => Equational.TermEq R
+  | .nat | .int | .bool | .ptr | .blockPtr => Eq
+
+def CellRelated (R : Spec.Assumptions ComputeStmt)
+    (a b : Cell (Equational.Term α)) : Prop :=
+  ∃ d va vb, a = .mk d va ∧ b = .mk d vb ∧ ValueRelated R d va vb
+
+/-- Successful executions with outputs derived equivalent from scalar atoms.
+All addition schedules are quantified over; padding leaves, precision and
+non-addition primitives remain in the terms. Frames retain exact cells. -/
+def IO₁NumericalEquiv (R : Spec.Assumptions ComputeStmt) (lhs rhs : KernelIO₁) : Prop :=
+  IO₁PrivateScratch lhs ∧ IO₁PrivateScratch rhs ∧
+  ∀ (α : Type) [Inhabited α] (plans : Equational.Schedules) (s : State (Equational.Term α)),
+    ∃ a b, exec (Equational.algebra plans) lhs.kernel s = some a ∧
+      exec (Equational.algebra plans) rhs.kernel s = some b ∧
+      (∀ i : Fin lhs.Bout,
+        CellRelated R (a.mem lhs.out (lhs.write (s.pids 0) + i.val))
+          (b.mem rhs.out (rhs.write (s.pids 0) + i.val))) ∧
+      IO₁Frame lhs s a ∧ IO₁Frame rhs s b
+
 /-- Mask and tile length belong to the public signature. A derivation cannot
 weaken the output obligations by changing its active lanes. -/
 structure MaskedIO₂Signature where
@@ -164,6 +189,7 @@ instance kernelIO₁FPProgramSyntax : Spec.ProgramSyntax KernelIO₁ where
   signature := FP.Structural.io₁Signature
   body := fun io => io.kernel.surfaceBody
   structural := some FP.Structural.IO₁Equiv
+  numerical := FP.Structural.IO₁NumericalEquiv
   sameContext := fun lhs rhs => lhs.scratch = rhs.scratch
 
 instance maskedKernelIO₂FPProgramSyntax : Spec.ProgramSyntax MaskedKernelIO₂ where
