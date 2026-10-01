@@ -1,6 +1,6 @@
 # 浮点运算原语：完整设计
 
-更新日期：2026-10-01。状态：**已实现 Python 配置、14 条 Triton 原子关系、two-gates 和 CPU 结果重放；GPU 实测与 Lean 规则绑定仍待完成，证明将复用现有 agent/comparator**。
+更新日期：2026-10-01。状态：**已报告 42 个实例，其中 30 个接受；可从受信报告生成 Lean 规则数据，TritonBench fp32 加法例子已绑定并证明；其他原子的语法绑定及通用自动化继续复用现有 agent/comparator**。
 
 用户要求交付完整的“配置 → 检查原语 → 生成规则集 → 自动证明”流程，不以标量演示代替完整流程。已确认的实现路线减少了对自研执行器的要求：实际浮点运算交给 Triton/GPU，two-gates 在 Python 中运行，Lean 检查规则假设下的推导。[TwoGatesAcceptance.md](./TwoGatesAcceptance.md) 定义变换接受协议。
 
@@ -269,7 +269,7 @@ profile = {
 
 `#print_spec` 打印两段实现、原子假设表及逐项配置／证据、声明前提、传递依赖的原语／规则和公理；`full` 补充完整依赖。报告与声明假设集合均是保守范围，不声称是最小使用集合。严格浮点事实保留为内部辅助引理；不能向具体浮点函数注入与已知反例矛盾的结合律公理。
 
-[TritonBench 示例](../bench/examples/TritonBenchVectorAdditionFP.lean) 复用原始 vector_addition，构造只交换 `x + y` 操作数的变体。整个 kernel 的等价证明引用一条 `ADD-COMMUTE` 原子假设，并在 Lean 中验证前后 load/store 语法保持不变。原来的实数正确性证明独立保留。公开规格只写 `(R : Rules) : originalKernel ≡[R] optimizedKernel`，实验配置与结果归入 `R` 的规则表，由 `#print_spec` 展开。该规格以 `R` 中的原子准入假设为条件；未运行 two-gates，不提供已验证的 `R`。
+[TritonBench 示例](../bench/examples/TritonBenchVectorAdditionFP.lean) 复用原始 vector_addition，具体化为本轮实验的 4096×4096、block=1024、fp32 配置，构造只交换 `x + y` 操作数的变体。生成的 `ReportedAdmission.fp32_add_commute` 固定这条规则的配置与接受结果；公开规格仍只写 `(R : Rules) : originalKernel ≡[R] optimizedKernel`。`R.add_comm` 明确表示对外部报告及其局部片段对应关系的信任，Lean 检查剩余组合推导。这里按用户要求直接信任已发布报告，不重新重放 GPU 数据，不宣称形式化证明了外部实验。数学投影与原 TritonBench kernel 相同，实数正确性证明独立保留。[运行与 specification 输出](../experiments/floating_point/EXAMPLE.md)。
 
 数值执行层和 checker 仍负责真实浮点计算、配对采样、oracle、非有限值及统计协议。规则配置保留 dtype、累加精度、shape、执行顺序、后端及原子测试操作数分布。原始输入为高斯不保证中间值高斯；按第 7.1 节的默认流程，Lean 检查 `R` 下的形式推导，不证明分布传播。声称某个原子实验代表实际内部使用位置时，需要对应的操作数来源和联合采样依据。
 
@@ -286,7 +286,7 @@ profile = {
 | [DSL/Expansion/Main.lean](../VeriTile/Triton/DSL/Expansion/Main.lean) 的 dot 展开 | acc 被代数化为额外加法，部分精度参数被擦除 | 浮点证明表示保留 DotAcc/FMA、精度模式及必要执行配置，防止未检查的数值差异变成语法相同 |
 | [Semantics/TileOps.lean](../VeriTile/Triton/Semantics/TileOps.lean) | reduceSum/dot 使用实数求和 | 数学模型保留；归约/矩阵变换需展开或建立明确的执行连接后由局部原子关系推导，不直接统计准入整个算子 |
 | [Float/EvalOpR.lean](../VeriTile/Triton/Float/EvalOpR.lean) 与 [Float/StepR.lean](../VeriTile/Triton/Float/StepR.lean) | 现有抽象 cast/store 模型 | 描述抽象语义，不将其当成 GPU 执行器或新的准入结果 |
-| [Spec.lean](../VeriTile/Spec.lean) | `EvidenceValidated` 仍是未接通的验证前提 | 将已校验的 Python 规则表接入模型假设；Lean 检查形式推导，不承担统计检验的形式化证明 |
+| [Spec.lean](../VeriTile/Spec.lean) | `EvidenceValidated` 表示外部数值准入与片段对应的信任前提 | 受信报告已接入具体加法模型；保留 scoped 假设并打印，Lean 检查其下的形式推导，不承担外部实验的形式化证明 |
 | [prove.py](../scripts/prove.py) | 已有 agent、可信输入快照与 comparator 检查 | 在调用前固定规则集和目标；复用入口，不允许证明 agent 修改准入集合 |
 
 测试绑定的是实际 Triton 原语及其配置，不能以 Lean 的数学 evaluator 替代其数值输出。数学投影也可以失败：runtime bitcast、NaN 依赖分支等需要相应规格与前提，不能假设删掉 rounding 就得到合法代数证明。旧等价证明中的实数代数步骤不能直接作为新浮点规则，需要迁移为引用已准入的原子关系。

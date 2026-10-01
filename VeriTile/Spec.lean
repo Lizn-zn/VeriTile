@@ -27,15 +27,17 @@ inductive WarningPolicy where
   | passOnly | allowWarn
   deriving Repr, DecidableEq, BEq
 
-/-- Full canonical configuration from the experiment registry, including
-graphs/lowering, numerical formats, shape/stride/plans, backend, distribution
-and protocol. The external validation obligation binds this JSON and its key
-to the actual programs; a supplied hash alone proves nothing. -/
+/-- Frozen configuration from the experiment registry, or explicitly identified
+published-report metadata. A summary import does not invent missing lowering
+digests. The external assumption binds this JSON/key to the actual programs;
+a supplied hash alone proves nothing about a GPU execution. -/
 structure Contract where
   ruleID : String
   instanceKey : String
   configuration : Lean.Json
   warningPolicy : WarningPolicy
+  /-- Human-readable frozen scope; full machine-readable data stays above. -/
+  description : String := ""
 
 /-- A numerical atomic rewrite, instantiated as syntax fragments. The contract
 binds their precision, shape, backend, operand distribution and protocol.
@@ -62,10 +64,11 @@ def GateStatus.allowed (policy : WarningPolicy) : GateStatus → Bool
 def PolicyAllows (policy : WarningPolicy) (e : Evidence) : Prop :=
   e.bias.allowed policy = true ∧ e.vars.allowed policy = true
 
-/-- Validation/replay of the numerical check for this specific atomic rule.
-This includes syntax/configuration/backend correspondence and artifact integrity.
-The checker bridge is still external; keep this obligation explicit until it is
-closed. No Boolean-to-proof conversion or introduction axiom is provided. -/
+/-- External numerical acceptance for this specific atomic rule, including
+syntax/configuration/backend correspondence and the chosen evidence source.
+A model importing a trusted report carries this as a scoped premise. Lean
+checks the derivation under that premise, not the external GPU experiment.
+No Boolean-to-proof conversion or introduction axiom is provided. -/
 opaque EvidenceValidated {Statement : Type u}
     (rule : AtomicRule Statement) (e : Evidence) : Prop
 

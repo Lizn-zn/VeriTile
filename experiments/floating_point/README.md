@@ -222,12 +222,21 @@ Correctness stays real-valued. Public equivalence stays `lhs ≡[R] rhs`;
 [TritonBench example](../../bench/examples/TritonBenchVectorAdditionFP.lean)
 proves conditional composition under one ADD-COMMUTE assumption.
 
-Imported JSON is the numerical admission table. It **does not yet construct a
-Lean `Rules` value or discharge `EvidenceValidated`**. Parameterized rule-fragment
-binding and invocation of the existing `scripts/prove.sh` agent/comparator are
-the next integration step; no separate proof searcher is planned. The example's
-N=98432/block=1024 is not covered by the default 4096×4096 experiment. Atom
-admission does not establish whole-kernel gates or distributions of intermediates.
+The published report can now be frozen into Lean with
+`python3 scripts/export_numerical_rules.py --trust-report`. This explicit mode
+trusts the report, checks its source hashes/configuration and exports only its
+30 accepted rows. It does not pretend to replay missing raw observations.
+
+The [worked example](./EXAMPLE.md) binds its fp32 ADD-COMMUTE row to the actual
+TritonBench vector_addition fragments at 4096×4096/block=1024. Its public theorem
+still takes only `R : Rules`; the row, precision, shape and PASS results are fixed.
+`R.add_comm` is the explicit external numerical assumption for that bound atom,
+not a global IEEE axiom. Lean checks the remaining whole-kernel derivation and
+`#print_spec` prints the actual rule ID, scope, report identity and both gates.
+Other accepted rows are exported as data; further use-site syntax bindings remain
+necessary. Existing `scripts/prove.sh` and the official comparator remain the
+proof/checking entry points. Atom admission does not establish whole-kernel gates
+or distributions of intermediates.
 
 CPU statistics/configuration/replay checks:
 

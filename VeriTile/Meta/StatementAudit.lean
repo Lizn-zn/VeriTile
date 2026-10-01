@@ -260,6 +260,23 @@ private def ppSpecField (label : String) (projection : Name) (value : Expr) : Me
     if let some status := Meta.getStringValue? rendered then
       logInfo m!"  {label}: {status}"
       return
+  -- Imported report rows use named projections for their IDs and digest keys.
+  -- Print the actual identity rather than an unevaluated `row.ruleID`.
+  if projection == ``VeriTile.Spec.Contract.ruleID ||
+      projection == ``VeriTile.Spec.Contract.instanceKey ||
+      projection == ``VeriTile.Spec.Contract.description ||
+      projection == ``VeriTile.Spec.Evidence.instanceKey then
+    let rendered ← Meta.withTransparency .all <| Meta.whnf field
+    if let some value := Meta.getStringValue? rendered then
+      logInfo m!"  {label}: {repr value}"
+      return
+  if projection == ``VeriTile.Spec.Evidence.artifact then
+    let rendered ← Meta.withTransparency .all <| Meta.whnf field
+    if rendered.isAppOf ``Option.some then
+      let value ← Meta.withTransparency .all <| Meta.whnf rendered.getAppArgs.back!
+      if let some artifact := Meta.getStringValue? value then
+        logInfo m!"  {label}: some {repr artifact}"
+        return
   logInfo m!"  {label}: {← Meta.ppExpr field}"
 
 private def printAtomicEntry (entry : Expr) : MetaM Unit := do
@@ -271,6 +288,7 @@ private def printAtomicEntry (entry : Expr) : MetaM Unit := do
   ppSpecField "atom rhs" ``VeriTile.Spec.AtomicRule.rhs rule
   ppSpecField "instance key" ``VeriTile.Spec.Contract.instanceKey contract
   ppSpecField "configuration" ``VeriTile.Spec.Contract.configuration contract
+  ppSpecField "configuration summary" ``VeriTile.Spec.Contract.description contract
   ppSpecField "warning policy" ``VeriTile.Spec.Contract.warningPolicy contract
   ppSpecField "evidence key" ``VeriTile.Spec.Evidence.instanceKey evidence
   ppSpecField "artifact" ``VeriTile.Spec.Evidence.artifact evidence
