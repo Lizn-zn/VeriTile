@@ -13,7 +13,7 @@ floating-point atom assumptions.** Both retain the `specification` keyword.
 The existing TritonBench [vector addition correctness theorem](../bench/tritonbench_g/vector_addition/VectorAddition.lean)
 uses the real `addIO … ⊨ fun xs ys i => xs i + ys i` surface. The separate
 [correctness example](../bench/examples/TritonBenchVectorAdditionCorrect.lean)
-defines the shared fp32 kernel and its real-valued IO specification:
+defines its fp32 kernel and real-valued IO specification:
 
 ```lean
 specification vector_addition_correct (nElements blockSize : Nat) :
@@ -23,7 +23,7 @@ specification vector_addition_correct (nElements blockSize : Nat) :
 It reuses the existing TritonBench proof through the kernel's mathematical
 projection. `real_projection` lives in this file; no numerical assumptions are needed.
 
-The [floating-point companion](../bench/examples/TritonBenchVectorAdditionFP.lean)
+The [floating-point companion](../bench/examples/TritonBenchVectorAdditionFPEquiv.lean)
 compares that actual kernel with a variant changing only `output = x + y` to
 `output = y + x`, with fp32 operations and symbolic element count and block size.
 Its headline is:
@@ -43,8 +43,8 @@ only the referenced atomic assumption names, such as `add_commute`. Under this s
 elaborates to `Spec.FloatingPoint`; historical KernelIO scopes still use their
 original `RoundingModel` relation.
 
-The FP file imports the shared kernel definition from the correctness file.
-Its equivalence proof does not use `vector_addition_correct` or `real_projection`.
+The FP file writes both Triton kernels directly and does not import the
+correctness file. Its equivalence proof uses only its atomic assumptions.
 
 Experimental parameters select the available assumptions. The subsequent proof
 uses those assumptions without matching kernel sizes to experimental sizes or

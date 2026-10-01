@@ -39,13 +39,13 @@ globs = [
 name = "VeriTileMath"
 globs = ["VeriTile.Math.+"]
 
-# Separate real-correctness and FP-equivalence specifications sharing one kernel.
+# Independent real-correctness and FP-equivalence specification examples.
 [[lean_lib]]
 name = "TritonBenchSpecExamples"
 roots = [
   "bench.tritonbench_g.vector_addition.VectorAddition",
   "bench.examples.TritonBenchVectorAdditionCorrect",
-  "bench.examples.TritonBenchVectorAdditionFP",
+  "bench.examples.TritonBenchVectorAdditionFPEquiv",
 ]
 
 # Full target: Lite + Math + ApproxGeLU. Build this when working on the

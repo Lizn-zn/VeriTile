@@ -219,7 +219,7 @@ rejected instead of silently merging different experiments.
 
 Correctness stays real-valued. Public equivalence stays `lhs ≡[R] rhs`;
 `#print_spec` exposes its atoms. The existing
-[TritonBench example](../../bench/examples/TritonBenchVectorAdditionFP.lean)
+[TritonBench example](../../bench/examples/TritonBenchVectorAdditionFPEquiv.lean)
 proves conditional composition under one ADD-COMMUTE assumption.
 
 The published report can now be frozen into Lean with
@@ -229,8 +229,9 @@ trusts the report, checks its source hashes/configuration and exports only its
 
 The [worked example](./EXAMPLE.md) has separate
 [real correctness](../../bench/examples/TritonBenchVectorAdditionCorrect.lean) and
-[FP equivalence](../../bench/examples/TritonBenchVectorAdditionFP.lean) files sharing
-one source kernel. The latter binds its fp32 ADD-COMMUTE row to the actual
+[FP equivalence](../../bench/examples/TritonBenchVectorAdditionFPEquiv.lean) files, each
+with its own original kernel transcription. The FP file does not import the
+correctness example. It binds its fp32 ADD-COMMUTE row to the actual
 TritonBench vector_addition fragments with symbolic element count and block size.
 The experiment selects the fp32 assumption; the subsequent proof does not match
 kernel dimensions against experimental dimensions. `Rules blockSize` instantiates

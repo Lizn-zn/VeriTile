@@ -1,26 +1,39 @@
 /-
 TritonBench vector_addition, with arbitrary element count and block size.
 The source kernel is specialized to typed fp32 regions; only x+y changes to y+x.
-The shared source kernel and real correctness spec live in the Correct companion.
+Both kernel definitions are written here so this example is self-contained.
 
 The experiment selects ADD-COMMUTE as an atomic assumption. The proof uses
 that assumption at the kernel's symbolic tile size, without matching it to
 the experiment's shape or launch configuration. No new global axiom.
 -/
-import bench.examples.TritonBenchVectorAdditionCorrect
+import VeriTile.Triton.DSL
 import VeriTile.Meta.StatementAudit
 import VeriTile.Triton.Float.Equivalence
 import VeriTile.Triton.Float.ReportedAdmission
 
-namespace VeriTile.Bench.Examples.TritonBenchVectorAdditionFP
+namespace VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv
 
 open VeriTile Triton
 open scoped VeriTile.Spec
 
 abbrev admitted := FP.ReportedAdmission.fp32_add_commute
 
-/-- Reuse exactly the kernel specified in the correctness companion. -/
-abbrev originalKernel := TritonBenchVectorAdditionCorrect.originalKernel
+/-- Original TritonBench vector addition, transcribed with fp32 regions. -/
+def originalKernel (nElements blockSize : Nat) : ComputeKernel :=
+  let x_ptr : Region .fp32 := ⟨"x"⟩
+  let y_ptr : Region .fp32 := ⟨"y"⟩
+  let output_ptr : Region .fp32 := ⟨"output"⟩
+  triton {
+  pid = tl.program_id(axis=0)
+  block_start = pid * $(blockSize)
+  offsets = block_start + tl.arange(0, $(blockSize))
+  mask = offsets < $(nElements)
+  x = tl.load(x_ptr + offsets, mask=mask)
+  y = tl.load(y_ptr + offsets, mask=mask)
+  output = x + y
+  tl.store(output_ptr + offsets, output, mask=mask)
+}
 
 /-- The sole rewrite is output = y + x. Addresses/masks are unchanged. -/
 def optimizedKernel (nElements blockSize : Nat) : ComputeKernel :=
@@ -104,4 +117,4 @@ specification vector_addition_equiv (nElements blockSize : Nat) (R : Rules block
 #guard_msgs (drop info) in
 #auditModuleAxioms
 
-end VeriTile.Bench.Examples.TritonBenchVectorAdditionFP
+end VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv

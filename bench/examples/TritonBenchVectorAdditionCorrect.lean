@@ -11,7 +11,7 @@ namespace VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect
 open VeriTile Triton
 open scoped VeriTile.Triton.MaskedKernelIO₂
 
-/-- The shared fp32 kernel; correctness interprets its mathematical projection. -/
+/-- The fp32 kernel; correctness interprets its mathematical projection. -/
 def originalKernel (nElements blockSize : Nat) : ComputeKernel :=
   let x_ptr : Region .fp32 := ⟨"x"⟩
   let y_ptr : Region .fp32 := ⟨"y"⟩

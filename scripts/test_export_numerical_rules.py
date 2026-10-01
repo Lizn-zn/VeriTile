@@ -79,7 +79,7 @@ class ExportTests(unittest.TestCase):
 class LeanExampleTests(unittest.TestCase):
     def test_frozen_example_and_printed_assumption(self):
         result = subprocess.run(['lake', 'env', 'lean',
-                                 'bench/examples/TritonBenchVectorAdditionFP.lean'],
+                                 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean'],
                                 cwd=exporter.ROOT, text=True, capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout,
@@ -87,7 +87,7 @@ class LeanExampleTests(unittest.TestCase):
                          '  add_commute\n')
 
     def test_full_example_keeps_the_audit_details(self):
-        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()
+        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean').read_text()
         source = source.replace('#print_fp_assumptions vector_addition_equiv',
                                 '#print_spec vector_addition_equiv full')
         with tempfile.TemporaryDirectory() as tmp:
@@ -103,9 +103,9 @@ class LeanExampleTests(unittest.TestCase):
             self.assertIn(text, result.stdout)
 
     def test_proof_is_parameterized_independently_of_experiment_dimensions(self):
-        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()
+        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean').read_text()
         source += '''
-open VeriTile.Bench.Examples.TritonBenchVectorAdditionFP
+open VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv
 open scoped VeriTile.Spec
 
 example (n block : Nat) (R : Rules block) :
@@ -118,15 +118,10 @@ example (R : Rules 64) : originalKernel 1001 64 ≡[R] optimizedKernel 1001 64 :
 example (R : Rules 256) : originalKernel 8192 256 ≡[R] optimizedKernel 8192 256 :=
   vector_addition_equiv 8192 256 R
 
-example (n block : Nat) : originalKernel n block =
-    VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.originalKernel n block := rfl
-
 open Lean Elab Command in
 run_cmd do
-  let deps ← liftCoreM <| VeriTile.Meta.specDependencies (← getEnv) [``vector_addition_equiv]
-  if deps.project.contains ``VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.vector_addition_correct ||
-      deps.project.contains ``VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.real_projection then
-    throwError "FP equivalence must not depend on the real correctness proof"
+  if (← getEnv).contains `VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.originalKernel then
+    throwError "FP equivalence must not import the correctness example"
 '''
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / 'GenericDimensions.lean'
@@ -166,7 +161,7 @@ run_cmd do
         self.assertIn('axiom footprint ⊆ standard base', result.stdout)
 
     def test_atom_selection_preserves_operation_precision(self):
-        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()
+        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean').read_text()
         # Check only the definitions and binding assertion; no proof/report noise.
         source = source.split('/-- Only this frozen accepted row')[0]
         for old, new in [('ReportedAdmission.fp32_add_commute', 'ReportedAdmission.bf16_add_commute'),
@@ -174,7 +169,7 @@ run_cmd do
             with self.subTest(change=new), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'WrongProfile.lean'
                 path.write_text(source.replace(old, new) +
-                                '\nend VeriTile.Bench.Examples.TritonBenchVectorAdditionFP\n')
+                                '\nend VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv\n')
                 result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=exporter.ROOT,
                                         text=True, capture_output=True, timeout=180)
                 self.assertNotEqual(result.returncode, 0)
