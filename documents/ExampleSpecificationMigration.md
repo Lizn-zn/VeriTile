@@ -37,10 +37,10 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | Original fp64 intermediate arithmetic has no admitted fp64 row |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | Fused versus materialized pipeline: pending structural memory/def-use lemmas |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | Fused versus materialized pipeline: pending structural lemmas and explicit rounding-idempotence atom |
-| Welford | Pending | Two-pass versus online variance: pending algebra and loop/reduction derivation |
-| Fused layernorm | Pending | Two-pass versus online statistics: pending algebra and loop/reduction derivation |
+| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: pending algebra and loop/reduction derivation |
+| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: pending algebra and loop/reduction derivation |
 
-There are currently 16 correctness modules and 7 FP equivalence modules. The
+There are currently 18 correctness modules and 7 FP equivalence modules. The
 eight legacy equivalence modules remain while their original transformations
 are migrated; their presence does not complete the pending FP entries above.
 
@@ -48,6 +48,15 @@ The SiLU and SwiGLU materialized kernels retain the original `ComputeKernel.seq`
 scope: one concatenation of stage bodies. Their real specifications explicitly
 declare scratch windows and prove that every cell outside output and scratch
 windows is preserved. They do not claim a new separate-launch theorem.
+
+Welford and LayerNorm retain symbolic row length and stride. These are
+per-program specifications: the original Welford sources write each scalar
+output at offset zero, so this does not assert a race-free multi-program
+Welford launch. Both proofs also cover zero-length rows under Lean's total
+real arithmetic. For Welford, that means zero mean and variance; for LayerNorm,
+there are no output lanes. The new `KernelIO₁ₓ₂.Implements` interface requires
+both results and frames outside the union of the two output windows and any
+declared scratch windows.
 
 ## Admission and proof boundaries
 
@@ -89,15 +98,21 @@ The checks cover:
   include output readback, termination, bounds safety and memory framing.
 - Exact source equality for both SiLU and SwiGLU pairs, and applications of all
   four real correctness headlines at arbitrary dimensions, without positivity
-  or whole-tile restrictions. These checks are included in the five example
-  pair tests. The other 32 regression tests cover admission, printing and the
-  specification surface.
+  or whole-tile restrictions.
+- Exact source equality for both Welford and LayerNorm pairs, and applications
+  of all four public real formulas without positivity restrictions. A flat
+  memory consumer checks Welford's two numerical outputs and preservation of
+  unwritten cells within both output regions.
 - Official comparator replay with trust audits for `VectorAddFPEquiv`,
   `FlatVectorAddFPEquiv`, `FloatDTypeAddFPEquiv`, `FloatDTypeAddCorrect`,
   `SoftmaxStableCorrect`, `StableLogSumExpCorrect`, `SoftmaxReciprocalCorrect`,
   `FloatDTypeSoftmaxCorrect`, `HyperConnectionsDepthFPEquiv`,
   `HyperConnectionsWidthFPEquiv`, `AdamUpdateGridLaunchFPEquiv`,
-  `FusedSiLUCorrect` and `FusedSwigluCorrect`.
+  `FusedSiLUCorrect`, `FusedSwigluCorrect`, `WelfordCorrect`,
+  `FusedLayerNormCorrect` and the updated `KernelSpec/Basic` interface.
+
+The current regression suite has 39 passing tests: 7 example-pair/contract
+tests and 32 admission, assumption-printer and specification-surface tests.
 
 Compile each changed module and run its axiom/statement audits. The
 `TritonBenchSpecExamples` Lake target now includes all `bench.examples` modules,

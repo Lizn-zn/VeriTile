@@ -1647,6 +1647,116 @@ structure KernelIO₁ₓ₂ where
 
 namespace KernelIO₁ₓ₂
 
+/-- Real correctness for one input and two outputs. Both output windows must
+hold the mathematical results; memory outside their union and the declared
+scratch windows is preserved. As with the other IO interfaces, this quantifies
+over every disjoint flat placement and requires successful termination. -/
+def Implements (io : KernelIO₁ₓ₂)
+    (f : (Fin io.Bin → ℝ) → (Fin io.Bout1 → ℝ) × (Fin io.Bout2 → ℝ)) : Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = [io.inp, io.out1, io.out2] ++ io.scratch.map (·.buf) →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+  ∀ pid : Nat,
+    io.read pid + io.Bin ≤ A.extent io.inp →
+    io.write1 pid + io.Bout1 ≤ A.extent io.out1 →
+    io.write2 pid + io.Bout2 ≤ A.extent io.out2 →
+    (∀ p ∈ io.scratch, p.win pid + p.len ≤ A.extent p.buf) →
+  ∀ (xs : Fin io.Bin → ℝ) (s₀ : BlockState),
+    s₀.pid = pid →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ j : Fin io.Bin, s₀.readMem io.inp (io.read pid + j.val) = xs j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀) = some s'
+      ∧ (∀ j : Fin io.Bout1,
+          s'.readMem A.flat (A.addr io.out1 (io.write1 pid + j.val)) = (f xs).1 j)
+      ∧ (∀ j : Fin io.Bout2,
+          s'.readMem A.flat (A.addr io.out2 (io.write2 pid + j.val)) = (f xs).2 j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ j : Fin io.Bout1, o' ≠ A.addr io.out1 (io.write1 pid + j.val)) ∧
+             (∀ j : Fin io.Bout2, o' ≠ A.addr io.out2 (io.write2 pid + j.val)) ∧
+             (∀ p ∈ io.scratch, ∀ j : Fin p.len, o' ≠ A.addr p.buf (p.win pid + j.val)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+@[inherit_doc] scoped infix:25 " ⊨ " => KernelIO₁ₓ₂.Implements
+
+/-- Assemble one-input/two-output real correctness from region execution and
+its flat-memory safety obligations. Scratch is framed independently of both
+outputs, including cells outside a scratch window in the same region. -/
+theorem Implements.intro (io : KernelIO₁ₓ₂)
+    {f : (Fin io.Bin → ℝ) → (Fin io.Bout1 → ℝ) × (Fin io.Bout2 → ℝ)}
+    (hok : io.kernel.toAlgKernel.FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState),
+      io.read s.pid + io.Bin ≤ bounds io.inp →
+      io.write1 s.pid + io.Bout1 ≤ bounds io.out1 →
+      io.write2 s.pid + io.Bout2 ≤ bounds io.out2 →
+      (∀ p ∈ io.scratch, p.win s.pid + p.len ≤ bounds p.buf) →
+      Kernel.TraceSafe bounds io.kernel.toAlgKernel s)
+    (hrun : ∀ (s₀ : BlockState) (xs : Fin io.Bin → ℝ),
+      (∀ j : Fin io.Bin, s₀.readMem io.inp (io.read s₀.pid + j.val) = xs j) →
+      ∃ s1, exec io.kernel.toAlgKernel s₀ = some s1
+        ∧ (∀ j : Fin io.Bout1, s1.readMem io.out1 (io.write1 s₀.pid + j.val) = (f xs).1 j)
+        ∧ (∀ j : Fin io.Bout2, s1.readMem io.out2 (io.write2 s₀.pid + j.val) = (f xs).2 j)
+        ∧ (∀ r o,
+            (r ≠ io.out1 ∨ ∀ j : Fin io.Bout1, o ≠ io.write1 s₀.pid + j.val) →
+            (r ≠ io.out2 ∨ ∀ j : Fin io.Bout2, o ≠ io.write2 s₀.pid + j.val) →
+            (∀ p ∈ io.scratch, r = p.buf → ∀ j : Fin p.len, o ≠ p.win s₀.pid + j.val) →
+            s1.mem r o = s₀.mem r o)) :
+    io.Implements f := by
+  intro A hd hregs hcov pid hin ho1 ho2 hsc xs s₀ hpid hu hx
+  subst hpid
+  obtain ⟨s1, he, hv1, hv2, hf⟩ := hrun s₀ xs hx
+  have hbridge := A.exec_flatten hd hcov _ s₀
+    (hts A.extent s₀ hin ho1 ho2 hsc) hok hu
+  have hmem1 : io.out1 ∈ A.regions := by rw [hregs]; simp
+  have hmem2 : io.out2 ∈ A.regions := by rw [hregs]; simp
+  refine ⟨A.flattenState s1, ?_, ?_, ?_, ?_⟩
+  · rw [hbridge, he, Option.map_some]
+  · intro j
+    have hj : io.write1 s₀.pid + j.val < A.extent io.out1 := by
+      have := j.isLt; omega
+    rw [A.flattenState_readMem hd s1 hmem1 hj]
+    exact hv1 j
+  · intro j
+    have hj : io.write2 s₀.pid + j.val < A.extent io.out2 := by
+      have := j.isLt; omega
+    rw [A.flattenState_readMem hd s1 hmem2 hj]
+    exact hv2 j
+  · intro r' o' hcond
+    by_cases hr : r' = A.flat
+    · subst hr
+      show (A.flattenState s1).mem A.flat o' = (A.flattenState s₀).mem A.flat o'
+      simp only [FlatAlloc.flattenState]
+      unfold FlatAlloc.readFlat
+      cases hdec : A.decode o' with
+      | none => rfl
+      | some p =>
+          obtain ⟨r, o⟩ := p
+          obtain ⟨_, hoeq, _⟩ := A.decode_sound hdec
+          show A.trCell (s1.mem r o) = A.trCell (s₀.mem r o)
+          refine congrArg A.trCell (hf r o ?_ ?_ ?_)
+          · by_cases hro : r = io.out1
+            · subst hro
+              refine Or.inr fun j hoj => ?_
+              rcases hcond with hflat | ⟨hn1, _, _⟩
+              · exact hflat rfl
+              · exact hn1 j (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · by_cases hro : r = io.out2
+            · subst hro
+              refine Or.inr fun j hoj => ?_
+              rcases hcond with hflat | ⟨_, hn2, _⟩
+              · exact hflat rfl
+              · exact hn2 j (by rw [hoeq, hoj])
+            · exact Or.inl hro
+          · intro p hp hrp j hoj
+            rcases hcond with hflat | ⟨_, _, hnsc⟩
+            · exact hflat rfl
+            · exact hnsc p hp j (by rw [hoeq, hrp, hoj])
+    · simp only [FlatAlloc.flattenState, if_neg hr]
+
+
 /-- `io₁ ≡[R] io₂` — kernel equivalence on a shared one-input / two-output
 IO signature; sibling of `MaskedKernelIO₂.Equiv`. The interface is read from
 `io₁` (instances share it by structure update); `io₂` contributes only its
