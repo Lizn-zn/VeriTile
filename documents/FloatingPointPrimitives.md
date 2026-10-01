@@ -267,7 +267,7 @@ profile = {
 
 `Derivation` 支持自反、对称、传递及共同语句前后文；`FloatingPoint` 还检查程序签名保持一致。当前 ComputeKernel 视图保留输入／输出元数据和真实 ComputeStmt 序列。它实现的是假设生成的形式理论，不把统计检验结果解释成对称、传递的概率保证，也不把该关系转换成具体 IEEE 位值的 Lean `=`。
 
-`#print_fp_assumptions theorem_name` 只打印浮点证明引用的原子假设、gate 状态及适用配置，不打印 specification。它沿证明和实例化后的辅助引理寻找 `Derivation.atom`，排除规则表中未引用的条目；同一实例去重，不同配置分开显示。不可展开的浮点证明前提显示为 unresolved。可达证明分支均计入，不声称是逻辑上的最小依赖集合。公理审计独立执行；旧 `#print_spec ... full` 保留为内部审计入口。严格浮点事实保留为内部辅助引理；不能向具体浮点函数注入与已知反例矛盾的结合律公理。
+`#print_fp_assumptions theorem_name` 只打印浮点证明引用的原子假设名称，使用 `add_commute` 这样的小写下划线形式；不打印配置、gate 状态或 specification。它沿证明和实例化后的辅助引理寻找 `Derivation.atom`，排除规则表中未引用的条目；同一实例去重，不同配置分开显示。不可展开的浮点证明前提显示为 unresolved。可达证明分支均计入，不声称是逻辑上的最小依赖集合。公理审计独立执行；旧 `#print_spec ... full` 保留为内部审计入口。严格浮点事实保留为内部辅助引理；不能向具体浮点函数注入与已知反例矛盾的结合律公理。
 
 [TritonBench 示例](../bench/examples/TritonBenchVectorAdditionFP.lean) 复用原始 vector_addition，具体化为本轮实验的 4096×4096、block=1024、fp32 配置，构造只交换 `x + y` 操作数的变体。生成的 `ReportedAdmission.fp32_add_commute` 固定这条规则的配置与接受结果；公开规格仍只写 `(R : Rules) : originalKernel ≡[R] optimizedKernel`。`R.add_comm` 明确表示对外部报告及其局部片段对应关系的信任，Lean 检查剩余组合推导。这里按用户要求直接信任已发布报告，不重新重放 GPU 数据，不宣称形式化证明了外部实验。数学投影与原 TritonBench kernel 相同，实数正确性证明独立保留。[运行与原子假设输出](../experiments/floating_point/EXAMPLE.md)。
 

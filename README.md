@@ -28,8 +28,8 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   implementation equivalence uses `lhs ≡[R] rhs` (`open scoped VeriTile.Spec`).
   Two-gates admits atomic rewrite assumptions; Lean checks their composition.
   `R` bundles the rule table and admissions; experiment bookkeeping stays there.
-  `#print_fp_assumptions name` lists the atomic assumptions referenced by an FP
-  proof, with their gate status and scope. The GPU runner and trusted-report
+  `#print_fp_assumptions name` lists only the atomic assumption names referenced
+  by an FP proof, such as `add_commute`. The GPU runner and trusted-report
   example are available. See [specification meanings](./documents/CorrectnessSurfaces.md#two-public-specification-meanings).
 - **Narrow-float / rounding-model layer** (#1): an abstract `RoundingModel`
   (`round : FloatDType → ℝ → ℝ`, fields `round_real` (real-channel identity) and `round_idem` (idempotence)) threads a

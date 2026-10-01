@@ -82,18 +82,9 @@ class LeanExampleTests(unittest.TestCase):
                                  'bench/examples/TritonBenchVectorAdditionFP.lean'],
                                 cwd=exporter.ROOT, text=True, capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for text in ('FP assumptions used by vector_addition_equiv:',
-                     'ADD-COMMUTE [bias PASS; vars PASS]',
-                     '4096', 'fp32'):
-            self.assertIn(text, result.stdout)
-        for hidden in ('instance key:', 'EvidenceValidated', 'artifact:',
-                       'Reachable execution primitives', 'Dependency boundary:',
-                       'R.assumptions', 'sorryAx', 'Nonstandard axioms:',
-                       'Specification:', 'Kind:', 'Claim:', 'Parameters / premises:',
-                       'R : Rules', 'originalKernel', 'unresolved FP proof',
-                       'Classical.choice', 'axiom footprint'):
-            self.assertNotIn(hidden, result.stdout)
-        self.assertEqual(result.stdout.count('ADD-COMMUTE ['), 1)
+        self.assertEqual(result.stdout,
+                         'FP assumptions used by vector_addition_equiv:\n'
+                         '  add_commute\n')
 
     def test_full_example_keeps_the_audit_details(self):
         source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()

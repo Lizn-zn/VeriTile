@@ -332,11 +332,16 @@ private def shortSpecName : Name → String
   | .str _ name => name
   | name => name.toString
 
-private def printFPAtom (entry : Expr) : MetaM Unit := do
+private def printFPAtom (entry : Expr) (details : Bool := false) : MetaM Unit := do
   let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[entry]
-  let evidence ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.evidence #[entry]
   let contract ← Meta.mkAppM ``VeriTile.Spec.AtomicRule.contract #[rule]
   let id ← specString? ``VeriTile.Spec.Contract.ruleID contract
+  unless details do
+    match id with
+    | some id => logInfo m!"  {id.toLower.replace "-" "_"}"
+    | none => logInfo m!"  {← Meta.ppExpr entry} [symbolic atom]"
+    return
+  let evidence ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.evidence #[entry]
   let scope ← specString? ``VeriTile.Spec.Contract.description contract
   let status (projection : Name) : MetaM String := do
     let gate ← Meta.mkAppM projection #[evidence]
@@ -435,7 +440,7 @@ private def printCompactAtoms (assumptions : Expr) : MetaM Unit := do
       logInfo m!"  {← Meta.ppExpr rest} (symbolic table)"
       return
     let args := reduced.getAppArgs
-    printFPAtom args[1]!
+    printFPAtom args[1]! (details := true)
     rest := args[2]!
   logInfo "  further entries omitted; use #print_spec ... full."
 

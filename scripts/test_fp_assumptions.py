@@ -51,11 +51,11 @@ theorem composed (ha : Spec.AcceptedAtom used) :
   (helper ha).symm.trans (helper ha)
 #print_fp_assumptions composed
 """)
-        self.assertEqual(output.count('USED [bias NOT_RUN; vars NOT_RUN]'), 1)
-        self.assertIn('shape=32', output)
-        self.assertNotIn('UNUSED', output)
+        self.assertEqual(output.count('  used\n'), 1)
+        self.assertNotIn('shape=', output)
+        self.assertNotIn('unused', output)
         self.assertNotIn('unresolved', output)
-        self.assertNotIn('bias PASS', output)
+        self.assertNotIn('bias', output)
         for hidden in ('Specification:', 'Claim:', 'Parameters', 'EvidenceValidated'):
             self.assertNotIn(hidden, output)
 
@@ -65,7 +65,7 @@ theorem identity : Spec.FloatingPoint [used, unused] [0] [0] := .refl _
 #print_fp_assumptions identity
 """)
         self.assertIn('FP assumptions used by identity:\n  none', output)
-        self.assertNotIn('USED', output)
+        self.assertNotIn('  used', output)
 
     def test_distinct_instances_with_same_id_are_not_collapsed(self):
         output = self.run_lean("""
@@ -76,9 +76,8 @@ theorem twoShapes (h32 : Spec.AcceptedAtom used) (h64 : Spec.AcceptedAtom other)
     (.symm (step [used, other] other (by simp) h64))
 #print_fp_assumptions twoShapes
 """)
-        self.assertEqual(output.count('USED [bias NOT_RUN; vars NOT_RUN]'), 2)
-        self.assertIn('shape=32', output)
-        self.assertIn('shape=64', output)
+        self.assertEqual(output.count('  used\n'), 2)
+        self.assertNotIn('shape=', output)
 
     def test_symbolic_atom_and_opaque_derivation_stay_explicit(self):
         output = self.run_lean("""
@@ -97,7 +96,7 @@ theorem projected (m : Model) : Spec.Derivation [used] [0] [1] := m.proof
         self.assertIn('unresolved FP proof: h', output)
         self.assertIn('unresolved FP proof: m.1', output)
         self.assertNotIn('  none', output)
-        self.assertNotIn('USED [', output)
+        self.assertNotIn('  used\n', output)
 
     def test_non_fp_theorems_are_rejected(self):
         output = self.run_lean('theorem realClaim : Spec.Real True := True.intro\n'

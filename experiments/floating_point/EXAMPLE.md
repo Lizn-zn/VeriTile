@@ -42,16 +42,16 @@ lake env lean bench/examples/TritonBenchVectorAdditionFP.lean
 #print_fp_assumptions vector_addition_equiv
 ```
 
-输出只有原子假设及其适用配置：
+输出只有原子假设名称，使用小写下划线形式：
 
 ```text
 FP assumptions used by vector_addition_equiv:
-  ADD-COMMUTE [bias PASS; vars PASS]
-    shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)
+  add_commute
 ```
 
 该命令沿证明及其辅助引理寻找 `Derivation.atom`，不把规则表中未引用的条目算进去；
-重复的同一实例只显示一次，不同配置的实例分开显示。它也适用于普通浮点 theorem，
+重复的同一实例只显示一次，不同配置的实例仍分别列出，但不打印配置或 gate 状态。
+它也适用于普通浮点 theorem，
 不要求使用 `specification` 关键字。不引用原子的推导显示 `none`；若证明依赖不可展开的
 浮点证明前提，则明确显示 `unresolved FP proof`，不会猜测其原子集合。
 遍历涵盖可达证明分支，不声称求出了逻辑上的最小依赖集合。

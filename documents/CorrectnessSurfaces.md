@@ -30,7 +30,7 @@ This reuses the existing equivalence notation. Here `R` is the rule model;
 its table stores the experiment configuration and results, and its `add_comm`
 field requires admission of the atom. Neither `experiment` nor `evidence` is
 a public theorem argument. `#print_fp_assumptions vector_addition_equiv` lists
-only the referenced atomic assumptions, with their gate status and scope. Under this scope, the notation
+only the referenced atomic assumption names, such as `add_commute`. Under this scope, the notation
 elaborates to `Spec.FloatingPoint`; historical KernelIO scopes still use their
 original `RoundingModel` relation.
 
@@ -75,7 +75,8 @@ justification. The current context rule is syntactic sequence framing, not a
 proof of distribution transport.
 
 `#print_fp_assumptions name` walks the FP proof and instantiated helper proofs,
-printing the referenced `Derivation.atom` entries, their gate labels and scope.
+printing only the referenced `Derivation.atom` names in lowercase snake case.
+Configuration and gate status remain in the rule records and are not printed.
 It does not enumerate unused entries in the rule table or print the specification.
 Repeated instances are deduplicated; distinct configurations stay separate.
 Opaque FP proof premises are marked unresolved rather than assumed to use no atoms.
