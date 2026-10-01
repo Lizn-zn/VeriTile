@@ -134,6 +134,44 @@ theorem projected (m : Model) : Spec.Derivation [used] [0] [1] := m.proof
                                '#print_fp_assumptions realClaim\n', success=False)
         self.assertIn('expected a floating-point equivalence or derivation', output)
 
+    def test_generic_transport_cannot_hide_atoms_from_dependency_pruning(self):
+        output = self.run_lean("""
+theorem genericTransport {P : Prop} (h : P) : P := h
+theorem transported (h : Spec.AcceptedAtom used) :
+    Spec.Derivation [used] [0] [1] :=
+  genericTransport (step [used] used (by simp) h)
+#print_fp_assumptions transported
+""")
+        self.assertEqual(output.count('  used\n'), 1)
+        self.assertNotIn('  none', output)
+
+    def test_structural_composition_keeps_atoms_and_opaque_steps_visible(self):
+        output = self.run_lean("""
+structure Code where
+  body : List Nat
+instance : Spec.ProgramSyntax Code where
+  Statement := Nat
+  Signature := Unit
+  signature := fun _ => ()
+  body := Code.body
+  structural := some Eq
+def c0 : Code := ⟨[0]⟩
+def c1 : Code := ⟨[1]⟩
+theorem structuralStart : Spec.FloatingPoint [used] c0 c0 :=
+  Spec.FloatingPoint.ofStructural (structural := Eq) rfl rfl rfl
+theorem numericalStep (h : Spec.AcceptedAtom used) : Spec.FloatingPoint [used] c0 c1 :=
+  Spec.FloatingPoint.ofDerivation rfl trivial (step [used] used (by simp) h)
+theorem combined (h : Spec.AcceptedAtom used) : Spec.FloatingPoint [used] c0 c1 :=
+  structuralStart.trans (numericalStep h)
+#print_fp_assumptions combined
+theorem opaqueStep (h : Spec.ProgramDerivation (Program := Code) Eq [used] c0 c1) :
+    Spec.FloatingPoint [used] c0 c1 := ⟨rfl, h⟩
+#print_fp_assumptions opaqueStep
+""")
+        self.assertEqual(output.count('  used\n'), 1)
+        self.assertIn('unresolved FP proof: h', output)
+        self.assertNotIn('  none', output)
+
 
 if __name__ == '__main__':
     unittest.main()

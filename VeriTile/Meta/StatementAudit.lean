@@ -239,7 +239,8 @@ a time; a bounded failure is reported as an unwrapped legacy declaration. -/
 private def specConclusion (e : Expr) : MetaM Expr := do
   let mut e := e
   for _ in [:64] do
-    if e.isAppOf ``VeriTile.Spec.Real || e.isAppOf ``VeriTile.Spec.FloatingPoint then
+    if e.isAppOf ``VeriTile.Spec.Real || e.isAppOf ``VeriTile.Spec.FloatingPoint ||
+        e.isAppOf ``VeriTile.Spec.ProgramSyntax.Derivation then
       return e
     match ← Meta.unfoldDefinition? e (ignoreTransparency := true) with
     | some next => e := next
@@ -357,7 +358,56 @@ private structure FPAssumptionState where
   entries : Array Expr := #[]
   printedAdmissions : Array (Expr × Expr) := #[]
   unresolved : Bool := false
+  fpConstants : Std.HashMap Name Bool := {}
   remaining : Nat := 10000
+
+private def fpProofType (name : Name) : Bool :=
+  #[``VeriTile.Spec.Derivation, ``VeriTile.Spec.ProgramDerivation,
+    ``VeriTile.Spec.FloatingPoint, ``VeriTile.Spec.ProgramSyntax.Derivation].contains name
+
+/-- Conservative reachability, including declaration types and projection
+functions. A closed dependency graph without an FP proof type cannot hide an
+atomic derivation. Cache negative results only after the entire graph has been
+searched; mutual recursion must not turn a back-edge into a false negative. -/
+private partial def fpConstantReachable (root : Name) (work : List Name)
+    (seen : NameSet := {}) : StateRefT FPAssumptionState MetaM Bool := do
+  match work with
+  | [] =>
+    modify fun s => { s with fpConstants := seen.foldl (fun m n => m.insert n false) s.fpConstants }
+    return false
+  | name :: rest =>
+    if seen.contains name then return ← fpConstantReachable root rest seen
+    if fpProofType name || (← get).fpConstants[name]? == some true then
+      modify fun s => { s with fpConstants := s.fpConstants.insert root true }
+      return true
+    if (← get).fpConstants[name]? == some false then
+      return ← fpConstantReachable root rest seen
+    let seen := seen.insert name
+    let env ← getEnv
+    if isCoreConst env name then return ← fpConstantReachable root rest seen
+    let some info := env.find? name | return true
+    let mut next ← specExprConsts env info.type
+    if let some value := info.value? then next := next ++ (← specExprConsts env value)
+    fpConstantReachable root (next.toList ++ rest) seen
+
+private def fpExprReachable (proof : Expr) : StateRefT FPAssumptionState MetaM Bool := do
+  let env ← getEnv
+  let mut names ← specExprConsts env proof
+  -- Actual proof arguments can introduce FP dependencies into otherwise
+  -- generic helpers. Include free-variable types instead of inspecting only
+  -- the helper's declaration or the result type of this proof.
+  let visit : StateRefT (Bool × Array Expr) MetaM Unit := proof.forEach fun e => do
+    if e.isFVar then modify fun s => (s.1, s.2.push e)
+    if e.isMVar then modify fun s => (true, s.2)
+  let (_, localState) ← visit.run (false, #[])
+  if localState.1 then return true
+  for localProof in localState.2 do
+    let type ← Meta.inferType localProof
+    if type.getAppFn.isFVar || type.isMVar then return true
+    names := names ++ (← specExprConsts env type)
+  for name in names do
+    if ← fpConstantReachable name [name] then return true
+  return false
 
 /-- Walk instantiated proof bodies, not theorem types or the declared table.
 We inspect all reachable proof branches, not a minimal logical dependency set.
@@ -376,6 +426,7 @@ private partial def visitFPAssumptions (proof : Expr) :
   | .lam .. => Meta.lambdaTelescope proof fun _ body => visitFPAssumptions body
   | _ =>
     unless ← Meta.isProof proof do return
+    unless ← fpExprReachable proof do return
     let args := proof.getAppArgs
     if proof.isAppOf ``VeriTile.Spec.Derivation.atom then
       let entry := args[2]!
@@ -434,7 +485,9 @@ private partial def visitFPAssumptions (proof : Expr) :
       | _ => false
     if opaqueHead then
       let type ← specConclusion (← Meta.inferType proof)
-      if type.isAppOf ``VeriTile.Spec.FloatingPoint || type.isAppOf ``VeriTile.Spec.Derivation then
+      if type.isAppOf ``VeriTile.Spec.FloatingPoint || type.isAppOf ``VeriTile.Spec.Derivation ||
+          type.isAppOf ``VeriTile.Spec.ProgramDerivation ||
+          type.isAppOf ``VeriTile.Spec.ProgramSyntax.Derivation then
         modify fun s => { s with unresolved := true }
         logInfo m!"  unresolved FP proof: {← Meta.ppExpr proof} (atomic assumptions unavailable)"
 
@@ -445,7 +498,9 @@ elab "#print_fp_assumptions " id:ident : command => do
   let info ← liftCoreM <| getConstInfo name
   liftTermElabM <| Meta.forallTelescope info.type fun params conclusion => do
     let target ← specConclusion conclusion
-    unless target.isAppOf ``VeriTile.Spec.FloatingPoint || target.isAppOf ``VeriTile.Spec.Derivation do
+    unless target.isAppOf ``VeriTile.Spec.FloatingPoint || target.isAppOf ``VeriTile.Spec.Derivation ||
+        target.isAppOf ``VeriTile.Spec.ProgramDerivation ||
+        target.isAppOf ``VeriTile.Spec.ProgramSyntax.Derivation do
       throwError "{name}: expected a floating-point equivalence or derivation"
     logInfo m!"FP assumptions used by {shortSpecName name}:"
     let proof := mkAppN (mkConst name (info.levelParams.map Level.param)) params

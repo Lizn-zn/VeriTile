@@ -5,7 +5,8 @@ The reference is `TritonBenchVectorAdditionCorrect.lean` and
 
 Each completed case has a real correctness file and an independent FP equivalence file.
 The correctness statement is `Spec.Real (io ⊨ mathematical_formula)`.
-The FP statement is `originalKernel … ≡[R] optimizedKernel …`, with
+The FP statement is `originalKernel … ≡[R] optimizedKernel …` (or the corresponding
+IO contracts for transformations with private scratch), with
 `#print_fp_assumptions` listing the numerical atoms used by its proof. FP files
 define their own kernels and never import their correctness counterpart.
 
@@ -35,14 +36,15 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable: missing admitted elementary exp/log laws |
 | Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | Division versus reciprocal multiplication: pending a faithful match to tested `div_rn` |
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | Original fp64 intermediate arithmetic has no admitted fp64 row |
-| Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | Fused versus materialized pipeline: pending structural memory/def-use lemmas |
-| Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | Fused versus materialized pipeline: pending structural lemmas and explicit rounding-idempotence atom |
+| Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
+| Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | Fused versus materialized pipeline: pending masked structural execution and scratch framing |
 | Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: pending algebra and loop/reduction derivation |
 | Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: pending algebra and loop/reduction derivation |
 
-There are currently 18 correctness modules and 7 FP equivalence modules. The
-eight legacy equivalence modules remain while their original transformations
-are migrated; their presence does not complete the pending FP entries above.
+There are currently 18 correctness modules and 8 FP equivalence modules. The
+eight legacy equivalence modules remain as source references; seven of their
+original transformations still await FP migration. Their presence does not
+complete the pending FP entries above.
 
 The SiLU and SwiGLU materialized kernels retain the original `ComputeKernel.seq`
 scope: one concatenation of stage bodies. Their real specifications explicitly
@@ -69,10 +71,35 @@ instance. `SQRT-RSQRT` was not admitted. `DIV-RCP` was measured with Triton's
 `div_rn`; an ordinary or approximate division cannot silently use that result.
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
-sequential context. Additional proof infrastructure is needed for rewriting
-inside expressions and loop bodies, reduction trees, and memory fusion. Such
-infrastructure must preserve numerical operations; real ring identities cannot
-be installed as structural FP rules.
+sequential context. A `ProgramSyntax` view may additionally enable independently
+proved structural execution steps through `Spec.ProgramDerivation`, without
+changing the public `≡[R]` notation or the existing syntax-only views. Each step
+preserves the public signature; syntax steps also preserve private scratch
+metadata. Whole-program structural steps cannot be framed inside arbitrary
+statement contexts.
+
+`Float/Structural` interprets floating values with an arbitrary carrier and
+arbitrary numerical functions, preserving dtype and compute-precision tags.
+`Float/StructuralIO` requires both executions to succeed, output cells to agree,
+and every cell outside each implementation's output and private scratch windows
+to remain unchanged. Scratch cannot alias public inputs or output. The SiLU
+proof retains the exact original kernels and derives the same opaque numerical
+call tree by store/load forwarding. Its assumption printer reports `none`.
+This is a structural theorem of the FP model, not an IEEE execution theorem or
+a claim that a newly measured whole-kernel numerical test passed.
+
+The pending SwiGLU proof must use the actual elaborated syntax: the intermediate
+load annotation becomes a bf16-typed load, with no additional cast. Its legacy
+proof needed rounding idempotence because that model rounded again on a typed
+store. The structural model copies an already typed value on store and retains
+all explicit casts as opaque operations, so that legacy need alone does not
+justify adding an idempotence assumption to the new proof.
+
+The structural evaluator currently supports straight-line assignments, typed
+loads/stores, masks and a subset of expressions; unsupported syntax fails
+explicitly. Additional infrastructure is needed for rewriting inside
+expressions and loop bodies, reduction trees and further memory transformations.
+Real ring identities cannot be installed as structural FP rules.
 
 Legacy `KernelIO.Equiv` proofs quantify over a boundary-rounding model. They
 are not proofs under the new two-gates-selected atom calculus and do not count
@@ -99,6 +126,12 @@ The checks cover:
 - Exact source equality for both SiLU and SwiGLU pairs, and applications of all
   four real correctness headlines at arbitrary dimensions, without positivity
   or whole-tile restrictions.
+- Exact source equality for both kernels in `FusedSiLUFPEquiv`, its public FP
+  theorem at symbolic block size (including zero), independence from Correct,
+  and its empty numerical-assumption output. Structural countermodels prevent
+  accidental commutation, reassociation, cast idempotence or precision erasure;
+  they also check typed forwarding, register shadowing, unsupported executions,
+  private scratch and cell-level framing.
 - Exact source equality for both Welford and LayerNorm pairs, and applications
   of all four public real formulas without positivity restrictions. A flat
   memory consumer checks Welford's two numerical outputs and preservation of
@@ -109,10 +142,13 @@ The checks cover:
   `FloatDTypeSoftmaxCorrect`, `HyperConnectionsDepthFPEquiv`,
   `HyperConnectionsWidthFPEquiv`, `AdamUpdateGridLaunchFPEquiv`,
   `FusedSiLUCorrect`, `FusedSwigluCorrect`, `WelfordCorrect`,
-  `FusedLayerNormCorrect` and the updated `KernelSpec/Basic` interface.
+  `FusedLayerNormCorrect` and the updated `KernelSpec/Basic` interface. The
+  structural FP extension also replays `Spec`, `Float/Structural`,
+  `Float/StructuralIO`, `FusedSiLUFPEquiv` and its boundary fixture.
 
-The current regression suite has 39 passing tests: 7 example-pair/contract
-tests and 32 admission, assumption-printer and specification-surface tests.
+The current regression suite has 44 passing tests: 7 example-pair/contract
+tests, 3 structural FP tests and 34 admission, assumption-printer and
+specification-surface tests.
 
 Compile each changed module and run its axiom/statement audits. The
 `TritonBenchSpecExamples` Lake target now includes all `bench.examples` modules,

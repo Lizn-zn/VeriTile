@@ -118,12 +118,49 @@ class ProgramSyntax (Program : Type u) where
   Signature : Type u
   signature : Program → Signature
   body : Program → List Statement
+  /-- Optional, library-defined structural equivalence. It must preserve
+  numerical primitives without assuming their algebraic laws. IO views can
+  supply an independently proved abstract-execution relation, including
+  termination and memory framing. The default permits only syntax rules. -/
+  structural : Option (Program → Program → Prop) := none
+  /-- Additional context preserved by syntax-only steps in a structural view,
+  such as private scratch declarations. A structural execution proof may
+  relate different private workspaces; a mere body rewrite may not. -/
+  sameContext : Program → Program → Prop := fun _ _ => True
 
 instance {Statement : Type u} : ProgramSyntax (List Statement) where
   Statement := Statement
   Signature := PUnit
   signature := fun _ => PUnit.unit
   body := id
+
+/-- Composition of syntax derivations and certified whole-program structural
+steps. Every step retains the public signature. Structural IO equivalence is
+not lifted through an arbitrary statement context: its private memory and
+register observations need not be preserved by such a context. -/
+inductive ProgramDerivation {Program : Type u} [view : ProgramSyntax Program]
+    (structural : Program → Program → Prop) (assumptions : Assumptions view.Statement) :
+    Program → Program → Prop where
+  | refl (program) : ProgramDerivation structural assumptions program program
+  | syntax {lhs rhs} (signature : view.signature lhs = view.signature rhs)
+      (context : view.sameContext lhs rhs)
+      (proof : Derivation assumptions (view.body lhs) (view.body rhs)) :
+      ProgramDerivation structural assumptions lhs rhs
+  | structural {lhs rhs} (signature : view.signature lhs = view.signature rhs)
+      (proof : structural lhs rhs) : ProgramDerivation structural assumptions lhs rhs
+  | symm {lhs rhs} : ProgramDerivation structural assumptions lhs rhs →
+      ProgramDerivation structural assumptions rhs lhs
+  | trans {lhs middle rhs} : ProgramDerivation structural assumptions lhs middle →
+      ProgramDerivation structural assumptions middle rhs →
+      ProgramDerivation structural assumptions lhs rhs
+
+/-- Existing syntax-only views keep precisely their original derivation type.
+An IO view may additionally enable certified structural program steps. -/
+def ProgramSyntax.Derivation {Program : Type u} [view : ProgramSyntax Program]
+    (assumptions : Assumptions view.Statement) (lhs rhs : Program) : Prop :=
+  match view.structural with
+  | none => Spec.Derivation assumptions (view.body lhs) (view.body rhs)
+  | some structural => ProgramDerivation structural assumptions lhs rhs
 
 /-- Floating-point IMPLEMENTATION EQUIVALENCE under the displayed atom
 assumptions, written `lhs ≡[R] rhs` on the public surface. Correctness against
@@ -132,7 +169,7 @@ Lean checks the resulting derivation. -/
 structure FloatingPoint {Program : Type u} [view : ProgramSyntax Program]
     (assumptions : Assumptions view.Statement) (lhs rhs : Program) : Prop where
   sameSignature : view.signature lhs = view.signature rhs
-  derivation : Derivation assumptions (view.body lhs) (view.body rhs)
+  derivation : ProgramSyntax.Derivation assumptions lhs rhs
 
 /-- Reuse the existing equivalence spelling. Here `R` supplies the atomic rule
 table; models can coerce to their table to keep experiment bookkeeping out of
@@ -148,15 +185,42 @@ namespace FloatingPoint
 variable {Program : Type u} [view : ProgramSyntax Program]
     {assumptions : Assumptions view.Statement} {lhs middle rhs : Program}
 
-theorem refl (program : Program) : FloatingPoint assumptions program program :=
-  ⟨rfl, .refl _⟩
+theorem ofDerivation (hsig : view.signature lhs = view.signature rhs)
+    (hcontext : view.sameContext lhs rhs)
+    (h : Derivation assumptions (view.body lhs) (view.body rhs)) :
+    FloatingPoint assumptions lhs rhs := by
+  refine ⟨hsig, ?_⟩
+  unfold ProgramSyntax.Derivation
+  cases view.structural with
+  | none => exact h
+  | some _ => exact .syntax hsig hcontext h
 
-theorem symm (h : FloatingPoint assumptions lhs rhs) : FloatingPoint assumptions rhs lhs :=
-  ⟨h.sameSignature.symm, .symm h.derivation⟩
+theorem ofStructural {structural : Program → Program → Prop}
+    (hview : view.structural = some structural)
+    (hsig : view.signature lhs = view.signature rhs) (h : structural lhs rhs) :
+    FloatingPoint assumptions lhs rhs := by
+  refine ⟨hsig, ?_⟩
+  simp only [ProgramSyntax.Derivation, hview]
+  exact .structural hsig h
+
+theorem refl (program : Program) : FloatingPoint assumptions program program := by
+  refine ⟨rfl, ?_⟩
+  unfold ProgramSyntax.Derivation
+  cases view.structural <;> exact .refl _
+
+theorem symm (h : FloatingPoint assumptions lhs rhs) : FloatingPoint assumptions rhs lhs := by
+  refine ⟨h.sameSignature.symm, ?_⟩
+  have hd := h.derivation
+  cases hs : view.structural <;>
+    simp only [ProgramSyntax.Derivation, hs] at hd ⊢ <;> exact .symm hd
 
 theorem trans (h₁ : FloatingPoint assumptions lhs middle)
-    (h₂ : FloatingPoint assumptions middle rhs) : FloatingPoint assumptions lhs rhs :=
-  ⟨h₁.sameSignature.trans h₂.sameSignature, .trans h₁.derivation h₂.derivation⟩
+    (h₂ : FloatingPoint assumptions middle rhs) : FloatingPoint assumptions lhs rhs := by
+  refine ⟨h₁.sameSignature.trans h₂.sameSignature, ?_⟩
+  have hd₁ := h₁.derivation
+  have hd₂ := h₂.derivation
+  cases hs : view.structural <;>
+    simp only [ProgramSyntax.Derivation, hs] at hd₁ hd₂ ⊢ <;> exact .trans hd₁ hd₂
 
 end FloatingPoint
 end VeriTile.Spec
