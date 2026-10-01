@@ -444,7 +444,7 @@ theorem online_softmax_correct
 /-! ## KernelIO spec — `batchSoftmaxIO ⊨` the online recurrence
 
 The `io ⊨ f` correctness headline for the batch kernel, following the
-canonical KernelIO showcase `bench/examples/VectorAdd.lean` (softmax is
+canonical KernelIO showcase `bench/examples/VectorAddCorrect.lean` (softmax is
 one-input/one-output, so `KernelIO₁`). The mathematical function `f` is the
 **online `(M, L)` recurrence itself** — `exp (xs i − M_B) / L_B` with
 `M_B = onlineSoftmaxM xs B` and `L_B = onlineSoftmaxL xs B` (read back from
@@ -728,9 +728,9 @@ correct softmax spec, and the batch kernel provably computes it. Proof:
 `Implements.intro` assembles the region-model triple (Part 1) with the
 bridge side conditions (Part 2). -/
 specification online_softmax_correctness (B : Nat) (hB : 0 < B) :
-    batchSoftmaxIO B ⊨ fun xs i =>
+    Spec.Real (batchSoftmaxIO B ⊨ fun xs i =>
       Real.exp (xs i - (onlineSoftmaxM xs B).unbotD 0)
-        / (onlineSoftmaxL xs B).unbotD 0 := by
+        / (onlineSoftmaxL xs B).unbotD 0) := by
   refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
   · exact batchSoftmax_flattenOk ⟨"x"⟩ ⟨"y"⟩ B
   · intro bounds s h1 h2 _
@@ -755,7 +755,7 @@ Hoare-triple combinator, and the online-recurrence math constants
 core-listed; `Zero.toOfNat0` is the Mathlib numeral-`0` instance behind the
 `unbotD 0` default) — no other project constant. -/
 #stmtSurfaceSubset online_softmax_correctness ⊆
-  [batchSoftmaxIO, VeriTile.Triton.KernelIO₁.Implements,
+  [Spec.Real, batchSoftmaxIO, VeriTile.Triton.KernelIO₁.Implements,
    VeriTile.Triton.KernelIO₁.Bin, VeriTile.Triton.KernelIO₁.Bout,
    onlineSoftmaxM, onlineSoftmaxL, Zero.toOfNat0]
 

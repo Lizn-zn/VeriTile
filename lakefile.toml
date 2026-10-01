@@ -42,6 +42,7 @@ globs = ["VeriTile.Math.+"]
 # Independent real-correctness and FP-equivalence specification examples.
 [[lean_lib]]
 name = "TritonBenchSpecExamples"
+globs = ["bench.examples.+"]
 roots = [
   "bench.tritonbench_g.vector_addition.VectorAddition",
   "bench.examples.TritonBenchVectorAdditionCorrect",

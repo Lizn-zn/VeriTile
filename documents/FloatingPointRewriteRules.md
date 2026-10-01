@@ -84,7 +84,7 @@ DIV-RCP、SQRT-RSQRT 等具有定义域前提的规则，需要明确从探针�
 - [RoundingModel.lean](../VeriTile/Triton/Float/RoundingModel.lean) 给出抽象幂等性约束及 cast/store 引理。
 - [FusedSwigluEquiv.lean](../bench/examples/FusedSwigluEquiv.lean) 有保留中间舍入的抽象模型结论，仍需检查独立 launch 与具体执行的连接。
 - [FusedLayerNormEquiv.lean](../bench/examples/FusedLayerNormEquiv.lean) 有实数中间计算及输出抽象舍入的等价性结果。
-- [OnlineSoftmax.lean](../bench/examples/OnlineSoftmax.lean) 有数学递推与 batch 输出的连接，完整 streaming 输出路径的范围仍按投稿计划核对。
+- [OnlineSoftmaxCorrect.lean](../bench/examples/OnlineSoftmaxCorrect.lean) 有数学递推与 batch 输出的连接，完整 streaming 输出路径的范围仍按投稿计划核对。
 
 ## 3. 已计算的严格不等见证
 

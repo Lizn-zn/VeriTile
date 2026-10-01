@@ -828,9 +828,9 @@ applied to the *originally loaded* windows; every other flat cell is
 untouched. Proof: `Implements.intro` assembles the region-model triple with
 the bridge side conditions. -/
 specification adam_update_correctness (lr wd beta1 beta2 : ℝ) (n B : Nat) :
-    adamIO lr wd beta1 beta2 n B ⊨ fun p grad expAvg =>
+    Spec.Real (adamIO lr wd beta1 beta2 n B ⊨ fun p grad expAvg =>
       (fun i => TiledOptimizer.lionParam (p i) (expAvg i) (grad i) lr wd beta1,
-       fun i => TiledOptimizer.lionMomentum (expAvg i) (grad i) beta2) := by
+       fun i => TiledOptimizer.lionMomentum (expAvg i) (grad i) beta2)) := by
   refine MaskedKernelIO₃ₓ₂.Implements.intro _
     (by simp [adamIO]) (by simp [adamIO]) ?_ ?_ ?_
   · exact update_fn_kernel_flattenOk ⟨"p"⟩ ⟨"grad"⟩ ⟨"exp_avg"⟩
@@ -850,7 +850,7 @@ specification adam_update_correctness (lr wd beta1 beta2 : ℝ) (n B : Nat) :
 audit-once Hoare-triple combinator, and the two Lion oracles — no other
 project constant. -/
 #stmtSurfaceSubset adam_update_correctness ⊆
-  [adamIO, VeriTile.Triton.MaskedKernelIO₃ₓ₂.Implements,
+  [Spec.Real, adamIO, VeriTile.Triton.MaskedKernelIO₃ₓ₂.Implements,
    TiledOptimizer.lionParam, TiledOptimizer.lionMomentum,
    VeriTile.Triton.MaskedKernelIO₃ₓ₂.B]
 

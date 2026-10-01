@@ -1,40 +1,42 @@
 /-
-bench/examples/RowWiseSum
+bench/examples/RowWiseMax
 
-**Row-wise sum** over a row-major 2D matrix: each `program_id` gathers
-`blockSize` consecutive cells starting at `x + row * nCol`, sums them, and
-stores one scalar at `y[row]`. Four parts, following the canonical KernelIO
-showcase `bench/examples/VectorAdd.lean`:
+**Row-wise max** over a row-major 2D matrix: each `program_id` gathers
+`blockSize` consecutive cells starting at `x + row * nCol`, reduces by max,
+and stores one scalar at `y[row]`. Four parts, following the canonical
+KernelIO showcase `bench/examples/VectorAddCorrect.lean`:
 
-1. **The kernel** — `rowWiseSumKernel` (1D tile, row-stride arithmetic
+1. **The kernel** — `rowWiseMaxKernel` (1D tile, row-stride arithmetic
    `row * nCol + cols`; aligned/unmasked — real Triton adds a tail mask
    when the row is not exactly covered).
-2. **Region-model Hoare triple** — value theorem `rowWiseSum_correct`,
-   single-cell frame, and their package `rowWiseSum_region_run`.
+2. **Region-model Hoare triple** — value theorem `rowWiseMax_correct`,
+   single-cell frame, and their package `rowWiseMax_region_run`.
 3. **Flat-memory bridge side conditions** — the five-statement `TraceSafe`
    walk (row-stride load in bounds when `pid * nCol + B ≤ bounds x`;
    single-cell store when `pid + 1 ≤ bounds y`; the reduction is
    memory-silent) and `FlattenOk`.
-4. **The spec** — the file's single `specification`, hypothesis-free:
+4. **The spec** — the file's single `specification`:
 
-       rowWiseSum_correctness : rowWiseSumIO nCol B ⊨ fun xs _ => ∑ k, xs k
+       rowWiseMax_correctness : rowWiseMaxIO nCol B ⊨ fun xs _ => tileMax hB xs
 
-   the first **single-output-cell** (`Bout = 1`) instance of `KernelIO₁`.
-   Spelled out: for every disjoint flat placement of the two buffers, every
-   program id whose windows are in bounds, and every launch state whose
-   input row window holds `xs` — everything else arbitrary — the translated
-   pointer kernel terminates, `y[pid]` holds `∑ xs`, and every other flat
-   cell is unchanged.
+   a **single-output-cell** (`Bout = 1`) instance of `KernelIO₁`.
+   Non-emptiness `0 < B` is required: the kernel's `max` reduction (like
+   `Finset.sup'`) is only defined on non-empty tiles. Spelled out: for
+   every disjoint flat placement of the two buffers, every program id whose
+   windows are in bounds, and every launch state whose input row window
+   holds `xs` — everything else arbitrary — the translated pointer kernel
+   terminates, `y[pid]` holds `max xs`, and every other flat cell is
+   unchanged.
 
 Source Triton (`.py` reference):
 
 ```python
 @triton.jit
-def row_wise_sum(X, Y, n_cols: tl.constexpr, BLOCK_SIZE: tl.constexpr):
+def row_wise_max(X, Y, n_cols: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     row    = tl.program_id(0)
     cols   = tl.arange(0, BLOCK_SIZE)
     values = tl.load(X + row * n_cols + cols)
-    result = tl.sum(values, axis=0)
+    result = tl.max(values, axis=0)
     tl.store(Y + row, result)
 ```
 -/
@@ -50,7 +52,7 @@ import VeriTile.Examples.Common
 import VeriTile.Meta.Specification
 import VeriTile.Meta.StatementAudit
 
-namespace VeriTile.Bench.Examples.RowWiseSum
+namespace VeriTile.Bench.Examples.RowWiseMax
 
 open VeriTile.Triton
 open VeriTile.Triton.KernelIO₁ (Implements)
@@ -59,57 +61,60 @@ open VeriTile.Examples
 
 /-! ## Part 1 — the kernel -/
 
-/-- Row-wise sum over a row-major 2D matrix.
+/-- Row-wise max over a row-major 2D matrix.
 
 Per `program_id`: gather `blockSize` cells from row `pid` of `xReg` (row
-stride `nCol`), sum them, and scatter the scalar to `yReg[pid]`. -/
-def rowWiseSumKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : ComputeKernel :=
+stride `nCol`), reduce by max, and scatter the scalar to `yReg[pid]`. -/
+def rowWiseMaxKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : ComputeKernel :=
   triton {
     row    := tl.program_id(0)
     cols   := tl.arange(0, $(blockSize))
     values := tl.load($(xReg) + row * $(nCol) + cols)
-    result := tl.sum(values, axis=0)
+    result := tl.max(values, axis=0)
     tl.store($(yReg) + row, result)
   }
 
 /-! ## Part 2 — the region-model Hoare triple -/
 
 /-- Value half: after the run on a state where row `s.pid` of `xReg` holds
-the tile `xs`, the cell `yReg[s.pid]` equals `∑ xs`. -/
-theorem rowWiseSum_correct
-    (xReg yReg : RegionName) (nCol blockSize : Nat)
+the non-empty tile `xs`, the cell `yReg[s.pid]` equals `max xs`. -/
+theorem rowWiseMax_correct
+    (xReg yReg : RegionName) (nCol blockSize : Nat) (hN : 0 < blockSize)
     (s : BlockState) (xs : Fin blockSize → ℝ)
     (h_x : InputRowLoadedAt s xReg nCol blockSize xs) :
-    observeRowAt (exec (rowWiseSumKernel xReg yReg nCol blockSize) s) yReg s.pid
-      = some (∑ k, xs k) := by
-  simp [observeRowAt, exec, rowWiseSumKernel, stepStmts, stepStmt, evalOp,
-        Tile.bop, Tile.reduceSum, Tile.reduceSumDrop,
+    observeRowAt (exec (rowWiseMaxKernel xReg yReg nCol blockSize) s) yReg s.pid
+      = some (Triton.TiledReduction.tileMax hN xs) := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hN.ne'
+  simp [observeRowAt, exec, rowWiseMaxKernel, stepStmts, stepStmt, evalOp,
+        Tile.bop, Tile.reduceMax, Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex,
         NumericDType.mul, NumericDType.add,
-        Triton.TiledReduction.tileSum]
+        Triton.TiledReduction.tileMax]
   unfold InputRowLoadedAt at h_x
   simp_rw [h_x]
   apply Exists.intro
   constructor
   · unfold evalOp
-    simp [Tile.reduceSum, Tile.reduceSumDrop,
+    simp [Tile.reduceMax, Tile.reduceMaxDrop,
       TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
     rfl
   · simp [BlockState.writeMem_readMem]
     rfl
 
 /-- Frame half: the single-cell store at `y[pid]` leaves every other memory
-cell unchanged. -/
-private theorem rowWiseSum_frame (xReg yReg : RegionName)
-    (nCol B : Nat) (s s1 : BlockState)
-    (hExec : exec ((rowWiseSumKernel xReg yReg nCol B).toAlgKernel) s
+cell unchanged. Non-emptiness is needed here because `Tile.reduceMax`
+(hence the kernel's termination) is only defined on positive-length axes. -/
+private theorem rowWiseMax_frame (xReg yReg : RegionName)
+    (nCol B : Nat) (hB : 0 < B) (s s1 : BlockState)
+    (hExec : exec ((rowWiseMaxKernel xReg yReg nCol B).toAlgKernel) s
       = some s1)
     (r : RegionName) (o : Nat) (hmiss : ¬(yReg = r ∧ s.pid = o)) :
     s1.mem r o = s.mem r o := by
-  simp [exec, rowWiseSumKernel, ComputeKernel.toAlgKernel, stepStmts,
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
+  simp [exec, rowWiseMaxKernel, ComputeKernel.toAlgKernel, stepStmts,
     stepStmt, Tile.bop, NumericDType.add, NumericDType.mul] at hExec
   repeat unfold evalOp at hExec
-  simp [Tile.reduceSum, Tile.reduceSumDrop, TileShape.axisDim,
+  simp [Tile.reduceMax, Tile.reduceMaxDrop, TileShape.axisDim,
     TileShape.eraseAxis, TileShape.insertAxisIndex] at hExec
   subst hExec
   rw [BlockState.writeMem_mem]
@@ -118,20 +123,21 @@ private theorem rowWiseSum_frame (xReg yReg : RegionName)
 /-- **The region-model Hoare triple** — termination, the output-cell value,
 and frame, from any launch state whose input row window is loaded. This is
 what the `⊨` headline transports to flat memory. -/
-theorem rowWiseSum_region_run (nCol B : Nat)
+theorem rowWiseMax_region_run (nCol B : Nat) (hB : 0 < B)
     (s₀ : BlockState) (xs : Fin B → ℝ)
     (hx : ∀ j : Fin B, s₀.readMem ⟨"x"⟩ (s₀.pid * nCol + j.val) = xs j) :
-    ∃ s1, exec ((rowWiseSumKernel ⟨"x"⟩ ⟨"y"⟩ nCol B).toAlgKernel) s₀
+    ∃ s1, exec ((rowWiseMaxKernel ⟨"x"⟩ ⟨"y"⟩ nCol B).toAlgKernel) s₀
         = some s1
-      ∧ (∀ j : Fin 1, s1.readMem ⟨"y"⟩ (s₀.pid + j.val) = ∑ k, xs k)
+      ∧ (∀ j : Fin 1, s1.readMem ⟨"y"⟩ (s₀.pid + j.val)
+          = Triton.TiledReduction.tileMax hB xs)
       ∧ (∀ r o,
           (r ≠ ⟨"y"⟩ ∨ ∀ j : Fin 1, o ≠ s₀.pid + j.val) →
           s1.mem r o = s₀.mem r o) := by
-  have hobs := rowWiseSum_correct ⟨"x"⟩ ⟨"y"⟩ nCol B s₀ xs hx
-  rw [show exec (rowWiseSumKernel ⟨"x"⟩ ⟨"y"⟩ nCol B) s₀
-      = exec ((rowWiseSumKernel ⟨"x"⟩ ⟨"y"⟩ nCol B).toAlgKernel) s₀ from rfl]
+  have hobs := rowWiseMax_correct ⟨"x"⟩ ⟨"y"⟩ nCol B hB s₀ xs hx
+  rw [show exec (rowWiseMaxKernel ⟨"x"⟩ ⟨"y"⟩ nCol B) s₀
+      = exec ((rowWiseMaxKernel ⟨"x"⟩ ⟨"y"⟩ nCol B).toAlgKernel) s₀ from rfl]
     at hobs
-  cases hsrc : exec ((rowWiseSumKernel ⟨"x"⟩ ⟨"y"⟩ nCol B).toAlgKernel) s₀ with
+  cases hsrc : exec ((rowWiseMaxKernel ⟨"x"⟩ ⟨"y"⟩ nCol B).toAlgKernel) s₀ with
   | none =>
       rw [hsrc] at hobs
       simp [observeRowAt] at hobs
@@ -140,7 +146,7 @@ theorem rowWiseSum_region_run (nCol B : Nat)
       refine ⟨s1, rfl, fun j => ?_, fun r o hcond => ?_⟩
       · have hj : (j : Nat) = 0 := Nat.lt_one_iff.mp j.isLt
         simpa [observeRowAt, hj] using hobs
-      · refine rowWiseSum_frame ⟨"x"⟩ ⟨"y"⟩ nCol B s₀ s1 hsrc r o
+      · refine rowWiseMax_frame ⟨"x"⟩ ⟨"y"⟩ nCol B hB s₀ s1 hsrc r o
           (fun ⟨hr, ho⟩ => ?_)
         rcases hcond with hne | hno
         · exact hne hr.symm
@@ -213,14 +219,14 @@ private theorem row_activeAddressSafe (bounds : RegionBounds)
   exact hreg
 
 set_option maxHeartbeats 1600000 in
-/-- The row-wise sum kernel is trace-safe: of its five statements, only the
-row-stride load and the single-cell store touch memory; the `sum` reduction
+/-- The row-wise max kernel is trace-safe: of its five statements, only the
+row-stride load and the single-cell store touch memory; the `max` reduction
 is memory-silent. -/
-theorem rowWiseSum_traceSafe (xReg yReg : RegionName)
+theorem rowWiseMax_traceSafe (xReg yReg : RegionName)
     (nCol B : Nat) (bounds : RegionBounds) (s : BlockState)
     (hx : s.pid * nCol + B ≤ bounds xReg) (hy : s.pid + 1 ≤ bounds yReg) :
     Kernel.TraceSafe bounds
-      ((rowWiseSumKernel xReg yReg nCol B).toAlgKernel)
+      ((rowWiseMaxKernel xReg yReg nCol B).toAlgKernel)
       s := by
   unfold Kernel.TraceSafe
   -- statement 1: row := program_id(0)
@@ -246,7 +252,7 @@ theorem rowWiseSum_traceSafe (xReg yReg : RegionName)
         (by simp [BlockState.setReg]) (by simp [BlockState.setReg]) xReg hx⟩
   intro s3 hs3
   obtain ⟨v3, hv3, rfl⟩ := stepStmt_assign_inv hs3
-  -- statement 4: result := sum(values, axis=0)   (register op)
+  -- statement 4: result := max(values, axis=0)   (register op)
   refine Stmt.TraceSafeList.cons_intro
     (by simp [Stmt.TraceSafe, Op.SafeAt.eq_def]) ?_
   intro s4 hs4
@@ -259,23 +265,23 @@ theorem rowWiseSum_traceSafe (xReg yReg : RegionName)
   simp [BlockState.setReg]
 
 /-- The kernel sits inside the bridge's covered fragment. -/
-theorem rowWiseSum_flattenOk (xReg yReg : RegionName) (nCol B : Nat) :
-    ((rowWiseSumKernel xReg yReg nCol B).toAlgKernel).FlattenOk := by
+theorem rowWiseMax_flattenOk (xReg yReg : RegionName) (nCol B : Nat) :
+    ((rowWiseMaxKernel xReg yReg nCol B).toAlgKernel).FlattenOk := by
   unfold Kernel.FlattenOk
-  simp [rowWiseSumKernel, ComputeKernel.toAlgKernel,
+  simp [rowWiseMaxKernel, ComputeKernel.toAlgKernel,
     StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
 
-/-! ## Part 4 — the spec: `rowWiseSumIO ⊨` the row sum -/
+/-! ## Part 4 — the spec: `rowWiseMaxIO ⊨` the row max -/
 
-/-- `rowWiseSumKernel`'s **IO signature** — the whole kernel-specific audit
+/-- `rowWiseMaxKernel`'s **IO signature** — the whole kernel-specific audit
 surface of the headline: `x` (the row-major matrix) in, `y` (one scalar per
 row) out; tile lengths `Bin = B`, `Bout = 1` (a scalar-per-program
 reduction); program `pid` reads the row window at `pid * nCol` (row stride
 `nCol`!) and writes the single cell `y[pid]`. The windows are declared, not
 parsed from the kernel: the headline **proves** the kernel's actual
 addressing matches them. Buffer sizes are not signature content. -/
-def rowWiseSumIO (nCol B : Nat) : KernelIO₁ where
-  kernel := rowWiseSumKernel ⟨"x"⟩ ⟨"y"⟩ nCol B
+def rowWiseMaxIO (nCol B : Nat) : KernelIO₁ where
+  kernel := rowWiseMaxKernel ⟨"x"⟩ ⟨"y"⟩ nCol B
   inp := ⟨"x"⟩
   out := ⟨"y"⟩
   Bin := B
@@ -283,18 +289,19 @@ def rowWiseSumIO (nCol B : Nat) : KernelIO₁ where
   read := fun pid => pid * nCol
   write := fun pid => pid
 
-/-- **The headline**: `rowWiseSumKernel` implements the row sum `∑ k, xs k`
-on its IO signature — hypothesis-free (the empty sum is genuine). Proof:
-`Implements.intro` assembles the region-model triple (Part 2) with the
-bridge side conditions (Part 3). -/
-specification rowWiseSum_correctness (nCol B : Nat) :
-    rowWiseSumIO nCol B ⊨ fun xs _ => ∑ k, xs k := by
+/-- **The headline**: `rowWiseMaxKernel` implements the row max
+`tileMax hB xs` on its IO signature. Non-emptiness `0 < B` is required: the
+kernel's `max` reduction (like `Finset.sup'`) is only defined on non-empty
+tiles. Proof: `Implements.intro` assembles the region-model triple (Part 2)
+with the bridge side conditions (Part 3). -/
+specification rowWiseMax_correctness (nCol B : Nat) (hB : 0 < B) :
+    Spec.Real (rowWiseMaxIO nCol B ⊨ fun xs _ => Triton.TiledReduction.tileMax hB xs) := by
   refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
-  · exact rowWiseSum_flattenOk ⟨"x"⟩ ⟨"y"⟩ nCol B
+  · exact rowWiseMax_flattenOk ⟨"x"⟩ ⟨"y"⟩ nCol B
   · intro bounds s h1 h2 _
-    exact rowWiseSum_traceSafe ⟨"x"⟩ ⟨"y"⟩ nCol B bounds s h1 h2
+    exact rowWiseMax_traceSafe ⟨"x"⟩ ⟨"y"⟩ nCol B bounds s h1 h2
   · intro s₀ xs hx
-    obtain ⟨s1, hexec, hval, hframe⟩ := rowWiseSum_region_run nCol B s₀ xs hx
+    obtain ⟨s1, hexec, hval, hframe⟩ := rowWiseMax_region_run nCol B hB s₀ xs hx
     -- scratch is empty, so its frame side condition is vacuous
     exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
 
@@ -302,15 +309,15 @@ specification rowWiseSum_correctness (nCol B : Nat) :
 
 -- No `sorry`, no smuggled axiom, in the headline's transitive proof
 -- (and in the region-model value theorem).
-#axiomsClean rowWiseSum_correctness
-#axiomsClean rowWiseSum_correct
+#axiomsClean rowWiseMax_correctness
+#axiomsClean rowWiseMax_correct
 
 /- The headline's statement surface is the IO signature, the audit-once
-Hoare-triple combinator, and the pure-math constants of `∑` — no other
-project constant. -/
-#stmtSurfaceSubset rowWiseSum_correctness ⊆
-  [rowWiseSumIO, VeriTile.Triton.KernelIO₁.Implements,
+Hoare-triple combinator, and the pure-math `tileMax` — no other project
+constant. -/
+#stmtSurfaceSubset rowWiseMax_correctness ⊆
+  [Spec.Real, rowWiseMaxIO, VeriTile.Triton.KernelIO₁.Implements,
    VeriTile.Triton.KernelIO₁.Bin, VeriTile.Triton.KernelIO₁.Bout,
-   Finset.sum, Finset.univ]
+   VeriTile.Triton.TiledReduction.tileMax]
 
-end VeriTile.Bench.Examples.RowWiseSum
+end VeriTile.Bench.Examples.RowWiseMax

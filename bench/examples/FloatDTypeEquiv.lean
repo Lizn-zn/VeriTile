@@ -57,8 +57,8 @@ empty block genuinely diverges.
 The headline quantifies over **every** rounding model `R` — but the erased
 kernels are cast-free, so `execR R` never rounds. The ∀`R` quantification
 keeps the surface uniform with the other seven equivalence showcases while
-the content is the exact-ℝ rewrite `e / S = e · S⁻¹`. The correctness
-counterpart of the erasure policy is `bench/examples/FloatDTypeCorrect.lean`;
+the content is the exact-ℝ rewrite `e / S = e · S⁻¹`. The real correctness
+companion for addition is `bench/examples/FloatDTypeAddCorrect.lean`;
 the rounding-model (bf16) sibling of this same rewrite is
 `bench/examples/SoftmaxReciprocalEquiv.lean`.
 

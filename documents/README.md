@@ -57,6 +57,9 @@ The end-to-end project plan and roadmap live in the repo root:
   gate result fields (in Chinese; statistical results not yet measured).
 - [Run and return floating-point experiments](../experiments/floating_point/README.md) —
   Python configuration, GPU commands, resume, result packaging and CPU replay.
+- [Example specification migration](./ExampleSpecificationMigration.md) —
+  case-by-case real-correctness and FP-equivalence coverage, checked pairs,
+  and missing atomic or structural proof requirements.
 
 ## Archive
 

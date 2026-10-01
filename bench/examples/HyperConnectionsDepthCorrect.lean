@@ -4,7 +4,7 @@ bench/examples/HyperConnectionsDepth
 **Depth-side hyper-connections (mHC)**: fixed-rank, inference-only DSL
 surface for the branch-reintegration half of manifold-constrained
 hyper-connections. The width-side sibling (`mhcWidthConnectionKernel`) lives
-in `bench/examples/HyperConnectionsWidth.lean` — the old two-kernel
+in `bench/examples/HyperConnectionsWidthCorrect.lean` — the old two-kernel
 `HyperConnections.lean` was split so that each showcased kernel is
 self-contained in its own file.
 
@@ -15,7 +15,7 @@ stream, and `mhcDepthConnectionKernel` consumes a separately supplied branch
 output.
 
 Four parts, following the canonical KernelIO showcase
-`bench/examples/VectorAdd.lean`:
+`bench/examples/VectorAddCorrect.lean`:
 
 1. **The kernel** — `mhcDepthConnectionKernel`; its `S = T = D = 1,
    numIters = 0` match arm is the scalar fixed-rank slice the proof covers
@@ -363,8 +363,8 @@ signature; see the module docstring for the full Hoare triple `⊨` unfolds
 to. Proof: `Implements.intro` assembles the region-model triple (Part 2)
 with the bridge side conditions (Part 3). -/
 specification mhc_depth_correctness (tau : ℝ) :
-    mhcDepthIO tau ⊨ fun resMix branchOut hPost _ =>
-      resMix 0 + Real.exp (hPost 0 / tau) * branchOut 0 := by
+    Spec.Real (mhcDepthIO tau ⊨ fun resMix branchOut hPost _ =>
+      resMix 0 + Real.exp (hPost 0 / tau) * branchOut 0) := by
   refine KernelIO₃.Implements.intro _ ?_ ?_ ?_
   · exact mhcDepth_flattenOk tau
   · intro bounds s h1 h2 h3 h4 _
@@ -383,7 +383,7 @@ specification mhc_depth_correctness (tau : ℝ) :
 /- The headline's statement surface is the IO signature plus the audit-once
 Hoare-triple combinator — no other project constant. -/
 #stmtSurfaceSubset mhc_depth_correctness ⊆
-  [mhcDepthIO, VeriTile.Triton.KernelIO₃.Implements,
+  [Spec.Real, mhcDepthIO, VeriTile.Triton.KernelIO₃.Implements,
    VeriTile.Triton.KernelIO₃.B1, VeriTile.Triton.KernelIO₃.B2,
    VeriTile.Triton.KernelIO₃.B3, VeriTile.Triton.KernelIO₃.Bout]
 

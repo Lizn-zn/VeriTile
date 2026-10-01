@@ -76,7 +76,7 @@ git clone https://github.com/Lizn-zn/VeriTile.git
 cd VeriTile
 lake exe cache get
 lake build
-lake env lean bench/examples/VectorAdd.lean
+lake env lean bench/examples/VectorAddCorrect.lean
 ```
 
 The repository pins the Lean and Mathlib versions. The cache command downloads
@@ -161,18 +161,23 @@ naming conventions: [KernelManifest.md](./documents/KernelManifest.md),
 ## Minimal Example
 
 Elementwise vector add against the `addSpec xs ys i = xs i + ys i` math
-spec — see [`bench/examples/VectorAdd.lean`](./bench/examples/VectorAdd.lean).
+spec — see [`bench/examples/VectorAddCorrect.lean`](./bench/examples/VectorAddCorrect.lean).
 
-## Refinement Example
+## Floating-Point Equivalence Example
 
-Naive vs numerically-stable softmax (kernel pair refinement) — see
-[`bench/examples/SoftmaxStableEquiv.lean`](./bench/examples/SoftmaxStableEquiv.lean).
+Vector addition with swapped operands — see
+[`VectorAddFPEquiv.lean`](./bench/examples/VectorAddFPEquiv.lean), alongside
+[`VectorAddCorrect.lean`](./bench/examples/VectorAddCorrect.lean). The FP proof
+uses the experiment-selected `add_commute` atom; the real proof states the
+pointwise mathematical formula. `#print_fp_assumptions add_kernel_equiv`
+prints the atom used by the FP proof.
 
 The [floating-point experiment workflow](./experiments/floating_point/README.md)
 provides configurable Triton/GPU candidate checks and CPU replay of two-gates
-results. Correctness stays real-valued; accepted atoms are intended to populate
-the rule model for `lhs ≡[R] rhs`. GPU measurements and the automatic Lean
-admission binding remain pending.
+results. The trusted GPU report supplies 30 accepted atomic instances for
+`lhs ≡[R] rhs`. Other worked examples are being migrated from their legacy
+models; the [coverage ledger](./documents/ExampleSpecificationMigration.md)
+records completed cases and remaining proof requirements.
 
 ## Documentation Map
 
@@ -225,7 +230,8 @@ verso/                     Slide deck / overview
 - `lake build` — build the default `VeriTile` library target; standalone
   benchmarks/showcases and the GeLU/trust-report target are separate
 - `lake build VeriTile VeriTileFull` — also build the full analysis and library trust report
-- `lake env lean bench/examples/VectorAdd.lean` — quick example smoke check after building
+- `lake build TritonBenchSpecExamples` — build all worked examples, including the independent real/FP pairs
+- `lake env lean bench/examples/VectorAddCorrect.lean` — quick example smoke check after building
 - `scripts/check-artifact.sh` — `lake build` ∧ `no sorry` ∧ axiom
   whitelist ∧ kernel-manifest schema ∧ README/doc-term drift
 - `bench/check_ports.sh` — per-port elaboration and official comparator replay

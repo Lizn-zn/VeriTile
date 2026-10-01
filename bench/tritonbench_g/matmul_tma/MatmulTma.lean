@@ -913,9 +913,9 @@ way, carrying `outDType := .fp16` on their (streaming) IO signature with the
 cast-plus-typed-store pair collapsed by `round_idem`: `matmul_kernel`,
 `matmul_leakyrelu`, `matmul_leakyrelu_fp8`, `matmul_triton_autotune`,
 `iv_dependent_matmul`, `rmsnorm_fused_llama`, `attention_kernel`,
-`attention_kernel_aligned`. The showcase
-`bench/examples/FloatDTypeCorrect.lean` does the same at `.fp32` via the
-explicit `.round_to(...)` spelling.
+`attention_kernel_aligned`. The addition showcase now lives in
+`bench/examples/FloatDTypeAddCorrect.lean`: its public contract is real
+correctness after erasing the explicit `.round_to(...)` quantization.
 
 What this face *does* is close a real gap and extend the surface:
 

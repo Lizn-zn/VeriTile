@@ -156,7 +156,7 @@ structure RoundingModel where
 
 ### Online softmax
 
-当前 [OnlineSoftmax.lean](../bench/examples/OnlineSoftmax.lean) 的最终 `online_softmax_correctness` 声明针对 `batchSoftmaxIO`：batch kernel 实现由 online recurrence 定义的数学函数。文件中的 streaming kernel 证明主要描述寄存器递推结果，kernel body 没有最终输出 store。
+当前 [OnlineSoftmaxCorrect.lean](../bench/examples/OnlineSoftmaxCorrect.lean) 的最终 `online_softmax_correctness` 声明针对 `batchSoftmaxIO`：batch kernel 实现由 online recurrence 定义的数学函数。文件中的 streaming kernel 证明主要描述寄存器递推结果，kernel body 没有最终输出 store。
 
 如果把它作为完整 streaming kernel 验证案例，需要补输出阶段并连接到对应 IO 定理；也可以保留当前结果并准确限定论文主张。文件名和递推恒等式本身不能替代完整 streaming 输出定理。
 

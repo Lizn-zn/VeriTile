@@ -44,7 +44,7 @@ the per-execution `Kernel.TraceSafe` contract instead. Four parts:
    is unchanged.
 
 The aligned (unmasked) sibling `addKernel` lives in
-`bench/examples/VectorAdd.lean` — each showcased kernel is self-contained
+`bench/examples/VectorAddCorrect.lean` — each showcased kernel is self-contained
 in its showcase file.
 
 Source Triton (`.py` reference — the canonical tutorial kernel, with the
@@ -402,7 +402,7 @@ masked IO signature — see the module docstring for the full masked Hoare
 triple `⊨` unfolds to. Proof: `Implements.intro` assembles the region-model
 masked triple (Part 2) with the bridge side conditions (Part 3). -/
 specification add_kernel_masked_correctness (B n : Nat) (hB : 0 < B) :
-    addMaskedIO B n ⊨ fun xs ys i => xs i + ys i := by
+    Spec.Real (addMaskedIO B n ⊨ fun xs ys i => xs i + ys i) := by
   refine MaskedKernelIO₂.Implements.intro _ ?_ ?_ ?_
   · exact addKernelMasked_flattenOk ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B n
   · intro bounds s h1 h2 h3 _
@@ -422,7 +422,7 @@ specification add_kernel_masked_correctness (B n : Nat) (hB : 0 < B) :
 /- The headline's statement surface is the masked IO signature plus the
 audit-once Hoare-triple combinator — no other project constant. -/
 #stmtSurfaceSubset add_kernel_masked_correctness ⊆
-  [addMaskedIO, VeriTile.Triton.MaskedKernelIO₂.Implements,
+  [Spec.Real, addMaskedIO, VeriTile.Triton.MaskedKernelIO₂.Implements,
    VeriTile.Triton.MaskedKernelIO₂.B]
 
 end VeriTile.Bench.Examples.FlatVectorAdd

@@ -31,7 +31,7 @@ bench/examples/VectorAdd
    unchanged.
 
 The masked boundary variant (`addKernelMasked`) lives in
-`bench/examples/FlatVectorAdd.lean` — each showcased kernel is
+`bench/examples/FlatVectorAddCorrect.lean` — each showcased kernel is
 self-contained in its showcase file.
 
 Source Triton (`.py` reference, aligned single-block flavour):
@@ -332,6 +332,5 @@ signature and the audit-once Hoare-triple combinator. -/
 #stmtSurfaceSubset add_kernel_correctness ⊆
   [Spec.Real, addIO, VeriTile.Triton.KernelIO₂.Implements, VeriTile.Triton.KernelIO₂.B]
 
-#print_spec add_kernel_correctness
 
 end VeriTile.Bench.Examples.VectorAdd
