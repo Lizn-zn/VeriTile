@@ -27,10 +27,14 @@ INVENTORY = r'''
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
+  -- Enumerate and look up in the same completed kernel environment. The
+  -- elaborator's prefix-based lookup can miss realized private match equations
+  -- even though they are already present in `env.constants`.
+  let kernelEnv := env.toKernelEnv
   let selected : Array Name := __SELECTED__
   let mut names : Array Name := #[]
   if selected.isEmpty then
-    for (name, info) in env.constants.toList do
+    for (name, info) in kernelEnv.constants.toList do
       if (env.getModuleIdxFor? name).isSome then continue
       if let .thmInfo _ := info then names := names.push name
   else
@@ -39,7 +43,7 @@ run_cmd do
   let mut aliases : Array String := #[]
   for i in [:names.size] do
     let name := names[i]!
-    let some (.thmInfo info) := env.find? name
+    let some (.thmInfo info) := kernelEnv.find? name
       | throwError "Comparator target is not a theorem: {name}"
     let wrapperName := Name.mkSimple s!"veritile_comparator_target_{i}"
     if env.contains wrapperName then throwError "Reserved comparator target name: {wrapperName}"

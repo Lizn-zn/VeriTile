@@ -86,6 +86,29 @@ class ComparatorGateTests(unittest.TestCase):
                 self.assertFalse(reports[0]['accepted'])
                 self.assertIn('Illegal axiom detected', result.stderr)
 
+    def test_realized_private_match_equations_are_replayed(self):
+        result, reports, inventories = self.run_check('''
+structure Model where
+  binary : Nat → Option Nat → Nat
+  choose : Option Nat → Nat
+private def model : Model where
+  binary := fun x y => match x, y with
+    | 0, none => 1
+    | 0, some _ => 2
+    | _, _ => 3
+  choose := fun x => match x with
+    | some n => n
+    | none => 0
+theorem binary_none : model.binary 0 none = 1 := by simp [model]
+theorem binary_some : model.binary 0 (some 7) = 2 := by simp [model]
+theorem chosen : model.choose (some 7) = 7 := by simp [model]
+''')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertTrue(reports[0]['accepted'])
+        names = inventories[0]['theorems']
+        self.assertTrue(any('model.match_' in n and '.eq_' in n for n in names), names)
+        self.assertTrue({'binary_none', 'binary_some', 'chosen'}.issubset(names))
+
     def test_sorry_rejected(self):
         result, reports, _ = self.run_check('theorem target : True := by sorry\n')
         self.assertNotEqual(result.returncode, 0)

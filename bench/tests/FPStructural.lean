@@ -20,6 +20,10 @@ private def M : Algebra Nat where
   fromInt := fun _ n => n.toNat
   fp32Bits := fun x => x.bits.toNat
   fp32Load := fun x => x + 1
+  reduceMax := fun _ {shape} _ _ values _ =>
+    match (TileShape.allIndices shape).head? with
+    | some i => values i
+    | none => 0
 
 private def initial : State Nat where
   mem := fun _ _ => .mk .real 0
@@ -61,6 +65,24 @@ example : evalOp M none (.castFloat .real .bf16 (.const 0)) initial ≠
   intro h
   have hscalar := congrArg (Option.map (fun v => v PUnit.unit)) h
   simp [evalOp_unfold, ofFloat, toFloat, M] at hscalar
+
+private def maxInputs : State Nat :=
+  (initial.setReg "left" .real [2] (fun i => if i.1.val = 0 then 3 else 8)).setReg
+    "right" .real [2] (fun i => if i.1.val = 0 then 8 else 3)
+
+-- An opaque max reduction must retain its inputs in order; interpreting the
+-- existing operation adds no numerical permutation or maximum identities.
+theorem max_permutation_is_not_structural :
+    evalOp M none (.reduceMax ⟨0, by decide⟩ Bool.false (.ref .real [2] "left")) maxInputs ≠
+      evalOp M none (.reduceMax ⟨0, by decide⟩ Bool.false (.ref .real [2] "right")) maxInputs := by
+  intro h
+  have hscalar := congrArg (Option.map (fun v => v PUnit.unit)) h
+  simp [evalOp_unfold, maxInputs, State.setReg, TileShape.axisDim, M,
+    TileShape.allIndices, List.finRange_succ] at hscalar
+
+theorem empty_max_fails :
+    evalOp M none (.reduceMax ⟨0, by decide⟩ Bool.false (.full [0] (.const 0))) initial = none := by
+  simp [evalOp_unfold, TileShape.axisDim]
 
 -- A register assignment shadows old bindings of the same name at other types.
 example : ((initial.setReg "v" .real [] (fun _ => 1)).setReg
@@ -172,5 +194,32 @@ theorem masked_failures_not_certificates : ¬ MaskedIO₂Equiv maskedIO maskedIO
   intro h
   obtain ⟨t, _, he, _⟩ := h.2.2 Nat M initial
   simp [maskedIO, FP.Structural.exec, run, step] at he
+
+private def singleIO : KernelIO₁ where
+  kernel := .mk [] [] [.effectMarker "tl.debug_barrier"]
+  projection := by rfl
+  inp := "x"
+  out := "out"
+  Bin := 2
+  Bout := 1
+  read := fun _ => 0
+  write := fun _ => 0
+
+theorem single_signature_keeps_output_window :
+    io₁Signature singleIO ≠ io₁Signature { singleIO with write := fun _ => 1 } := by
+  intro h
+  have hw := congrArg (fun sig : IO₁Signature => sig.write 0) h
+  change (0 : Nat) = 1 at hw
+  contradiction
+
+theorem single_scratch_cannot_alias_input :
+    ¬ IO₁PrivateScratch
+      { singleIO with scratch := [{ buf := "x", win := fun _ => 0, len := 1 }] } := by
+  simp [IO₁PrivateScratch, singleIO]
+
+theorem single_failures_not_certificates : ¬ IO₁Equiv singleIO singleIO := by
+  intro h
+  obtain ⟨t, _, he, _⟩ := h.2.2 Nat M initial
+  simp [singleIO, FP.Structural.exec, run, step] at he
 
 end FPStructuralTests

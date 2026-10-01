@@ -27,7 +27,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Masked vector addition | `FlatVectorAddCorrect` — checked | `FlatVectorAddFPEquiv` — checked; add commutation |
 | Float dtype addition | `FloatDTypeAddCorrect` — checked, including empty tiles | `FloatDTypeAddFPEquiv` — checked; add commutation; output cast retained |
 | Row-wise sum | `RowWiseSumCorrect` — checked | Pending reduction-order derivation from scalar atoms |
-| Row-wise max | `RowWiseMaxCorrect` — checked | Pending a structural transformation; no max atom is admitted |
+| Row-wise max | `RowWiseMaxCorrect` — checked | `RowWiseMaxFPEquiv` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
 | Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch versus online: pending elementary exp laws and loop/reduction derivation |
 | mHC depth | `HyperConnectionsDepthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepthFPEquiv` — checked in the same scope; add commutation |
 | mHC width | `HyperConnectionsWidthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidthFPEquiv` — checked in the same scope; two multiplication commutations |
@@ -41,7 +41,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: pending algebra and loop/reduction derivation |
 | Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: pending algebra and loop/reduction derivation |
 
-There are currently 18 correctness modules and 9 FP equivalence modules. The
+There are currently 18 correctness modules and 10 FP equivalence modules. The
 eight legacy equivalence modules remain as source references; six of their
 original transformations still await FP migration. Their presence does not
 complete the pending FP entries above.
@@ -99,8 +99,16 @@ for arbitrary element count and block size, including zero and partial blocks;
 inactive scratch values are not used as a forwarding premise.
 
 The structural evaluator currently supports straight-line assignments, typed
-loads/stores, masks and a subset of expressions; unsupported syntax fails
-explicitly. Additional infrastructure is needed for rewriting inside
+loads/stores, masks and a subset of expressions. Max reduction is interpreted
+as an arbitrary operation retaining compute precision, the entire input tile,
+shape, axis and `keepDims`; an empty reduction axis fails, as in the original
+semantics. The row-wise max FP proof preserves that operation while eliminating
+the `values` and `result` register bindings. Its stride and positive row length
+are symbolic, with the same nonempty-row condition as its Correct counterpart.
+Its one-input IO interface requires successful executions, equal output cells
+and memory framing on each side.
+
+Unsupported syntax still fails explicitly. Additional infrastructure is needed for rewriting inside
 expressions and loop bodies, reduction trees and further memory transformations.
 Real ring identities cannot be installed as structural FP rules.
 
@@ -140,6 +148,11 @@ The checks cover:
   output. Masked-interface counterexamples prevent changing the public mask,
   hiding writes to inactive output or scratch lanes, aliasing input as scratch,
   or treating two failed executions as a structural certificate.
+- Exact source equality for row-wise max, independent FP proof and empty
+  assumption output, and application of its public theorem at symbolic stride
+  and positive block size. Countermodels keep max input permutations distinct
+  and reject empty max reductions; the one-input interface also protects output
+  windows, private scratch and successful-execution requirements.
 - Exact source equality for both Welford and LayerNorm pairs, and applications
   of all four public real formulas without positivity restrictions. A flat
   memory consumer checks Welford's two numerical outputs and preservation of
@@ -152,12 +165,19 @@ The checks cover:
   `FusedSiLUCorrect`, `FusedSwigluCorrect`, `WelfordCorrect`,
   `FusedLayerNormCorrect` and the updated `KernelSpec/Basic` interface. The
   structural FP extension also replays `Spec`, `Float/Structural`,
-  `Float/StructuralIO`, `FusedSiLUFPEquiv`, `FusedSwigluFPEquiv` and the boundary
-  fixture, including its named masked-interface counterexamples.
+  `Float/StructuralIO`, `FusedSiLUFPEquiv`, `FusedSwigluFPEquiv`,
+  `RowWiseMaxFPEquiv` and the boundary fixture, including its named reduction
+  and IO-interface counterexamples.
 
-The current regression suite has 46 passing tests: 7 example-pair/contract
-tests, 5 structural FP tests and 34 admission, assumption-printer and
+The current regression suite has 48 passing tests: 7 example-pair/contract
+tests, 7 structural FP tests and 34 admission, assumption-printer and
 specification-surface tests.
+
+The comparator also has 7 passing integration tests. Its theorem inventory
+enumerates and looks up declarations in the same completed kernel environment,
+so realized private match equations remain explicit replay targets even when
+the elaborator's name lookup cannot retrieve them. The tests retain rejection
+checks for `sorry` and unapproved axioms.
 
 Compile each changed module and run its axiom/statement audits. The
 `TritonBenchSpecExamples` Lake target now includes all `bench.examples` modules,

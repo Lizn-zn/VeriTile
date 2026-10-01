@@ -63,6 +63,42 @@ def IO₃Equiv (lhs rhs : KernelIO₃) : Prop :=
           b.mem rhs.out (rhs.write (s.pids 0) + i.val)) ∧
       Frame lhs s a ∧ Frame rhs s b
 
+structure IO₁Signature where
+  ports : List RegionName × List RegionName
+  inp : RegionName
+  out : RegionName
+  Bin : Nat
+  Bout : Nat
+  read : Nat → Nat
+  write : Nat → Nat
+
+def io₁Signature (io : KernelIO₁) : IO₁Signature where
+  ports := match io.kernel with | .mk ins outs _ => (ins, outs)
+  inp := io.inp
+  out := io.out
+  Bin := io.Bin
+  Bout := io.Bout
+  read := io.read
+  write := io.write
+
+def IO₁PrivateScratch (io : KernelIO₁) : Prop :=
+  ∀ p ∈ io.scratch, p.buf ≠ io.inp ∧ p.buf ≠ io.out
+
+def IO₁Frame {α : Type} (io : KernelIO₁) (before after : State α) : Prop :=
+  ∀ (r : RegionName) o,
+    (r ≠ io.out ∨ ∀ i : Fin io.Bout, o ≠ io.write (before.pids 0) + i.val) →
+    (∀ p ∈ io.scratch, r = p.buf → ∀ i : Fin p.len, o ≠ p.win (before.pids 0) + i.val) →
+    after.mem r o = before.mem r o
+
+def IO₁Equiv (lhs rhs : KernelIO₁) : Prop :=
+  IO₁PrivateScratch lhs ∧ IO₁PrivateScratch rhs ∧
+  ∀ (α : Type) [Inhabited α] (M : Algebra α) (s : State α),
+    ∃ a b, exec M lhs.kernel s = some a ∧ exec M rhs.kernel s = some b ∧
+      (∀ i : Fin lhs.Bout,
+        a.mem lhs.out (lhs.write (s.pids 0) + i.val) =
+          b.mem rhs.out (rhs.write (s.pids 0) + i.val)) ∧
+      IO₁Frame lhs s a ∧ IO₁Frame rhs s b
+
 /-- Mask and tile length belong to the public signature. A derivation cannot
 weaken the output obligations by changing its active lanes. -/
 structure MaskedIO₂Signature where
@@ -120,6 +156,14 @@ instance kernelIO₃FPProgramSyntax : Spec.ProgramSyntax KernelIO₃ where
   signature := FP.Structural.ioSignature
   body := fun io => io.kernel.surfaceBody
   structural := some FP.Structural.IO₃Equiv
+  sameContext := fun lhs rhs => lhs.scratch = rhs.scratch
+
+instance kernelIO₁FPProgramSyntax : Spec.ProgramSyntax KernelIO₁ where
+  Statement := ComputeStmt
+  Signature := FP.Structural.IO₁Signature
+  signature := FP.Structural.io₁Signature
+  body := fun io => io.kernel.surfaceBody
+  structural := some FP.Structural.IO₁Equiv
   sameContext := fun lhs rhs => lhs.scratch = rhs.scratch
 
 instance maskedKernelIO₂FPProgramSyntax : Spec.ProgramSyntax MaskedKernelIO₂ where

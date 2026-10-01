@@ -1,4 +1,4 @@
-"""Lean regressions for structural execution and the activation FP proofs."""
+"""Lean regressions for structural execution and independent kernel FP proofs."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -13,7 +13,8 @@ class FPStructuralTests(unittest.TestCase):
         result = subprocess.run(
             ["lake", "build", "VeriTile.Triton.Float.StructuralIO",
              "bench.examples.FusedSiLUFPEquiv", "bench.examples.FusedSiLUEquiv",
-             "bench.examples.FusedSwigluFPEquiv", "bench.examples.FusedSwigluEquiv"], cwd=ROOT,
+             "bench.examples.FusedSwigluFPEquiv", "bench.examples.FusedSwigluEquiv",
+             "bench.examples.RowWiseMaxFPEquiv", "bench.examples.RowWiseMaxCorrect"], cwd=ROOT,
             text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -88,6 +89,33 @@ example (x y s o : RegionName) (n B : Nat) :
 example (n B : Nat) :
     FusedSwigluFPEquiv.fusedIO n B ≡[FusedSwigluFPEquiv.R]
       FusedSwigluFPEquiv.unfusedIO n B := FusedSwigluFPEquiv.swiglu_equiv n B
+''')
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_rowmax_proof_is_independent_and_has_no_numerical_assumptions(self):
+        source = (ROOT / "bench/examples/RowWiseMaxFPEquiv.lean").read_text() + '''
+open Lean Elab Command in
+run_cmd do
+  if (← getEnv).contains `VeriTile.Bench.Examples.RowWiseMax.rowWiseMaxIO then
+    throwError "FP proof imported its real correctness counterpart"
+'''
+        result = self.lean(source)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(result.stdout, "FP assumptions used by rowwise_max_equiv:\n  none\n")
+
+    def test_rowmax_preserves_original_source_and_symbolic_nonempty_rows(self):
+        result = self.lean('''
+import bench.examples.RowWiseMaxCorrect
+import bench.examples.RowWiseMaxFPEquiv
+open VeriTile Triton
+open VeriTile.Bench.Examples
+open scoped VeriTile.Spec
+example (x y : RegionName) (nCol B : Nat) :
+    RowWiseMaxFPEquiv.rowWiseMaxKernel x y nCol B =
+      RowWiseMax.rowWiseMaxKernel x y nCol B := rfl
+example (nCol B : Nat) (hB : 0 < B) :
+    RowWiseMaxFPEquiv.originalIO nCol B ≡[RowWiseMaxFPEquiv.R]
+      RowWiseMaxFPEquiv.inlinedIO nCol B := RowWiseMaxFPEquiv.rowwise_max_equiv nCol B hB
 ''')
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

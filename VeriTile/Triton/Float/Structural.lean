@@ -63,6 +63,11 @@ structure Algebra (α : Type) where
   fp32Bits : Float32Bits → α
   /-- Compute loads retain their explicit load precision. -/
   fp32Load : α → α
+  /-- Preserve the complete reduction operation and layout. No max identity,
+  permutation invariance, scalar fold law or reduction schedule is assumed. -/
+  reduceMax : Option ComputeDType → {shape : TileShape} →
+    (axis : Fin shape.length) → (keepDims : Bool) → Values α .real shape →
+    Values α .real (TileShape.reduceShape shape axis keepDims)
 
 inductive Cell (α : Type) where
   | mk (dtype : TileDType) (value : Value α dtype)
@@ -334,6 +339,11 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
         | _ => some (fun i => s.undef d (addresses i).1 (addresses i).2)
       let other ← otherResult
       return fun i => if active i then (s.mem (addresses i).1 (addresses i).2).read d else other i
+  | .reduceMax axis keepDims e, s => do
+      let v ← evalOp M p e s
+      if 0 < TileShape.axisDim _ axis then
+        return M.reduceMax p axis keepDims v
+      else none
   | .castRealToInt8 .., _ => none
   | .floorDiv .., _ => none
   | .mod .., _ => none
@@ -346,7 +356,6 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .gt .., _ => none
   | .ge .., _ => none
   | .ne .., _ => none
-  | .reduceMax .., _ => none
   | .reduceMaxNat .., _ => none
   | .reduceSum .., _ => none
   | .scan .., _ => none
