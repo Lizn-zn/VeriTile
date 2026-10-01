@@ -114,9 +114,7 @@ def render(directory=REPORT):
         description = (f"shape={profile['shape']}; block={profile['launch']['block']}; "
                        f"input/compute/accumulator/output={fmt['input']}/{fmt['compute']}/"
                        f"{fmt['accumulator']}/{fmt['output']}; "
-                       f"independent Normal(mean={dist['mean']}, std={dist['std']}); "
-                       f"replicates={row['replicates']}; bias={row['bias']}; vars={row['vars']}; "
-                       f"U kind={row['u_kind']}; trust=published report")
+                       f"independent Normal(mean={dist['mean']}, std={dist['std']})")
         lines += [f'def {name} : ReportedRule where',
                   f'  ruleID := {lean_string(row["rule"])}',
                   f'  format := {lean_string(row["format"])}',

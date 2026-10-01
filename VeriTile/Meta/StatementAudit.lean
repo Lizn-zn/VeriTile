@@ -10,8 +10,9 @@ audit:
 * `#stmtConsts T`          — every constant in `T`'s statement.
 * `#auditStmt T`           — just the project (non-core) constants: the surface
                              a human must read.
-* `#print_spec T`          — public meaning, parameters/assumptions, transitive
-                             primitive/rule dependencies and numerical obligations.
+* `#print_spec T`          — reader-facing claim, premises and atomic rules.
+* `#print_spec T full`     — configuration/evidence, transitive dependencies
+                             and the complete trust audit.
 * `#stmtSurfaceSubset T ⊆ [a, b, …]` — GATE: fail if the statement mentions a
                              project constant outside the allowlist (e.g. a spec
                              sneaking into a spec-free headline).
@@ -321,6 +322,80 @@ private def printFloatingPointTheory (assumptions lhs rhs : Expr) : MetaM Unit :
   logInfo "Symmetry, composition and common context are formal proof rules, not statistical gate guarantees."
   logInfo "No IEEE value equality or whole-kernel two-gates result is implied."
 
+/-- Reduce a string-valued projection, without evaluating arbitrary code. -/
+private def specString? (projection : Name) (value : Expr) : MetaM (Option String) := do
+  let field ← Meta.mkAppM projection #[value]
+  return Meta.getStringValue? (← Meta.withTransparency .all <| Meta.whnf field)
+
+private def shortSpecName : Name → String
+  | .str _ name => name
+  | name => name.toString
+
+private def printCompactAtoms (assumptions : Expr) : MetaM Unit := do
+  logInfo "Atomic assumptions (declared scope):"
+  let mut rest := assumptions
+  for i in [:256] do
+    let reduced ← Meta.withTransparency .all <| Meta.whnf rest
+    if reduced.isAppOf ``List.nil then
+      if i == 0 then logInfo "  none"
+      return
+    unless reduced.isAppOf ``List.cons do
+      logInfo m!"  {← Meta.ppExpr rest} (symbolic table)"
+      return
+    let args := reduced.getAppArgs
+    let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[args[1]!]
+    let evidence ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.evidence #[args[1]!]
+    let contract ← Meta.mkAppM ``VeriTile.Spec.AtomicRule.contract #[rule]
+    let id ← specString? ``VeriTile.Spec.Contract.ruleID contract
+    let scope ← specString? ``VeriTile.Spec.Contract.description contract
+    let status (projection : Name) : MetaM String := do
+      let gate ← Meta.mkAppM projection #[evidence]
+      return (← specString? ``VeriTile.Spec.GateStatus.label gate).getD "symbolic"
+    match id with
+    | some id => logInfo m!"  {id} [bias {← status ``VeriTile.Spec.Evidence.bias}; vars {← status ``VeriTile.Spec.Evidence.vars}]"
+    | none => logInfo m!"  rule from {← Meta.ppExpr args[1]!} [symbolic]"
+    if let some scope := scope then
+      unless scope.isEmpty do logInfo m!"    {scope}"
+    rest := args[2]!
+  logInfo "  further entries omitted; use #print_spec ... full."
+
+private def printCompactSpec (name : Name) (info : ConstantInfo)
+    (primitives rules : Array Name) : CommandElabM Unit := do
+  logInfo m!"Specification: {shortSpecName name}"
+  liftTermElabM <| Meta.forallTelescope info.type fun params conclusion => do
+    let target ← specConclusion conclusion
+    let floating := target.isAppOf ``VeriTile.Spec.FloatingPoint
+    if floating then
+      logInfo "Kind: floating-point equivalence under atomic assumptions"
+      let args := target.getAppArgs
+      let mut theory := (← Meta.ppExpr args[2]!).pretty
+      -- Coercions elaborate the public `R` to `R.assumptions`. Keep the
+      -- reader-facing model spelling when it is exactly that projection.
+      for param in params do
+        let model := (← Meta.ppExpr param).pretty
+        if theory == model ++ ".assumptions" then theory := model
+      logInfo m!"Claim: {← Meta.ppExpr args[3]!} ≡[{theory}] {← Meta.ppExpr args[4]!}"
+    else
+      logInfo "Kind: real-valued correctness"
+      let claim := if target.isAppOf ``VeriTile.Spec.Real then target.getAppArgs.back! else conclusion
+      logInfo m!"Claim: {← Meta.ppExpr claim}"
+    unless params.isEmpty do
+      logInfo "Parameters / premises:"
+      for param in params do
+        let decl ← Meta.getFVarLocalDecl param
+        logInfo m!"  {decl.userName} : {← Meta.ppExpr decl.type}"
+    if floating then
+      printCompactAtoms target.getAppArgs[2]!
+    else
+      unless primitives.isEmpty do
+        logInfo m!"Primitives: {primitives.map shortSpecName}"
+      unless rules.isEmpty do
+        logInfo m!"Rules: {rules.map shortSpecName}"
+  -- Compact output must never hide a nonstandard axiom or `sorryAx`.
+  let (_, ax) := ((CollectAxioms.collect name).run (← getEnv)).run {}
+  let bad := ax.axioms.filter fun a => ! #[`propext, `Classical.choice, `Quot.sound].contains a
+  unless bad.isEmpty do logWarning m!"Nonstandard axioms: {bad}"
+
 /-- Shared report implementation, also exercised by the regression fixtures. -/
 def printSpec (name : Name) (full : Bool := false) : CommandElabM Unit := do
   let env ← getEnv
@@ -332,6 +407,9 @@ def printSpec (name : Name) (full : Bool := false) : CommandElabM Unit := do
   let primitives := order ((deps.project ++ deps.library).filter fun n =>
     specPrimitiveAttr.hasTag env n || legacyPrimitive n || syntaxPrimitive env n)
   let rules := order ((deps.project ++ deps.library).filter (specRuleAttr.hasTag env))
+  unless full do
+    printCompactSpec name info primitives rules
+    return
   logInfo m!"Specification: {name}"
   liftTermElabM <| Meta.forallTelescope info.type fun params conclusion => do
     let target ← specConclusion conclusion

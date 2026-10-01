@@ -71,6 +71,22 @@ class SpecificationSurfaceTests(unittest.TestCase):
         self.assertNotIn("bias gate: PASS", report)
         self.assertIn("synthetic; no experiment performed", report)
 
+    def test_compact_view_preserves_pending_status_and_premises(self):
+        source = (ROOT / 'bench/tests/SpecificationSurface.lean').read_text()
+        source = source.split('@[spec_rule] theorem localRule')[0]
+        source += '\n#print_spec pendingConditional\n#print_spec ideal\nend SpecificationSurface\n'
+        with tempfile.TemporaryDirectory() as directory:
+            path = Path(directory) / 'Compact.lean'
+            path.write_text(source)
+            result = lean(path)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertIn('ATOM-FIXTURE [bias NOT_RUN; vars NOT_RUN]', result.stdout)
+        self.assertIn('hAtom : Spec.AcceptedAtom pending', result.stdout)
+        self.assertIn('hN : n > 0', result.stdout)
+        self.assertNotIn('bias PASS', result.stdout)
+        self.assertNotIn('atomic validation obligation:', result.stdout)
+        self.assertNotIn('Dependency boundary:', result.stdout)
+
     def test_local_rule_is_a_scoped_acceptance_premise(self):
         report = self.report("usesLocalRule")
         self.assertIn('assumption hAtom: Spec.AcceptedAtom entry', report)
@@ -135,7 +151,7 @@ import VeriTile.Triton.Core.Ast
 open VeriTile.Triton
 def op : Op .real [] := .add .real .nil (.ref .real [] "x") (.ref .real [] "y")
 specification headline : VeriTile.Spec.Real (op = op) := rfl
-#print_spec headline
+#print_spec headline full
 """)
             result = lean(path)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)

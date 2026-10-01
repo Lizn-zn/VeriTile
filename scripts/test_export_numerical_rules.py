@@ -82,14 +82,31 @@ class LeanExampleTests(unittest.TestCase):
                                  'bench/examples/TritonBenchVectorAdditionFP.lean'],
                                 cwd=exporter.ROOT, text=True, capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
-        for text in ('rule ID: "ADD-COMMUTE"', 'bias gate: PASS', 'vars gate: PASS',
-                     'Atom 1:', 'fp32:ADD-COMMUTE', 'Rules.add_comm:', 'axiom footprint ⊆ standard base'):
+        for text in ('ADD-COMMUTE [bias PASS; vars PASS]', 'Parameters / premises:',
+                     'R : Rules', 'originalKernel ≡[R] optimizedKernel',
+                     'axiom footprint ⊆ standard base', '4096', 'fp32'):
             self.assertIn(text, result.stdout)
-        self.assertNotIn('Atom 2:', result.stdout)
-        self.assertNotIn('sorryAx', result.stdout)
-        self.assertNotIn('Nonstandard axioms:', result.stdout)
-        self.assertIn('summary.json#fp32/ADD-COMMUTE', result.stdout)
-        self.assertIn('4096', result.stdout)
+        for hidden in ('instance key:', 'EvidenceValidated', 'artifact:',
+                       'Reachable execution primitives', 'Dependency boundary:',
+                       'R.assumptions', 'sorryAx', 'Nonstandard axioms:'):
+            self.assertNotIn(hidden, result.stdout)
+        self.assertEqual(result.stdout.count('ADD-COMMUTE ['), 1)
+
+    def test_full_example_keeps_the_audit_details(self):
+        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()
+        source = '\n'.join(line + ' full' if line.startswith('#print_spec ') else line
+                           for line in source.splitlines())
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'FullSpec.lean'
+            path.write_text(source)
+            result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=exporter.ROOT,
+                                    text=True, capture_output=True, timeout=180)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        for text in ('rule ID: "ADD-COMMUTE"', 'bias gate: PASS', 'vars gate: PASS',
+                     'Atom 1:', 'fp32:ADD-COMMUTE', 'Rules.add_comm:', 'EvidenceValidated',
+                     'summary.json#fp32/ADD-COMMUTE', 'Transitive axioms:',
+                     'Project dependencies:', 'Trusted library boundary:'):
+            self.assertIn(text, result.stdout)
 
     def test_shape_and_precision_cannot_silently_change(self):
         source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()

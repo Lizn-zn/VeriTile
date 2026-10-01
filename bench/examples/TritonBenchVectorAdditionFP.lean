@@ -114,15 +114,15 @@ instance : Coe Rules (Spec.Assumptions (Spec.ProgramSyntax.Statement ComputeKern
     (admitted.admit originalAdd optimizedAdd R.add_comm)
 
 /-- Public specification: a kernel equivalence derived from one accepted atom. -/
-specification vector_addition_fp_equiv (R : Rules) :
+specification vector_addition_equiv (R : Rules) :
     originalKernel ≡[R] optimizedKernel := by
   refine ⟨rfl, ?_⟩
   change Spec.Derivation R.assumptions (body originalKernel) (body optimizedKernel)
   rw [original_decomposition, optimized_decomposition]
   exact .frame beforeAdd afterAdd (admitted_add_commute R)
 
-#print_spec vector_addition_fp_equiv
-#axiomsClean vector_addition_fp_equiv
+#print_spec vector_addition_equiv
+#axiomsClean vector_addition_equiv
 #auditModuleAxioms
 
 end VeriTile.Bench.Examples.TritonBenchVectorAdditionFP

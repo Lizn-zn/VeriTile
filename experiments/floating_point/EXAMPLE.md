@@ -11,7 +11,7 @@
 两个 kernel 唯一的差异是 `output = x + y` 与 `output = y + x`：
 
 ```lean
-specification vector_addition_fp_equiv (R : Rules) :
+specification vector_addition_equiv (R : Rules) :
     originalKernel ≡[R] optimizedKernel := by
   refine ⟨rfl, ?_⟩
   change Spec.Derivation R.assumptions (body originalKernel) (body optimizedKernel)
@@ -39,20 +39,21 @@ lake env lean bench/examples/TritonBenchVectorAdditionFP.lean
 最后一条命令完成 Lean 检查并运行 `#print_spec`，其中应看到：
 
 ```text
-Kind: FLOATING_POINT_EQUIVALENCE
-Atom 1:
-  rule ID: "ADD-COMMUTE"
-  configuration summary: shape=[4096, 4096]; block=1024;
-    input/compute/accumulator/output=fp32/fp32/fp32/fp32;
-    independent Normal(mean=1.0, std=1.0); replicates=4096;
-    bias=PASS; vars=PASS; U kind=empirical_max; trust=published report
-  artifact: some "experiments/floating_point/report/summary.json#fp32/ADD-COMMUTE"
-  bias gate: PASS
-  vars gate: PASS
+Specification: vector_addition_equiv
+Kind: floating-point equivalence under atomic assumptions
+Claim: originalKernel ≡[R] optimizedKernel
+Parameters / premises:
+  R : Rules
+Atomic assumptions (declared scope):
+  ADD-COMMUTE [bias PASS; vars PASS]
+    shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)
 ```
 
-报告同时打印具体的报告快照标识、`Rules.add_comm` 前提和传递公理依赖。
-`empirical_max` 保留原报告含义，不被改写为尾部置信上界。
+详细审计使用 `#print_spec vector_addition_equiv full`：它补充报告快照标识、来源文件、
+`Rules.add_comm` / `EvidenceValidated` 前提、完整配置引用和传递依赖。
+默认视图仍会显示非标准公理或 `sorryAx` 警告；规则列表是声明范围，不声称是最小使用集合。
+文件里的 `#axiomsClean` 和 `#auditModuleAxioms` 是独立的审计命令，它们的输出不属于 `#print_spec`。
+`empirical_max` 保留在报告数据里，不被改写为尾部置信上界。
 
 冻结输入后的回归和现有官方 comparator 检查：
 

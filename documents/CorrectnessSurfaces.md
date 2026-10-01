@@ -16,21 +16,21 @@ continue to work; `Spec.Real` is a transparent optional wrapper for this meaning
 
 The [floating-point companion](../bench/examples/TritonBenchVectorAdditionFP.lean)
 compares that actual kernel with a variant changing only `output = x + y` to
-`output = y + x`, for the original test's `N = 98432`, `BLOCK_SIZE = 1024`, fp32
+`output = y + x`, for the measured `4096×4096` shape, `BLOCK_SIZE = 1024`, fp32
 instance. Its headline is:
 
 ```lean
 open scoped VeriTile.Spec
 
-specification vector_addition_fp_equiv (R : Rules) :
+specification vector_addition_equiv (R : Rules) :
     originalKernel ≡[R] optimizedKernel
 ```
 
 This reuses the existing equivalence notation. Here `R` is the rule model;
 its table stores the experiment configuration and results, and its `add_comm`
 field requires admission of the atom. Neither `experiment` nor `evidence` is
-a public theorem argument. `#print_spec vector_addition_fp_equiv` expands the
-table and model assumptions for inspection. Under this scope, the notation
+a public theorem argument. `#print_spec vector_addition_equiv` displays the
+claim, model premise and atomic rule scope. Append `full` for the audit details. Under this scope, the notation
 elaborates to `Spec.FloatingPoint`; historical KernelIO scopes still use their
 original `RoundingModel` relation.
 
@@ -74,24 +74,24 @@ Statistical claims about an actual use site's operands need their own sampling
 justification. The current context rule is syntactic sequence framing, not a
 proof of distribution transport.
 
-`#print_spec name` displays both implementations, the declared atom table,
-per-atom gate status/configuration/evidence, hypotheses, reachable primitives,
-registered rules and axioms. `full` adds project dependencies and the trusted
-library boundary. The dependency report and declared atom list are conservative,
-not a minimal used-atom trace. Printing does not discharge a premise.
+`#print_spec name` is the reader-facing view: the claim, parameters/premises,
+atomic rules, gate labels and their scope. `#print_spec name full` retains
+configuration/evidence identities, model obligations, reachable primitives,
+registered rules, axioms, project dependencies and the trusted library boundary.
+Nonstandard axiom warnings are shown in both modes. The declared atom list is
+conservative, not a minimal used-atom trace. Printing does not discharge a premise.
 
 The calculus, reporting, example and rejection checks are implemented. The
 [GPU experiment runner](../experiments/floating_point/README.md) now supplies
 14 fixed-size atomic expression pairs, Python configuration, gates and CPU result replay.
 Composite algorithms, reductions, scans, dot rewrites and memory/layout properties
 are excluded from admission; their equivalences require Lean derivations.
-GPU measurements remain unrun. The replayed JSON admission table still needs
-binding to parameterized Lean fragments and the existing proof-agent entry;
-it does not itself discharge `EvidenceValidated` or construct `R`.
-The example is conditional on supplying `R : Rules`, including its admitted
-`add_comm` assumption; no such model or PASS experiment is supplied here.
-Build with `lake build TritonBenchSpecExamples`, then inspect with
-`lake env lean bench/examples/TritonBenchVectorAdditionFP.lean`.
+The published GPU report has 30 accepted instances. The report exporter freezes
+them as Lean data, and the worked example binds fp32 ADD-COMMUTE to its concrete
+assignment fragments. The model premise `R.add_comm` explicitly trusts that
+external result and binding; Lean checks the derivation under it. Other atomic
+syntax bindings remain separate work. See the [worked example](../experiments/floating_point/EXAMPLE.md)
+for generation, build and inspection commands.
 
 Historical unwrapped or abstract cast/store-rounding headlines keep their old
 meaning. They do not become atom-based FP equivalence merely by renaming them.

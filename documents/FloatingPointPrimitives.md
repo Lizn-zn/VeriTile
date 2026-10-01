@@ -252,7 +252,7 @@ profile = {
 
 这里的输入分布默认指**原子规则的测试操作数分布**。由此得到 `R` 下的形式等价性，不要求证明程序中间值也独立同分布。若某条检查明确要代表实际 kernel 内部的使用位置，则由输入生成器执行到该位置，保留中间操作数的联合关系并另建规则实例；不能把它们重抽成独立高斯。整 kernel 的统计接受结果是可选的额外实验，不从规则组合自动推出。
 
-当前仓库已具备 Python 配置、14 条局部 Triton 实现对、two-gates runner、数值准入表导入、具体标量参考、条件等价推导、假设打印和通用 agent/comparator 入口。GPU 实测由用户在独立机器运行并回传；命令见[实验目录](../experiments/floating_point/README.md)。当前生成的是 JSON 准入表，尚未构造 Lean `Rules` 或关闭 `EvidenceValidated`；仍需绑定可实例化的 Lean 规则模板并连接已有证明入口。完整流程不以脚本编译通过代替验收。
+当前仓库已具备 Python 配置、14 条局部 Triton 实现对、two-gates runner、数值准入表导入、具体标量参考、条件等价推导、假设打印和通用 agent/comparator 入口。GPU 实测由用户在独立机器运行并回传；命令见[实验目录](../experiments/floating_point/README.md)。已可从受信报告生成 30 个接受项的 Lean 数据，并将 fp32 ADD-COMMUTE 绑定到具体 TritonBench 加法模型；`EvidenceValidated` 保留为对外部结果的 scoped 模型前提。其他原子的语法绑定及通用自动化仍需继续连接已有证明入口。完整流程不以脚本编译通过代替验收。
 
 ## 8. 正确性、等价性与原子假设
 
@@ -267,7 +267,7 @@ profile = {
 
 `Derivation` 支持自反、对称、传递及共同语句前后文；`FloatingPoint` 还检查程序签名保持一致。当前 ComputeKernel 视图保留输入／输出元数据和真实 ComputeStmt 序列。它实现的是假设生成的形式理论，不把统计检验结果解释成对称、传递的概率保证，也不把该关系转换成具体 IEEE 位值的 Lean `=`。
 
-`#print_spec` 打印两段实现、原子假设表及逐项配置／证据、声明前提、传递依赖的原语／规则和公理；`full` 补充完整依赖。报告与声明假设集合均是保守范围，不声称是最小使用集合。严格浮点事实保留为内部辅助引理；不能向具体浮点函数注入与已知反例矛盾的结合律公理。
+`#print_spec` 默认只打印命题、声明前提、原子假设及适用配置；`#print_spec ... full` 提供逐项证据、来源标识、内部验证前提、依赖与公理审计。默认模式也保留非标准公理警告。报告与声明假设集合均是保守范围，不声称是最小使用集合。严格浮点事实保留为内部辅助引理；不能向具体浮点函数注入与已知反例矛盾的结合律公理。
 
 [TritonBench 示例](../bench/examples/TritonBenchVectorAdditionFP.lean) 复用原始 vector_addition，具体化为本轮实验的 4096×4096、block=1024、fp32 配置，构造只交换 `x + y` 操作数的变体。生成的 `ReportedAdmission.fp32_add_commute` 固定这条规则的配置与接受结果；公开规格仍只写 `(R : Rules) : originalKernel ≡[R] optimizedKernel`。`R.add_comm` 明确表示对外部报告及其局部片段对应关系的信任，Lean 检查剩余组合推导。这里按用户要求直接信任已发布报告，不重新重放 GPU 数据，不宣称形式化证明了外部实验。数学投影与原 TritonBench kernel 相同，实数正确性证明独立保留。[运行与 specification 输出](../experiments/floating_point/EXAMPLE.md)。
 

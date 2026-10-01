@@ -185,13 +185,13 @@ example :
 @[simp] private specification «legacy headline» (n : Nat) : n + 0 = n := rfl
 
 #print_spec ideal full
-#print_spec aliasedIdeal
-#print_spec modeled
-#print_spec numerical
-#print_spec pendingConditional
-#print_spec usesLocalRule
-#print_spec fromModel
-#print_spec «legacy headline»
+#print_spec aliasedIdeal full
+#print_spec modeled full
+#print_spec numerical full
+#print_spec pendingConditional full
+#print_spec usesLocalRule full
+#print_spec fromModel full
+#print_spec «legacy headline» full
 #auditModuleAxioms
 
 end SpecificationSurface

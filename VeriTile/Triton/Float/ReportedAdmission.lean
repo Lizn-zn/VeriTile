@@ -13,7 +13,7 @@ def bf16_add_commute : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:ADD-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#bf16/ADD-COMMUTE"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -28,7 +28,7 @@ def bf16_fp32_add_commute : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:ADD-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/ADD-COMMUTE"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -43,7 +43,7 @@ def fp32_add_commute : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:ADD-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#fp32/ADD-COMMUTE"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -58,7 +58,7 @@ def bf16_mul_commute : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:MUL-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#bf16/MUL-COMMUTE"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -73,7 +73,7 @@ def bf16_fp32_mul_commute : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:MUL-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/MUL-COMMUTE"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -88,7 +88,7 @@ def fp32_mul_commute : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:MUL-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#fp32/MUL-COMMUTE"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -103,7 +103,7 @@ def bf16_round_idem : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:ROUND-IDEM"
   artifact := "experiments/floating_point/report/summary.json#bf16/ROUND-IDEM"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ROUND-IDEM\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -118,7 +118,7 @@ def bf16_fp32_round_idem : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:ROUND-IDEM"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/ROUND-IDEM"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ROUND-IDEM\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -133,7 +133,7 @@ def fp32_round_idem : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:ROUND-IDEM"
   artifact := "experiments/floating_point/report/summary.json#fp32/ROUND-IDEM"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ROUND-IDEM\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -148,7 +148,7 @@ def bf16_bf16_widen_return : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:BF16-WIDEN-RETURN"
   artifact := "experiments/floating_point/report/summary.json#bf16/BF16-WIDEN-RETURN"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"BF16-WIDEN-RETURN\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -163,7 +163,7 @@ def bf16_fp32_bf16_widen_return : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:BF16-WIDEN-RETURN"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/BF16-WIDEN-RETURN"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"BF16-WIDEN-RETURN\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -178,7 +178,7 @@ def bf16_add_assoc : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:ADD-ASSOC"
   artifact := "experiments/floating_point/report/summary.json#bf16/ADD-ASSOC"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-ASSOC\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":3.9822615726749158}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -193,7 +193,7 @@ def bf16_fp32_add_assoc : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:ADD-ASSOC"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/ADD-ASSOC"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-ASSOC\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":1.4143862696537501}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -208,7 +208,7 @@ def fp32_add_assoc : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:ADD-ASSOC"
   artifact := "experiments/floating_point/report/summary.json#fp32/ADD-ASSOC"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-ASSOC\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":4.148575422389505}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -223,7 +223,7 @@ def bf16_mul_assoc : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:MUL-ASSOC"
   artifact := "experiments/floating_point/report/summary.json#bf16/MUL-ASSOC"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=pot_pwm; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.6744499512473935,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-ASSOC\",\"state\":\"COMPLETE\",\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":3.496948622716781}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -238,7 +238,7 @@ def bf16_fp32_mul_assoc : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:MUL-ASSOC"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/MUL-ASSOC"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-ASSOC\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -253,7 +253,7 @@ def fp32_mul_assoc : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:MUL-ASSOC"
   artifact := "experiments/floating_point/report/summary.json#fp32/MUL-ASSOC"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=pot_pwm; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.6334642596150297,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-ASSOC\",\"state\":\"COMPLETE\",\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":3.5492202407199573}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -268,7 +268,7 @@ def bf16_fp32_mul_distrib : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:MUL-DISTRIB"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/MUL-DISTRIB"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-DISTRIB\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":1.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -283,7 +283,7 @@ def fp32_mul_distrib : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:MUL-DISTRIB"
   artifact := "experiments/floating_point/report/summary.json#fp32/MUL-DISTRIB"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=pot_pwm; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.3063635593821837,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-DISTRIB\",\"state\":\"COMPLETE\",\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":3.8284048169472813}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -298,7 +298,7 @@ def bf16_fp32_fma_contract : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:FMA-CONTRACT"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/FMA-CONTRACT"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"FMA-CONTRACT\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -313,7 +313,7 @@ def fp32_fma_contract : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:FMA-CONTRACT"
   artifact := "experiments/floating_point/report/summary.json#fp32/FMA-CONTRACT"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"FMA-CONTRACT\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":4.203631227592151}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -328,7 +328,7 @@ def bf16_cancel : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:CANCEL"
   artifact := "experiments/floating_point/report/summary.json#bf16/CANCEL"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CANCEL\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":4.333448665425525}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -343,7 +343,7 @@ def bf16_fp32_cancel : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:CANCEL"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/CANCEL"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CANCEL\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":3.290487407957116}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -358,7 +358,7 @@ def fp32_cancel : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:CANCEL"
   artifact := "experiments/floating_point/report/summary.json#fp32/CANCEL"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CANCEL\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":3.9248459246044596}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -373,7 +373,7 @@ def bf16_div_rcp : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:DIV-RCP"
   artifact := "experiments/floating_point/report/summary.json#bf16/DIV-RCP"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=6144; bias=PASS; vars=PASS; U kind=pot_pwm; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":1.9003910568291154,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":6144,\"rule\":\"DIV-RCP\",\"state\":\"COMPLETE\",\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":2.8678424493018735}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -388,7 +388,7 @@ def bf16_fp32_div_rcp : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:DIV-RCP"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/DIV-RCP"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"DIV-RCP\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -403,7 +403,7 @@ def fp32_div_rcp : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:DIV-RCP"
   artifact := "experiments/floating_point/report/summary.json#fp32/DIV-RCP"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=6656; bias=PASS; vars=PASS; U kind=pot_pwm; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":1.763260567112382,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":6656,\"rule\":\"DIV-RCP\",\"state\":\"COMPLETE\",\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":3.173428427801835}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -418,7 +418,7 @@ def bf16_cast_move : ReportedRule where
   format := "bf16"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16:CAST-MOVE"
   artifact := "experiments/floating_point/report/summary.json#bf16/CAST-MOVE"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-MOVE\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -433,7 +433,7 @@ def bf16_fp32_cast_move : ReportedRule where
   format := "bf16_fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:bf16_fp32:CAST-MOVE"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/CAST-MOVE"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-MOVE\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
@@ -448,7 +448,7 @@ def fp32_acc_widen : ReportedRule where
   format := "fp32"
   key := "report:0f20370099d78ed8aac58cc70d386e484528c264572ff6eba2c7763cae701dc9:fp32:ACC-WIDEN"
   artifact := "experiments/floating_point/report/summary.json#fp32/ACC-WIDEN"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0); replicates=4096; bias=PASS; vars=PASS; U kind=empirical_max; trust=published report"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
     ("row", (Lean.Json.parse "{\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ACC-WIDEN\",\"state\":\"COMPLETE\",\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
