@@ -7,26 +7,31 @@
 ## 用户看到的 specification
 
 [TritonBenchVectorAdditionFP.lean](../../bench/examples/TritonBenchVectorAdditionFP.lean)
-复用 TritonBench `vector_addition` 的结构，具体化为 `4096×4096` 个元素、block=1024、fp32 输入/计算/输出。
+复用 TritonBench `vector_addition` 的结构，保留 fp32 输入/计算/输出；
+`nElements` 和 `blockSize` 是任意符号参数，不与实验的尺寸或启动配置核对。
 两个 kernel 唯一的差异是 `output = x + y` 与 `output = y + x`：
 
 ```lean
-specification vector_addition_equiv (R : Rules) :
-    originalKernel ≡[R] optimizedKernel := by
+specification vector_addition_equiv (nElements blockSize : Nat) (R : Rules blockSize) :
+    originalKernel nElements blockSize ≡[R] optimizedKernel nElements blockSize := by
   refine ⟨rfl, ?_⟩
-  change Spec.Derivation R.assumptions (body originalKernel) (body optimizedKernel)
+  change Spec.Derivation R.assumptions
+    (body (originalKernel nElements blockSize)) (body (optimizedKernel nElements blockSize))
   rw [original_decomposition, optimized_decomposition]
-  exact .frame beforeAdd afterAdd (admitted_add_commute R)
+  exact .frame (beforeAdd nElements blockSize) (afterAdd nElements blockSize) (admitted_add_commute R)
 ```
 
 `R` 固定引用导出的 `fp32_add_commute`；用户不再提供任意 contract/evidence，也不手填 PASS。
-它只包含一条数值模型假设：信任该报告中的 ADD-COMMUTE 及其与指定 fp32 加法片段的对应关系。
+它只包含一条数值模型假设：使用实验选出的 fp32 ADD-COMMUTE 原子关系。
 这个前提保留为 `Rules.add_comm`，它正是“实验通过后 assume 该原子关系”的逻辑表达。
+`Rules blockSize` 中的参数只用于实例化带形状的语法，不要求 `blockSize` 等于实验值。
 Lean 证明只交换加法输入，检查加载、地址、mask、store 和程序签名保持一致。
 Lean 不证明 GPU 确实运行过，也不把统计接受转换成 IEEE 位值等式；本例没有引入全局公理。
 
 `real_projection` 检查 fp32 版本的数学投影等于原来的 TritonBench kernel，已有实数正确性证明继续适用。
-实验 shape 是完整数据的形状；kernel 以 block=1024 遍历其连续展平存储。每个被重写的加法直接读取原始独立正态输入，未把中间值擅自当成同分布输入。
+流程分成两步：实验使用指定 shape、分布、精度等参数选择 assumption；
+Lean 随后只在该 assumption 下证明，不重新检查实验 shape 或输入分布。
+因此这里没有 `rows = 4096`、`columns = 4096`、`blockSize = 1024` 之类的固定常量。
 
 ## 运行和检查
 
@@ -75,5 +80,7 @@ comparator 使用独立输入快照；报告生成和原子绑定必须在证明
 导出表已有全部 30 个接受实例，本例完成了其中 fp32 ADD-COMMUTE 到实际 TritonBench 语句的绑定与组合证明。
 其他原子的参数化语法绑定应按同一方式明确表达舍入/cast/FMA，不能把一个接受行任意套到不同片段。
 导出的 `report:...` 标识绑定发布的 JSON 快照，不伪造仓库外原始 bundle 的 instance key、观测或 PTX 哈希。
-更改报告会产生新的标识；更改数值实现会使源码哈希检查失败；更改本例的 shape、block 或精度会使 `report_matches` 编译失败。
+更改报告会产生新的标识；更改数值实验实现会使源码哈希检查失败。
+本例在任意 `nElements`、`blockSize` 下由同一原子关系推导；没有实验尺寸匹配条件。
+规则选择仍区分操作和精度，不能将 bf16 或乘法实验行作为 fp32 加法的来源。
 任意复合算法仍需由已接受的局部关系推导，不能借这个导出入口把整个算法直接假设为等价。

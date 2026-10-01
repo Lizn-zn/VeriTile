@@ -211,7 +211,7 @@ exp/log/exp2/log2/rsqrt/tanh/sin/cos/tan/atan/sinh/cosh/erf/pow，以及由它�
 
 ## 7. Shape 与实例身份
 
-源码保持参数化，验证实例固定合法 shape/stride、dtype 和双方的编译/启动配置。标量原语不依赖全局张量尺寸；具体的归约树、dot 计划、索引和 mask 会依赖实例配置。
+源码保持参数化，数值实验实例固定合法 shape/stride、dtype 和双方的编译/启动配置。**实验参数用于选择 assumption；第二步 Lean 只在选出的 assumption 下证明，不要求目标 kernel 的 shape 或 block 与实验相同。** 程序里的符号 shape 仍描述索引、mask 和 tile 类型，属于正常语法条件，不是实验准入条件。
 
 每个实例记录：
 
@@ -246,9 +246,9 @@ profile = {
 
 1. **实例化预定义规则。** 候选目录固定，shape/精度/采样配置变化时重新实例化。逐元素加法可把 `(4096, 4096)` 作为三个操作数各自的 shape。该尺寸只定义局部表达式的测试批次。归约树、dot 执行计划和循环结构属于后续 Lean 推导，不作为整体关系送入原子准入表。
 2. **逐条运行 two-gates。** 同一 replicate 内配对执行两侧及 oracle，再按固定协议给出结果。一整个张量采样是一个 replicate，不能把 `4096 × 4096` 个元素当成同样数量的独立 replicate。协议预算、分桶和阈值由选定的协议配置提供，不能看过结果再调到通过。用户已确认只按指定分布准入；系统不追加其他探针分布，也不要求它们通过。同分布导致的偏差抵消作为结果解释，不能自行变成新的拒绝条件。
-3. **自动生成规则集 `R`。** 按选定策略收集接受的条目；失败、无结论、未运行及不支持的条目保留状态但不成为可用假设。规则更新改变的是可用原子关系集合，不修改浮点加法等执行原语的定义。
-4. **复用现有 agent 自动尝试证明。** 先固定准入规则表和目标规格，再调用 `scripts/prove.sh`。Agent 使用已接受的规则模板，处理 shape、各步精度和规则附带条件，Lean/comparator 检查推导及目标未被改写。公开结论仍是 `lhs ≡[R] rhs`，`#print_fp_assumptions` 打印证明引用的原子假设。Agent 不负责修改准入判决、阈值或可信规则文件；找不到推导时报告未解决目标，不自动补一个假设。
-5. **配置变化后重新检查。** 改变 shape、分布、精度或执行后端，生成新的规则集并重跑依赖它的证明。旧结果保留原配置；可以复用配置身份完全匹配的检查，但不把旧 PASS 覆盖到新配置。规则通过数量不保证随 shape 或 `sigma` 单调变化。
+3. **自动生成规则集 `R`。** 按选定策略收集接受的条目，作为可参数化使用的原子关系；失败、无结论、未运行及不支持的条目保留状态但不成为可用假设。规则更新改变的是可用原子关系集合，不修改浮点加法等执行原语的定义。
+4. **复用现有 agent 自动尝试证明。** 先固定准入规则表和目标规格，再调用 `scripts/prove.sh`。Agent 使用选出的原子关系，处理程序本身的语法形状、各步精度和规则条件，不重新核对实验 shape 或输入分布。Lean/comparator 检查推导及目标未被改写。公开结论仍是 `lhs ≡[R] rhs`，`#print_fp_assumptions` 打印证明引用的原子假设。Agent 不负责修改准入判决、阈值或可信规则文件；找不到推导时报告未解决目标，不自动补一个假设。
+5. **实验配置变化后重新选择假设。** 改变实验 shape、分布、精度或执行后端，可以重新运行准入并生成新的规则集。旧结果保留原实验配置，不把旧 PASS 伪装成新配置的实测结果。仅改变待证明 kernel 的长度或 block 不需要重新实验，参数化证明继续使用已选定的原子假设。规则通过数量不保证随实验 shape 或 `sigma` 单调变化。
 
 这里的输入分布默认指**原子规则的测试操作数分布**。由此得到 `R` 下的形式等价性，不要求证明程序中间值也独立同分布。若某条检查明确要代表实际 kernel 内部的使用位置，则由输入生成器执行到该位置，保留中间操作数的联合关系并另建规则实例；不能把它们重抽成独立高斯。整 kernel 的统计接受结果是可选的额外实验，不从规则组合自动推出。
 
@@ -269,7 +269,7 @@ profile = {
 
 `#print_fp_assumptions theorem_name` 只打印浮点证明引用的原子假设名称，使用 `add_commute` 这样的小写下划线形式；不打印配置、gate 状态或 specification。它沿证明和实例化后的辅助引理寻找 `Derivation.atom`，排除规则表中未引用的条目；同一实例去重，不同配置分开显示。不可展开的浮点证明前提显示为 unresolved。可达证明分支均计入，不声称是逻辑上的最小依赖集合。公理审计独立执行；旧 `#print_spec ... full` 保留为内部审计入口。严格浮点事实保留为内部辅助引理；不能向具体浮点函数注入与已知反例矛盾的结合律公理。
 
-[TritonBench 示例](../bench/examples/TritonBenchVectorAdditionFP.lean) 复用原始 vector_addition，具体化为本轮实验的 4096×4096、block=1024、fp32 配置，构造只交换 `x + y` 操作数的变体。生成的 `ReportedAdmission.fp32_add_commute` 固定这条规则的配置与接受结果；公开规格仍只写 `(R : Rules) : originalKernel ≡[R] optimizedKernel`。`R.add_comm` 明确表示对外部报告及其局部片段对应关系的信任，Lean 检查剩余组合推导。这里按用户要求直接信任已发布报告，不重新重放 GPU 数据，不宣称形式化证明了外部实验。数学投影与原 TritonBench kernel 相同，实数正确性证明独立保留。[运行与原子假设输出](../experiments/floating_point/EXAMPLE.md)。
+[TritonBench 示例](../bench/examples/TritonBenchVectorAdditionFP.lean) 复用原始 vector_addition，保留 fp32 操作，构造只交换 `x + y` 操作数的变体。`nElements`、`blockSize` 均为符号参数，没有固定的 4096×4096 或 block=1024，也没有实验尺寸匹配条件。生成的 `ReportedAdmission.fp32_add_commute` 提供原子关系的准入来源；公开规格为 `(nElements blockSize : Nat) (R : Rules blockSize) : originalKernel nElements blockSize ≡[R] optimizedKernel nElements blockSize`。`Rules blockSize` 只实例化带形状的语法；`R.add_comm` 表示使用实验选出的原子假设，Lean 检查其下的组合推导。这里按用户要求直接信任已发布报告，不重新重放 GPU 数据。数学投影与原 TritonBench kernel 相同，实数正确性证明独立保留。[运行与原子假设输出](../experiments/floating_point/EXAMPLE.md)。
 
 数值执行层和 checker 仍负责真实浮点计算、配对采样、oracle、非有限值及统计协议。规则配置保留 dtype、累加精度、shape、执行顺序、后端及原子测试操作数分布。原始输入为高斯不保证中间值高斯；按第 7.1 节的默认流程，Lean 检查 `R` 下的形式推导，不证明分布传播。声称某个原子实验代表实际内部使用位置时，需要对应的操作数来源和联合采样依据。
 
@@ -300,7 +300,7 @@ profile = {
 - [ ] Python 配置接受 shape、用户输入生成器、dtype 与累加精度，并解析双方原语的实际执行配置。
 - [ ] 候选规则目录具有可执行的 Triton 原语对及 oracle，只覆盖 bf16/fp32 与混合精度下固定规模的局部表达式；复合算法、归约/scan/dot 变换必须由 Lean 推导。
 - [ ] Two-gates 在 GPU 原语输出上工作；配对采样、分桶、预算、退化情形、非有限结果和尾部拟合失败有明确处理；只按指定分布准入。
-- [ ] 通过检查的规则自动进入配置专属的 `R`；旧 PASS 不跨配置复用，失败/无结论/未运行记录不能混入可用集合。
+- [ ] 通过检查的规则自动进入 `R`；保留实验配置作为选择来源，证明阶段不匹配实验尺寸。旧 PASS 不冒充其他实验配置的实测结果，失败/无结论/未运行记录不能混入可用集合。
 - [ ] 规则可带变量实例化；FP 证明路径保留 shape、dtype、cast、FMA、DotAcc 与必要执行配置，不利用擦除后的语法绕过准入。
 - [ ] 调用前固定规则文件与目标规格，复用现有 agent 和 comparator；成功须通过 Lean 检查，失败保留未解决目标，不能改题或新增假设来制造成功。
 - [ ] 公开规格沿用 `lhs ≡[R] rhs`，`#print_fp_assumptions` 打印证明引用的原子假设；实数正确性独立保留。

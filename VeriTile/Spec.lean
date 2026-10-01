@@ -29,8 +29,9 @@ inductive WarningPolicy where
 
 /-- Frozen configuration from the experiment registry, or explicitly identified
 published-report metadata. A summary import does not invent missing lowering
-digests. The external assumption binds this JSON/key to the actual programs;
-a supplied hash alone proves nothing about a GPU execution. -/
+digests. This records how the atom was selected; experimental dimensions do
+not constrain a later symbolic derivation under the selected assumption.
+A supplied hash alone proves nothing about a GPU execution. -/
 structure Contract where
   ruleID : String
   instanceKey : String
@@ -40,8 +41,9 @@ structure Contract where
   description : String := ""
 
 /-- A numerical atomic rewrite, instantiated as syntax fragments. The contract
-binds their precision, shape, backend, operand distribution and protocol.
-Two-gates checks this atom; whole-program equivalence is derived separately. -/
+records the experiment used to select the assumption, including precision,
+shape, backend, operand distribution and protocol. Syntax dimensions may be
+symbolic; the derivation does not equate them with the experimental shape. -/
 structure AtomicRule (Statement : Type u) where
   lhs : List Statement
   rhs : List Statement
@@ -64,10 +66,11 @@ def GateStatus.allowed (policy : WarningPolicy) : GateStatus → Bool
 def PolicyAllows (policy : WarningPolicy) (e : Evidence) : Prop :=
   e.bias.allowed policy = true ∧ e.vars.allowed policy = true
 
-/-- External numerical acceptance for this specific atomic rule, including
-syntax/configuration/backend correspondence and the chosen evidence source.
-A model importing a trusted report carries this as a scoped premise. Lean
-checks the derivation under that premise, not the external GPU experiment.
+/-- External admission of this atomic modeling assumption from numerical
+evidence. A model importing a trusted report carries this as a scoped premise;
+its syntax template can be instantiated at symbolic dimensions independently
+of experimental dimensions. Lean checks the derivation under that premise,
+not a universal statistical guarantee or the external GPU experiment.
 No Boolean-to-proof conversion or introduction axiom is provided. -/
 opaque EvidenceValidated {Statement : Type u}
     (rule : AtomicRule Statement) (e : Evidence) : Prop

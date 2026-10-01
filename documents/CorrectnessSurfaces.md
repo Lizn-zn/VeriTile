@@ -16,14 +16,14 @@ continue to work; `Spec.Real` is a transparent optional wrapper for this meaning
 
 The [floating-point companion](../bench/examples/TritonBenchVectorAdditionFP.lean)
 compares that actual kernel with a variant changing only `output = x + y` to
-`output = y + x`, for the measured `4096×4096` shape, `BLOCK_SIZE = 1024`, fp32
-instance. Its headline is:
+`output = y + x`, with fp32 operations and symbolic element count and block size.
+Its headline is:
 
 ```lean
 open scoped VeriTile.Spec
 
-specification vector_addition_equiv (R : Rules) :
-    originalKernel ≡[R] optimizedKernel
+specification vector_addition_equiv (nElements blockSize : Nat) (R : Rules blockSize) :
+    originalKernel nElements blockSize ≡[R] optimizedKernel nElements blockSize
 ```
 
 This reuses the existing equivalence notation. Here `R` is the rule model;
@@ -33,6 +33,12 @@ a public theorem argument. `#print_fp_assumptions vector_addition_equiv` lists
 only the referenced atomic assumption names, such as `add_commute`. Under this scope, the notation
 elaborates to `Spec.FloatingPoint`; historical KernelIO scopes still use their
 original `RoundingModel` relation.
+
+Experimental parameters select the available assumptions. The subsequent proof
+uses those assumptions without matching kernel sizes to experimental sizes or
+checking input distributions. `Rules blockSize` only instantiates typed syntax;
+it imposes no equality with the experiment's block size. The public theorem is
+parameterized, so it does not need fixed `rows`, `columns` or launch constants.
 
 The intended user workflow starts with a Python shape/input-sampling profile
 (plus the numerical configuration), checks the predefined candidate rules with
@@ -68,8 +74,9 @@ symmetry and composition rules are part of that policy; they do not claim that
 the original directed statistical tests reverse or compose. There is no
 conversion to Lean equality of concrete IEEE values, no global floating-point
 ring instance, and no inferred whole-kernel statistical guarantee. Hypotheses
-retain the configuration and operand-distribution scope supplied by the checker;
-rule matching must preserve the declared shape, precision and side conditions.
+retain the experiment configuration as provenance for selecting the assumptions.
+Rule matching preserves operation identity, precision and syntactic side conditions;
+kernel shape and block size need not equal the experiment's shape or block size.
 Statistical claims about an actual use site's operands need their own sampling
 justification. The current context rule is syntactic sequence framing, not a
 proof of distribution transport.

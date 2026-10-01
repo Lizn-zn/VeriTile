@@ -1,12 +1,11 @@
 /-
-TritonBench vector_addition, instantiated at the PR #9 numerical profile:
-4096 x 4096 elements, block 1024, fp32 input/compute/output, Normal(1,1).
+TritonBench vector_addition, with arbitrary element count and block size.
 The source kernel is specialized to typed fp32 regions; only x+y changes to y+x.
 The real correctness theorem remains in the imported TritonBench source.
 
-The numerical model R trusts the published ADD-COMMUTE row for the exact
-fragments below. This is the declared atomic assumption, not an outstanding
-whole-kernel proof or an assertion of IEEE equality. No new global axiom.
+The experiment selects ADD-COMMUTE as an atomic assumption. The proof uses
+that assumption at the kernel's symbolic tile size, without matching it to
+the experiment's shape or launch configuration. No new global axiom.
 -/
 import bench.tritonbench_g.vector_addition.VectorAddition
 import VeriTile.Meta.StatementAudit
@@ -20,13 +19,8 @@ open scoped VeriTile.Spec
 
 abbrev admitted := FP.ReportedAdmission.fp32_add_commute
 
-def rows : Nat := 4096
-def columns : Nat := 4096
-def nElements : Nat := rows * columns
-def blockSize : Nat := 1024
-
 /-- Same vector_addition body, with the experiment's fp32 region types. -/
-def originalKernel : ComputeKernel :=
+def originalKernel (nElements blockSize : Nat) : ComputeKernel :=
   let x_ptr : Region .fp32 := ⟨"x"⟩
   let y_ptr : Region .fp32 := ⟨"y"⟩
   let output_ptr : Region .fp32 := ⟨"output"⟩
@@ -43,13 +37,13 @@ def originalKernel : ComputeKernel :=
 
 /-- Erasing numerical precision recovers the existing TritonBench real kernel.
 Its mathematical correctness proof can therefore be reused unchanged. -/
-theorem real_projection :
-    originalKernel.toAlgorithm? =
+theorem real_projection (nElements blockSize : Nat) :
+    (originalKernel nElements blockSize).toAlgorithm? =
       (VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel
         "x" "y" "output" nElements blockSize).toAlgorithm? := rfl
 
 /-- The sole rewrite is output = y + x. Addresses/masks are unchanged. -/
-def optimizedKernel : ComputeKernel :=
+def optimizedKernel (nElements blockSize : Nat) : ComputeKernel :=
   let x_ptr : Region .fp32 := ⟨"x"⟩
   let y_ptr : Region .fp32 := ⟨"y"⟩
   let output_ptr : Region .fp32 := ⟨"output"⟩
@@ -67,59 +61,63 @@ def optimizedKernel : ComputeKernel :=
 abbrev body := Spec.ProgramSyntax.body (Program := ComputeKernel)
 
 /-- Parameterized local fp32 addition: register renaming is explicit. -/
-def addFragment (out x y : RegName) : List ComputeStmt :=
+def addFragment (blockSize : Nat) (out x y : RegName) : List ComputeStmt :=
   [.assign .real [blockSize] out
     (.compute (.alg .fp32 (.add .real (.consSame .nil)
       (.ref .real [blockSize] x) (.ref .real [blockSize] y))))]
 
-def originalAdd := addFragment "output" "x" "y"
-def optimizedAdd := addFragment "output" "y" "x"
-def beforeAdd : List ComputeStmt := (body originalKernel).take 6
-def afterAdd : List ComputeStmt := (body originalKernel).drop 7
+def originalAdd (blockSize : Nat) := addFragment blockSize "output" "x" "y"
+def optimizedAdd (blockSize : Nat) := addFragment blockSize "output" "y" "x"
+def beforeAdd (nElements blockSize : Nat) : List ComputeStmt :=
+  (body (originalKernel nElements blockSize)).take 6
+def afterAdd (nElements blockSize : Nat) : List ComputeStmt :=
+  (body (originalKernel nElements blockSize)).drop 7
 
-theorem original_decomposition :
-    body originalKernel = beforeAdd ++ originalAdd ++ afterAdd := rfl
+theorem original_decomposition (nElements blockSize : Nat) :
+    body (originalKernel nElements blockSize) =
+      beforeAdd nElements blockSize ++ originalAdd blockSize ++ afterAdd nElements blockSize := rfl
 
-theorem optimized_decomposition :
-    body optimizedKernel = beforeAdd ++ optimizedAdd ++ afterAdd := rfl
+theorem optimized_decomposition (nElements blockSize : Nat) :
+    body (optimizedKernel nElements blockSize) =
+      beforeAdd nElements blockSize ++ optimizedAdd blockSize ++ afterAdd nElements blockSize := rfl
 
-/-- Changes to shape, launch or dtype invalidate this binding at compile time.
-Distribution/backend/protocol and source hashes remain in admitted.configuration.
-Flattening the contiguous matrix uses exactly rows*columns elements. -/
-theorem report_matches :
-    admitted.ruleID = "ADD-COMMUTE" ∧ admitted.shape = [rows, columns] ∧
-    admitted.block = blockSize ∧ admitted.input = "fp32" ∧
+/-- Admission selects the fp32 operation. Experimental shape and launch are
+provenance for that selection, not restrictions on the subsequent derivation. -/
+theorem admitted_operation_matches :
+    admitted.ruleID = "ADD-COMMUTE" ∧ admitted.input = "fp32" ∧
     admitted.compute = "fp32" ∧ admitted.accumulator = "fp32" ∧
     admitted.output = "fp32" := by decide
 
 /-- Only this frozen accepted row is bound, never a user-supplied PASS label. -/
-def addCommute : Spec.RuleEntry ComputeStmt :=
-  admitted.bind originalAdd optimizedAdd
+def addCommute (blockSize : Nat) : Spec.RuleEntry ComputeStmt :=
+  admitted.bind (originalAdd blockSize) (optimizedAdd blockSize)
 
-/-- Trust in the published numerical result and its use-site correspondence.
-The record is concrete: the caller cannot choose the rule, gates or contract.
-This scoped premise is the numerical assumption exposed by #print_fp_assumptions. -/
-structure Rules where
-  add_comm : Spec.EvidenceValidated addCommute.rule addCommute.evidence
+/-- The experiment-selected atom, instantiated at a symbolic tile size.
+`blockSize` only indexes the typed syntax; no experiment-size condition remains.
+This is the atomic modeling assumption exposed by #print_fp_assumptions. -/
+structure Rules (blockSize : Nat) where
+  add_comm : Spec.EvidenceValidated (addCommute blockSize).rule (addCommute blockSize).evidence
 
-def Rules.assumptions (_ : Rules) : Spec.Assumptions ComputeStmt := [addCommute]
+def Rules.assumptions {blockSize : Nat} (_ : Rules blockSize) :
+    Spec.Assumptions ComputeStmt := [addCommute blockSize]
 
-instance : Coe Rules (Spec.Assumptions (Spec.ProgramSyntax.Statement ComputeKernel)) :=
+instance {blockSize : Nat} :
+    CoeOut (Rules blockSize) (Spec.Assumptions (Spec.ProgramSyntax.Statement ComputeKernel)) :=
   ⟨Rules.assumptions⟩
 
-@[spec_rule] theorem admitted_add_commute (R : Rules) :
-    Spec.Derivation R.assumptions originalAdd optimizedAdd := by
-  have _ := report_matches
-  exact .atom addCommute (by simp [Rules.assumptions])
-    (admitted.admit originalAdd optimizedAdd R.add_comm)
+@[spec_rule] theorem admitted_add_commute {blockSize : Nat} (R : Rules blockSize) :
+    Spec.Derivation R.assumptions (originalAdd blockSize) (optimizedAdd blockSize) := by
+  exact .atom (addCommute blockSize) (by simp [Rules.assumptions])
+    (admitted.admit (originalAdd blockSize) (optimizedAdd blockSize) R.add_comm)
 
 /-- Public specification: a kernel equivalence derived from one accepted atom. -/
-specification vector_addition_equiv (R : Rules) :
-    originalKernel ≡[R] optimizedKernel := by
+specification vector_addition_equiv (nElements blockSize : Nat) (R : Rules blockSize) :
+    originalKernel nElements blockSize ≡[R] optimizedKernel nElements blockSize := by
   refine ⟨rfl, ?_⟩
-  change Spec.Derivation R.assumptions (body originalKernel) (body optimizedKernel)
+  change Spec.Derivation R.assumptions
+    (body (originalKernel nElements blockSize)) (body (optimizedKernel nElements blockSize))
   rw [original_decomposition, optimized_decomposition]
-  exact .frame beforeAdd afterAdd (admitted_add_commute R)
+  exact .frame (beforeAdd nElements blockSize) (afterAdd nElements blockSize) (admitted_add_commute R)
 
 #print_fp_assumptions vector_addition_equiv
 -- Keep the proof audit active without adding its success log to the example.

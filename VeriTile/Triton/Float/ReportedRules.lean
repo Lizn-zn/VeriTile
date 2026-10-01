@@ -21,7 +21,8 @@ structure ReportedRule where
   accumulator : String
   output : String
 
-/-- Bind the imported numerical assumption to explicit syntax fragments.
+/-- Instantiate the selected atomic assumption as explicit syntax fragments.
+Experimental shape/launch remain provenance, not restrictions on syntax sizes.
 Binding is data construction only; it does not validate arbitrary fragments. -/
 def ReportedRule.bind (row : ReportedRule) (lhs rhs : List Statement) :
     Spec.RuleEntry Statement where

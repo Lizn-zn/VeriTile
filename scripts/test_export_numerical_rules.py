@@ -102,12 +102,40 @@ class LeanExampleTests(unittest.TestCase):
                      'Project dependencies:', 'Trusted library boundary:'):
             self.assertIn(text, result.stdout)
 
-    def test_shape_and_precision_cannot_silently_change(self):
+    def test_proof_is_parameterized_independently_of_experiment_dimensions(self):
+        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()
+        source += '''
+open VeriTile.Bench.Examples.TritonBenchVectorAdditionFP
+open scoped VeriTile.Spec
+
+example (n block : Nat) (R : Rules block) :
+    originalKernel n block ≡[R] optimizedKernel n block :=
+  vector_addition_equiv n block R
+
+example (R : Rules 64) : originalKernel 1001 64 ≡[R] optimizedKernel 1001 64 :=
+  vector_addition_equiv 1001 64 R
+
+example (R : Rules 256) : originalKernel 8192 256 ≡[R] optimizedKernel 8192 256 :=
+  vector_addition_equiv 8192 256 R
+
+example (n block : Nat) :
+    (originalKernel n block).toAlgorithm? =
+      (VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel
+        "x" "y" "output" n block).toAlgorithm? := real_projection n block
+'''
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / 'GenericDimensions.lean'
+            path.write_text(source)
+            result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=exporter.ROOT,
+                                    text=True, capture_output=True, timeout=180)
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_atom_selection_preserves_operation_precision(self):
         source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFP.lean').read_text()
         # Check only the definitions and binding assertion; no proof/report noise.
         source = source.split('/-- Only this frozen accepted row')[0]
-        for old, new in [('def rows : Nat := 4096', 'def rows : Nat := 32'),
-                         ('ReportedAdmission.fp32_add_commute', 'ReportedAdmission.bf16_add_commute')]:
+        for old, new in [('ReportedAdmission.fp32_add_commute', 'ReportedAdmission.bf16_add_commute'),
+                         ('ReportedAdmission.fp32_add_commute', 'ReportedAdmission.fp32_mul_commute')]:
             with self.subTest(change=new), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'WrongProfile.lean'
                 path.write_text(source.replace(old, new) +

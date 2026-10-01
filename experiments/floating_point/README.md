@@ -228,11 +228,13 @@ trusts the report, checks its source hashes/configuration and exports only its
 30 accepted rows. It does not pretend to replay missing raw observations.
 
 The [worked example](./EXAMPLE.md) binds its fp32 ADD-COMMUTE row to the actual
-TritonBench vector_addition fragments at 4096×4096/block=1024. Its public theorem
-still takes only `R : Rules`; the row, precision, shape and PASS results are fixed.
-`R.add_comm` is the explicit external numerical assumption for that bound atom,
+TritonBench vector_addition fragments with symbolic element count and block size.
+The experiment selects the fp32 assumption; the subsequent proof does not match
+kernel dimensions against experimental dimensions. `Rules blockSize` instantiates
+the typed atom syntax at the kernel's tile size, without a size restriction.
+`R.add_comm` is the explicit modeling assumption for that atom,
 not a global IEEE axiom. Lean checks the remaining whole-kernel derivation and
-`#print_spec` shows the claim, model premise, rule ID, scope and both gates.
+`#print_fp_assumptions` shows only the referenced atom name, `add_commute`.
 Use `#print_spec ... full` for report identity, provenance and dependency auditing.
 Other accepted rows are exported as data; further use-site syntax bindings remain
 necessary. Existing `scripts/prove.sh` and the official comparator remain the
