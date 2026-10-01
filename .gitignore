@@ -30,3 +30,6 @@
 
 # Python bytecode caches (py_compile / import of the bench ports)
 __pycache__/
+
+# Returned FP experiment bundles contain large measurements and compiler output.
+/experiments/floating_point/results/

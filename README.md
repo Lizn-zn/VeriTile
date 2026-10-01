@@ -24,6 +24,12 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   (writes-equality: the two final memories agree at every cell outside the
   declared scratch regions). Both project through `toAlgorithm?` and run on
   `Kernel.Correct_without_Rounding` / `Kernel.Refine` underneath.
+- **Public specifications**: correctness uses real semantics (`Spec.Real claim`);
+  implementation equivalence uses `lhs ≡[R] rhs` (`open scoped VeriTile.Spec`).
+  Two-gates admits atomic rewrite assumptions; Lean checks their composition.
+  `R` bundles the rule table and admissions; experiment bookkeeping stays there.
+  `#print_spec name` reports implementations, atom evidence, primitives and
+  hypotheses. The numerical runner and artifact-replay bridge remain pending. See [specification meanings](./documents/CorrectnessSurfaces.md#two-public-specification-meanings).
 - **Narrow-float / rounding-model layer** (#1): an abstract `RoundingModel`
   (`round : FloatDType → ℝ → ℝ`, fields `round_real` (real-channel identity) and `round_idem` (idempotence)) threads a
   black-box rounding function through the semantics (`evalOpR` / `stepStmtR` /
@@ -50,7 +56,8 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   doc-drift checks). `.github/workflows/site.yml` builds and deploys the docs
   site to GitHub Pages on every push touching `site/`.
 
-Out of scope: IEEE-754 floating-point semantics, PTX-level codegen,
+Pending for complete kernel verification: concrete floating-point execution
+(the bf16/fp32 scalar foundation is implemented), PTX-level codegen,
 detailed concurrency (atomics / async-copy serialization, beyond the
 projection boundary), Python wrapper execution.
 
@@ -94,6 +101,13 @@ def addKernel (xReg yReg outReg : RegionName) (n : Nat) : ComputeKernel := trito
 ```
 
 ### 2. Choose a theorem surface
+
+For new public headlines, express correctness against the mathematical formula
+in real semantics (`Spec.Real`); use `lhs ≡[R] rhs` in the `VeriTile.Spec` scope
+for implementation equivalence derived from two-gates-admitted atomic rules. Both keep the `specification` keyword.
+After importing `VeriTile.Meta.StatementAudit`, `#print_spec name` shows the
+claim's assumptions and dependencies. The existing proof vocabulary below
+retains its original mathematical/abstract-rounding meaning.
 
 | Goal | Use |
 |---|---|
@@ -150,6 +164,12 @@ spec — see [`bench/examples/VectorAdd.lean`](./bench/examples/VectorAdd.lean).
 
 Naive vs numerically-stable softmax (kernel pair refinement) — see
 [`bench/examples/SoftmaxStableEquiv.lean`](./bench/examples/SoftmaxStableEquiv.lean).
+
+The [floating-point experiment workflow](./experiments/floating_point/README.md)
+provides configurable Triton/GPU candidate checks and CPU replay of two-gates
+results. Correctness stays real-valued; accepted atoms are intended to populate
+the rule model for `lhs ≡[R] rhs`. GPU measurements and the automatic Lean
+admission binding remain pending.
 
 ## Documentation Map
 

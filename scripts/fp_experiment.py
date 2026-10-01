@@ -1,0 +1,551 @@
+#!/usr/bin/env python3
+"""Run Triton two-gates experiments, or replay a returned result bundle on CPU."""
+import argparse
+from copy import deepcopy
+import hashlib
+import importlib.util
+import json
+from pathlib import Path
+import re
+import subprocess
+import sys
+import time
+
+import numpy as np
+
+if __package__:
+    from . import fp_rule_registry as registry, fp_two_gates as gates
+else:
+    import fp_rule_registry as registry
+    import fp_two_gates as gates
+
+ROOT = Path(__file__).resolve().parents[1]
+DEFAULT_PROFILE = ROOT / "experiments/floating_point/profile.py"
+KERNELS = ROOT / "experiments/floating_point/triton_rules.py"
+SOURCES = [Path(__file__).resolve(), Path(gates.__file__), Path(registry.__file__), KERNELS, registry.CATALOG]
+ACCEPTED = {"ACCEPT", "ACCEPT_WITH_WARNING"}
+BUNDLE_VERSION = 1
+
+
+def sha(data):
+    return hashlib.sha256(data).hexdigest()
+
+
+def write_json(path, data):
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_bytes(registry.canonical_json(data) + b"\n")
+    temporary.replace(path)
+
+
+def read_json(path):
+    def no_duplicates(pairs):
+        result = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError(f"duplicate JSON key: {key}")
+            result[key] = value
+        return result
+    result = json.loads(path.read_text(), object_pairs_hook=no_duplicates)
+    registry.canonical_json(result)
+    return result
+
+
+def load_module(path):
+    spec = importlib.util.spec_from_file_location("veritile_fp_" + path.stem, path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def validate_profile(profile):
+    expected = {"shape", "distribution", "seed", "replicates", "formats", "rules", "launch",
+                "layernorm_epsilon", "gates"}
+    if type(profile) is not dict or set(profile) != expected:
+        raise ValueError(f"profile requires exactly {sorted(expected)}")
+    registry.canonical_json(profile)
+    shape = profile["shape"]
+    if type(shape) is not list or len(shape) != 2 or any(type(n) is not int or n <= 0 for n in shape):
+        raise ValueError("shape must be [rows, columns] with positive concrete integers")
+    if shape[1] > 65536:
+        raise ValueError("row templates support at most 65536 columns")
+    dist = profile["distribution"]
+    if (type(dist) is not dict or set(dist) != {"family", "mean", "std"}
+            or dist["family"] != "normal" or type(dist["mean"]) not in (int, float)
+            or type(dist["std"]) not in (int, float) or dist["std"] <= 0):
+        raise ValueError("distribution must specify normal mean and positive std (sigma)")
+    for key in ("seed", "replicates"):
+        if type(profile[key]) is not int or profile[key] < 0:
+            raise ValueError(f"{key} must be a nonnegative integer")
+    if profile["replicates"] < 2 or profile["seed"] >= 2**63:
+        raise ValueError("need >= 2 replicates and seed < 2**63")
+    names = set()
+    if type(profile["formats"]) is not list or not profile["formats"]:
+        raise ValueError("formats must be a nonempty list")
+    for fmt in profile["formats"]:
+        if type(fmt) is not dict or set(fmt) != {"name", "input", "compute", "accumulator", "output"}:
+            raise ValueError("each format requires name/input/compute/accumulator/output")
+        if not isinstance(fmt["name"], str) or not re.fullmatch(r"[A-Za-z0-9_]+", fmt["name"]) or fmt["name"] in names:
+            raise ValueError("format names must be unique alphanumeric/underscore identifiers")
+        names.add(fmt["name"])
+        if any(fmt[k] not in ("bf16", "fp32") for k in ("input", "compute", "output")):
+            raise ValueError("input/compute/output formats must be bf16 or fp32")
+        if fmt["accumulator"] != "fp32":
+            raise ValueError("the supplied reduction/dot templates use fp32 accumulation")
+    if profile["rules"] == "all":
+        profile["rules"] = list(registry.load_catalog())
+    if (type(profile["rules"]) is not list or not profile["rules"]
+            or any(type(r) is not str or r not in registry.load_catalog() for r in profile["rules"])
+            or len(set(profile["rules"])) != len(profile["rules"])):
+        raise ValueError("rules must be 'all' or distinct candidate IDs")
+    launch = profile["launch"]
+    if type(launch) is not dict or set(launch) != {"block", "chunk", "num_warps", "dot_tile"}:
+        raise ValueError("launch requires block/chunk/num_warps/dot_tile")
+    for key in ("block", "chunk"):
+        n = launch[key]
+        if type(n) is not int or n < 32 or n > 65536 or n & (n - 1):
+            raise ValueError(f"{key} must be a power of two in [32, 65536]")
+    if launch["num_warps"] not in (4, 8) or launch["dot_tile"] not in (16, 32):
+        raise ValueError("num_warps must be 4/8, dot_tile must be 16/32")
+    if type(profile["layernorm_epsilon"]) not in (int, float) or profile["layernorm_epsilon"] <= 0:
+        raise ValueError("layernorm_epsilon must be positive")
+    g = profile["gates"]
+    if type(g) is not dict or set(g) != {"bias", "vars", "warning_policy"}:
+        raise ValueError("gates requires bias/vars/warning_policy")
+    if (type(g["bias"]) is not dict or set(g["bias"]) != {"z", "snr", "ulp_floor"}
+            or type(g["vars"]) is not dict or set(g["vars"]) != {
+                "quantile", "horizon", "confidence_z", "bootstrap", "min_exceedances", "warn", "fail"}):
+        raise ValueError("unexpected two-gates parameters")
+    if any(type(x) not in (int, float) or x <= 0 for c in (g["bias"], g["vars"]) for x in c.values()):
+        raise ValueError("gate parameters must be positive finite numbers")
+    v = g["vars"]
+    if not 0 < v["quantile"] < 1 or v["warn"] >= v["fail"] or v["horizon"] <= 1:
+        raise ValueError("invalid quantile, horizon or ordered vars thresholds")
+    if (type(v["bootstrap"]) is not int or v["bootstrap"] < 2
+            or type(v["min_exceedances"]) is not int or v["min_exceedances"] < 3):
+        raise ValueError("bootstrap >= 2 and min_exceedances >= 3 must be integers")
+    if g["warning_policy"] not in ("pass_only", "allow_warn"):
+        raise ValueError("warning_policy must be pass_only or allow_warn")
+    return profile
+
+
+def source_hashes():
+    return {str(path.relative_to(ROOT)): sha(path.read_bytes()) for path in SOURCES}
+
+
+def seed_for(profile, fmt, rule):
+    data = registry.canonical_json([profile["seed"], fmt["name"], rule])
+    return int(sha(data)[:15], 16)
+
+
+def shapes_for(profile, rule):
+    m, n = profile["shape"]
+    if rule in ("DOT-LOWER", "DOT-ACC-FUSE", "GEMM-SPLIT-K"):
+        return {"a": [m, n], "b": [n, n], "c": [m, n], "out": [m, n]}
+    out = [m] if rule in ("REDUCE-REORDER", "REDUCE-SPLIT") else [m, n]
+    return {"a": [m, n], "b": [m, n], "c": [m, n], "out": out}
+
+
+def graph_hash(rule, side, profile, fmt, sources):
+    # Bind the host sampler/oracle and importer too, not just the JIT function.
+    return sha(registry.canonical_json({"implementation_sources": sources,
+               "rule": rule, "side": side, "shape": profile["shape"], "formats": fmt,
+               "launch": profile["launch"], "epsilon": profile["layernorm_epsilon"]}))
+
+
+def contract_for(profile, fmt, rule, backend, sources, lowerings):
+    shapes = shapes_for(profile, rule)
+    row = rule.startswith(("REDUCE", "SCAN", "SOFTMAX", "LAYERNORM"))
+    dot = rule.startswith(("DOT", "GEMM"))
+    launch = profile["launch"]
+    return {
+        "schema_version": 1, "rule_id": rule,
+        **{side: {"graph_sha256": graph_hash(rule, side, profile, fmt, sources),
+                  "lowering_sha256": sha(registry.canonical_json(lowerings[side]))}
+           for side in ("reference", "candidate")},
+        "numerics": {
+            "semantics_version": "triton-templates-v1", "input_formats": {k: fmt["input"] for k in ("a", "b", "c")},
+            "node_formats": {"elementwise": fmt["compute"], "row_and_dot": "fp32",
+                             "explicit_cast_target": "bf16", "fma_intrinsic": "fp32",
+                             "template_details": "see bound Triton source for every cast and operation"},
+            "accumulator_formats": {"row_and_dot": fmt["accumulator"],
+                                    "ACC-WIDEN_reference": fmt["input"], "ACC-WIDEN_candidate": "fp32"},
+            "output_formats": {"out": fmt["output"]}, "rounding": "rne casts; instruction-specific intrinsics",
+            "nan": "no NaN payload equivalence; nonfinite samples stop the instance",
+            "subnormal": "native bound GPU/compiler instruction behavior; no software flush substitution",
+            "intrinsics": {"exp": "tl.exp", "sqrt": "tl.sqrt", "rsqrt": "tl.rsqrt", "div": "tl.div_rn",
+                           "dot_input_precision": "ieee", "oracle": "torch fp64 on the same quantized input"}},
+        "layout": {"shapes": shapes, "strides": {k: [v[1], 1] if len(v) == 2 else [1] for k, v in shapes.items()},
+                   "reduction": {"axis": 1, "chunk": launch["chunk"], "rule": rule} if row else None,
+                   "scan": {"reference": "serial", "candidate": "tl.cumsum"} if rule == "SCAN-REORDER" else None,
+                   "dot": {"M": shapes["a"][0], "N": shapes["b"][1], "K": shapes["a"][1],
+                           "tile": launch["dot_tile"], "split_k": 2 if rule == "GEMM-SPLIT-K" else 1,
+                           "merge": "deterministic, no atomic addition"} if dot else None},
+        "backend": backend,
+        "probe": {"family": "normal", "roles": {k: profile["distribution"] for k in ("a", "b", "c")},
+                  "joint_distribution": "independent roles and elements; fresh whole tuple per replicate",
+                  "weights": None, "seed": seed_for(profile, fmt, rule),
+                  "quantization": "torch fp64 normal -> input dtype (RNE); oracle widens those same values",
+                  "special_values": "no truncation/resampling; domain/nonfinite events recorded"},
+        "protocol": {"name": "two-gates", "version": gates.VERSION, "checker_version": sources["scripts/fp_two_gates.py"],
+                     "bias": {**profile["gates"]["bias"], "replicates": profile["replicates"],
+                              "buckets": "last-axis columns; 1D output has one bucket",
+                              "ulp": "mean over replicates of spacing at per-bucket max abs reference"},
+                     "vars": {**profile["gates"]["vars"], "replicates": profile["replicates"],
+                              "epsilon": "one output-format ULP at max abs fp64 oracle",
+                              "tail": "strict exceedances, PWM, no xi clipping, conditional bootstrap",
+                              "stopping": "fixed budget; no adaptive early acceptance"},
+                     "decision_policy": profile["gates"]["warning_policy"]},
+    }
+
+
+class NumericEvent(Exception):
+    def __init__(self, status, message):
+        super().__init__(message)
+        self.status = status
+
+
+def oracle(torch, rule, inputs, epsilon):
+    a, b, c = (x.double() for x in inputs)
+    if rule in ("ADD-COMMUTE", "CAST-MOVE"):
+        return a + b
+    if rule == "MUL-COMMUTE":
+        return a * b
+    if rule in ("ADD-ASSOC", "ACC-WIDEN"):
+        return (a + b) + c
+    if rule == "MUL-ASSOC":
+        return (a * b) * c
+    if rule == "MUL-DISTRIB":
+        return a * (b + c)
+    if rule == "FMA-CONTRACT":
+        return a * b + c
+    if rule == "CAST-REMOVE":
+        return (a + b) * c
+    if rule == "DIV-RCP":
+        if bool((b == 0).any()):
+            raise NumericEvent("INCONCLUSIVE", "division domain violated by a sampled zero denominator")
+        return a / b
+    if rule == "SQRT-RSQRT":
+        if bool((a <= 0).any()):
+            raise NumericEvent("INCONCLUSIVE", "sqrt domain violated; the requested normal distribution was not conditioned")
+        return torch.rsqrt(a)
+    if rule.startswith("REDUCE-"):
+        return a.sum(dim=1)
+    if rule == "SCAN-REORDER":
+        return a.cumsum(dim=1)
+    if rule.startswith("SOFTMAX-"):
+        return torch.softmax(a, dim=1)
+    if rule == "LAYERNORM-WELFORD":
+        centered = a - a.mean(dim=1, keepdim=True)
+        return centered / torch.sqrt((centered * centered).mean(dim=1, keepdim=True) + epsilon)
+    if rule in ("DOT-LOWER", "GEMM-SPLIT-K"):
+        return a @ b
+    if rule == "DOT-ACC-FUSE":
+        return a @ b + c
+    if rule == "SWIGLU-FUSE":
+        return a * torch.sigmoid(a) * b
+    return a
+
+
+def launch_pair(torch, triton, kernels, rule, inputs, profile, fmt):
+    m, n = profile["shape"]
+    count = m * n
+    a, b, c = inputs
+    options = {"num_warps": profile["launch"]["num_warps"], "enable_fp_fusion": False}
+    block = profile["launch"]["block"]
+    out_shape = shapes_for(profile, rule)["out"]
+    dtype = torch.bfloat16 if fmt["output"] == "bf16" else torch.float32
+    outputs, compiled = [], {}
+    for side, name in enumerate(("reference", "candidate")):
+        out = torch.empty(out_shape, dtype=dtype, device=a.device)
+        programs = []
+        if rule in kernels.ELEMENTWISE:
+            target = torch.empty_like(out) if rule == "SWIGLU-FUSE" and side == 0 else out
+            programs.append(kernels.elementwise[(triton.cdiv(count, block),)](
+                a, b, c, target, count, rule, side, fmt["compute"] == "bf16", fmt["input"] == "bf16", block, **options))
+            if target is not out:
+                programs.append(kernels.multiply_stage[(triton.cdiv(count, block),)](
+                    target, b, out, count, fmt["compute"] == "bf16", block, **options))
+        elif rule in kernels.LAYOUT_RULES:
+            if side == 0:
+                transpose = rule == "LAYOUT-INVERSE"
+                temp = torch.empty_like(out)
+                programs.append(kernels.copy_or_transpose[(triton.cdiv(count, block),)](
+                    a, temp, m, n, transpose, block, **options))
+                programs.append(kernels.copy_or_transpose[(triton.cdiv(count, block),)](
+                    temp, out, n if transpose else m, m if transpose else n, transpose, block, **options))
+            else:
+                programs.append(kernels.copy_or_transpose[(triton.cdiv(count, block),)](
+                    a, out, m, n, False, block, **options))
+        elif rule in kernels.ROW_RULES:
+            programs.append(kernels.row_kernel[(m,)](
+                a, out, n, rule, side, profile["layernorm_epsilon"], profile["launch"]["chunk"],
+                triton.next_power_of_2(n), **options))
+        elif rule in kernels.DOT_RULES:
+            tile = profile["launch"]["dot_tile"]
+            programs.append(kernels.dot_kernel[(triton.cdiv(m, tile), triton.cdiv(n, tile))](
+                a, b, c, out, m, n, n, rule, side, tile, **options))
+        else:
+            raise ValueError("no concrete template for " + rule)
+        outputs.append(out)
+        compiled[name] = [p.asm["ptx"] for p in programs]
+    return outputs, compiled
+
+
+def ulp(torch, magnitude, dtype):
+    precision, minimum = (8, -133) if dtype == "bf16" else (24, -149)
+    _, exponent = torch.frexp(magnitude.double().abs())
+    spacing = torch.ldexp(torch.ones_like(magnitude, dtype=torch.float64), exponent - precision)
+    spacing = spacing.clamp_min(2.0**minimum)
+    return torch.where(magnitude == 0, 2.0**minimum, spacing)
+
+
+def observe(torch, reference, candidate, exact, output_format):
+    if not bool(torch.isfinite(exact).all()):
+        raise NumericEvent("INCONCLUSIVE", "fp64 oracle produced nonfinite values")
+    if not bool(torch.isfinite(reference).all()):
+        raise NumericEvent("INCONCLUSIVE", "reference produced nonfinite values; finite-error protocol is inapplicable")
+    if not bool(torch.isfinite(candidate).all()):
+        raise NumericEvent("REJECT", "candidate produced nonfinite values with finite reference and oracle")
+    ref, cand = reference.double(), candidate.double()
+    bucket_ref = ref if ref.ndim == 2 else ref[:, None]
+    delta = cand - ref
+    delta = delta if delta.ndim == 2 else delta[:, None]
+    return {
+        "delta": delta.mean(dim=0).cpu().numpy(),
+        "ulp": ulp(torch, bucket_ref.abs().amax(dim=0), output_format).cpu().numpy(),
+        "reference_error": (ref - exact).abs().max().item(),
+        "candidate_error": (cand - exact).abs().max().item(),
+        "epsilon": ulp(torch, exact.abs().max(), output_format).item(),
+    }
+
+
+def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend, sources, smoke):
+    directory.mkdir(exist_ok=True)
+    record_path = directory / "record.json"
+    base = {"rule_id": rule, "format": fmt["name"], "state": "RUNNING", "decision": "NOT_EVALUATED"}
+    write_json(record_path, base)
+    if rule == "BF16-WIDEN-RETURN" and (fmt["input"] != "bf16" or fmt["output"] != "bf16"):
+        write_json(record_path, {**base, "state": "UNSUPPORTED", "reason": "requires bf16 input and output"})
+        return "UNSUPPORTED"
+    observations = {key: [] for key in gates.OBSERVATIONS}
+    seed = seed_for(profile, fmt, rule)
+    generator = torch.Generator(device="cuda").manual_seed(seed)
+    dtype = torch.bfloat16 if fmt["input"] == "bf16" else torch.float32
+    lowerings = None
+    started = time.monotonic()
+    try:
+        for replicate in range(profile["replicates"]):
+            dist = profile["distribution"]
+            shapes = shapes_for(profile, rule)
+            inputs = [(torch.randn(shapes[key], device="cuda", dtype=torch.float64, generator=generator)
+                       * dist["std"] + dist["mean"]).to(dtype) for key in ("a", "b", "c")]
+            if any(not bool(torch.isfinite(x).all()) for x in inputs):
+                raise NumericEvent("INCONCLUSIVE", "input quantization produced nonfinite values")
+            exact = oracle(torch, rule, inputs, profile["layernorm_epsilon"])
+            (reference, candidate), compiled = launch_pair(torch, triton, kernels, rule, inputs, profile, fmt)
+            if lowerings is None:
+                lowerings = {}
+                for side, programs in compiled.items():
+                    lowerings[side] = []
+                    for index, ptx in enumerate(programs):
+                        name = f"{side}.{index}.ptx"
+                        (directory / name).write_text(ptx)
+                        lowerings[side].append(sha(ptx.encode()))
+                config = contract_for(profile, fmt, rule, backend, sources, lowerings)
+                base.update(config=config, instance_key=registry.instance_key(config), lowerings=lowerings)
+                write_json(record_path, base)
+            elif any([sha(p.encode()) for p in compiled[side]] != lowerings[side] for side in lowerings):
+                raise ValueError("compiled lowering changed within one instance")
+            sample = observe(torch, reference, candidate, exact, fmt["output"])
+            for key in observations:
+                observations[key].append(sample[key])
+            if replicate == 0 or (replicate + 1) % 32 == 0:
+                print(f"  {fmt['name']} {rule}: {replicate + 1}/{profile['replicates']} ({time.monotonic() - started:.1f}s)", flush=True)
+        arrays = {key: np.asarray(values, dtype=np.float64) for key, values in observations.items()}
+        result = gates.evaluate(arrays, profile["gates"], seed, profile["replicates"], smoke)
+        np.savez_compressed(directory / "observations.npz", **arrays)
+        base.update(state="COMPLETE", result=result, decision=result["decision"],
+                    observations_sha256=sha((directory / "observations.npz").read_bytes()),
+                    seconds=time.monotonic() - started)
+    except NumericEvent as event:
+        base.update(state="NUMERIC_EVENT", decision="SMOKE_ONLY" if smoke else event.status,
+                    reason=str(event), completed_replicates=len(observations["delta"]))
+    except Exception as error:
+        base.update(state="ERROR", decision="NOT_EVALUATED", reason=f"{type(error).__name__}: {error}",
+                    completed_replicates=len(observations["delta"]))
+    write_json(record_path, base)
+    return base["decision"]
+
+
+def run(args):
+    profile = validate_profile(deepcopy(load_module(args.profile.resolve()).PROFILE))
+    if args.rules:
+        profile["rules"] = args.rules.split(",")
+    if args.formats:
+        requested = args.formats.split(",")
+        known = {fmt["name"] for fmt in profile["formats"]}
+        if not set(requested) <= known:
+            raise ValueError("unknown --formats entry")
+        profile["formats"] = [f for f in profile["formats"] if f["name"] in requested]
+    if args.smoke:
+        profile["shape"], profile["replicates"] = [32, 33], 4
+    validate_profile(profile)
+    try:
+        import torch
+        import triton
+    except ImportError as error:
+        raise ValueError("GPU run requires torch and triton in your CUDA environment; see experiments/floating_point/README.md") from error
+    if not torch.cuda.is_available() or torch.version.hip is not None:
+        raise ValueError("this runner requires an NVIDIA CUDA GPU; no CPU numerical fallback is used")
+    kernels = load_module(KERNELS)
+    if kernels.SUPPORTED != set(registry.load_catalog()):
+        raise ValueError("candidate catalogue and executable templates disagree")
+    torch.backends.cuda.matmul.allow_tf32 = False
+    torch.backends.cudnn.allow_tf32 = False
+    try:
+        driver = subprocess.run(["nvidia-smi", "--query-gpu=driver_version", "--format=csv,noheader"],
+                                capture_output=True, text=True, check=True, timeout=10).stdout.strip().splitlines()
+    except (OSError, subprocess.SubprocessError):
+        driver = ["unavailable"]
+    backend = {"kind": "triton-cuda", "implementation_version": source_hashes()[str(KERNELS.relative_to(ROOT))],
+               "target": {"device": torch.cuda.get_device_name(), "capability": list(torch.cuda.get_device_capability()),
+                          "driver_versions": driver},
+               "compiler": {"torch": torch.__version__, "triton": triton.__version__, "cuda": torch.version.cuda,
+                            "numpy": np.__version__},
+               "compile_options": {"enable_fp_fusion": False, "dot_input_precision": "ieee"},
+               "launch": profile["launch"]}
+    manifest = {"bundle_version": BUNDLE_VERSION, "profile": profile, "smoke": args.smoke,
+                "sources": source_hashes(), "backend": backend,
+                "entries": [f"{f['name']}__{r}" for f in profile["formats"] for r in profile["rules"]]}
+    if args.resume:
+        old = read_json(args.output / "manifest.json")
+        if old != manifest:
+            raise ValueError("resume requires identical configuration, source, device and software versions")
+        replay(args.output)  # Verify retained records before skipping them.
+    else:
+        args.output.mkdir(parents=True, exist_ok=False)
+        write_json(args.output / "manifest.json", manifest)
+        source_dir = args.output / "sources"
+        source_dir.mkdir()
+        for path in SOURCES:
+            (source_dir / path.name).write_bytes(path.read_bytes())
+        (source_dir / "profile.py").write_bytes(args.profile.read_bytes())
+    errors = 0
+    for fmt in profile["formats"]:
+        for rule in profile["rules"]:
+            directory = args.output / f"{fmt['name']}__{rule}"
+            record = directory / "record.json"
+            if args.resume and record.exists() and read_json(record)["state"] in ("COMPLETE", "UNSUPPORTED", "NUMERIC_EVENT"):
+                print(f"[KEEP] {directory.name}", flush=True)
+                continue
+            print(f"[RUN] {directory.name}", flush=True)
+            decision = run_instance(torch, triton, kernels, profile, fmt, rule, directory,
+                                    backend, manifest["sources"], args.smoke)
+            print(f"[{decision}] {directory.name}", flush=True)
+            errors += read_json(record)["state"] == "ERROR"
+            torch.cuda.empty_cache()
+    print(f"Bundle saved to {args.output}; return the entire directory, including observations and PTX.")
+    return 1 if errors else 0
+
+
+def replay(bundle):
+    """Read only JSON/NPZ/PTX. Never execute a returned profile or Python source."""
+    manifest = read_json(bundle / "manifest.json")
+    if manifest.get("bundle_version") != BUNDLE_VERSION or type(manifest.get("smoke")) is not bool:
+        raise ValueError("unsupported bundle schema")
+    if manifest["sources"] != source_hashes():
+        raise ValueError("source hashes differ: check out the exact experiment revision before import")
+    for path in SOURCES:
+        if sha((bundle / "sources" / path.name).read_bytes()) != manifest["sources"][str(path.relative_to(ROOT))]:
+            raise ValueError(f"saved source hash mismatch: {path.name}")
+    profile = validate_profile(deepcopy(manifest["profile"]))
+    expected = [f"{f['name']}__{r}" for f in profile["formats"] for r in profile["rules"]]
+    if manifest["entries"] != expected:
+        raise ValueError("manifest entries do not match the frozen profile")
+    rows, accepted = [], []
+    for fmt in profile["formats"]:
+        for rule in profile["rules"]:
+            name = f"{fmt['name']}__{rule}"
+            directory = bundle / name
+            if not (directory / "record.json").exists():
+                rows.append({"rule_id": rule, "format": fmt["name"], "decision": "NOT_EVALUATED", "reason": "missing record"})
+                continue
+            record = read_json(directory / "record.json")
+            if record.get("rule_id") != rule or record.get("format") != fmt["name"]:
+                raise ValueError(f"record identity mismatch: {name}")
+            if record["state"] != "COMPLETE":
+                # Unfinished/error/domain-event labels are never imported as accepted rules.
+                rows.append({"rule_id": rule, "format": fmt["name"], "decision": "NOT_EVALUATED",
+                             "state": record["state"], "reported_decision": record["decision"],
+                             "reason": record.get("reason", "incomplete protocol")})
+                continue
+            lowerings = record["lowerings"]
+            if set(lowerings) != {"reference", "candidate"}:
+                raise ValueError("missing compiled side")
+            for side, digests in lowerings.items():
+                if not digests or any(sha((directory / f"{side}.{i}.ptx").read_bytes()) != digest for i, digest in enumerate(digests)):
+                    raise ValueError(f"compiled lowering hash mismatch: {name}/{side}")
+            config = contract_for(profile, fmt, rule, manifest["backend"], manifest["sources"], lowerings)
+            if config != record["config"] or registry.instance_key(config) != record["instance_key"]:
+                raise ValueError(f"configuration identity mismatch: {name}")
+            path = directory / "observations.npz"
+            if sha(path.read_bytes()) != record["observations_sha256"]:
+                raise ValueError(f"observation hash mismatch: {name}")
+            with np.load(path, allow_pickle=False) as data:
+                arrays = {key: data[key] for key in data.files}
+            buckets = profile["shape"][1] if len(shapes_for(profile, rule)["out"]) == 2 else 1
+            count = profile["replicates"]
+            if (set(arrays) != gates.OBSERVATIONS or any(a.dtype != np.float64 for a in arrays.values())
+                    or any(arrays[k].shape != (count, buckets) for k in ("delta", "ulp"))
+                    or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error", "epsilon"))):
+                raise ValueError(f"observation shape/dtype mismatch: {name}")
+            result = gates.evaluate(arrays, profile["gates"], seed_for(profile, fmt, rule), count, manifest["smoke"])
+            if result != record["result"] or result["decision"] != record["decision"]:
+                raise ValueError(f"stored decision/statistics disagree with replay: {name}")
+            row = {"rule_id": rule, "format": fmt["name"], "instance_key": record["instance_key"],
+                   "decision": result["decision"], "bias": result["bias"]["status"], "vars": result["vars"]["status"]}
+            rows.append(row)
+            if result["decision"] in ACCEPTED:
+                accepted.append({**row, "config": config, "artifact": str((directory / "record.json").resolve()),
+                                 "observations_sha256": record["observations_sha256"]})
+    return {"schema_version": 1, "checker_version": gates.VERSION, "bundle": str(bundle.resolve()),
+            "manifest_sha256": sha((bundle / "manifest.json").read_bytes()), "rows": rows, "accepted": accepted,
+            "trust": "CPU replay validates statistics and identity; GPU execution and oracle remain trusted. "
+                     "This table does not prove EvidenceValidated or IEEE equality."}
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    sub = parser.add_subparsers(dest="command", required=True)
+    check = sub.add_parser("check", help="validate a Python configuration without importing GPU packages")
+    check.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
+    run_parser = sub.add_parser("run", help="execute paired Triton kernels on an NVIDIA GPU")
+    run_parser.add_argument("--profile", type=Path, default=DEFAULT_PROFILE)
+    run_parser.add_argument("--output", type=Path, required=True)
+    run_parser.add_argument("--rules", help="comma-separated rule IDs; default comes from profile")
+    run_parser.add_argument("--formats", help="comma-separated format names; default comes from profile")
+    run_parser.add_argument("--smoke", action="store_true", help="32x33, four replicates, NEVER admissible")
+    run_parser.add_argument("--resume", action="store_true", help="continue an interrupted identical run")
+    replay_parser = sub.add_parser("import", help="recompute both gates from a returned bundle, CPU only")
+    replay_parser.add_argument("bundle", type=Path)
+    replay_parser.add_argument("--output", type=Path, required=True)
+    args = parser.parse_args()
+    try:
+        if args.command == "check":
+            profile = validate_profile(deepcopy(load_module(args.profile.resolve()).PROFILE))
+            print(json.dumps(profile, indent=2))
+            return 0
+        if args.command == "run":
+            return run(args)
+        report = replay(args.bundle)
+        with args.output.open("x") as output:
+            json.dump(report, output, indent=2, allow_nan=False)
+            output.write("\n")
+        print(f"Replayed {len(report['rows'])} rows; {len(report['accepted'])} accepted. Saved {args.output}")
+        return 0
+    except (OSError, ValueError, KeyError, TypeError) as error:
+        parser.error(str(error))
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

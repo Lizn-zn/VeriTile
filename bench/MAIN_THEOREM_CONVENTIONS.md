@@ -19,6 +19,16 @@ tooling keys headline discovery on (`scripts/spec_sheet.py`,
 name-suffix heuristics). Helper lemmas stay `theorem`; do **not** declare
 internal lemmas as `specification`.
 
+There are two public meanings, expressed without changing this keyword:
+`Spec.Real claim` for real-valued correctness against the mathematical formula,
+and `lhs ≡[R] rhs` (`open scoped VeriTile.Spec`) for implementation equivalence
+under two-gates-admitted atomic rewrite assumptions.
+The model `R` bundles the rule table and its admission assumptions; keep
+experiment configuration and result records out of the headline's parameters.
+Use `#print_spec` to expose assumptions, primitive/rule dependencies and evidence.
+Existing unwrapped declarations keep their mathematical/abstract-rounding
+meaning; `⊨[R]` and `≡[R]` are not automatically FP acceptance certificates.
+
 ## 1. Position — the last theorem is the main theorem
 
 The **final theorem in the file must be the headline** (declared
@@ -26,7 +36,15 @@ The **final theorem in the file must be the headline** (declared
 then walk *up* to the lemmas it references, and see the whole trust chain. No
 pinned corollaries, dead helpers, or stray lemmas after it.
 
-## 2. Dimension-general — no test shapes
+## 2. Quantification — general mathematical proofs, scoped numerical evidence
+
+The dimension-general rules below apply to the mathematical/legacy corpus.
+For atom-based `≡[R]`, concrete shape/stride/precision/backend/probe
+configurations belong to the atomic assumptions. Report their checked scope;
+evidence for one shape cannot justify admission for another. Structural and algebraic helper theorems should remain parameterized
+where possible. A theorem quantified over configurations with an explicit
+validated-evidence premise is conditional, not evidence that all configurations
+passed. Pending records are not acceptance results.
 
 - The headline is **universally quantified over all shapes / strides /
   compile-time flags** as symbolic `Nat`/`Bool`/`ℝ` parameters. It must **not**
@@ -108,6 +126,19 @@ that genuinely cannot meet it yet must carry a
 `Correctness-surface blocker:` preamble marker **and** a row under
 "## Correctness-Surface Blockers" in `proof_blockers.md`; the scan rejects an
 unregistered offender and a stale registration alike.
+
+### 4d. Floating-point implementation-equivalence headlines
+
+State these as `lhs ≡[R] rhs` in the `VeriTile.Spec` scope. `R` supplies the
+rule table and its admission assumptions; `Spec.FloatingPoint` is the underlying
+relation. Each numerical atom
+requires an `AcceptedAtom` obligation backed by its own two-gates record; never
+assume the whole equivalence as a shortcut. Lean checks the derivation and the
+unchanged implementation signature. Symmetry, transitivity and common sequence
+context are formal rules under those assumptions, not empirical gate guarantees.
+Correctness against a mathematical formula stays in the real model. Print all
+premises and atom records; do not equate admitted atoms with IEEE bit equality
+or claim that an unrun checker supplied a validated artifact.
 
 ## 5. Axiom-clean
 

@@ -20,6 +20,7 @@ Documentation Map):
 | Where does my new lemma / definition belong? | [CodeOrganization.md](./CodeOrganization.md) |
 | Tactic conventions (incl. `erw` carrier-bridge) | [ProofConventions.md](./ProofConventions.md) |
 | Which theorem surface should I use? | [CorrectnessSurfaces.md](./CorrectnessSurfaces.md) |
+| How do I distinguish real/FP specifications and print their assumptions? | [Two public specification meanings](./CorrectnessSurfaces.md#two-public-specification-meanings), [TrustAudit.md](./TrustAudit.md) |
 | Naming conventions for theorem surfaces | [TheoremSurfaces.md](./TheoremSurfaces.md) |
 | How does the kernel manifest work? | [KernelManifest.md](./KernelManifest.md) |
 | How is the axiom-clean / sorry-free trust audit run? | [TrustAudit.md](./TrustAudit.md) |
@@ -36,6 +37,26 @@ The end-to-end project plan and roadmap live in the repo root:
 - [`../PLAN.md`](../PLAN.md) — architecture, decision log, phase status
 - Live roadmap: GitHub issue
   [`#1`](https://github.com/Lizn-zn/VeriTile/issues/1)
+
+## Paper Preparation
+
+- [MLSys 2027 submission plan](./MLSys2027Plan.md) — paper positioning,
+  evidence gaps, ordered tasks, evaluation design, and proposed schedule
+  (in Chinese). This planning document is separate from the semantic contracts
+  and the long-term project roadmap.
+- [Two-gates floating-point acceptance design](./TwoGatesAcceptance.md) —
+  proposed bias/error-amplification gates, acceptance conditions, evidence
+  boundaries, and integration tasks (in Chinese; Python checker implemented,
+  GPU measurements pending).
+- [Floating-point primitives: complete design](./FloatingPointPrimitives.md) —
+  Triton/GPU candidates, mixed precision, reductions, dot/MMA, backend
+  contracts, completion criteria, and dependency-ordered implementation plan
+  (in Chinese; GPU runner and replay implemented, Lean admission binding pending).
+- [Floating-point rewrite rules and acceptance table](./FloatingPointRewriteRules.md) —
+  candidate transformations, kernel-checked scalar witnesses, and per-configuration
+  gate result fields (in Chinese; statistical results not yet measured).
+- [Run and return floating-point experiments](../experiments/floating_point/README.md) —
+  Python configuration, GPU commands, resume, result packaging and CPU replay.
 
 ## Archive
 

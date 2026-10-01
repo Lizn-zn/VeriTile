@@ -1,5 +1,18 @@
 # Examples Theorem Surface Style
 
+Correctness against a formula uses real semantics (`Spec.Real claim`).
+Implementation equivalence uses `lhs ≡[R] rhs` (`open scoped VeriTile.Spec`):
+two-gates admits the atomic assumptions and Lean checks their formal composition.
+The rule model `R` holds the experiment configuration and admission records;
+those records are not separate public theorem parameters.
+Both use `specification`; `#print_spec` exposes the implementations and atom
+records. See [CorrectnessSurfaces.md](./CorrectnessSurfaces.md).
+
+Existing unwrapped/abstract-rounding headlines retain their historical meaning;
+they are not automatically admitted FP rules. Exact FP facts remain internal
+helper lemmas. The library vocabulary below describes legacy mathematical and
+abstract-rounding reasoning, which is distinct from the new equivalence calculus.
+
 User-facing theorem surfaces in `VeriTile/Examples/` should start from the
 public compute-facing APIs. See
 [`CorrectnessSurfaces.md`](./CorrectnessSurfaces.md) for the full user guide.

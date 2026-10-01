@@ -19,6 +19,7 @@ globs = [
   # which pulls the heavy analysis chain the lite target deliberately skips.
   "VeriTile.Meta.Specification",
   "VeriTile.Meta.StatementAudit",
+  "VeriTile.Spec",
   # Worked-example KERNELS live in bench/examples/ (one self-contained .lean
   # per kernel correctness/refinement story). The library keeps only shared
   # vocabulary (Common), pure-math spec files (AttentionForwardClosedForm,
@@ -37,6 +38,12 @@ globs = [
 [[lean_lib]]
 name = "VeriTileMath"
 globs = ["VeriTile.Math.+"]
+
+# Make the existing TritonBench source importable by its FP specification
+# companion, so the example reuses the actual kernel and mathematical proof.
+[[lean_lib]]
+name = "TritonBenchSpecExamples"
+roots = ["bench.tritonbench_g.vector_addition.VectorAddition"]
 
 # Full target: Lite + Math + ApproxGeLU. Build this when working on the
 # GeLU error bound or before any release tagging.

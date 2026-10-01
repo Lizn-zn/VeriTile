@@ -1,5 +1,102 @@
 # Correctness Surfaces
 
+## Two public specification meanings
+
+**Correctness is real-valued; implementation equivalence is derived under
+floating-point atom assumptions.** Both retain the `specification` keyword.
+
+| Public relation | Meaning |
+|---|---|
+| `Spec.Real claim` | An implementation satisfies its mathematical formula in ideal real semantics |
+| `lhs ≡[R] rhs` | The two implementations are equivalent under the two-gates-admitted atomic rules supplied by `R` |
+
+The existing TritonBench [vector addition correctness theorem](../bench/tritonbench_g/vector_addition/VectorAddition.lean)
+uses the real `addIO … ⊨ fun xs ys i => xs i + ys i` surface. Existing proofs
+continue to work; `Spec.Real` is a transparent optional wrapper for this meaning.
+
+The [floating-point companion](../bench/examples/TritonBenchVectorAdditionFP.lean)
+compares that actual kernel with a variant changing only `output = x + y` to
+`output = y + x`, for the original test's `N = 98432`, `BLOCK_SIZE = 1024`, fp32
+instance. Its headline is:
+
+```lean
+open scoped VeriTile.Spec
+
+specification vector_addition_fp_equiv (R : Rules) :
+    originalKernel ≡[R] optimizedKernel
+```
+
+This reuses the existing equivalence notation. Here `R` is the rule model;
+its table stores the experiment configuration and results, and its `add_comm`
+field requires admission of the atom. Neither `experiment` nor `evidence` is
+a public theorem argument. `#print_spec vector_addition_fp_equiv` expands the
+table and model assumptions for inspection. Under this scope, the notation
+elaborates to `Spec.FloatingPoint`; historical KernelIO scopes still use their
+original `RoundingModel` relation.
+
+The intended user workflow starts with a Python shape/input-sampling profile
+(plus the numerical configuration), checks the predefined candidate rules with
+two-gates on Triton/GPU, generates `R`, and automatically attempts a proof using
+the existing proof agent and comparator with those rules frozen beforehand.
+Changing the profile generates a new rule set and reruns dependent proofs;
+failure to find a derivation is reported rather than filled by a new assumption.
+The distribution defines the atom test environment. The theorem is conditional
+on `R`, not a claim that arbitrary intermediate operands follow that distribution
+or that the whole kernel passed the gates. This automation remains to be connected;
+see the workflow in [FloatingPointPrimitives.md, section 7.1](./FloatingPointPrimitives.md#71-用户流程配置--检查原语--生成规则集--自动证明).
+
+The table contains one `ADD-COMMUTE` atom: the actual differing assignment
+fragments. Lean checks the syntax decomposition and lifts that atom through
+unchanged loads and store. It does not assume the whole kernel result. The
+original real correctness theorem remains separate and is not used to smuggle
+real `add_comm` into a floating-point equivalence proof.
+
+The implementation in [Spec.lean](../VeriTile/Spec.lean) separates three things:
+
+1. `AtomicRule` and `RuleEntry` name a numerical rewrite and its configuration,
+   identity and evidence. Checks apply to atoms, not to the public theorem.
+2. `AcceptedAtom` requires validated/replayed evidence, matching identity, an
+   artifact and two allowed gate results. `AcceptedAssumptions` collects these
+   obligations for a table. PASS labels alone cannot admit a rule.
+3. `Derivation` supplies reflexivity, symmetry, transitivity and common sequential
+   context. `FloatingPoint` additionally preserves the implementation signature.
+   `ProgramSyntax` supplies the auditable signature/body view; ComputeKernel's
+   view retains its input/output lists and actual ComputeStmt sequence.
+
+Admitting an atom means **assuming its relation in this formal theory**. The
+symmetry and composition rules are part of that policy; they do not claim that
+the original directed statistical tests reverse or compose. There is no
+conversion to Lean equality of concrete IEEE values, no global floating-point
+ring instance, and no inferred whole-kernel statistical guarantee. Hypotheses
+retain the configuration and operand-distribution scope supplied by the checker;
+rule matching must preserve the declared shape, precision and side conditions.
+Statistical claims about an actual use site's operands need their own sampling
+justification. The current context rule is syntactic sequence framing, not a
+proof of distribution transport.
+
+`#print_spec name` displays both implementations, the declared atom table,
+per-atom gate status/configuration/evidence, hypotheses, reachable primitives,
+registered rules and axioms. `full` adds project dependencies and the trusted
+library boundary. The dependency report and declared atom list are conservative,
+not a minimal used-atom trace. Printing does not discharge a premise.
+
+The calculus, reporting, example and rejection checks are implemented. The
+[GPU experiment runner](../experiments/floating_point/README.md) now supplies
+26 concrete candidate pairs, Python configuration, gates and CPU result replay.
+GPU measurements remain unrun. The replayed JSON admission table still needs
+binding to parameterized Lean fragments and the existing proof-agent entry;
+it does not itself discharge `EvidenceValidated` or construct `R`.
+The example is conditional on supplying `R : Rules`, including its admitted
+`add_comm` assumption; no such model or PASS experiment is supplied here.
+Build with `lake build TritonBenchSpecExamples`, then inspect with
+`lake env lean bench/examples/TritonBenchVectorAdditionFP.lean`.
+
+Historical unwrapped or abstract cast/store-rounding headlines keep their old
+meaning. They do not become atom-based FP equivalence merely by renaming them.
+Exact FP facts remain internal helper lemmas, not a third public specification.
+
+## Underlying library surfaces
+
 This document explains which public theorem surface to use when proving
 properties of `ComputeKernel`s. Exact surfaces live in
 [`VeriTile.Triton.Correctness`](../VeriTile/Triton/Correctness.lean); rounding

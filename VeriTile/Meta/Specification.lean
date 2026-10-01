@@ -20,6 +20,7 @@ elaborates identically to `def`; combine with modifiers as usual
 -/
 
 import Lean
+import VeriTile.Spec
 
 namespace VeriTile.Meta
 
@@ -27,6 +28,14 @@ namespace VeriTile.Meta
 source layout, identifier spelling, and declaration modifiers. -/
 initialize headlineAttr : Lean.TagAttribute ←
   Lean.registerTagAttribute `kernel_headline "A public kernel specification theorem."
+
+/-- Labels for dependency reports. Tagging a declaration supplies no proof and
+does not change its meaning. Reports discover uses through elaborated terms. -/
+initialize specPrimitiveAttr : Lean.TagAttribute ←
+  Lean.registerTagAttribute `spec_primitive "An execution primitive shown by #print_spec."
+
+initialize specRuleAttr : Lean.TagAttribute ←
+  Lean.registerTagAttribute `spec_rule "A transformation rule shown by #print_spec."
 
 end VeriTile.Meta
 

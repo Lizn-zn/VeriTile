@@ -10,6 +10,8 @@ audit:
 * `#stmtConsts T`          — every constant in `T`'s statement.
 * `#auditStmt T`           — just the project (non-core) constants: the surface
                              a human must read.
+* `#print_spec T`          — public meaning, parameters/assumptions, transitive
+                             primitive/rule dependencies and numerical obligations.
 * `#stmtSurfaceSubset T ⊆ [a, b, …]` — GATE: fail if the statement mentions a
                              project constant outside the allowlist (e.g. a spec
                              sneaking into a spec-free headline).
@@ -172,5 +174,202 @@ elab "#auditModuleSpecs" : command => do
   let display := fun (names : Array Name) =>
     (names.map fun name => (privateToUserName? name).getD name).qsort (·.toString < ·.toString)
   logInfo m!"Spec audit: kernels={kernels.size}, independentSpecs={specs.size}, denotations={denotations.size}\nkernels: {display kernels}\nindependent specs: {display specs}\ndenotations: {display denotations}"
+
+/-! ## Public specification reports
+
+This is inspection, not an acceptance checker. Traversal follows both types
+and proof/definition bodies in project modules, stopping at trusted library
+boundaries. It is conservative: all branches of a reachable definition count.
+No trace of actual GPU operations or minimal logical dependency is claimed.
+-/
+
+/-- `getUsedConstants` omits raw `Expr.proj` nodes. Recover their projection
+functions too, so a model/typeclass law cannot disappear from the report. -/
+def specExprConsts (env : Environment) (e : Expr) : CoreM (Array Name) := do
+  let visit : StateRefT (Array Name) CoreM Unit := e.forEach fun node => do
+    if let .proj structureName index _ := node then
+      if let some info := getStructureInfo? env structureName then
+        if let some projection := info.getProjFn? index then
+          modify (·.push projection)
+  return (← visit.run e.getUsedConstants).2
+
+structure SpecDependencies where
+  project : Array Name := #[]
+  library : Array Name := #[]
+
+/-- Transitive syntactic dependency closure, with an explicit trusted-library
+boundary. Origins, not namespace spellings, determine the boundary. -/
+partial def specDependencies (env : Environment) (work : List Name)
+    (seen : NameSet := {}) (found : SpecDependencies := {}) : CoreM SpecDependencies := do
+  match work with
+  | [] => return found
+  | n :: rest =>
+    if seen.contains n then return ← specDependencies env rest seen found
+    let seen := seen.insert n
+    if isCoreConst env n then
+      return ← specDependencies env rest seen { found with library := found.library.push n }
+    let some info := env.find? n | return ← specDependencies env rest seen found
+    let mut next ← specExprConsts env info.type
+    if let some value := info.value? then
+      next := next ++ (← specExprConsts env value)
+    specDependencies env (next.toList ++ rest) seen { found with project := found.project.push n }
+
+private def legacyPrimitive (n : Name) : Bool :=
+  #[`VeriTile.Triton.NumericDType.add, `VeriTile.Triton.NumericDType.sub,
+    `VeriTile.Triton.NumericDType.mul, `VeriTile.Triton.NumericDType.div,
+    `VeriTile.Triton.WithBot.realAdd, `VeriTile.Triton.WithBot.realSub,
+    `VeriTile.Triton.WithBot.realMul, `VeriTile.Triton.WithBot.realDiv,
+    `VeriTile.Triton.FloatDType.cast, `VeriTile.Triton.RoundingModel.cast,
+    `VeriTile.Triton.RoundingModel.storeValue, `VeriTile.Triton.Tile.reduceSum,
+    `VeriTile.Triton.Tile.dot].contains n
+
+/-- Syntax-level equivalence need not call an evaluator. Its operation and
+statement constructors are still primitive dependencies readers must see. -/
+private def syntaxPrimitive (env : Environment) (n : Name) : Bool :=
+  match env.find? n with
+  | some (.ctorInfo info) =>
+      #[`VeriTile.Triton.Op, `VeriTile.Triton.ComputeOp,
+        `VeriTile.Triton.Stmt, `VeriTile.Triton.ComputeStmt].contains info.induct
+  | _ => false
+
+/-- Stop before unfolding either public relation. Follow aliases one step at
+a time; a bounded failure is reported as an unwrapped legacy declaration. -/
+private def specConclusion (e : Expr) : MetaM Expr := do
+  let mut e := e
+  for _ in [:64] do
+    if e.isAppOf ``VeriTile.Spec.Real || e.isAppOf ``VeriTile.Spec.FloatingPoint then
+      return e
+    match ← Meta.unfoldDefinition? e (ignoreTransparency := true) with
+    | some next => e := next
+    | none => return e
+  return e
+
+private def ppSpecField (label : String) (projection : Name) (value : Expr) : MetaM Unit := do
+  let env ← getEnv
+  let mut field ← Meta.mkAppM projection #[value]
+  -- Reduce the record, then select the field without unfolding its contents.
+  -- In particular a program stays a named program, not a printed AST dump.
+  if let some info := env.getProjectionFnInfo? projection then
+    let record ← Meta.withTransparency .all <| Meta.whnf value
+    if record.isAppOf info.ctorName then
+      if let some selected := record.getAppArgs[info.numParams + info.i]? then
+        field := selected
+  if projection == ``VeriTile.Spec.Evidence.bias || projection == ``VeriTile.Spec.Evidence.vars then
+    let rendered ← Meta.withTransparency .all <| Meta.whnf
+      (← Meta.mkAppM ``VeriTile.Spec.GateStatus.label #[field])
+    if let some status := Meta.getStringValue? rendered then
+      logInfo m!"  {label}: {status}"
+      return
+  logInfo m!"  {label}: {← Meta.ppExpr field}"
+
+private def printAtomicEntry (entry : Expr) : MetaM Unit := do
+  let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[entry]
+  let evidence ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.evidence #[entry]
+  let contract ← Meta.mkAppM ``VeriTile.Spec.AtomicRule.contract #[rule]
+  ppSpecField "rule ID" ``VeriTile.Spec.Contract.ruleID contract
+  ppSpecField "atom lhs" ``VeriTile.Spec.AtomicRule.lhs rule
+  ppSpecField "atom rhs" ``VeriTile.Spec.AtomicRule.rhs rule
+  ppSpecField "instance key" ``VeriTile.Spec.Contract.instanceKey contract
+  ppSpecField "configuration" ``VeriTile.Spec.Contract.configuration contract
+  ppSpecField "warning policy" ``VeriTile.Spec.Contract.warningPolicy contract
+  ppSpecField "evidence key" ``VeriTile.Spec.Evidence.instanceKey evidence
+  ppSpecField "artifact" ``VeriTile.Spec.Evidence.artifact evidence
+  ppSpecField "bias gate" ``VeriTile.Spec.Evidence.bias evidence
+  ppSpecField "vars gate" ``VeriTile.Spec.Evidence.vars evidence
+  let validated ← Meta.mkAppM ``VeriTile.Spec.EvidenceValidated #[rule, evidence]
+  logInfo m!"  atomic validation obligation: {← Meta.ppExpr validated}"
+
+private def printFloatingPointTheory (assumptions lhs rhs : Expr) : MetaM Unit := do
+  logInfo m!"Implementation lhs: {← Meta.ppExpr lhs}"
+  logInfo m!"Implementation rhs: {← Meta.ppExpr rhs}"
+  logInfo m!"Atomic assumptions: {← Meta.ppExpr assumptions}"
+  logInfo "Declared atom scope (conservative; may include unused entries):"
+  let mut rest := assumptions
+  for i in [:256] do
+    let reduced ← Meta.withTransparency .all <| Meta.whnf rest
+    if reduced.isAppOf ``List.nil then
+      if i == 0 then logInfo "  none"
+      break
+    if reduced.isAppOf ``List.cons then
+      let args := reduced.getAppArgs
+      logInfo m!"Atom {i + 1}:"
+      printAtomicEntry args[1]!
+      rest := args[2]!
+    else
+      logInfo m!"  symbolic remainder: {← Meta.ppExpr rest}"
+      break
+    if i == 255 then logInfo "  further entries omitted (use the named table definition)."
+  logInfo "Meaning: formal implementation equivalence under admitted atomic assumptions."
+  logInfo "Symmetry, composition and common context are formal proof rules, not statistical gate guarantees."
+  logInfo "No IEEE value equality or whole-kernel two-gates result is implied."
+
+/-- Shared report implementation, also exercised by the regression fixtures. -/
+def printSpec (name : Name) (full : Bool := false) : CommandElabM Unit := do
+  let env ← getEnv
+  unless headlineAttr.hasTag env name do
+    throwError "{name}: not a registered specification"
+  let info ← liftCoreM <| getConstInfo name
+  let deps ← liftCoreM <| specDependencies env [name]
+  let order (ns : Array Name) := ns.qsort (·.toString < ·.toString)
+  let primitives := order ((deps.project ++ deps.library).filter fun n =>
+    specPrimitiveAttr.hasTag env n || legacyPrimitive n || syntaxPrimitive env n)
+  let rules := order ((deps.project ++ deps.library).filter (specRuleAttr.hasTag env))
+  logInfo m!"Specification: {name}"
+  liftTermElabM <| Meta.forallTelescope info.type fun params conclusion => do
+    let target ← specConclusion conclusion
+    if target.isAppOf ``VeriTile.Spec.FloatingPoint then
+      logInfo "Kind: FLOATING_POINT_EQUIVALENCE (two-gates-admitted atom assumptions)"
+    else if target.isAppOf ``VeriTile.Spec.Real then
+      logInfo "Kind: REAL (explicit mathematical claim)"
+    else
+      logInfo "Kind: REAL (legacy unwrapped claim; inspect the semantic dependencies)"
+    logInfo m!"Conclusion: {← Meta.ppExpr conclusion}"
+    logInfo "Declared parameters and assumptions (including implicit/instance binders):"
+    if params.isEmpty then logInfo "  none"
+    for param in params do
+      let decl ← Meta.getFVarLocalDecl param
+      let kind ← if ← Meta.isProp decl.type then pure "assumption"
+        else if (← Meta.isClass? decl.type).isSome then pure "class parameter"
+        else pure "parameter"
+      logInfo m!"  {kind} {decl.userName}: {← Meta.ppExpr decl.type}"
+    if target.isAppOf ``VeriTile.Spec.FloatingPoint then
+      let args := target.getAppArgs
+      printFloatingPointTheory args[2]! args[3]! args[4]!
+    if !params.isEmpty then
+      logInfo "Scope: conditional on all declared assumptions; this report does not discharge them."
+  logInfo m!"Reachable execution primitives ({primitives.size}): {primitives}"
+  logInfo m!"Reachable registered rules ({rules.size}): {rules}"
+  liftTermElabM do
+    for n in rules do
+      let ruleInfo ← getConstInfo n
+      logInfo m!"  rule {n}: {← Meta.ppExpr ruleInfo.type}"
+      if let .defnInfo ruleDef := ruleInfo then
+        logInfo m!"    definition: {← Meta.ppExpr ruleDef.value}"
+    logInfo "Reachable proposition-valued structure/class fields:"
+    let mut any := false
+    for n in order (deps.project ++ deps.library) do
+      if (env.getProjectionFnInfo? n).isSome then
+        let ty := (← getConstInfo n).type
+        if ← Meta.isProp ty then
+          any := true
+          logInfo m!"  {n}: {← Meta.ppExpr ty}"
+    unless any do logInfo "  none"
+  if deps.project.contains `VeriTile.Triton.RoundingModel then
+    logInfo "Semantic boundary: ABSTRACT CAST/STORE ROUNDING; this is not a concrete FP execution certificate."
+  let (_, ax) := ((CollectAxioms.collect name).run env).run {}
+  logInfo m!"Transitive axioms: {order ax.axioms}"
+  let bad := ax.axioms.filter fun a => ! #[`propext, `Classical.choice, `Quot.sound].contains a
+  unless bad.isEmpty do logWarning m!"Nonstandard axioms: {bad}"
+  logInfo m!"Dependency boundary: {deps.project.size} project declarations; {deps.library.size} trusted library declarations."
+  logInfo "Conservative type/proof dependency report; reachable definitions can include unexecuted branches."
+  if full then
+    logInfo m!"Project dependencies: {order deps.project}"
+    logInfo m!"Trusted library boundary: {order deps.library}"
+
+elab "#print_spec " id:ident : command => do
+  printSpec (← liftCoreM <| realizeGlobalConstNoOverload id)
+
+elab "#print_spec " id:ident " full" : command => do
+  printSpec (← liftCoreM <| realizeGlobalConstNoOverload id) true
 
 end VeriTile.Meta

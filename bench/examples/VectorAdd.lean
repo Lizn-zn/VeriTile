@@ -16,7 +16,7 @@ bench/examples/VectorAdd
    arithmetic.
 4. **The spec** — the file's single `specification`:
 
-       add_kernel_correctness : addIO B ⊨ fun xs ys i => xs i + ys i
+       add_kernel_correctness : Spec.Real (addIO B ⊨ fun xs ys i => xs i + ys i)
 
    `addIO` is the kernel's **IO signature**: which buffer is which
    argument, where each program reads its input tiles, where it writes its
@@ -314,7 +314,7 @@ signature — see the module docstring for the full Hoare triple `⊨`
 unfolds to. Proof: `Implements.intro` assembles the region-model triple
 (Part 2) with the bridge side conditions (Part 3). -/
 specification add_kernel_correctness (B : Nat) (hB : 0 < B) :
-    addIO B ⊨ fun xs ys i => xs i + ys i := by
+    Spec.Real (addIO B ⊨ fun xs ys i => xs i + ys i) := by
   refine KernelIO₂.Implements.intro _ ?_ ?_ ?_
   · exact addKernel_flattenOk ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B
   · intro bounds s h1 h2 h3
@@ -327,9 +327,11 @@ specification add_kernel_correctness (B : Nat) (hB : 0 < B) :
 -- No `sorry`, no smuggled axiom, in the headline's transitive proof.
 #axiomsClean add_kernel_correctness
 
-/- The headline's statement surface is the IO signature plus the audit-once
-Hoare-triple combinator — no other project constant. -/
+/- The headline's statement surface is the real-specification marker, the IO
+signature and the audit-once Hoare-triple combinator. -/
 #stmtSurfaceSubset add_kernel_correctness ⊆
-  [addIO, VeriTile.Triton.KernelIO₂.Implements, VeriTile.Triton.KernelIO₂.B]
+  [Spec.Real, addIO, VeriTile.Triton.KernelIO₂.Implements, VeriTile.Triton.KernelIO₂.B]
+
+#print_spec add_kernel_correctness
 
 end VeriTile.Bench.Examples.VectorAdd

@@ -82,6 +82,8 @@ The commands:
 | `#stmtSurfaceSubset T ⊆ [a, b, …]` | `T`'s statement mentions no project constant outside the list |
 | `#specNonCircular s avoiding [k, …]` | spec `s`'s definition never references a kernel `k` |
 | `#auditStmt T` | inspection — lists the project constants in `T`'s statement |
+| `#print_spec T` | inspection — public kind, assumptions, transitive primitive/rule dependencies, model fields, numerical configuration/evidence, and axioms |
+| `#print_spec T full` | the same report plus all reached project declarations and trusted-library boundaries |
 | `#auditModuleSpecs` | discover current-module kernels/specs in Lean, check transitive independence, and report coverage |
 
 ## Add a self-audit to a file
@@ -109,6 +111,33 @@ any gate is violated:
 which pulls the heavy analysis chain), so a routine lite `lake build` stays fast.
 
 ## Audit boundary
+
+`#print_spec` follows elaborated declaration types **and** proof/definition
+bodies through project helpers. Raw structure projections are included, so a
+model law such as `RoundingModel.round_idem` cannot vanish just because Lean
+represents its use as `Expr.proj`. Top-level parameters/hypotheses and reachable
+proposition-valued structure/class fields are reported separately from axioms:
+`#print axioms` alone does not list a theorem's explicit assumptions.
+
+The dependency report is conservative and syntactic. A reachable generic
+evaluator can mention operations on unexecuted branches. Declared hypotheses
+may be unused. Tagged rules/primitives come from the elaborated dependency
+graph, not a manually supplied per-theorem list; the tags identify categories,
+not semantic validity. Untagged project declarations are available in `full`
+output. It stops at trusted library declarations, whose names are also listed
+in `full` output; it does not claim a minimal proof slice or a GPU trace.
+
+For `lhs ≡[R] rhs` in the `VeriTile.Spec` scope (underlying `Spec.FloatingPoint`),
+the report expands the rule model `R`, showing both implementations and the declared
+atom table, including each atom's configuration, NOT_RUN status and missing
+artifacts (symbolic fields remain symbolic). The table is a conservative scope,
+not an exact used-atom trace. `AcceptedAtom`, `AcceptedAssumptions` and their
+`EvidenceValidated` premises remain obligations. Evidence is attached to each
+atom; the public theorem is a derivation, not a whole-kernel gate receipt. This
+command does not run two-gates, import trusted receipts, infer population
+guarantees, or convert a conditional theorem into an unconditional result.
+Nonstandard transitive axioms are explicitly reported; `#axiomsClean` remains
+the failing gate. The standard-base whitelist is unchanged.
 
 The statement surface excludes declarations originating in the trusted `Init`,
 `Std`, `Lean`, and `Mathlib` modules. Origin comes from Lean's environment,
