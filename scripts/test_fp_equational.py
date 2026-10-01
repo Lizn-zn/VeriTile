@@ -35,6 +35,9 @@ class FPEquationalTests(unittest.TestCase):
         self.assertIn("FP assumptions used by inside_opaque_exp:\n  add_commute\n", output)
         self.assertEqual(output.count("unresolved FP proof"), 1)
 
+    def test_current_admissions_do_not_silently_supply_missing_algebra(self):
+        self.assertEqual(self.lean((ROOT / "bench/tests/FPAdmissionCoverage.lean").read_text()), "")
+
     def test_kernel_proof_is_independent_and_prints_only_two_atoms(self):
         source = (ROOT / "bench/examples/RowWiseSumFPEquiv.lean").read_text() + '''
 open Lean Elab Command in

@@ -38,8 +38,8 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | Original fp64 intermediate arithmetic has no admitted fp64 row |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
-| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: pending algebra and loop/reduction derivation |
-| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: pending algebra and loop/reduction derivation |
+| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: missing initialization/division relations, then loop/reduction derivation |
+| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: missing scalar relations for statistics, then loop/reduction derivation |
 
 There are currently 18 correctness modules and 11 FP equivalence modules. The
 eight legacy equivalence modules remain as source references; six of their
@@ -69,6 +69,13 @@ softmax, logsumexp, normalization, fusion, or online-recurrence rules.
 In particular, the table has no exp/log identity, no max identity and no fp64
 instance. `SQRT-RSQRT` was not admitted. `DIV-RCP` was measured with Triton's
 `div_rn`; an ordinary or approximate division cannot silently use that result.
+
+[The remaining prerequisites](./FPRemainingAdmissionGaps.md) are backed by
+Lean-checked scalar countermodels satisfying all currently admitted rule
+families. In particular, the table does not force additive identity, Welford
+initialization, ordinary-division replacement or the exp/log transformations.
+These are algebraic coverage checks, not numerical gate rejections. The
+remaining entries cannot be completed merely by adding more proof automation.
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently
@@ -196,10 +203,13 @@ The checks cover:
   `Float/StructuralIO`, `FusedSiLUFPEquiv`, `FusedSwigluFPEquiv`,
   `RowWiseMaxFPEquiv` and the boundary fixture, including its named reduction
   and IO-interface counterexamples.
+  The sum extension replays `Float/Equational`, `Float/TermModel`,
+  `RowWiseSumFPEquiv` and their updated interfaces and boundary fixtures;
+  all 510 theorem targets in that batch were accepted.
 
-The current regression suite has 48 passing tests: 7 example-pair/contract
-tests, 7 structural FP tests and 34 admission, assumption-printer and
-specification-surface tests.
+The regression suite includes 7 example-pair/contract tests, 7 structural FP
+tests, 6 expression/reduction/admission-coverage tests and 35 admission,
+assumption-printer and specification-surface tests.
 
 The comparator also has 7 passing integration tests. Its theorem inventory
 enumerates and looks up declarations in the same completed kernel environment,
