@@ -12,13 +12,13 @@ namespace VeriTile.Triton.DSL
 
 def ensureComputeArithComposable (ctx : String) (e : EOut) : MacroM Unit := do
   match e.computeTerm, e.computeDType? with
-  | some _, some .fp32 => pure ()
+  | some _, some .fp32 | some _, some .real => pure ()
   | some _, _ =>
       Macro.throwError
-        (ctx ++ ": compute-only expressions without a composable fp32 annotation must be assigned or stored directly before algorithm-layer composition")
+        (ctx ++ ": compute-only expressions without a composable floating annotation must be assigned or stored directly before algorithm-layer composition")
   | none, _ => pure ()
 
-def fp32ComputeArith? (ctx : String) (algTerm : TSyntax `term) (a b : EOut) :
+def floatingComputeArith? (ctx : String) (algTerm : TSyntax `term) (a b : EOut) :
     MacroM (Option (TSyntax `term) × Option DInfo) := do
   match a.computeDType?, b.computeDType? with
   | none, none => pure (none, none)
@@ -26,16 +26,18 @@ def fp32ComputeArith? (ctx : String) (algTerm : TSyntax `term) (a b : EOut) :
       -- This is annotation tracking only: Algorithm semantics still owns the
       -- arithmetic term; Compute records that the result remains fp32.
       pure (some (← fp32ComputeExpr algTerm), some .fp32)
+  | some .real, none | none, some .real | some .real, some .real =>
+      pure (some (← fp64ComputeExpr algTerm), some .real)
   | some _, _ | _, some _ =>
       Macro.throwError
-        (ctx ++ ": only fp32 compute arithmetic annotations are supported")
+        (ctx ++ ": mixed or unsupported compute precisions; assign explicit casts first")
 
 def ensureComputeCmpComposable (ctx : String) (e : EOut) : MacroM Unit := do
   match e.computeTerm, e.computeDType? with
-  | some _, some .fp32 => pure ()
+  | some _, some .fp32 | some _, some .real => pure ()
   | some _, _ =>
       Macro.throwError
-        (ctx ++ ": compute-only expressions without a composable fp32 annotation must be assigned or stored directly before algorithm-layer composition")
+        (ctx ++ ": compute-only expressions without a composable floating annotation must be assigned or stored directly before algorithm-layer composition")
   | none, _ => pure ()
 
 partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
@@ -65,7 +67,7 @@ partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (
   let np ← a'.dtype.numericProof
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
   let algTerm ← `($op $np $bc $a'.term $b'.term)
-  let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx algTerm a' b'
+  let (computeTerm?, computeDType?) ← floatingComputeArith? ctx algTerm a' b'
   pure ⟨algTerm, a'.dtype, outShape, computeTerm?, computeDType?⟩
 
 /-- `tl.extra.cuda.libdevice.pow(base, exponent)`: element-wise real power,
@@ -99,7 +101,7 @@ partial def expandPow (expandExpr : ExprExpander) (env : Env) (ctx : String)
   let bTerm ← realMathTerm (ctx ++ " exponent") b'
   let (bc, outShape) ← broadcastTerm a'.shape b'.shape ctx
   let algTerm ← `(Op.pow $bc $aTerm $bTerm)
-  let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx algTerm a' b'
+  let (computeTerm?, computeDType?) ← floatingComputeArith? ctx algTerm a' b'
   pure ⟨algTerm, .real, outShape, computeTerm?, computeDType?⟩
 
 partial def expandBoolMaskMul? (expandExpr : ExprExpander) (env : Env)
@@ -119,6 +121,7 @@ partial def expandBoolMaskMul? (expandExpr : ExprExpander) (env : Env)
     let computeTerm? ←
       match val.computeDType? with
       | some .fp32 => pure (some (← fp32ComputeExpr algTerm))
+      | some .real => pure (some (← fp64ComputeExpr algTerm))
       | some _ =>
           Macro.throwError "bool mask multiplication: only fp32 compute annotations are supported"
       | none => pure none
@@ -290,7 +293,7 @@ partial def expandMinMax (expandExpr : ExprExpander) (env : Env) (ctx : String) 
   let aTerm ← coerceShape a'.term a'.shape outShape (ctx ++ " lhs")
   let bTerm ← coerceShape b'.term b'.shape outShape (ctx ++ " rhs")
   let algTerm ← `(Op.where ($cmp $cp $bc $a'.term $b'.term) $aTerm $bTerm)
-  let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx algTerm a' b'
+  let (computeTerm?, computeDType?) ← floatingComputeArith? ctx algTerm a' b'
   pure ⟨algTerm, a'.dtype, outShape, computeTerm?, computeDType?⟩
 
 partial def expandScanOp : TSyntax `tritonScanOp → MacroM (TSyntax `term)
@@ -490,7 +493,7 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
         if keepDims then setNthOne dims axisIdx else eraseNth dims axisIdx
       let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
       let term ← `($op (⟨$axisLit, by simp⟩) $kdLit $eTerm)
-      let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx term e' e'
+      let (computeTerm?, computeDType?) ← floatingComputeArith? ctx term e' e'
       pure ⟨term, .real, SInfo.dims outDims, computeTerm?, computeDType?⟩
   | none =>
       -- `axis = None` (Triton default): reduce over all dimensions.
@@ -512,7 +515,7 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
           pure (List.replicate dims.length oneLit)
         else
           pure []
-      let (computeTerm?, computeDType?) ← fp32ComputeArith? ctx term e' e'
+      let (computeTerm?, computeDType?) ← floatingComputeArith? ctx term e' e'
       pure ⟨term, .real, SInfo.dims outDims, computeTerm?, computeDType?⟩
 
 /-- Lower `tl.max(...)` reductions. Real-valued tiles keep the existing
@@ -596,7 +599,9 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
           `(Op.reduceMaxNat (⟨$axisLit, by simp⟩) $kdLit $eTerm)
         else
           `(Op.reduceMax (⟨$axisLit, by simp⟩) $kdLit $eTerm)
-      pure ⟨term, outDType, SInfo.dims outDims, none, none⟩
+      let (ct, cp) ← if isNat then pure (none, none)
+                    else floatingComputeArith? "tl.max" term e' e'
+      pure ⟨term, outDType, SInfo.dims outDims, ct, cp⟩
   | none =>
       let mut term := eTerm
       for j in [:dims.length] do
@@ -617,7 +622,9 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
           pure (List.replicate dims.length oneLit)
         else
           pure []
-      pure ⟨term, outDType, SInfo.dims outDims, none, none⟩
+      let (ct, cp) ← if isNat then pure (none, none)
+                    else floatingComputeArith? "tl.max" term e' e'
+      pure ⟨term, outDType, SInfo.dims outDims, ct, cp⟩
 
 /-- Lower a `tl.dot(a, b)` to `Op.dot a b` (or `Op.dotInt` on the `.int`
 channel).

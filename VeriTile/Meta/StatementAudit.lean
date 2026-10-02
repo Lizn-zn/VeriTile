@@ -240,6 +240,7 @@ private def fpProofType (name : Name) : Bool :=
     ``VeriTile.Spec.ProgramSyntax.numerical,
     `VeriTile.Triton.FP.Equational.TermEq, `VeriTile.Triton.FP.Equational.OptionalEq,
     `VeriTile.Triton.FP.Structural.IO₁NumericalEquiv,
+    `VeriTile.Triton.FP.Guarded.Equivalent,
     `VeriTile.Triton.FP.Structural.CellRelated,
     `VeriTile.Triton.FP.Structural.ValueRelated].contains name
 

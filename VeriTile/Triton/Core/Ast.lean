@@ -471,10 +471,33 @@ noncomputable def decodeReal (x : Float32Bits) : WithBot ℝ :=
 
 end Float32Bits
 
+/-- Binary64 payloads remain separate from binary32, including at projection. -/
+structure Float64Bits where
+  bits : BitVec 64
+  deriving Repr, BEq, DecidableEq
+
+namespace Float64Bits
+
+/-- Finite-normal binary64 projection, with the same partial domain as binary32. -/
+def decodeRat (x : Float64Bits) : Option Rat :=
+  let n := x.bits.toNat
+  let sign := n / 2^63
+  let exp := (n / 2^52) % 2048
+  let frac := n % 2^52
+  if exp = 0 ∨ exp = 2047 then none else
+    let significand : Rat := (2^52 + frac : Nat)
+    let signed := if sign = 0 then significand else -significand
+    let e := Int.ofNat exp - 1075
+    some (if 0 ≤ e then signed * (2 : Rat)^e.toNat
+          else signed / (2 : Rat)^(-e).toNat)
+
+end Float64Bits
+
 inductive ComputeDType where
   | uint32
   | int32
   | fp32
+  | fp64
   deriving Repr, BEq, DecidableEq
 
 namespace ComputeDType
@@ -482,12 +505,13 @@ namespace ComputeDType
 def eraseDType : ComputeDType → AlgDType
   | .uint32 => .nat
   | .int32 => .int
-  | .fp32 => .real
+  | .fp32 | .fp64 => .real
 
 def width : ComputeDType → Nat
   | .uint32 => 32
   | .int32 => 32
   | .fp32 => 32
+  | .fp64 => 64
 
 end ComputeDType
 
@@ -495,6 +519,7 @@ def ComputeCarrier : ComputeDType → Type
   | .uint32 => UInt32Bits
   | .int32 => Int32Bits
   | .fp32 => Float32Bits
+  | .fp64 => Float64Bits
 
 inductive ComputeOp : ComputeDType → TileShape → Type where
   | alg : (dtype : ComputeDType) →
@@ -527,6 +552,8 @@ def bitcastPayload (src dst : ComputeDType) :
   | .fp32, .uint32 => fun x => some ({ bits := x.bits } : UInt32Bits)
   | .fp32, .int32 => fun x => some ({ bits := x.bits } : Int32Bits)
   | .fp32, .fp32 => fun x => some x
+  | .fp64, .fp64 => fun x => some x
+  | .fp64, _ | _, .fp64 => fun _ => none
 
 def constPayload? : ComputeOp dtype [] → Option (ComputeCarrier dtype)
   | .alg _ _ => none
@@ -547,6 +574,11 @@ def constToAlgorithm? :
       match Float32Bits.decodeRat value with
       | some q => Except.ok (Op.const (q : ℝ))
       | none => Except.error (.unsupportedBitcast "unsupported fp32 decode")
+
+  | .fp64, value =>
+      match Float64Bits.decodeRat value with
+      | some q => Except.ok (Op.const (q : ℝ))
+      | none => Except.error (.unsupportedBitcast "unsupported fp64 decode")
 
 def constOpToAlgorithm? (op : ComputeOp dtype []) :
     Except EraseDTypeError (Op dtype.eraseDType []) :=

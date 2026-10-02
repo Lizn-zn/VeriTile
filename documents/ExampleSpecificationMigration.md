@@ -34,15 +34,15 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Adam-named Lion update | `AdamUpdateGridLaunchCorrect` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunchFPEquiv` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStableCorrect` — checked for both original kernels against the softmax formula | Naive versus stable: missing admitted elementary exp laws |
 | Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable: missing admitted elementary exp/log laws |
-| Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | Division versus reciprocal multiplication: pending ordinary-division admission; the old `div_rn` result is a different relation |
-| Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | Original fp64 intermediate arithmetic has no admitted fp64 row |
+| Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | `SoftmaxReciprocalFPEquiv` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
+| Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmaxFPEquiv` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
 | Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: missing initialization/division relations, then loop/reduction derivation |
 | Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: missing scalar relations for statistics, then loop/reduction derivation |
 
-There are currently 18 correctness modules and 11 FP equivalence modules. The
-eight legacy equivalence modules remain as source references; six of their
+There are currently 18 correctness modules and 13 FP equivalence modules. The
+eight legacy equivalence modules remain as source references; four of their
 original transformations still await FP migration. Their presence does not
 complete the pending FP entries above.
 
@@ -62,25 +62,37 @@ declared scratch windows.
 
 ## Admission and proof boundaries
 
-The trusted PR #9 report admits 30 instances of elementary relations. Its
-accepted table is unchanged by this migration. There are no admitted whole
-softmax, logsumexp, normalization, fusion, or online-recurrence rules.
+The trusted PR #9 report admits 30 instances. PR #10 adds 32 accepted
+supplemental scalar instances, for **62 accepted instances** across the two
+frozen tables. Neither table contains a whole softmax, logsumexp,
+normalization, reduction or online-recurrence rule. The original numerical
+sources and source hashes remain unchanged.
 
-In particular, the table has no exp/log identity, no max identity and no fp64
-instance. `SQRT-RSQRT` was not admitted. `DIV-RCP` was measured with Triton's
-`div_rn`; an ordinary or approximate division cannot silently use that result.
+The supplemental table excludes eight WARN rows, three LOG-MUL domain events,
+and thirteen unsupported fp64 combinations. EXP-SUB and LOG-EXP were not
+admitted. MUL-RCP-CANCEL was admitted only at bf16 input/fp32 work/bf16 output;
+it is not a bare fp32 cancellation law. The old DIV-RCP uses `div_rn`; the new
+DIV-MUL-RCP measures ordinary Triton division separately.
 
-[The remaining prerequisites](./FPRemainingAdmissionGaps.md) are backed by
-Lean-checked scalar countermodels satisfying all currently admitted rule
-families. In particular, the table does not force additive identity, Welford
-initialization, ordinary-division replacement or the exp/log transformations.
-These are algebraic coverage checks, not numerical gate rejections. The
-remaining entries cannot be completed merely by adding more proof automation.
+The two reciprocal examples use `Guarded.IO`: the signature includes a domain
+contract checking finite exponential values and a finite, nonzero denominator
+at the shared prefix. They quantify over opaque numerical interpretations
+satisfying the selected scalar theory, prove both runs succeed, and frame every
+cell outside the output window. Exp, max and sum are identical opaque operations
+on both sides; no whole-softmax law or positivity of abstract exp is assumed.
+Only the fp64 relation's final fp32 outputs are equated. The fp32 example lifts
+its admitted fp32 relation through the common bf16 output cast.
 
-The [supplemental GPU package](../experiments/floating_point/supplement/README.md)
-prepares the additional scalar experiments without changing this coverage count
-or the admitted table. Results are pending; count conversions, operation domains
-and the remaining loop/reduction proofs are not discharged by preparing a runner.
+`ComputeDType.fp64` and the DSL preserve explicit float64 casts and precision
+through arithmetic, max, sum, exp and log in these examples. The wide FP example
+binds its fp32 load before widening so each precision boundary is explicit.
+Binary64 constant projection is partial (finite normals); the structural
+interpreter deliberately rejects raw fp64 payload constants and typed fp64
+loads, which these examples do not use. This is not a complete IEEE evaluator.
+
+[The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
+frozen PR #9 algebraic countermodels from the newly admitted rules. Stable
+softmax, stable logsumexp, online softmax, Welford and LayerNorm remain pending.
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently

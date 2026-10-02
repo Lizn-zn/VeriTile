@@ -391,12 +391,14 @@ abbrev evalOp_unfold := @evalOp.eq_def
 noncomputable def evalComputeOp {α : Type} [Inhabited α] (M : Algebra α) :
     ComputeOp dtype shape → State α → Option (Values α dtype.eraseDType shape)
   | .alg d e, s => evalOp M (some d) e s
+  | .const (dtype := .fp64) _, _ => none
   | .const (dtype := .fp32) c, _ => some (fun _ => M.fp32Bits c)
   | .const (dtype := .int32) c, _ => some (fun _ => c.toInt)
   | .const (dtype := .uint32) c, _ => some (fun _ => c.toNat)
   | .full _ e, s => do
       let v ← evalComputeOp M e s
       return fun _ => v PUnit.unit
+  | .load .fp64 .., _ => none
   | .load .fp32 mem mask, s => do
       let v ← evalOp M (some .fp32) (.load .real mem mask) s
       return fun i => M.fp32Load (v i)

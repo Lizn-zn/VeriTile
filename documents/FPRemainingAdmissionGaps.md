@@ -1,9 +1,9 @@
 # Remaining FP example prerequisites
 
-The migration has 18 real correctness files and 11 FP equivalence files. The
-remaining seven entries retain their original transformations. Completing them
-requires more than loop support: the current 30 admitted instances do not
-provide enough numerical relations.
+The migration has 18 real correctness files and 13 FP equivalence files.
+PR #10's 32 accepted scalar instances have joined PR #9's original 30. The
+ordinary-division and fp64-work reciprocal softmax cases are now proved under
+their explicit operand domains. Five original transformations remain pending.
 
 ## Checked algebraic evidence
 
@@ -11,12 +11,14 @@ provide enough numerical relations.
 countermodels for the **scalar equations** in the frozen admission table. Its
 list of rule families is computed from `ReportedAdmission.all`; an added family
 changes the coverage obligation. The examples below use identity casts, so the
-countermodels satisfy every currently admitted precision instance of each
+countermodels satisfy every PR #9 precision instance of each
 family. All numerical symbols are interpreted on rational numbers.
 
 These are not IEEE executions, GPU failures, or two-gates results. They show
 that the selected equations alone leave the proposed conclusion undetermined.
-The source kernels, the report and the 30 admitted instances are unchanged.
+The fixture is deliberately scoped to PR #9. Its add-zero and ordinary-division
+countermodels do **not** satisfy the newly admitted supplemental table, so they
+are no longer evidence that those particular relations are unavailable.
 
 | Missing conclusion | Checked countermodel |
 |---|---|
@@ -30,16 +32,14 @@ The source kernels, the report and the 30 admitted instances are unchanged.
 The fixture also checks that the frozen table has only bf16/fp32 compute
 formats. It supplies no fp64 instance.
 
-## Work needed for each original case
+## Work still needed
 
 | Case | Numerical prerequisites still to settle | Implementation work after admission |
 |---|---|---|
-| `SoftmaxReciprocal` | The scalar relation for **ordinary Triton `/`** versus `a * (1 / b)`, with its actual compute/output formats. The existing `div_rn` experiment is a different pair. | Preserve precision through all scalar operations and derive the local replacement inside the common exp/max/sum context. |
-| `FloatDTypeSoftmax` | The same scalar relation at the original fp64 intermediate precision, with fp32 input and final output conversion. | Retain the original fp32-load/fp64-work program and represent its compute precision explicitly. |
-| `SoftmaxStable` | Elementary exp and reciprocal/scaling relations sufficient to derive normalization invariance. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
-| `StableLogSumExp` | Elementary exp and log relations, including the domain of each log operation. | Derive the sum factorization and log transformation from these atoms. |
-| `OnlineSoftmax` | Elementary exp relations, max-reduction identities and the explicit negative-infinity initialization behavior. | Prove the loop invariant in the original recurrence scope. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
-| `Welford` | Initial-value/constant laws and appropriate division/count relations, beyond the currently admitted associativity, distribution and cancellation laws. | Connect explicit reduction trees to the online loop and retain both output windows and memory framing. |
+| `SoftmaxStable` | EXP-SUB still has WARN results; initialization and ordinary division alone do not establish normalization invariance. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
+| `StableLogSumExp` | EXP-SUB and LOG-EXP have WARN results; LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
+| `OnlineSoftmax` | Scalar max identities and EXP-NEG-INF-SUB are admitted; the required EXP-SUB relation is not. | Prove the loop invariant in the original recurrence scope. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
+| `Welford` | Basic identity laws are admitted. MUL-RCP-CANCEL is accepted only with a bf16 output cast, not for fp32 statistics; integer-count conversion and nonzero-count obligations remain. | Connect explicit reduction trees to the online loop and retain both output windows and memory framing. |
 | `FusedLayerNorm` | The Welford prerequisites at the actual arithmetic precision. | Derive the statistics replacement and preserve the common normalization, affine operations and bf16 output conversion. |
 
 This table lists prerequisites, not newly available assumptions. It does not
@@ -47,8 +47,8 @@ assert that any proposed numerical experiment will pass.
 
 ## Constraints on the supplemental atom set
 
-The next atom set needs a derivation-level dependency check before a GPU run.
-For example, add-zero is a missing elementary identity; sub-zero should then
+Further atom sets need a derivation-level dependency check before a GPU run.
+For example, add-zero is now admitted; sub-zero should then
 be derived from it and the existing CANCEL relation instead of automatically
 adding another experiment. Whole softmax, Welford, LayerNorm and reduction
 transformations remain excluded from the atomic registry.
@@ -72,24 +72,25 @@ recorded as such.
 Additional candidate experiments should use separate source and report files:
 the current imported report binds hashes of the original catalogue, kernels,
 runner, registry and gates. Rewriting those sources would invalidate its
-source check. The existing 30 rows remain the available assumptions until new
-results are supplied and admitted.
+source check. Both frozen reports remain unchanged; additional measurements
+must use a new source identity and report.
 
 ## Validation
 
 The [supplemental experiment package](../experiments/floating_point/supplement/README.md)
-now prepares 14 local scalar candidates (43 executable precision instances),
-with ordinary division distinguished from `div_rn`, explicit domains, and a
-fp64-operand/fp64-work/fp32-output division pair. It uses the unchanged gates and
-separate source identities. These are **pending experiments**, not additions
-to the 30 admitted instances or completed proofs. Integer-count conversions,
-domain obligations and loop/reduction derivations remain proof work; the
-default unconditioned normal profile can leave LOG-MUL inconclusive.
+completed 40 instances: 32 ACCEPT and eight WARN. Three LOG-MUL instances had
+domain events; thirteen fp64 combinations are unsupported. Only the 32 ACCEPT
+rows enter `SupplementalAdmission`. The exporter checks source hashes, manifest
+identity, complete report coverage, gate status and precision, while trusting
+the user's published numerical results rather than requesting another replay.
 
 ```bash
 lake env lean bench/tests/FPAdmissionCoverage.lean
 python3 -m unittest scripts.test_fp_equational
 python3 scripts/export_numerical_rules.py --trust-report --check
+python3 scripts/export_supplemental_rules.py --trust-report --check
+python3 -m unittest scripts.test_export_supplemental_rules scripts.test_fp_supplemental
+lake build TritonBenchSpecExamples
 ```
 
 The coverage fixture also runs the project axiom audit. None of its

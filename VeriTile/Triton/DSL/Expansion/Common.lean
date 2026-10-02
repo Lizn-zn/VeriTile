@@ -279,6 +279,11 @@ def inferComputeSourceDType (ctx : String) (dtype : DInfo) : MacroM CInfo := do
 def fp32ComputeExpr (term : TSyntax `term) : MacroM (TSyntax `term) :=
   `(ComputeExpr.compute (ComputeOp.alg ComputeDType.fp32 $term))
 
+/-- In compute annotations, `.real` denotes an explicit `tl.float64` target;
+`none` continues to mean that no compute precision has been specified. -/
+def fp64ComputeExpr (term : TSyntax `term) : MacroM (TSyntax `term) :=
+  `(ComputeExpr.compute (ComputeOp.alg ComputeDType.fp64 $term))
+
 def fp32ComputeLoadExpr (mem mask : TSyntax `term) : MacroM (TSyntax `term) :=
   `(ComputeExpr.compute (ComputeOp.load ComputeDType.fp32 $mem $mask))
 

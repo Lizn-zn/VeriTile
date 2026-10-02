@@ -167,6 +167,8 @@ private def expandIdentRefByName (env : Env) (name : String) : MacroM EOut := do
   match lookupComputeDType? env name with
   | some .fp32 =>
       pure ⟨term, dtype, shape, some (← fp32ComputeExpr term), some .fp32⟩
+  | some .real =>
+      pure ⟨term, dtype, shape, some (← fp64ComputeExpr term), some .real⟩
   | some _ =>
       pure ⟨term, dtype, shape,
         some (← `(ComputeExpr.opaque ("runtime compute value `" ++ $s ++ "`"))),
@@ -793,6 +795,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               let srcProof ← e'.dtype.floatProof
               let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
               pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
+          | .real =>
+              let srcProof ← e'.dtype.floatProof
+              let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨algTerm, .real, e'.shape, some (← fp64ComputeExpr algTerm), some .real⟩
           | _ =>
               let srcProof ← e'.dtype.floatProof
               let dstProof ← dst.floatProof
@@ -879,6 +885,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
               let srcProof ← e'.dtype.floatProof
               let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
               pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
+          | _, .real =>
+              let srcProof ← e'.dtype.floatProof
+              let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+              pure ⟨algTerm, .real, e'.shape, some (← fp64ComputeExpr algTerm), some .real⟩
           | _, _ =>
               let srcProof ← e'.dtype.floatProof
               let dstProof ← dst.floatProof
@@ -916,6 +926,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           pure ⟨term, dtype, shape,
             some (← fp32ComputeExpr term),
             some .fp32⟩
+      | some .real =>
+          pure ⟨term, dtype, shape,
+            some (← fp64ComputeExpr term),
+            some .real⟩
       | some _ =>
           pure ⟨term, dtype, shape,
             some (← `(ComputeExpr.opaque ("runtime compute value `" ++ $s ++ "`"))),
@@ -954,7 +968,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.exp($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.exp" e'
-      pure ⟨← `(Op.exp $eTerm), .real, e'.shape, none, none⟩
+      let term ← `(Op.exp $eTerm)
+      let (ct, cp) ← floatingComputeArith? "tl.exp" term e' e'
+      pure ⟨term, .real, e'.shape, ct, cp⟩
   | `(tritonExpr| tl.exp2($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.exp2" e'
@@ -979,7 +995,9 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
   | `(tritonExpr| tl.log($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.log" e'
-      pure ⟨← `(Op.log $eTerm), .real, e'.shape, none, none⟩
+      let term ← `(Op.log $eTerm)
+      let (ct, cp) ← floatingComputeArith? "tl.log" term e' e'
+      pure ⟨term, .real, e'.shape, ct, cp⟩
   | `(tritonExpr| tl.log2($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.log2" e'
@@ -1184,6 +1202,10 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
           let srcProof ← e'.dtype.floatProof
           let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
           pure ⟨algTerm, .real, e'.shape, some (← fp32ComputeExpr algTerm), some .fp32⟩
+      | .real =>
+          let srcProof ← e'.dtype.floatProof
+          let algTerm ← `(Op.castFloat $srcProof FloatDType.real $e'.term)
+          pure ⟨algTerm, .real, e'.shape, some (← fp64ComputeExpr algTerm), some .real⟩
       | _ =>
           let srcProof ← e'.dtype.floatProof
           let dstProof ← dst.floatProof
@@ -1402,7 +1424,7 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let (bc, outShape) ← broadcastTerm SInfo.scalar a'.shape "unary -"
       let term ← `(Op.sub $np $bc $zeroTerm $a'.term)
       let zero : EOut := ⟨zeroTerm, zeroDType, SInfo.scalar, none, none⟩
-      let (computeTerm?, computeDType?) ← fp32ComputeArith? "unary -" term zero a'
+      let (computeTerm?, computeDType?) ← floatingComputeArith? "unary -" term zero a'
       pure ⟨term, a'.dtype, outShape, computeTerm?, computeDType?⟩
   | `(tritonExpr| $a:tritonExpr + $b:tritonExpr) => do
       match ← expandStaticPtrExpr env stx with
@@ -1825,6 +1847,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let lhsComputeTerm? ←
         match lhsComputeDType? with
         | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some .real => pure (some (← fp64ComputeExpr lhsTerm))
         | some _ =>
             Macro.throwError
               ("identifier `" ++ envName ++ "` has unsupported compute dtype annotation")
@@ -1853,7 +1876,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let np ← lhs.dtype.numericProof
       let (bc, outShape) ← broadcastTerm lhs.shape rhs'.shape "self add assignment"
       let eTerm ← `(Op.add $np $bc $lhs.term $rhs'.term)
-      let (computeTerm?, computeDType?) ← fp32ComputeArith? "self add assignment" eTerm lhs rhs'
+      let (computeTerm?, computeDType?) ← floatingComputeArith? "self add assignment" eTerm lhs rhs'
       let e' : EOut :=
         { term := eTerm, dtype := lhs.dtype, shape := outShape,
           computeTerm := computeTerm?, computeDType? := computeDType? }
@@ -2269,6 +2292,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
             let lhsComputeTerm? ←
               match lhsComputeDType? with
               | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+              | some .real => pure (some (← fp64ComputeExpr lhsTerm))
               | some _ =>
                   Macro.throwError
                     ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
@@ -2292,7 +2316,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
             let np ← lhs.dtype.numericProof
             let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`+=`"
             let eTerm ← `(Op.add $np $bc $lhs.term $rhs.term)
-            let (computeTerm?, computeDType?) ← fp32ComputeArith? "`+=`" eTerm lhs rhs
+            let (computeTerm?, computeDType?) ← floatingComputeArith? "`+=`" eTerm lhs rhs
             let e' : EOut :=
               { term := eTerm, dtype := lhs.dtype, shape := outShape,
                 computeTerm := computeTerm?, computeDType? := computeDType? }
@@ -2358,6 +2382,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let lhsComputeTerm? ←
         match lhsComputeDType? with
         | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some .real => pure (some (← fp64ComputeExpr lhsTerm))
         | some _ =>
             Macro.throwError
               ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
@@ -2381,7 +2406,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let np ← lhs.dtype.numericProof
       let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`-=`"
       let eTerm ← `(Op.sub $np $bc $lhs.term $rhs.term)
-      let (computeTerm?, computeDType?) ← fp32ComputeArith? "`-=`" eTerm lhs rhs
+      let (computeTerm?, computeDType?) ← floatingComputeArith? "`-=`" eTerm lhs rhs
       let e' : EOut :=
         { term := eTerm, dtype := lhs.dtype, shape := outShape,
           computeTerm := computeTerm?, computeDType? := computeDType? }
@@ -2410,6 +2435,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let lhsComputeTerm? ←
         match lhsComputeDType? with
         | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some .real => pure (some (← fp64ComputeExpr lhsTerm))
         | some _ =>
             Macro.throwError
               ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
@@ -2433,7 +2459,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let np ← lhs.dtype.numericProof
       let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`*=`"
       let eTerm ← `(Op.mul $np $bc $lhs.term $rhs.term)
-      let (computeTerm?, computeDType?) ← fp32ComputeArith? "`*=`" eTerm lhs rhs
+      let (computeTerm?, computeDType?) ← floatingComputeArith? "`*=`" eTerm lhs rhs
       let e' : EOut :=
         { term := eTerm, dtype := lhs.dtype, shape := outShape,
           computeTerm := computeTerm?, computeDType? := computeDType? }
@@ -2462,6 +2488,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let lhsComputeTerm? ←
         match lhsComputeDType? with
         | some .fp32 => pure (some (← fp32ComputeExpr lhsTerm))
+        | some .real => pure (some (← fp64ComputeExpr lhsTerm))
         | some _ =>
             Macro.throwError
               ("identifier `" ++ name ++ "` has unsupported compute dtype annotation")
@@ -2485,7 +2512,7 @@ partial def expandStmt (env : Env) (pinned intPinned : List String)
       let np ← lhs.dtype.numericProof
       let (bc, outShape) ← broadcastTerm lhs.shape rhs.shape "`/=`"
       let eTerm ← `(Op.div $np $bc $lhs.term $rhs.term)
-      let (computeTerm?, computeDType?) ← fp32ComputeArith? "`/=`" eTerm lhs rhs
+      let (computeTerm?, computeDType?) ← floatingComputeArith? "`/=`" eTerm lhs rhs
       let e' : EOut :=
         { term := eTerm, dtype := lhs.dtype, shape := outShape,
           computeTerm := computeTerm?, computeDType? := computeDType? }

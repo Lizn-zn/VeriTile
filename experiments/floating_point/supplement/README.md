@@ -4,7 +4,7 @@
 现有 30 条准入实例、原实验源码和 two-gates 算法保持不变。
 这里没有 softmax、Welford、LayerNorm 或整个 reduction 的准入原子。
 本批 GPU 结果已完成并独立 CPU 回放；当前有 32 个统计接受实例。
-这些新结果尚未接入 Lean，Lean 可用假设仍是原来的 30 条。
+32 个 ACCEPT 已接入 Lean，加上原有 30 个，共 62 个可选准入实例。
 
 ## 当前结果
 
@@ -159,9 +159,9 @@ python3 scripts/check_numerics_supplement.py run --rules ADD-ZERO,MUL-ONE,DIV-ON
 exp 中间值的有限性、log 输入的正性等适用条件仍需在使用处处理。
 这不要求在证明第二步固定实验 shape。
 
-这批对应剩余七个例子的数值缺口，但不保证每个原子会通过，也不自动完成剩余证明：
+这批最初针对七个例子的数值缺口；接入后已完成两个，剩余五个仍需以下工作：
 
-- reciprocal 两例需要将普通除法和 dtype/cast 与准确实验关系对应。
+- reciprocal 两例已将普通除法、精度、定义域和最终 cast 与对应原子衔接，完成 FP 证明。
 - stable softmax、logsumexp、online softmax 还需要从基础关系推导 reduction/loop 不变量。
 - Welford/LayerNorm 还需要 count 的自然数转换及非零/可表示性证明。
   正态浮点采样不能证明任意整数 count 的 cast-successor 恒等式；本批没有伪造此类原子。
@@ -183,3 +183,14 @@ python3 scripts/export_numerical_rules.py --trust-report --check
 解释器检查涵盖全部 43 对表达式、精度和非整块矩形索引；另有 profile、定义域、
 fp64 除法残差、报告、源/PTX/观测/配置/统计篡改检测测试。离线编译不需要 GPU，
 默认目标 sm_80。解释器和离线编译结果均不是 GPU two-gates 准入结果。
+
+## Lean 接入
+
+`python3 scripts/export_supplemental_rules.py --trust-report` 根据本报告生成
+`VeriTile/Triton/Float/SupplementalAdmission.lean`，只收录 32 个 ACCEPT 实例。
+加上原来的 30 个，共 62 个实例。导出不重放 GPU，也不生成 `EvidenceValidated`
+证明；沿用用户信任报告、在证明中显式提供原子假设的接口。
+
+`SoftmaxReciprocalFPEquiv.lean` 和 `FloatDTypeSoftmaxFPEquiv.lean` 使用各自精度的
+`div_mul_rcp` 原子，保留有限/非零定义域和最终输出转换。第二个例子只在 fp32
+输出处应用 fp64-work 结果。默认打印仍只有实际使用的原子名称。
