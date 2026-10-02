@@ -1,0 +1,150 @@
+{
+  "schema_version": 1,
+  "semantics": "Q rounds each node to compute precision; both entire expressions are finally cast to output precision; / is ordinary Triton division, never tl.div_rn",
+  "rules": [
+    {
+      "id": "ADD-ZERO",
+      "reference": "Q(a + 0)",
+      "candidate": "a",
+      "domain": "finite a",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "MUL-ONE",
+      "reference": "Q(a * 1)",
+      "candidate": "a",
+      "domain": "finite a",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "DIV-ONE",
+      "reference": "Q(a / 1)",
+      "candidate": "a",
+      "domain": "finite a",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "DIV-MUL-RCP",
+      "reference": "Q(a / b)",
+      "candidate": "Q(a * Q(1 / b))",
+      "domain": "finite a,b; b != 0",
+      "operands": [
+        "a",
+        "b"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "MUL-RCP-CANCEL",
+      "reference": "Q(a * Q(1 / a))",
+      "candidate": "1",
+      "domain": "finite a; a != 0",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "EXP-SUB",
+      "reference": "Q(exp(Q(a - b)))",
+      "candidate": "Q(Q(exp(a)) / Q(exp(b)))",
+      "domain": "finite a,b",
+      "operands": [
+        "a",
+        "b"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "EXP-ZERO",
+      "reference": "Q(exp(0))",
+      "candidate": "1",
+      "domain": "no variable operands",
+      "operands": [],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "LOG-MUL",
+      "reference": "Q(log(Q(a * b)))",
+      "candidate": "Q(Q(log(a)) + Q(log(b)))",
+      "domain": "finite a,b; a > 0 and b > 0",
+      "operands": [
+        "a",
+        "b"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "LOG-EXP",
+      "reference": "Q(log(Q(exp(a))))",
+      "candidate": "a",
+      "domain": "finite a",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "MAX-COMMUTE",
+      "reference": "max(a, b)",
+      "candidate": "max(b, a)",
+      "domain": "finite a,b",
+      "operands": [
+        "a",
+        "b"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "MAX-ASSOC",
+      "reference": "max(max(a, b), c)",
+      "candidate": "max(a, max(b, c))",
+      "domain": "finite a,b,c",
+      "operands": [
+        "a",
+        "b",
+        "c"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "MAX-IDEM",
+      "reference": "max(a, a)",
+      "candidate": "a",
+      "domain": "finite a",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "MAX-NEG-INF",
+      "reference": "max(-inf, a)",
+      "candidate": "a",
+      "domain": "finite a; -inf is a literal, not a sampled operand",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "EXP-NEG-INF-SUB",
+      "reference": "Q(exp(Q(-inf - a)))",
+      "candidate": "0",
+      "domain": "finite a; -inf is a literal, not a sampled operand",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate"
+    }
+  ]
+}

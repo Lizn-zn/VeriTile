@@ -77,6 +77,15 @@ results are supplied and admitted.
 
 ## Validation
 
+The [supplemental experiment package](../experiments/floating_point/supplement/README.md)
+now prepares 14 local scalar candidates (43 executable precision instances),
+with ordinary division distinguished from `div_rn`, explicit domains, and a
+fp64-operand/fp64-work/fp32-output division pair. It uses the unchanged gates and
+separate source identities. These are **pending experiments**, not additions
+to the 30 admitted instances or completed proofs. Integer-count conversions,
+domain obligations and loop/reduction derivations remain proof work; the
+default unconditioned normal profile can leave LOG-MUL inconclusive.
+
 ```bash
 lake env lean bench/tests/FPAdmissionCoverage.lean
 python3 -m unittest scripts.test_fp_equational

@@ -1,5 +1,9 @@
 # Floating-point rule experiments
 
+For the new basic relations needed by the remaining examples, use the separate
+[supplemental experiment instructions](./supplement/README.md) on `codex/fp-example`.
+The original experiment sources and the 30 admitted instances below are frozen.
+
 Edit [config.py](./config.py), check atomic expression pairs with Triton kernels on an NVIDIA GPU,
 then import the result directory on the development machine (Python + NumPy).
 The importer recomputes both gates instead of trusting PASS labels.

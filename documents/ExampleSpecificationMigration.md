@@ -34,7 +34,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Adam-named Lion update | `AdamUpdateGridLaunchCorrect` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunchFPEquiv` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStableCorrect` — checked for both original kernels against the softmax formula | Naive versus stable: missing admitted elementary exp laws |
 | Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable: missing admitted elementary exp/log laws |
-| Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | Division versus reciprocal multiplication: pending a faithful match to tested `div_rn` |
+| Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | Division versus reciprocal multiplication: pending ordinary-division admission; the old `div_rn` result is a different relation |
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | Original fp64 intermediate arithmetic has no admitted fp64 row |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
@@ -76,6 +76,11 @@ families. In particular, the table does not force additive identity, Welford
 initialization, ordinary-division replacement or the exp/log transformations.
 These are algebraic coverage checks, not numerical gate rejections. The
 remaining entries cannot be completed merely by adding more proof automation.
+
+The [supplemental GPU package](../experiments/floating_point/supplement/README.md)
+prepares the additional scalar experiments without changing this coverage count
+or the admitted table. Results are pending; count conversions, operation domains
+and the remaining loop/reduction proofs are not discharged by preparing a runner.
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently
