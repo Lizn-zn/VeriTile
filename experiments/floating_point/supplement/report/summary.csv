@@ -1,0 +1,57 @@
+rule,format,replicates,z,U,bias,vars,u_kind,accept,decision,state,replayed,reason
+ADD-ZERO,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MUL-ONE,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+DIV-ONE,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+DIV-MUL-RCP,bf16,4096,2.887258789526148,1.8433613518063532,PASS,PASS,pot_pwm,True,ACCEPT,COMPLETE,True,
+MUL-RCP-CANCEL,bf16,4096,1481.7670510021285,0.0,WARN,PASS,empirical_max,False,WARN_NOT_ACCEPTED,COMPLETE,True,
+EXP-SUB,bf16,4096,7.746622766809997,0.624057842131928,WARN,PASS,pot_pwm,False,WARN_NOT_ACCEPTED,COMPLETE,True,
+EXP-ZERO,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+LOG-MUL,bf16,,,,,,,False,INCONCLUSIVE,NUMERIC_EVENT,False,"log requires a > 0 and b > 0; no abs, truncation or resampling"
+LOG-EXP,bf16,4096,32.90096793994256,0.0,WARN,PASS,empirical_max,False,WARN_NOT_ACCEPTED,COMPLETE,True,
+MAX-COMMUTE,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-ASSOC,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-IDEM,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-NEG-INF,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+EXP-NEG-INF-SUB,bf16,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+ADD-ZERO,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MUL-ONE,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+DIV-ONE,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+DIV-MUL-RCP,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MUL-RCP-CANCEL,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+EXP-SUB,bf16_fp32,4096,13.341121820512402,0.0,WARN,PASS,empirical_max,False,WARN_NOT_ACCEPTED,COMPLETE,True,
+EXP-ZERO,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+LOG-MUL,bf16_fp32,,,,,,,False,INCONCLUSIVE,NUMERIC_EVENT,False,"log requires a > 0 and b > 0; no abs, truncation or resampling"
+LOG-EXP,bf16_fp32,4096,5.868473818269026,0.0,WARN,PASS,empirical_max,False,WARN_NOT_ACCEPTED,COMPLETE,True,
+MAX-COMMUTE,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-ASSOC,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-IDEM,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-NEG-INF,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+EXP-NEG-INF-SUB,bf16_fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+ADD-ZERO,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MUL-ONE,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+DIV-ONE,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+DIV-MUL-RCP,fp32,4096,0.0,0.9847333313688038,PASS,PASS,pot_pwm,True,ACCEPT,COMPLETE,True,
+MUL-RCP-CANCEL,fp32,4096,790.0048603298055,0.0,WARN,PASS,empirical_max,False,WARN_NOT_ACCEPTED,COMPLETE,True,
+EXP-SUB,fp32,4096,133.80347974786807,2.9983014620917467,WARN,WARN,pot_pwm,False,WARN_NOT_ACCEPTED,COMPLETE,True,
+EXP-ZERO,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+LOG-MUL,fp32,,,,,,,False,INCONCLUSIVE,NUMERIC_EVENT,False,"log requires a > 0 and b > 0; no abs, truncation or resampling"
+LOG-EXP,fp32,4096,467.8810076774921,0.0,WARN,PASS,empirical_max,False,WARN_NOT_ACCEPTED,COMPLETE,True,
+MAX-COMMUTE,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-ASSOC,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-IDEM,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MAX-NEG-INF,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+EXP-NEG-INF-SUB,fp32,4096,0.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+ADD-ZERO,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+MUL-ONE,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+DIV-ONE,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+DIV-MUL-RCP,fp64_fp64_fp32,4096,1.0,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,
+MUL-RCP-CANCEL,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+EXP-SUB,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+EXP-ZERO,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+LOG-MUL,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+LOG-EXP,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+MAX-COMMUTE,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+MAX-ASSOC,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+MAX-IDEM,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+MAX-NEG-INF,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output
+EXP-NEG-INF-SUB,fp64_fp64_fp32,,,,,,,False,UNSUPPORTED,UNSUPPORTED,False,fp64-work supplement covers only ordinary division with fp32 output

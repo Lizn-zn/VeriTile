@@ -3,7 +3,39 @@
 在 `codex/fp-example` 分支运行。本目录补充剩余 FP 例子缺少的标量关系；
 现有 30 条准入实例、原实验源码和 two-gates 算法保持不变。
 这里没有 softmax、Welford、LayerNorm 或整个 reduction 的准入原子。
-当前尚无本批 GPU 结果，Lean 可用假设仍是原来的 30 条。
+本批 GPU 结果已完成并独立 CPU 回放；当前有 32 个统计接受实例。
+这些新结果尚未接入 Lean，Lean 可用假设仍是原来的 30 条。
+
+## 当前结果
+
+2026-10-02 在 H200（运行时显示 NVIDIA L20X）运行提交 `c02c21cd` 的默认配置。
+DLC 任务 `dlc1478c22drife5`，名称 `traces_kernel_equivalence_testing`，状态 `Succeeded`。
+87 个 kernel 特化编译通过，smoke 无执行错误；40 个完整正式实例均完成 4096 次
+整张量采样，并通过独立 CPU 回放。运行环境和开发环境生成的五份报告逐字节一致。
+
+全部 56 行结果为：32 ACCEPT、8 WARN_NOT_ACCEPTED、0 REJECT、3 INCONCLUSIVE、
+13 UNSUPPORTED。三个 INCONCLUSIVE 均为 LOG-MUL 在正态采样中遇到非正输入。
+13 个 UNSUPPORTED 是除 DIV-MUL-RCP 外的 fp64-work 组合。
+
+[完整 z / U / accept 表](./report/summary.md) 同时提供
+[全精度 CSV](./report/summary.csv) 和 [JSON](./report/summary.json)。
+[运行配置](./report/experiment.json) 记录源码、设备、任务及回放信息，
+[警告明细](./report/warning_audit.json) 保留显著 bucket 数和 ULP 尺度。
+
+| 原子 | bf16 | bf16_fp32 | fp32 |
+|---|---|---|---|
+| MUL-RCP-CANCEL | WARN | ACCEPT | WARN |
+| EXP-SUB | WARN | WARN | WARN |
+| LOG-EXP | WARN | WARN | WARN |
+
+八项均触发 bias WARN；fp32 EXP-SUB 还触发 vars WARN，U = 2.9983014620917467。
+其余警告的 vars 门限均通过。当前 `pass_only` 策略下八项全部不接受。
+DIV-MUL-RCP 的四个精度实例均 ACCEPT，包括带最终 fp32 cast 的 fp64-work 实例。
+统计接受仍仅对应采样配置及准确表达式，不是无条件 IEEE 等式证明。
+
+原始 bundle 在 `Logs/numerics-supplement/atomic/`，完整五文件回放报告在
+`Logs/numerics-supplement/report/`；其中 `admission.json` 保留完整统计和准入候选。
+原始观测和 PTX 未放入 Git。下方命令可用于在新目录重新运行。
 
 ## 直接运行
 

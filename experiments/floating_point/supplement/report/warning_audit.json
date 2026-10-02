@@ -1,0 +1,250 @@
+{
+  "checked_by": "Independent CPU replay of the original observations and contract/PTX/source hashes",
+  "warning_policy": "pass_only",
+  "bias_thresholds": {
+    "snr": 0.01,
+    "ulp_floor": 1.0,
+    "z": 5.0
+  },
+  "vars_thresholds": {
+    "warn": 2.0,
+    "fail": 10.0
+  },
+  "rows": [
+    {
+      "rule": "MUL-RCP-CANCEL",
+      "format": "bf16",
+      "relation": {
+        "candidate": "1",
+        "category": "two_gates_candidate",
+        "domain": "finite a; a != 0",
+        "final_cast": "bf16",
+        "id": "MUL-RCP-CANCEL",
+        "operands": [
+          "a"
+        ],
+        "reference": "Q(a * Q(1 / a))"
+      },
+      "replicates": 4096,
+      "z": 1481.7670510021285,
+      "U": 0.0,
+      "bias": "WARN",
+      "vars": "PASS",
+      "accept": false,
+      "significant_buckets": 4096,
+      "failing_buckets": 0,
+      "max_abs_mean_in_ulps": 0.05375564098358154,
+      "u_kind": "empirical_max",
+      "vars_interval": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "rule": "EXP-SUB",
+      "format": "bf16",
+      "relation": {
+        "candidate": "Q(Q(exp(a)) / Q(exp(b)))",
+        "category": "two_gates_candidate",
+        "domain": "finite a,b",
+        "final_cast": "bf16",
+        "id": "EXP-SUB",
+        "operands": [
+          "a",
+          "b"
+        ],
+        "reference": "Q(exp(Q(a - b)))"
+      },
+      "replicates": 4096,
+      "z": 7.746622766809997,
+      "U": 0.624057842131928,
+      "bias": "WARN",
+      "vars": "PASS",
+      "accept": false,
+      "significant_buckets": 265,
+      "failing_buckets": 0,
+      "max_abs_mean_in_ulps": 2.0783867682894197e-05,
+      "u_kind": "pot_pwm",
+      "vars_interval": [
+        0.22833678927566436,
+        0.624057842131928
+      ]
+    },
+    {
+      "rule": "LOG-EXP",
+      "format": "bf16",
+      "relation": {
+        "candidate": "a",
+        "category": "two_gates_candidate",
+        "domain": "finite a",
+        "final_cast": "bf16",
+        "id": "LOG-EXP",
+        "operands": [
+          "a"
+        ],
+        "reference": "Q(log(Q(exp(a))))"
+      },
+      "replicates": 4096,
+      "z": 32.90096793994256,
+      "U": 0.0,
+      "bias": "WARN",
+      "vars": "PASS",
+      "accept": false,
+      "significant_buckets": 4096,
+      "failing_buckets": 0,
+      "max_abs_mean_in_ulps": 0.0003335043517287417,
+      "u_kind": "empirical_max",
+      "vars_interval": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "rule": "EXP-SUB",
+      "format": "bf16_fp32",
+      "relation": {
+        "candidate": "Q(Q(exp(a)) / Q(exp(b)))",
+        "category": "two_gates_candidate",
+        "domain": "finite a,b",
+        "final_cast": "bf16",
+        "id": "EXP-SUB",
+        "operands": [
+          "a",
+          "b"
+        ],
+        "reference": "Q(exp(Q(a - b)))"
+      },
+      "replicates": 4096,
+      "z": 13.341121820512402,
+      "U": 0.0,
+      "bias": "WARN",
+      "vars": "PASS",
+      "accept": false,
+      "significant_buckets": 2968,
+      "failing_buckets": 0,
+      "max_abs_mean_in_ulps": 1.5585646906401962e-07,
+      "u_kind": "empirical_max",
+      "vars_interval": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "rule": "LOG-EXP",
+      "format": "bf16_fp32",
+      "relation": {
+        "candidate": "a",
+        "category": "two_gates_candidate",
+        "domain": "finite a",
+        "final_cast": "bf16",
+        "id": "LOG-EXP",
+        "operands": [
+          "a"
+        ],
+        "reference": "Q(log(Q(exp(a))))"
+      },
+      "replicates": 4096,
+      "z": 5.868473818269026,
+      "U": 0.0,
+      "bias": "WARN",
+      "vars": "PASS",
+      "accept": false,
+      "significant_buckets": 48,
+      "failing_buckets": 0,
+      "max_abs_mean_in_ulps": 8.15170153600775e-12,
+      "u_kind": "empirical_max",
+      "vars_interval": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "rule": "MUL-RCP-CANCEL",
+      "format": "fp32",
+      "relation": {
+        "candidate": "1",
+        "category": "two_gates_candidate",
+        "domain": "finite a; a != 0",
+        "final_cast": "fp32",
+        "id": "MUL-RCP-CANCEL",
+        "operands": [
+          "a"
+        ],
+        "reference": "Q(a * Q(1 / a))"
+      },
+      "replicates": 4096,
+      "z": 790.0048603298055,
+      "U": 0.0,
+      "bias": "WARN",
+      "vars": "PASS",
+      "accept": false,
+      "significant_buckets": 4096,
+      "failing_buckets": 0,
+      "max_abs_mean_in_ulps": 0.042887091636657715,
+      "u_kind": "empirical_max",
+      "vars_interval": [
+        0.0,
+        0.0
+      ]
+    },
+    {
+      "rule": "EXP-SUB",
+      "format": "fp32",
+      "relation": {
+        "candidate": "Q(Q(exp(a)) / Q(exp(b)))",
+        "category": "two_gates_candidate",
+        "domain": "finite a,b",
+        "final_cast": "fp32",
+        "id": "EXP-SUB",
+        "operands": [
+          "a",
+          "b"
+        ],
+        "reference": "Q(exp(Q(a - b)))"
+      },
+      "replicates": 4096,
+      "z": 133.80347974786807,
+      "U": 2.9983014620917467,
+      "bias": "WARN",
+      "vars": "WARN",
+      "accept": false,
+      "significant_buckets": 4096,
+      "failing_buckets": 0,
+      "max_abs_mean_in_ulps": 0.0003732607163726698,
+      "u_kind": "pot_pwm",
+      "vars_interval": [
+        2.1205371105570583,
+        2.9983014620917467
+      ]
+    },
+    {
+      "rule": "LOG-EXP",
+      "format": "fp32",
+      "relation": {
+        "candidate": "a",
+        "category": "two_gates_candidate",
+        "domain": "finite a",
+        "final_cast": "fp32",
+        "id": "LOG-EXP",
+        "operands": [
+          "a"
+        ],
+        "reference": "Q(log(Q(exp(a))))"
+      },
+      "replicates": 4096,
+      "z": 467.8810076774921,
+      "U": 0.0,
+      "bias": "WARN",
+      "vars": "PASS",
+      "accept": false,
+      "significant_buckets": 4096,
+      "failing_buckets": 0,
+      "max_abs_mean_in_ulps": 0.012944342356842498,
+      "u_kind": "empirical_max",
+      "vars_interval": [
+        0.0,
+        0.0
+      ]
+    }
+  ]
+}
