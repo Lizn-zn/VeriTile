@@ -13,7 +13,7 @@ from scripts import export_numerical_rules as exporter
 class ExportTests(unittest.TestCase):
     def test_only_accepted_instances_are_generated(self):
         _, _, rows, _, _ = exporter.load_report(exporter.REPORT)
-        self.assertEqual(len(rows), 30)
+        self.assertEqual(len(rows), 32)
         content = exporter.render()
         self.assertEqual(content, exporter.OUTPUT.read_text())
         self.assertIn('def bf16_add_assoc : ReportedRule', content)
@@ -21,8 +21,9 @@ class ExportTests(unittest.TestCase):
         self.assertNotIn('def bf16_fp32_add_assoc', content)
         self.assertIn('def bf16_fma_contract', content)
         self.assertNotIn('def fp32_cast_remove', content)
-        for name in ('fp32_cast_move', 'fp32_cancel', 'fp32_fma_contract'):
-            self.assertNotIn(f'def {name}', content)
+        self.assertNotIn('def fp32_cast_move', content)
+        for name in ('fp32_cancel', 'fp32_fma_contract'):
+            self.assertIn(f'def {name}', content)
         self.assertIn('def bf16_cast_remove', content)
         self.assertNotIn('def fp32_sqrt_rsqrt', content)
         self.assertNotIn('def fp32_bf16_widen_return', content)

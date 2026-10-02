@@ -1,9 +1,10 @@
 # Numerical rule results
 
-42 instances; 38 replayed; 30 accepted.
+42 instances; 38 replayed; 32 accepted.
 
-z = max |z| over output buckets (diagnostic only). U uses the configured magnitude gate.
-B = max(abs(mean) + se_multiplier * SE); bias PASS requires B <= tau, in local ULPs.
+Each replicate contributes one mean across its IID scalar instances; R counts replicates.
+z = |mean| / SE across replicate means (diagnostic only). U uses the configured magnitude gate.
+B = abs(mean) + se_multiplier * SE; bias PASS requires B <= tau, in local ULPs.
 Bias FAIL means an interval lies outside tolerance; INCONCLUSIVE means a boundary is crossed.
 The SE bands are engineering criteria, not calibrated simultaneous or optional-stopping confidence guarantees.
 Errors are normalized per element by the output-format ULP at the rounded golden value before aggregation.
@@ -26,35 +27,35 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 | BF16-WIDEN-RETURN | bf16 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | BF16-WIDEN-RETURN | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | BF16-WIDEN-RETURN | fp32 | — | — | — | — | — | — | — | — | no | UNSUPPORTED |
-| ADD-ASSOC | bf16 | 4096 | 3.658139 | 0.005621907 | 0.05 | 1.058843 | pot_pwm | PASS | PASS | yes | COMPLETE |
-| ADD-ASSOC | bf16_fp32 | 8704 | 1.73225 | 2.23833e-05 | 0.05 | 164.1267 | pot_pwm | PASS | FAIL | no | COMPLETE |
-| ADD-ASSOC | fp32 | 4096 | 3.126887 | 6.516323 | 0.05 | 132.7016 | pot_pwm | INCONCLUSIVE | FAIL | no | COMPLETE |
-| MUL-ASSOC | bf16 | 4096 | 3.993513 | 0.001294595 | 0.05 | 0.297186 | empirical_max | PASS | PASS | yes | COMPLETE |
+| ADD-ASSOC | bf16 | 4096 | 0.5262654 | 5.747947e-05 | 0.05 | 1.032816 | pot_pwm | PASS | PASS | yes | COMPLETE |
+| ADD-ASSOC | bf16_fp32 | 50176 | 0.3619857 | 4.997314e-09 | 0.05 | 300.3429 | pot_pwm | PASS | FAIL | no | COMPLETE |
+| ADD-ASSOC | fp32 | 4096 | 0.9255956 | 0.01525995 | 0.05 | 120.7185 | pot_pwm | PASS | FAIL | no | COMPLETE |
+| MUL-ASSOC | bf16 | 4096 | 0.03629942 | 1.147891e-05 | 0.05 | 0.297186 | empirical_max | PASS | PASS | yes | COMPLETE |
 | MUL-ASSOC | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| MUL-ASSOC | fp32 | 4096 | 3.412681 | 0.001215082 | 0.05 | 0.3437202 | pot_pwm | PASS | PASS | yes | COMPLETE |
-| MUL-DISTRIB | bf16 | 4096 | 5.723825 | 0.00680902 | 0.05 | 176 | empirical_max | PASS | FAIL | no | COMPLETE |
-| MUL-DISTRIB | bf16_fp32 | 4096 | 1 | 3.576279e-07 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| MUL-DISTRIB | fp32 | 4096 | 3.149106 | 5.780505 | 0.05 | 2.060443e+07 | pot_pwm | INCONCLUSIVE | FAIL | no | COMPLETE |
-| FMA-CONTRACT | bf16 | 4096 | 4.052241 | 0.009310908 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
+| MUL-ASSOC | fp32 | 4096 | 0.6556256 | 1.312948e-05 | 0.05 | 0.3442812 | pot_pwm | PASS | PASS | yes | COMPLETE |
+| MUL-DISTRIB | bf16 | 4096 | 122.4037 | 0.001239349 | 0.05 | 176 | empirical_max | PASS | FAIL | no | COMPLETE |
+| MUL-DISTRIB | bf16_fp32 | 4096 | 0.4471699 | 1.772632e-10 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
+| MUL-DISTRIB | fp32 | 4096 | 0.0719694 | 0.01296174 | 0.05 | 2.640162e+07 | pot_pwm | PASS | FAIL | no | COMPLETE |
+| FMA-CONTRACT | bf16 | 4096 | 23.85633 | 0.0004666169 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | FMA-CONTRACT | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| FMA-CONTRACT | fp32 | 4096 | 3.136422 | 8.428577 | 0.05 | 0 | empirical_max | INCONCLUSIVE | PASS | no | COMPLETE |
-| CANCEL | bf16 | 4096 | 4.893518 | 0.02136486 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| CANCEL | bf16_fp32 | 4096 | 3.117238 | 0.0001815225 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| CANCEL | fp32 | 4096 | 2.741671 | 10.2166 | 0.05 | 0 | empirical_max | INCONCLUSIVE | PASS | no | COMPLETE |
-| DIV-RCP | bf16 | 4096 | 71.11831 | 0.009062381 | 0.05 | 0.6904547 | empirical_max | PASS | PASS | yes | COMPLETE |
+| FMA-CONTRACT | fp32 | 4096 | 1.114051 | 0.0267935 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
+| CANCEL | bf16 | 4096 | 74.3824 | 0.002713128 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
+| CANCEL | bf16_fp32 | 4096 | 1.593619 | 8.745921e-07 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
+| CANCEL | fp32 | 4096 | 0.5932181 | 0.0496093 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
+| DIV-RCP | bf16 | 4096 | 4330.745 | 0.008101662 | 0.05 | 0.6904547 | empirical_max | PASS | PASS | yes | COMPLETE |
 | DIV-RCP | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| DIV-RCP | fp32 | 4096 | 4.80541 | 0.001224256 | 0.05 | 1.017085 | pot_pwm | PASS | PASS | yes | COMPLETE |
+| DIV-RCP | fp32 | 4096 | 23.69138 | 5.621148e-05 | 0.05 | 1.016309 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | SQRT-RSQRT | bf16 | 0 | — | — | — | — | — | — | — | no | NUMERIC_EVENT |
 | SQRT-RSQRT | bf16_fp32 | 0 | — | — | — | — | — | — | — | no | NUMERIC_EVENT |
 | SQRT-RSQRT | fp32 | 0 | — | — | — | — | — | — | — | no | NUMERIC_EVENT |
 | CAST-MOVE | bf16 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | CAST-MOVE | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| CAST-MOVE | fp32 | 4096 | 3.62554 | 24746.97 | 0.05 | 6.67413e-05 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE |
-| CAST-REMOVE | bf16 | 4096 | 29.03541 | 0.00396336 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| CAST-REMOVE | bf16_fp32 | 4096 | 28.69514 | 0.003929621 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| CAST-REMOVE | fp32 | 4096 | 7.330954 | 60.71056 | 0.05 | 7.731313e-06 | pot_pwm | FAIL | PASS | no | COMPLETE |
-| ACC-WIDEN | bf16 | 4096 | 4.667298 | 0.004971794 | 0.05 | 0.1484949 | pot_pwm | PASS | PASS | yes | COMPLETE |
-| ACC-WIDEN | bf16_fp32 | 4096 | 4.320873 | 0.00481253 | 0.05 | 0.2133777 | pot_pwm | PASS | PASS | yes | COMPLETE |
+| CAST-MOVE | fp32 | 4096 | 10.65762 | 53.82958 | 0.05 | 6.74171e-05 | pot_pwm | FAIL | PASS | no | COMPLETE |
+| CAST-REMOVE | bf16 | 4096 | 1618.834 | 0.00295496 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
+| CAST-REMOVE | bf16_fp32 | 4096 | 1591.302 | 0.002957028 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
+| CAST-REMOVE | fp32 | 4096 | 246.5784 | 19.59246 | 0.05 | 7.744817e-06 | pot_pwm | FAIL | PASS | no | COMPLETE |
+| ACC-WIDEN | bf16 | 4096 | 46.74694 | 0.0004120227 | 0.05 | 0.1285883 | pot_pwm | PASS | PASS | yes | COMPLETE |
+| ACC-WIDEN | bf16_fp32 | 4096 | 44.90049 | 0.0004025739 | 0.05 | 0.2910845 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | ACC-WIDEN | fp32 | 4096 | 0 | 0 | 0.05 | 0.9999999 | pot_pwm | PASS | PASS | yes | COMPLETE |
 
 ## Notes

@@ -19,7 +19,7 @@ def profile():
     return experiment.validate_profile(result)
 
 
-def observations(count=4, buckets=3):
+def observations(count=4, buckets=1):
     return {"delta": np.zeros((count, buckets)),
             "reference_error": np.zeros(count), "candidate_error": np.zeros(count)}
 
@@ -230,11 +230,22 @@ class ReplayTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             entry = fixture_bundle(root)
-            np.savez_compressed(entry / "observations.npz", **observations(buckets=2))
+            # The previous protocol kept one bucket for each of these 3 columns.
+            np.savez_compressed(entry / "observations.npz", **observations(buckets=3))
             data = experiment.read_json(entry / "record.json")
             data["observations_sha256"] = experiment.sha((entry / "observations.npz").read_bytes())
             experiment.write_json(entry / "record.json", data)
             with self.assertRaisesRegex(ValueError, "shape/dtype"):
+                experiment.replay(root)
+
+    def test_column_bucket_bundle_version_cannot_be_replayed(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            fixture_bundle(root)
+            manifest = experiment.read_json(root / 'manifest.json')
+            manifest['bundle_version'] = 4
+            experiment.write_json(root / 'manifest.json', manifest)
+            with self.assertRaisesRegex(ValueError, 'unsupported bundle schema'):
                 experiment.replay(root)
 
     def test_missing_and_error_rows_are_not_accepted(self):

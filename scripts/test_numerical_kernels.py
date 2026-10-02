@@ -45,17 +45,19 @@ class OracleTests(unittest.TestCase):
             k = gates.amplification([obs["reference_error"]], [obs["candidate_error"]])
             self.assertEqual(k[0], float("inf"))
 
-    def test_vector_buckets_do_not_cancel_and_scale_uses_golden(self):
+    def test_iid_positions_share_one_mean_and_scale_uses_golden(self):
         import torch
         ref = torch.tensor([1., 1.])
         cand = torch.tensor([1.25, .75])
         obs = experiment.observe(torch, ref, cand, torch.ones(2).double(), "fp32")
-        self.assertEqual(obs["delta"].tolist(), [2.**21, -2.**21])
+        self.assertEqual(obs["delta"].tolist(), [0.])
+        # Cancellation in the mean must not hide a large magnitude error.
+        self.assertEqual(obs["candidate_error"], 2.**21)
         ref = torch.ones((2, 3))
         cand = torch.full((2, 3), 2.)
         obs = experiment.observe(torch, ref, cand, ref.double(), "fp32")
         self.assertEqual(obs["candidate_error"], 2.**23)
-        self.assertEqual(obs["delta"].tolist(), [2.**23] * 3)
+        self.assertEqual(obs["delta"].tolist(), [2.**23])
 
     def test_large_exact_output_does_not_hide_small_output_error(self):
         import torch
@@ -72,6 +74,38 @@ class OracleTests(unittest.TestCase):
                 self.assertEqual(obs["candidate_error"], 2.)
                 self.assertEqual(gates.amplification([obs["reference_error"]],
                                                    [obs["candidate_error"]])[0], float("inf"))
+
+    def test_atomic_bias_is_invariant_to_position_and_array_shape(self):
+        import torch
+        ref = torch.tensor([1., 2., 4., 8., 16., 32.], dtype=torch.float32)
+        steps = torch.tensor([1., -2., 3., 0., -1., 2.])
+        cand = ref + steps * ref * 2.**-23
+        # Normalize locally before averaging: different output magnitudes must
+        # still contribute their signed ULP errors with equal weight.
+        layouts = [(ref.reshape(shape), cand.reshape(shape))
+                   for shape in ((6,), (1, 6), (2, 3), (3, 2), (6, 1))]
+        layouts.append((ref.reshape(2, 3).T, cand.reshape(2, 3).T))
+        order = torch.tensor([5, 2, 0, 3, 1, 4])
+        layouts.append((ref[order], cand[order]))
+        for reference, candidate in layouts:
+            with self.subTest(shape=reference.shape, strides=reference.stride()):
+                obs = experiment.observe(torch, reference, candidate, reference.double(), "fp32")
+                self.assertEqual(obs['delta'].tolist(), [0.5])
+                self.assertEqual(obs['reference_error'], 0.)
+                self.assertEqual(obs['candidate_error'], 3.)
+
+    def test_mean_standard_error_counts_whole_input_replicates(self):
+        import math
+        import torch
+        from scripts import numerical_gates as gates
+        ref = torch.ones((2, 3))
+        deltas = [experiment.observe(torch, ref, ref + step * 2.**-23,
+                                     ref.double(), 'fp32')['delta'] for step in range(4)]
+        result = gates.bias_gate(deltas, {'tau': 0.05, 'se_multiplier': 5.})
+        self.assertEqual(result['replicates'], 4)
+        self.assertEqual(result['bucket_count'], 1)
+        self.assertEqual(result['mean'], [1.5])
+        self.assertAlmostEqual(result['standard_error'][0], math.sqrt(5. / 12.))
 
     def test_normalization_precedes_mean_and_is_power_of_two_invariant(self):
         import torch
@@ -95,7 +129,7 @@ class OracleTests(unittest.TestCase):
             ref = torch.tensor([0., step], dtype=dtype)
             cand = torch.tensor([step, 2 * step], dtype=dtype)
             obs = experiment.observe(torch, ref, cand, ref.double(), fmt)
-            self.assertEqual(obs["delta"].tolist(), [1., 1.])
+            self.assertEqual(obs["delta"].tolist(), [1.])
             self.assertEqual(obs["candidate_error"], 1.)
 
     def test_overflowed_golden_scale_cannot_hide_finite_output_errors(self):

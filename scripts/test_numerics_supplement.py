@@ -172,9 +172,35 @@ class ContractTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     runner.replay(root)
 
+    def test_replay_rejects_column_buckets_and_previous_schema(self):
+        for change in ('shape', 'schema'):
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                entry = fixture_bundle(root)
+                if change == 'schema':
+                    manifest = runner.read_json(root / 'manifest.json')
+                    manifest['bundle_version'] = 'scalar-supplement-3'
+                    runner.write_json(root / 'manifest.json', manifest)
+                else:
+                    np.savez_compressed(entry / 'observations.npz', **observations(buckets=3))
+                    record = runner.read_json(entry / 'record.json')
+                    record['observations_sha256'] = runner.sha((entry / 'observations.npz').read_bytes())
+                    runner.write_json(entry / 'record.json', record)
+                with self.assertRaisesRegex(ValueError, 'bundle schema|shape/dtype'):
+                    runner.replay(root)
+
 
 @unittest.skipUnless(HAS_TORCH, "optional CPU numerical wiring checks require torch")
 class OracleTests(unittest.TestCase):
+    def test_supplement_pools_normalized_positions_without_changing_peak_errors(self):
+        import torch
+        reference = torch.tensor([[1., 2.], [4., 8.]])
+        candidate = reference + reference * torch.tensor([[1., -1.], [2., -2.]]) * 2.**-23
+        obs = supplement.observe(torch, reference, candidate, reference.double(), profile()['formats'][2])
+        self.assertEqual(obs['delta'].tolist(), [0.])
+        self.assertEqual(obs['reference_error'], 0.)
+        self.assertEqual(obs['candidate_error'], 2.)
+
     def test_runner_lifecycle_and_failure_records(self):
         import torch
 

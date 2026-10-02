@@ -86,6 +86,19 @@ class ReportingTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'duplicate'):
                 reporting.collect(root, profile())
 
+    def test_old_protocol_cannot_be_displayed_as_new_provisional_statistics(self):
+        for field, value in [('bundle_version', 4), ('sources', {})]:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                root = Path(tmp)
+                bundle = root / 'first'
+                bundle.mkdir()
+                fixture_bundle(bundle)
+                manifest = reporting.experiment.read_json(bundle / 'manifest.json')
+                manifest[field] = value
+                reporting.experiment.write_json(bundle / 'manifest.json', manifest)
+                with self.assertRaisesRegex(ValueError, 'bundle schema|source hashes'):
+                    reporting.collect(root, profile(), verify_all=False)
+
     def test_infinite_z_and_missing_values(self):
         self.assertEqual(reporting.maximum_z([0., 3., '+inf']), '+inf')
         self.assertIsNone(reporting.maximum_z([]))

@@ -24,7 +24,7 @@ DEFAULT_PROFILE = ROOT / "experiments/floating_point/config.py"
 KERNELS = ROOT / "experiments/floating_point/kernels.py"
 SOURCES = [Path(__file__).resolve(), Path(gates.__file__), Path(registry.__file__), KERNELS, registry.CATALOG]
 ACCEPTED = {"ACCEPT", "ACCEPT_WITH_WARNING"}
-BUNDLE_VERSION = 4
+BUNDLE_VERSION = 5
 
 
 def sha(data):
@@ -177,10 +177,10 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
                   "special_values": "no truncation/resampling; domain/nonfinite events recorded"},
         "protocol": {"name": "two-gates", "version": gates.VERSION, "checker_version": sources["scripts/numerical_gates.py"],
                      "bias": {**profile["gates"]["bias"], "replicates": profile["replicates"],
-                              "buckets": "last axis; 1D output keeps each element as a bucket",
+                              "buckets": "one mean per replicate across all IID scalar instances; no positional buckets",
                               "ulp": "per-element output-format ULP at abs(golden) rounded to output dtype; inward at max finite; minimum subnormal spacing at zero",
-                              "delta": "mean over rows of (candidate-reference)/local_golden_ulp; normalize before averaging",
-                              "acceptance": "all abs(mean) + se_multiplier * std / sqrt(R) <= tau; z is diagnostic",
+                              "delta": "mean over all elements of (candidate-reference)/local_golden_ulp; normalize before averaging",
+                              "acceptance": "abs(mean) + se_multiplier * std / sqrt(R) <= tau across replicate means; z is diagnostic",
                               "coverage": "engineering SE bands; no calibrated simultaneous or optional-stopping coverage"},
                      "vars": {**profile["gates"]["vars"], "replicates": profile["replicates"],
                               "errors": "separate maxima of abs(output-golden)/local_golden_ulp for reference and candidate",
@@ -260,7 +260,11 @@ def ulp(torch, magnitude, dtype):
 
 
 def observe(torch, reference, candidate, exact, output_format, errors=None):
-    """Normalize each element against the same golden ULP before aggregation.
+    """Normalize each IID scalar instance, then keep one mean per replicate.
+
+    Positions in these atomic probes share a distribution and expression. They
+    are not distinct channels. Retain a singleton bucket dimension for the
+    shared gate API; R still counts independent whole-input replicates.
 
     Optional elementwise oracle errors preserve residual-based evaluations when
     subtracting a rounded golden value would lose the true rounding residual.
@@ -269,13 +273,12 @@ def observe(torch, reference, candidate, exact, output_format, errors=None):
     ref, cand = reference.double(), candidate.double()
     scale = ulp(torch, exact, output_format)
     delta = (cand - ref) / scale
-    buckets = delta.shape[-1]
     if errors is None:
         errors = ((ref - exact).abs(), (cand - exact).abs())
     if len(errors) != 2 or any(error.shape != exact.shape for error in errors):
         raise ValueError("oracle errors must match the golden tensor shape")
     return {
-        "delta": delta.reshape(-1, buckets).mean(0).cpu().numpy(),
+        "delta": delta.mean().reshape(1).cpu().numpy(),
         "reference_error": (errors[0] / scale).max().item(),
         "candidate_error": (errors[1] / scale).max().item(),
     }
@@ -465,12 +468,11 @@ def replay(bundle):
                 raise ValueError(f"observation hash mismatch: {name}")
             with np.load(path, allow_pickle=False) as data:
                 arrays = {key: data[key] for key in data.files}
-            buckets = shapes_for(profile, rule)["out"][-1]
             count = record["result"].get("completed_replicates")
             if type(count) is not int or count < 2:
                 raise ValueError(f"invalid completed replicate count: {name}")
             if (set(arrays) != gates.OBSERVATIONS or any(a.dtype != np.float64 for a in arrays.values())
-                    or arrays["delta"].shape != (count, buckets)
+                    or arrays["delta"].shape != (count, 1)
                     or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error"))):
                 raise ValueError(f"observation shape/dtype mismatch: {name}")
             stop = gates.validate_stopping(arrays, profile["gates"]["vars"], profile["replicates"],

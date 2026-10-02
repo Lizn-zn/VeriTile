@@ -21,7 +21,7 @@ KERNELS = supplemental.KERNELS
 SOURCES = [*original.SOURCES, Path(__file__).resolve(), Path(supplemental.__file__),
            KERNELS, supplemental.CATALOG]
 ACCEPTED = original.ACCEPTED
-BUNDLE_VERSION = "scalar-supplement-3"
+BUNDLE_VERSION = "scalar-supplement-4"
 gates = original.gates
 NumericEvent = original.NumericEvent
 sha, write_json, read_json = original.sha, original.write_json, original.read_json
@@ -223,12 +223,11 @@ def replay(bundle):
                 raise ValueError(f"observation hash mismatch: {name}")
             with np.load(path, allow_pickle=False) as data:
                 arrays = {key: data[key] for key in data.files}
-            buckets = shapes_for(profile, rule)["out"][-1]
             count = record["result"].get("completed_replicates")
             if type(count) is not int or count < 2:
                 raise ValueError(f"invalid completed replicate count: {name}")
             if (set(arrays) != gates.OBSERVATIONS or any(a.dtype != np.float64 for a in arrays.values())
-                    or arrays["delta"].shape != (count, buckets)
+                    or arrays["delta"].shape != (count, 1)
                     or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error"))):
                 raise ValueError(f"observation shape/dtype mismatch: {name}")
             stop = gates.validate_stopping(arrays, profile["gates"]["vars"], profile["replicates"],

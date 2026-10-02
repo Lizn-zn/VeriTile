@@ -7,10 +7,13 @@
 
 ## 当前结果
 
-当前配置在 H200（运行时显示 NVIDIA L20X）使用独立种子 20261002，
-固定 `tau=0.05 local ULP`、`se_multiplier=5`。EXP-SUB 的 exp 使用 FP32
+当前 bias 协议将同分布的标量实例汇总成每个 replicate 的一个均值。当前结果
+使用独立种子 20261003 在 H200（运行时显示 NVIDIA L20X）重新采样，并完成独立
+CPU 回放。已发布表绑定其记录的源代码哈希和聚合协议。
+
+配置固定 `tau=0.05 local ULP`、`se_multiplier=5`。EXP-SUB 的 exp 使用 FP32
 `libdevice.exp`，保留原有输入、减法、除法、中间 cast 和输出 cast。
-DLC 名称为 `traces_kernel_equivalence_testing`。
+DLC 名称为 `traces_kernel_equivalence_testing`，任务 ID 为 `dlc1r4v11mbxhjwd`。
 
 [完整 z / B / tau / U / accept 表](./report/summary.md) 同时提供
 [全精度 CSV](./report/summary.csv) 和 [JSON](./report/summary.json)。
@@ -18,15 +21,13 @@ DLC 名称为 `traces_kernel_equivalence_testing`。
 [未接受项明细](./report/warning_audit.json) 区分偏差超预算、区间尚不足以确认和 U gate 状态。
 表中每个配置都单独报告；未测或不适用的统计不填写为零。
 
-所有桶的 `abs(mean) + 5*SE <= 0.05` 才满足 bias 预算；z 仅作诊断。
-存在一个桶的区间完全位于容差外就是 FAIL；没有 FAIL、但有区间跨过边界时是
+跨 replicate 均值的 `abs(mean) + 5*SE <= 0.05` 才满足 bias 预算；z 仅作诊断。
+偏差区间完全位于容差外就是 FAIL；没有 FAIL、但区间跨过边界时是
 INCONCLUSIVE。两者都不能准入。
 U gate 沿用幅度阈值 2/10。五个标准误是工程判据，不宣称已经校准多桶或
 自适应停止覆盖率。统计接受不等于无条件 IEEE 等式证明。
 
-原始 bundle 在 `Logs/bias-budget-verification/supplement/atomic/`，独立回放在
-`Logs/bias-budget-verification/supplement/cpu-report/`。原始观测、PTX 和完整统计
-不放入 Git；当前表、配置和审核摘要随代码维护。
+原始观测、PTX 和完整统计不放入 Git；当前表、配置和审核摘要随代码维护。
 
 ## 直接运行
 
@@ -131,7 +132,10 @@ fp64 实例仅检查 `fp32(a64 / b64)` 与 `fp32(a64 * (1 / b64))`。
 oracle 仍是受信数值计算，不是精确实数证明。
 
 误差尺度固定为每个元素 golden 值在输出 dtype 下的 ULP。先对每个元素计算
-`(candidate-reference)/ULP(golden)`，再按列取均值、跨 replicate 计算均值、标准误和诊断 z。每个桶的偏差区间均须落在 ±tau 内。
+`(candidate-reference)/ULP(golden)`，再对本次 replicate 的全部同分布标量实例
+取一个均值。保存的 delta 形状为 `[R, 1]`，跨 R 个 replicate 均值计算标准误
+和诊断 z，偏差区间须落在 ±tau 内。不将元素数计入 R；具有不同分布或语义的
+channel/head 不能直接沿用这种合并方式。
 两侧的 oracle 误差也先逐元素归一化，再分别取最大值 Er、Ec，计算
 `K = max(0, (Ec-1)/Er)` 并拟合 U。fp64-work 的残差误差同样先除以这个尺度。
 零值使用最小 subnormal 间距；输出 dtype 无法表示的 golden 尺度触发失败。

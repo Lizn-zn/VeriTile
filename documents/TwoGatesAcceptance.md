@@ -4,6 +4,8 @@
 
 状态：**已实现 specification、依赖报告、局部 Triton 原子关系、Python two-gates、GPU 实测与 CPU 重放，以及主目录和补充目录结果的 Lean 规则导出。** 两个目录使用相同的逐元素 golden ULP 归一化；当前结果见各目录的 `report/summary.md`。
 
+当前每个 replicate 汇总一个均值的 bias 协议已使用独立种子 20261003 在 H200 上完成实测，并经独立 CPU 回放。已发布报告绑定其源代码哈希和聚合协议；回放与导出拒绝哈希不匹配的报告。
+
 交付目标为完整浮点支持与接受流程，原语架构和统一完成条件见 [FloatingPointPrimitives.md](./FloatingPointPrimitives.md)。加法重排等小例子用于核对语义，不构成缩减后的交付版本。
 
 准入表只包含固定规模的局部表达式关系。Softmax、LayerNorm、SwiGLU、归约、scan 和 dot 等完整变换需由 Lean 推导，不能将整算法的测试通过变成原子假设。
@@ -93,29 +95,31 @@ Shape 按是否改变计算过程处理：
 
 ## 3. Bias gate：局部 ULP 单位的平均偏差预算
 
-对每个元素使用同一 golden 尺度 \(u_{r,i}=\operatorname{ULP}_d(O(x_r)_i)\)，先归一化，再按最后一维分桶。一个统计样本是整个 replicate 的桶平均，不能把同一 replicate 的元素再次计作独立样本：
+对每个元素使用同一 golden 尺度 \(u_{r,i}=\operatorname{ULP}_d(O(x_r)_i)\)，先归一化，再对本次 replicate 的全部同分布标量实例取一个均值。当前原子实验的各位置执行相同关系、使用相同分布，列位置没有独立 channel 语义。一个统计样本是整个 replicate 的均值，标准误中的 R 仍是 replicate 数：
 
 \[
-\Delta_{r,g}=\operatorname{mean}_{i\in g}\frac{Q(x_r)_i-P(x_r)_i}{u_{r,i}},
-\qquad SE_g=\frac{s_g}{\sqrt R},\qquad z_g=\frac{|\bar\Delta_g|}{SE_g}.
+\Delta_r=\operatorname{mean}_i\frac{Q(x_r)_i-P(x_r)_i}{u_{r,i}},
+\qquad SE=\frac{s}{\sqrt R},\qquad z=\frac{|\bar\Delta|}{SE}.
 \]
 
-当前 profile 固定 \(\tau=0.05\) local ULP、\(c=5\)，对每个桶构造工程判定区间 \([\bar\Delta_g-cSE_g,\bar\Delta_g+cSE_g]\)。定义：
+当前 profile 固定 \(\tau=0.05\) local ULP、\(c=5\)，构造工程判定区间 \([\bar\Delta-cSE,\bar\Delta+cSE]\)。定义：
 
 \[
-B_g=|\bar\Delta_g|+cSE_g,\qquad
-L_g=\max(0,|\bar\Delta_g|-cSE_g),\qquad B=\max_g B_g.
+B=|\bar\Delta|+cSE,\qquad
+L=\max(0,|\bar\Delta|-cSE).
 \]
 
-- **PASS**：所有桶 \(B_g\le\tau\)，即每个区间都完全位于容差内。
-- **FAIL**：存在桶 \(L_g>\tau\)，即至少一个区间完全位于容差外；无效或非有限统计也 FAIL。
-- **INCONCLUSIVE**：没有 FAIL，但至少一个区间跨过容差边界。数据不足以确认满足预算，不能准入。
+- **PASS**：\(B\le\tau\)，即区间完全位于容差内。
+- **FAIL**：\(L>\tau\)，即区间完全位于容差外；无效或非有限统计也 FAIL。
+- **INCONCLUSIVE**：没有 FAIL，但区间跨过容差边界。数据不足以确认满足预算，不能准入。
+
+该聚合只适用于当前同分布、同计算的标量原子实例；不同分布或语义的 channel/head/expert 需显式定义分组，不能直接合并。观测保存为 `[R, 1]`；bundle 和 checker 版本绑定这一聚合方式，旧的按列观测不能作为当前协议的正式证据。
 
 \(z\) 继续报告，但不决定接受。极小的恒定偏差可以有无穷 z 而满足预算；反过来，均值接近零但标准误很大时，不能仅凭小 z 接受。零样本方差时按观测区间退化为一点计算；这不证明总体方差也为零。\(\tau\) 约束平均有符号偏差，不约束单个输出误差，也不替代 vars gate。
 
 五个标准误是当前明确选择的工程协议，**不是已经校准的多桶、有限样本或自适应停止置信保证**。固定预算后用独立种子检验实现和结论；这也不自动证明协议的覆盖率。需要严格概率保证时，应另行固定检验族和采样规则并论证区间方法。不能逐条修改 tau 直到某个关系通过。
 
-尺度按元素计算，不使用输出峰值给其他元素放宽容差。报告中的 B 是归一化统计量的最差桶；输入分布、精度、cast 位置和 oracle 仍属于不可省略的契约。阈值不是任何 bf16/fp32 算子的通用误差保证，也不自动约束误差在整个训练过程中的传播。
+尺度按元素计算，不使用输出峰值给其他元素放宽容差。报告中的 B 是跨 replicate 均值的偏差上界；输入分布、精度、cast 位置和 oracle 仍属于不可省略的契约。阈值不是任何 bf16/fp32 算子的通用误差保证，也不自动约束误差在整个训练过程中的传播。
 
 ## 4. Vars gate：相对 oracle 的误差放大与尾部
 
@@ -210,7 +214,7 @@ Q_d(a,b,c)=\operatorname{fl}_d(a+\operatorname{fl}_d(b+c)).
 
 采用两门的职责、统计量与判决结构，不意味着报告中的强保证已成立。后续理论与实验工作至少需要处理：
 
-1. **偏差预算与区间覆盖。** PASS 表示所有桶的工程区间落在 ±tau 内，不表示严格无偏或逐元素小误差。tau 的应用合理性、区间覆盖率和所需样本量需要分别验证；均值接近零但区间宽时报告 INCONCLUSIVE。
+1. **偏差预算与区间覆盖。** PASS 表示平均偏差的工程区间落在 ±tau 内，不表示严格无偏或逐元素小误差。tau 的应用合理性、区间覆盖率和所需样本量需要分别验证；均值接近零但区间宽时报告 INCONCLUSIVE。
 2. **五西格玛与自适应停止。** 用样本标准差构造的统计量依赖分布和样本量；渐近正态近似不能直接给出有限样本的严格误报界。反复查看置信区间后停止，也不能自动沿用固定样本量的覆盖率。需固定协议或采用经过论证的序贯方法；置信序列是可研究的路径之一：[原始研究](https://arxiv.org/abs/2301.09573)。
 3. **Return level 的含义。** 理想连续模型下，\(r_T\) 对应单次超越概率约 \(1/T\)，不是 \(T\) 次最大值的期望，也不是保证不被超越的最坏值。独立抽样时至少超越一次的概率为 \(1-(1-1/T)^T\)，随 \(T\) 增大趋于约 \(0.632\)。必须区分 return level 的估计置信度和未来运行的超越风险。[NIST 的 return value 定义](https://www.nist.gov/programs-projects/maps-non-hurricane-non-tornadic-extreme-wind-speeds-contiguous-united-states)。
 4. **尾部模型和参数截断。** POT/GPD 拟合有尾部近似及采样假设，不能直接宣称有限样本“分布无关”。报告把正 \(\hat\xi\) 截到零，需要额外依据；当参考误差很小时，误差比可能出现长尾。即使极限尾部有界，也不足以保证有限阈值下的指数拟合保守。截断前后的诊断与覆盖率需要验证。
@@ -221,7 +225,7 @@ Q_d(a,b,c)=\operatorname{fl}_d(a+\operatorname{fl}_d(b+c)).
 
 双门验收采用自适应停止规则：默认最少 4096 次、每批 512 次、预算上限 50000 次（完整末批可到 50176）；每批检查幅度置信带，达到最小预算后稳定或回退则停止。PWM 保留原始 shape 供诊断，计算 return level 时截断到非正；1000 次固定种子 bootstrap，alpha=1.35e-3。尾部不可拟合时按经验最大 K 判 PASS/WARN/FAIL，明确标记 `empirical_fallback`，不能把它称为尾部置信保证。
 
-Bias 按输出最后一维分桶，一维输出也保留各元素。默认 tau=0.05 local ULP，SE 倍数为 5；z 只作诊断，接受要求所有桶的偏差上界不超过 tau。每个元素单独计算 ULP：取 golden 的绝对值，转到输出 dtype，再取向正无穷的 nextafter 间距；最大有限值取朝零间距，零和 subnormal 使用最小间距。golden 转换溢出产生无效尺度并使检查失败。先用该尺度归一化，再计算 bias 的列均值和 vars 的峰值误差；不跨元素或 replicate 取最大 ULP。CPU 回放检查实际采样数及所有自适应检查点。输入分布由 VeriTile 的 profile 指定，不引入新的正值或条件采样。具体参数与运行说明见实验目录，模型限制见第 7 节。
+Bias 对每个 replicate 的全部同分布标量实例取一个均值，一维和二维布局使用相同聚合。默认 tau=0.05 local ULP，SE 倍数为 5；z 只作诊断，接受要求跨 replicate 均值的偏差上界不超过 tau。每个元素单独计算 ULP：取 golden 的绝对值，转到输出 dtype，再取向正无穷的 nextafter 间距；最大有限值取朝零间距，零和 subnormal 使用最小间距。golden 转换溢出产生无效尺度并使检查失败。先用该尺度归一化，再计算 bias 的整次均值和 vars 的峰值误差；不跨元素或 replicate 取最大 ULP。CPU 回放检查 delta 的 `[R, 1]` 形状、实际采样数及所有自适应检查点。输入分布由 VeriTile 的 profile 指定，不引入新的正值或条件采样。具体参数与运行说明见实验目录，模型限制见第 7 节。
 
 ## 8. 下一步
 

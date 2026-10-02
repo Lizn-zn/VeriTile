@@ -8,7 +8,7 @@ The fp64-work profile applies only to DIV-MUL-RCP, including its output cast.
 PROFILE = {
     "shape": [4096, 4096],
     "distribution": {"family": "normal", "mean": 1.0, "std": 1.0},
-    "seed": 20261002,
+    "seed": 20261003,
     "replicates": 4096,
     "replicates_max": 50000,
     "batch": 512,

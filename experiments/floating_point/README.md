@@ -4,6 +4,10 @@ For additional basic relations, use the
 [supplemental experiment instructions](./supplement/README.md).
 Both catalogues use the same per-element ULP normalization and two gates.
 
+The current bias protocol pools IID scalar instances into one mean per replicate.
+The published tables use fresh GPU samples from this protocol and independent CPU
+replay. Their recorded source hashes bind the sampling and aggregation semantics.
+
 Edit [config.py](./config.py), check atomic expression pairs with Triton kernels on an NVIDIA GPU,
 then import the result directory on the development machine (Python + NumPy).
 The importer recomputes both gates instead of trusting PASS labels.
@@ -85,7 +89,7 @@ PTX digests, observation shapes and file hashes, and recomputes the statistics.
 Existing output files are never overwritten. Returned Python source is **not
 executed**, and NPZ is loaded with `allow_pickle=False`.
 
-Per-instance `observations.npz` stores per-replicate bucket deltas and peak oracle
+Per-instance `observations.npz` stores one bias mean per replicate and peak oracle
 errors, all in local-ULP units. It supports CPU statistical replay, not raw-output replay;
 frozen seeds and sources support a separate GPU rerun. The manifest includes
 profile, implementation hashes, device/capability, driver, software and launch
@@ -142,13 +146,16 @@ and error-amplification checks. Statistics and bundle replay use NumPy on CPU.
   output outliers cannot enlarge another element's allowance.
 - Normalize **before** aggregation: `d = (candidate-reference)/s`,
   `er = abs(reference-golden)/s`, `ec = abs(candidate-golden)/s`.
-  Bias buckets are the output's last axis. Each replicate averages `d` over rows,
-  retaining one bucket per column. Mean and sample std (ddof=1) across replicates
-  are therefore in local-ULP units. `z = sqrt(R)*abs(mean)/std` is dimensionless.
-  With `SE = std/sqrt(R)`, every bucket must satisfy `abs(mean) + 5*SE <= 0.05`
+  Each replicate averages `d` over all IID scalar instances, storing one mean
+  (`delta` has shape `[R, 1]`). Array columns have no separate channel semantics.
+  Mean and sample std (ddof=1) are computed across these R replicate means, not
+  across R times the number of elements. `z = sqrt(R)*abs(mean)/std` is dimensionless.
+  With `SE = std/sqrt(R)`, the mean must satisfy `abs(mean) + 5*SE <= 0.05`
   local ULP. A band entirely outside the tolerance FAILs; a boundary-crossing
   band is INCONCLUSIVE. z is diagnostic only. These are engineering SE bands,
   not calibrated simultaneous or optional-stopping confidence guarantees.
+  Pooling is scoped to these identical scalar expressions and IID probes; distinct
+  channels/heads or probe distributions require their own explicit grouping.
 - The magnitude gate uses `Er = max(er)`, `Ec = max(ec)` within each replicate,
   followed by `K = max(0, (Ec-1)/Er)`. The additive allowance is one local ULP.
   `Ec <= 1` yields zero; `Er == 0` with `Ec > 1` yields infinity.
@@ -183,10 +190,10 @@ quantized ties and nonfinite errors, plus adaptive stopping and replay integrity
 
 The checked-in [current table](./report/summary.md) contains all 42 instances,
 with full-precision [CSV](./report/summary.csv) and [JSON](./report/summary.json).
-The current H200 run (reported as NVIDIA L20X) uses seed 20261002, tau=0.05
-local ULP and a five-SE bias band. It uses independent samples after fixing
-the protocol and EXP-SUB implementation. Current totals are in the table.
-The DLC task is named `traces_kernel_equivalence_testing`.
+The current H200 run (reported as NVIDIA L20X) uses seed 20261003, tau=0.05
+local ULP and a five-SE bias band across replicate means. It uses independent
+samples after fixing the aggregation protocol. Current totals are in the table.
+The DLC task is named `traces_kernel_equivalence_testing` (`dlc1r4v11mbxhjwd`).
 
 [Experiment settings](./report/experiment.json) record the input distribution,
 precision profiles, gates, device/compiler details and checked source hashes.
@@ -204,8 +211,8 @@ Maintain a complete rule/format table while formal bundles are written under one
 run directory:
 
 ```bash
-python3 scripts/report_numerics.py Logs/bias-budget-verification/original
-python3 scripts/report_numerics.py Logs/bias-budget-verification/original --watch --job-id <dlc-job-id>
+python3 scripts/report_numerics.py Logs/replicate-mean-verification/original
+python3 scripts/report_numerics.py Logs/replicate-mean-verification/original --watch --job-id <dlc-job-id>
 ```
 
 After both runs complete, publish their independently replayed tables, settings
@@ -214,7 +221,7 @@ and audits together. The run directory must contain `original/atomic`,
 with `Status: Succeeded`, and an `exit_code` file containing `0`:
 
 ```bash
-python3 scripts/publish_numerical_results.py Logs/bias-budget-verification --hardware-model H200
+python3 scripts/publish_numerical_results.py Logs/replicate-mean-verification --hardware-model H200
 python3 scripts/export_numerical_rules.py --trust-report
 python3 scripts/export_supplemental_rules.py --trust-report
 ```
@@ -224,8 +231,8 @@ environment's reports before replacing current files. Raw observation bundles
 remain outside Git.
 
 The table includes every rule and precision in `config.py`, even if its run has
-not started. Smoke bundles are excluded. `z` is the maximum absolute bucket z;
-`B` is the largest bias upper bound in local ULPs, `tau` its budget;
+not started. Smoke bundles are excluded. `z` is the absolute z across replicate means;
+`B` is the bias upper bound in local ULPs, `tau` its budget;
 `U` is the magnitude-gate value, with `empirical_max` explicitly distinguished
 from a fitted upper estimate. Missing values remain empty rather than becoming
 zero. `accept` stays pending until CPU replay verifies the bundle.

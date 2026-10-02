@@ -42,7 +42,7 @@ formats. It supplies no fp64 instance.
 | `SoftmaxStable` | Bind the tested libdevice EXP-SUB implementation at the exact precision; its admission does not cover a tl.exp implementation. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
 | `StableLogSumExp` | EXP-SUB uses libdevice; select an actually accepted LOG-EXP precision. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
 | `OnlineSoftmax` | Scalar max identities and EXP-NEG-INF-SUB are admitted; EXP-SUB needs a compatible libdevice use-site binding. | Prove the loop invariant in the original recurrence scope. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
-| `Welford` | Basic identity and selected inverse-cancellation laws are available. The fp32 CANCEL instance is inconclusive; integer-count conversion, precision and nonzero-count obligations remain. | Connect explicit reduction trees to the online loop and retain both output windows and memory framing. |
+| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; integer-count conversion, precision and nonzero-count obligations remain. | Connect explicit reduction trees to the online loop and retain both output windows and memory framing. |
 | `FusedLayerNorm` | The Welford prerequisites at the actual arithmetic precision. | Derive the statistics replacement and preserve the common normalization, affine operations and bf16 output conversion. |
 
 This table lists prerequisites, not newly available assumptions. It does not

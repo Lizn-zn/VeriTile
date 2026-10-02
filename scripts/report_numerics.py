@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Maintain one current table of numerical rule decisions, max |z| and U."""
+"""Maintain one current table of atomic numerical decisions, |z| and U."""
 import argparse
 from collections import Counter
 from copy import deepcopy
@@ -20,9 +20,10 @@ else:
 COLUMNS = ("rule", "format", "replicates", "z", "B", "tau", "U", "bias", "vars", "u_kind",
            "accept", "decision", "state", "replayed", "reason")
 DEFINITIONS = {
+    'checker_version': experiment.gates.VERSION,
     'error_units': 'per-element output-format ULP at the rounded golden value; normalize before aggregation',
-    'z_definition': 'maximum absolute z of local-ULP bucket means across all output buckets',
-    'b_definition': 'maximum over buckets of abs(mean) + se_multiplier * std / sqrt(R), in local ULPs; not calibrated simultaneous/sequential coverage',
+    'z_definition': 'absolute z across per-replicate means of all IID scalar instances in local ULPs',
+    'b_definition': 'abs(mean) + se_multiplier * std / sqrt(R) across per-replicate means, in local ULPs; not calibrated simultaneous/sequential coverage',
     'u_definition': 'upper estimate of amplification of peak local-ULP oracle errors with additive allowance 1; empirical_max is not a tail confidence bound',
 }
 TERMINAL = {"Succeeded", "Failed", "Stopped", "Deleted"}
@@ -62,6 +63,10 @@ def collect(root, profile, cache=None, verify_all=False):
         manifest = experiment.read_json(manifest_path)
         if manifest["smoke"]:
             continue
+        if manifest.get('bundle_version') != experiment.BUNDLE_VERSION:
+            raise ValueError(f"unsupported bundle schema: {bundle}")
+        if manifest['sources'] != experiment.source_hashes():
+            raise ValueError(f"source hashes differ from the numerical implementation: {bundle}")
         if compatible_profile(manifest["profile"]) != compatible_profile(profile):
             raise ValueError(f"incompatible experiment configuration: {bundle}")
         records = {}
@@ -161,8 +166,9 @@ def publish(root, table):
     write_current(root / 'summary.csv', output.getvalue())
     lines = ['# Numerical rule results', '',
              f"{table['total']} instances; {table['replayed']} replayed; {table['accepted']} accepted.", '',
-             'z = max |z| over output buckets (diagnostic only). U uses the configured magnitude gate.',
-             'B = max(abs(mean) + se_multiplier * SE); bias PASS requires B <= tau, in local ULPs.',
+             'Each replicate contributes one mean across its IID scalar instances; R counts replicates.',
+             'z = |mean| / SE across replicate means (diagnostic only). U uses the configured magnitude gate.',
+             'B = abs(mean) + se_multiplier * SE; bias PASS requires B <= tau, in local ULPs.',
              'Bias FAIL means an interval lies outside tolerance; INCONCLUSIVE means a boundary is crossed.',
              'The SE bands are engineering criteria, not calibrated simultaneous or optional-stopping confidence guarantees.',
              'Errors are normalized per element by the output-format ULP at the rounded golden value before aggregation.',

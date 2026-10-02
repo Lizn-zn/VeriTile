@@ -8,7 +8,7 @@ from statistics import NormalDist
 
 import numpy as np
 
-VERSION = "local-ulp-bias-budget"
+VERSION = "local-ulp-replicate-mean"
 OBSERVATIONS = {"delta", "reference_error", "candidate_error"}
 
 
