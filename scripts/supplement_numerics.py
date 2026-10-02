@@ -1,4 +1,4 @@
-"""Supplemental catalogue, contracts and oracles; the original run is frozen.
+"""Supplemental catalogue, contracts and oracles using the shared ULP protocol.
 
 No GPU dependency at import time. This module reuses the original profile
 validator and observation definitions, without modifying their module globals.
@@ -29,7 +29,7 @@ def load_catalog():
 
 
 def validate_profile(profile):
-    # Validate the unchanged shape/distribution/gates using the frozen checker.
+    # Validate shape/distribution/gates using the shared checker.
     # Only the catalogue and explicitly supported precision tuples differ.
     if type(profile) is not dict or type(profile.get("formats")) is not list:
         raise ValueError("profile must be an object with a formats list")
@@ -79,7 +79,8 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
         node_formats={"arithmetic": fmt["compute"], "transcendental": fmt["compute"],
                       "details": "bf16 nodes execute in fp32 then explicitly round bf16; see bound source"},
         accumulator_formats={},  # Every expression is scalar; no reduction accumulator.
-        intrinsics={"div": "ordinary Triton /", "exp": "tl.exp", "log": "tl.log", "max": "tl.maximum",
+        intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule == "EXP-SUB" else "tl.exp",
+                    "log": "tl.log", "max": "tl.maximum",
                     "oracle": "torch fp64 mathematical reference on the same quantized operands"})
     config["probe"]["special_values"] = "only explicit -inf literals in the relation; no conditioning or resampling"
     config["probe"]["active_operands"] = load_catalog()[rule]["operands"]
@@ -123,13 +124,10 @@ def oracle(torch, rule, inputs):
 
 
 def observe(torch, reference, candidate, exact, fmt, errors=None):
-    result = original.observe(torch, reference, candidate, exact, fmt["output"])
     if fmt["compute"] == "fp64":
         if errors is None or len(errors) != 2:
             raise ValueError("fp64-work instance requires the bound residual oracle")
-        for key, error in zip(("reference_error", "candidate_error"), errors):
-            result[key] = error.max().item()
-    return result
+    return original.observe(torch, reference, candidate, exact, fmt["output"], errors)
 
 
 def launch_pair(torch, triton, kernels, rule, inputs, profile, fmt):

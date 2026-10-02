@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Run/replay the supplemental scalar atoms without invalidating the original run.
-
-The run/replay lifecycle is a versioned copy of check_numerics.py, whose source
-hash belongs to the frozen 30-row admission table. Statistical evaluation calls
-that SAME numerical_gates module; no gate implementation is copied or patched.
-"""
+"""Run/replay supplemental scalar atoms using the shared local-ULP two gates."""
 import argparse
 from copy import deepcopy
 import json
@@ -26,7 +21,7 @@ KERNELS = supplemental.KERNELS
 SOURCES = [*original.SOURCES, Path(__file__).resolve(), Path(supplemental.__file__),
            KERNELS, supplemental.CATALOG]
 ACCEPTED = original.ACCEPTED
-BUNDLE_VERSION = "scalar-supplement-1"
+BUNDLE_VERSION = "scalar-supplement-3"
 gates = original.gates
 NumericEvent = original.NumericEvent
 sha, write_json, read_json = original.sha, original.write_json, original.read_json
@@ -89,7 +84,7 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
                 if stop:
                     break
         arrays = {key: np.asarray(values, dtype=np.float64) for key, values in observations.items()}
-        count = len(arrays["epsilon"])
+        count = len(arrays["delta"])
         result = gates.evaluate(arrays, profile["gates"], seed, count, smoke)
         result.update(stopping_reason=stop, completed_replicates=count)
         np.savez_compressed(directory / "observations.npz", **arrays)
@@ -233,8 +228,8 @@ def replay(bundle):
             if type(count) is not int or count < 2:
                 raise ValueError(f"invalid completed replicate count: {name}")
             if (set(arrays) != gates.OBSERVATIONS or any(a.dtype != np.float64 for a in arrays.values())
-                    or any(arrays[k].shape != (count, buckets) for k in ("delta", "ulp"))
-                    or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error", "epsilon"))):
+                    or arrays["delta"].shape != (count, buckets)
+                    or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error"))):
                 raise ValueError(f"observation shape/dtype mismatch: {name}")
             stop = gates.validate_stopping(arrays, profile["gates"]["vars"], profile["replicates"],
                                            profile["replicates_max"], profile["batch"])
@@ -274,6 +269,8 @@ def publish_report(bundle, report, output):
         rows.append({
             "rule": r["rule_id"], "format": r["format"], "replicates": r.get("replicates"),
             "z": reporting.maximum_z(stats["bias"].get("abs_z")) if stats else None,
+            "B": stats["bias"].get("upper") if stats else None,
+            "tau": stats["bias"].get("tau") if stats else None,
             "U": var.get("upper"), "bias": r.get("bias"), "vars": r.get("vars"),
             "u_kind": ("empirical_max" if var["empirical_fallback"] else var["branch"]) if stats else None,
             "accept": (r["decision"] in ACCEPTED if stats or r.get("state") in
@@ -283,7 +280,8 @@ def publish_report(bundle, report, output):
             "reason": r.get("reason", ""),
         })
     table = {"rows": rows, "total": len(rows), "states": dict(Counter(r["state"] for r in rows)),
-             "accepted": len(report["accepted"]), "replayed": sum(r["replayed"] for r in rows)}
+             "accepted": len(report["accepted"]), "replayed": sum(r["replayed"] for r in rows),
+             **reporting.DEFINITIONS}
     reporting.publish(output, table)
     write_json(output / "admission.json", report)
     write_json(output / "experiment.json", read_json(bundle / "manifest.json"))

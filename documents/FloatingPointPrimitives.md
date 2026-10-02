@@ -1,6 +1,6 @@
 # 浮点运算原语：完整设计
 
-更新日期：2026-10-01。状态：**已报告 42 个实例，其中 30 个接受；可从受信报告生成 Lean 规则数据，TritonBench fp32 加法例子已绑定并证明；其他原子的语法绑定及通用自动化继续复用现有 agent/comparator**。
+更新日期：2026-10-02。状态：**主目录报告覆盖 42 个实例，接受项以当前逐元素 ULP 结果表为准；可从受信报告生成 Lean 规则数据，TritonBench fp32 加法例子已绑定并证明；其他原子的语法绑定及通用自动化继续复用现有 agent/comparator**。
 
 用户要求交付完整的“配置 → 检查原语 → 生成规则集 → 自动证明”流程，不以标量演示代替完整流程。已确认的实现路线减少了对自研执行器的要求：实际浮点运算交给 Triton/GPU，two-gates 在 Python 中运行，Lean 检查规则假设下的推导。[TwoGatesAcceptance.md](./TwoGatesAcceptance.md) 定义变换接受协议。
 
@@ -252,7 +252,7 @@ profile = {
 
 这里的输入分布默认指**原子规则的测试操作数分布**。由此得到 `R` 下的形式等价性，不要求证明程序中间值也独立同分布。若某条检查明确要代表实际 kernel 内部的使用位置，则由输入生成器执行到该位置，保留中间操作数的联合关系并另建规则实例；不能把它们重抽成独立高斯。整 kernel 的统计接受结果是可选的额外实验，不从规则组合自动推出。
 
-当前仓库已具备 Python 配置、14 条局部 Triton 实现对、two-gates runner、数值准入表导入、具体标量参考、条件等价推导、假设打印和通用 agent/comparator 入口。GPU 实测由用户在独立机器运行并回传；命令见[实验目录](../experiments/floating_point/README.md)。已可从受信报告生成 30 个接受项的 Lean 数据，并将 fp32 ADD-COMMUTE 绑定到具体 TritonBench 加法模型；`EvidenceValidated` 保留为对外部结果的 scoped 模型前提。其他原子的语法绑定及通用自动化仍需继续连接已有证明入口。完整流程不以脚本编译通过代替验收。
+当前仓库已具备 Python 配置、14 条局部 Triton 实现对、two-gates runner、数值准入表导入、具体标量参考、条件等价推导、假设打印和通用 agent/comparator 入口。GPU 实测在独立机器运行并经 CPU 回放；命令见[实验目录](../experiments/floating_point/README.md)。已可从受信报告生成当前接受项的 Lean 数据，并将 fp32 ADD-COMMUTE 绑定到具体 TritonBench 加法模型；`EvidenceValidated` 保留为对外部结果的 scoped 模型前提。其他原子的语法绑定及通用自动化仍需继续连接已有证明入口。完整流程不以脚本编译通过代替验收。
 
 ## 8. 正确性、等价性与原子假设
 

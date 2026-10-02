@@ -7,41 +7,40 @@ namespace FPEquationalTests
 open VeriTile Triton FP.Equational
 
 def commute := FP.ReportedAdmission.fp32_add_commute.bind commuteLHS commuteRHS
-def associate := FP.ReportedAdmission.fp32_add_assoc.bind associateLHS associateRHS
 
 structure Rules where
+  extra : Spec.Assumptions ComputeStmt
   comm : Spec.EvidenceValidated commute.rule commute.evidence
-  assoc : Spec.EvidenceValidated associate.rule associate.evidence
+  assoc : Spec.Derivation (commute :: extra) associateLHS associateRHS
 
-def rules : Spec.Assumptions ComputeStmt := [commute, associate]
+def rules (R : Rules) : Spec.Assumptions ComputeStmt := commute :: R.extra
 
-theorem commutation (R : Rules) : Spec.Derivation rules commuteLHS commuteRHS :=
+theorem commutation (R : Rules) : Spec.Derivation (rules R) commuteLHS commuteRHS :=
   .atom commute (by simp [rules])
     (FP.ReportedAdmission.fp32_add_commute.admit _ _ R.comm)
 
-theorem association (R : Rules) : Spec.Derivation rules associateLHS associateRHS :=
-  .atom associate (by simp [rules])
-    (FP.ReportedAdmission.fp32_add_assoc.admit _ _ R.assoc)
+theorem association (R : Rules) : Spec.Derivation (rules R) associateLHS associateRHS :=
+  R.assoc
 
 theorem reduction_reorder (R : Rules) (a b : SumTree α)
-    (h : a.leaves.Perm b.leaves) : TermEq rules a.eval b.eval :=
+    (h : a.leaves.Perm b.leaves) : TermEq (rules R) a.eval b.eval :=
   a.equiv_of_perm (commutation R) (association R) b h
 
 #print_fp_assumptions reduction_reorder
 
-theorem opaque_term (a b : Term α) (h : TermEq rules a b) : TermEq rules a b := h
+theorem opaque_term (R : Rules) (a b : Term α) (h : TermEq (rules R) a b) : TermEq (rules R) a b := h
 #print_fp_assumptions opaque_term
 
-theorem same_tree (a : SumTree α) : TermEq rules a.eval a.eval := .refl _
+theorem same_tree (a : SumTree α) : TermEq [] a.eval a.eval := .refl _
 #print_fp_assumptions same_tree
 
 theorem reassociation_only (R : Rules) (a b c : Term α) :
-    TermEq rules ((a.add b).add c) (a.add (b.add c)) :=
+    TermEq (rules R) ((a.add b).add c) (a.add (b.add c)) :=
   .addAssociate (association R) a b c
 #print_fp_assumptions reassociation_only
 
 theorem inside_opaque_exp (R : Rules) (a b : Term α) :
-    TermEq rules (.app (.unary (some .fp32) .exp) [a.add b])
+    TermEq (rules R) (.app (.unary (some .fp32) .exp) [a.add b])
       (.app (.unary (some .fp32) .exp) [b.add a]) :=
   .context _ [] [] (.addCommute (commutation R) a b)
 #print_fp_assumptions inside_opaque_exp

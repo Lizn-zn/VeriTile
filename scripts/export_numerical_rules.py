@@ -9,6 +9,7 @@ from collections import Counter
 from copy import deepcopy
 import hashlib
 import json
+import math
 from pathlib import Path
 import re
 
@@ -20,6 +21,15 @@ else:
 ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / 'experiments/floating_point/report'
 OUTPUT = ROOT / 'VeriTile/Triton/Float/ReportedAdmission.lean'
+
+
+def validate_accepted_bounds(row, profile):
+    """A PASS label cannot override the frozen numerical budgets."""
+    tau = profile['gates']['bias']['tau']
+    if (row.get('tau') != tau or any(type(row.get(k)) not in (float, int)
+                                   or not math.isfinite(row[k]) or row[k] < 0 for k in ('B', 'U'))
+            or row['B'] > tau or row['U'] > profile['gates']['vars']['warn']):
+        raise ValueError('accepted row disagrees with bias or magnitude budget')
 
 
 def digest(data):
@@ -51,6 +61,7 @@ def load_report(directory):
         if row['accept'] != passed:
             raise ValueError('accept disagrees with the reported state and gates')
         if passed:
+            validate_accepted_bounds(row, profile)
             if (type(row['replicates']) is not int
                     or not profile['replicates'] <= row['replicates'] <=
                     ((profile['replicates_max'] + profile['batch'] - 1) // profile['batch']) * profile['batch']

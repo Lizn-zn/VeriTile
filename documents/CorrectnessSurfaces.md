@@ -110,8 +110,8 @@ The calculus, reporting, example and rejection checks are implemented. The
 14 fixed-size atomic expression pairs, Python configuration, gates and CPU result replay.
 Composite algorithms, reductions, scans, dot rewrites and memory/layout properties
 are excluded from admission; their equivalences require Lean derivations.
-The published GPU report has 30 accepted instances. The report exporter freezes
-them as Lean data, and the worked example binds fp32 ADD-COMMUTE to its concrete
+The report exporter freezes the current GPU report’s accepted instances
+as Lean data, and the worked example binds fp32 ADD-COMMUTE to its concrete
 assignment fragments. The model premise `R.add_comm` explicitly trusts that
 external result and binding; Lean checks the derivation under it. Other atomic
 syntax bindings remain separate work. See the [worked example](../experiments/floating_point/EXAMPLE.md)

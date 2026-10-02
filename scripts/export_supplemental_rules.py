@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Import the user-trusted PR #10 report as guarded Lean scalar-rule data.
+"""Import the current user-trusted report as guarded Lean scalar-rule data.
 
 No GPU replay and no EvidenceValidated proofs are manufactured. Reported WARN,
 domain events, unsupported combinations and smoke results cannot be promoted.
@@ -11,10 +11,12 @@ from pathlib import Path
 
 if __package__:
     from . import check_numerics_supplement as experiment
-    from .export_numerical_rules import lean_string, declaration_name
+    from .export_numerical_rules import (lean_string, declaration_name, validate_accepted_bounds,
+                                         load_report as load_original_report, REPORT as ORIGINAL_REPORT)
 else:
     import check_numerics_supplement as experiment
-    from export_numerical_rules import lean_string, declaration_name
+    from export_numerical_rules import (lean_string, declaration_name, validate_accepted_bounds,
+                                        load_report as load_original_report, REPORT as ORIGINAL_REPORT)
 
 ROOT = experiment.ROOT
 REPORT = ROOT / "experiments/floating_point/supplement/report"
@@ -74,6 +76,7 @@ def load_report(directory):
         elif row["state"] not in {"NUMERIC_EVENT", "UNSUPPORTED"} or row["replayed"]:
             raise ValueError("report has unfinished or inconsistent rows")
         if passed:
+            validate_accepted_bounds(row, profile)
             accepted.append(row)
     if (seen != expected or summary["total"] != len(expected)
             or summary["accepted"] != len(accepted)
@@ -88,6 +91,7 @@ def load_report(directory):
 
 def render(directory=REPORT):
     settings, profile, rows, hashes, snapshot = load_report(directory)
+    original_count = len(load_original_report(ORIGINAL_REPORT)[2])
     canonical = experiment.original.registry.canonical_json
     try:
         path = str(directory.resolve().relative_to(ROOT))
@@ -127,7 +131,7 @@ def render(directory=REPORT):
     lines += ["def all : List ReportedScalarRule := [",
               "  " + ",\n  ".join(declaration_name(r) for r in rows) + "]", "",
               f"theorem accepted_count : all.length = {len(rows)} := rfl",
-              f"theorem total_accepted_count : ReportedAdmission.all.length + all.length = {30 + len(rows)} := rfl", "",
+              f"theorem total_accepted_count : ReportedAdmission.all.length + all.length = {original_count + len(rows)} := rfl", "",
               "end VeriTile.Triton.FP.SupplementalAdmission", ""]
     return "\n".join(lines)
 

@@ -24,18 +24,20 @@ class SupplementalExportTests(unittest.TestCase):
 
     def test_exact_accepted_precision_instances_and_reproducible_export(self):
         _, _, rows, _, _ = exporter.load_report(exporter.REPORT)
-        self.assertEqual(len(rows), 32)
+        self.assertEqual(len(rows), 37)
         self.assertEqual(sum(r['format'] == 'fp64_fp64_fp32' for r in rows), 1)
         self.assertEqual({r['format'] for r in rows if r['rule'] == 'MUL-RCP-CANCEL'},
-                         {'bf16_fp32'})
+                         {'bf16_fp32', 'fp32'})
         text = exporter.render()
         self.assertEqual(text, exporter.OUTPUT.read_text())
-        for name in ('fp32_exp_sub', 'fp32_log_exp', 'fp32_log_mul', 'fp32_mul_rcp_cancel'):
+        for name in ('fp32_log_exp', 'fp32_log_mul', 'bf16_mul_rcp_cancel'):
             self.assertNotIn(f'def {name} :', text)
+        self.assertIn('def fp32_exp_sub :', text)
+        self.assertIn('def fp32_mul_rcp_cancel :', text)
         self.assertNotIn('axiom ', text)
 
     def test_nonaccepted_results_cannot_be_promoted(self):
-        for key in [('EXP-SUB', 'fp32'), ('LOG-MUL', 'fp32'),
+        for key in [('LOG-EXP', 'fp32'), ('LOG-MUL', 'fp32'),
                     ('MUL-RCP-CANCEL', 'bf16'), ('ADD-ZERO', 'fp64_fp64_fp32')]:
             def promote(report):
                 row = next(r for r in report['rows'] if (r['rule'], r['format']) == key)
@@ -44,6 +46,12 @@ class SupplementalExportTests(unittest.TestCase):
                 target = self.mutate('summary.json', promote)
                 with self.assertRaisesRegex(ValueError, 'accept disagrees'):
                     exporter.render(target)
+
+    def test_pass_labels_do_not_override_the_bias_budget(self):
+        def exceed(report):
+            next(r for r in report['rows'] if r['accept'])['B'] = .051
+        with self.assertRaisesRegex(ValueError, 'budget'):
+            exporter.render(self.mutate('summary.json', exceed))
 
     def test_source_profile_and_manifest_tampering_rejected(self):
         for kind in ('sources', 'shape', 'smoke', 'entries'):

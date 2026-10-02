@@ -24,7 +24,7 @@ DEFAULT_PROFILE = ROOT / "experiments/floating_point/config.py"
 KERNELS = ROOT / "experiments/floating_point/kernels.py"
 SOURCES = [Path(__file__).resolve(), Path(gates.__file__), Path(registry.__file__), KERNELS, registry.CATALOG]
 ACCEPTED = {"ACCEPT", "ACCEPT_WITH_WARNING"}
-BUNDLE_VERSION = 2
+BUNDLE_VERSION = 4
 
 
 def sha(data):
@@ -110,7 +110,7 @@ def validate_profile(profile):
     g = profile["gates"]
     if type(g) is not dict or set(g) != {"bias", "vars", "warning_policy"}:
         raise ValueError("gates requires bias/vars/warning_policy")
-    if (type(g["bias"]) is not dict or set(g["bias"]) != {"z", "snr", "ulp_floor"}
+    if (type(g["bias"]) is not dict or set(g["bias"]) != {"tau", "se_multiplier"}
             or type(g["vars"]) is not dict or set(g["vars"]) != {
                 "quantile", "horizon", "alpha", "bootstrap", "min_exceedances", "warn", "fail"}):
         raise ValueError("unexpected two-gates parameters")
@@ -178,9 +178,13 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
         "protocol": {"name": "two-gates", "version": gates.VERSION, "checker_version": sources["scripts/numerical_gates.py"],
                      "bias": {**profile["gates"]["bias"], "replicates": profile["replicates"],
                               "buckets": "last axis; 1D output keeps each element as a bucket",
-                              "ulp": "spacing at pooled per-bucket max abs(candidate, reference), inward at max finite"},
+                              "ulp": "per-element output-format ULP at abs(golden) rounded to output dtype; inward at max finite; minimum subnormal spacing at zero",
+                              "delta": "mean over rows of (candidate-reference)/local_golden_ulp; normalize before averaging",
+                              "acceptance": "all abs(mean) + se_multiplier * std / sqrt(R) <= tau; z is diagnostic",
+                              "coverage": "engineering SE bands; no calibrated simultaneous or optional-stopping coverage"},
                      "vars": {**profile["gates"]["vars"], "replicates": profile["replicates"],
-                              "epsilon": "one comparison/output-format ULP at max abs candidate",
+                              "errors": "separate maxima of abs(output-golden)/local_golden_ulp for reference and candidate",
+                              "epsilon": "1 in local-ULP units",
                               "tail": "PWM, xi clipped <= 0, seed-0 bootstrap, empirical-max fallback",
                               "replicates_max": profile["replicates_max"], "batch": profile["batch"],
                               "stopping": "full batches; min replicates then magnitude band stable or empirical fallback; nonfinite stops immediately"},
@@ -249,22 +253,31 @@ def ulp(torch, magnitude, dtype):
     scale = magnitude.detach().abs().to(comparison_dtype)
     upper = torch.nextafter(scale, torch.full_like(scale, float("inf")))
     lower = torch.nextafter(scale, torch.zeros_like(scale))
-    return torch.where(torch.isfinite(upper), upper.double() - scale.double(),
-                       scale.double() - lower.double())
+    # Only max-finite values may use the inward gap. An overflowed golden cast
+    # must yield NaN, not an infinite scale that would normalize every error to 0.
+    return torch.where(torch.isfinite(scale) & torch.isinf(upper),
+                       scale.double() - lower.double(), upper.double() - scale.double())
 
 
-def observe(torch, reference, candidate, exact, output_format):
+def observe(torch, reference, candidate, exact, output_format, errors=None):
+    """Normalize each element against the same golden ULP before aggregation.
+
+    Optional elementwise oracle errors preserve residual-based evaluations when
+    subtracting a rounded golden value would lose the true rounding residual.
+    """
     # Keep invalid observations: both gates reject them, and replay sees them too.
     ref, cand = reference.double(), candidate.double()
-    delta = cand - ref
+    scale = ulp(torch, exact, output_format)
+    delta = (cand - ref) / scale
     buckets = delta.shape[-1]
-    scale = torch.maximum(candidate.abs(), reference.abs()).reshape(-1, buckets).amax(0)
+    if errors is None:
+        errors = ((ref - exact).abs(), (cand - exact).abs())
+    if len(errors) != 2 or any(error.shape != exact.shape for error in errors):
+        raise ValueError("oracle errors must match the golden tensor shape")
     return {
         "delta": delta.reshape(-1, buckets).mean(0).cpu().numpy(),
-        "ulp": ulp(torch, scale, output_format).cpu().numpy(),
-        "reference_error": (ref - exact).abs().max().item(),
-        "candidate_error": (cand - exact).abs().max().item(),
-        "epsilon": ulp(torch, candidate.abs().max(), output_format).item(),
+        "reference_error": (errors[0] / scale).max().item(),
+        "candidate_error": (errors[1] / scale).max().item(),
     }
 
 
@@ -318,7 +331,7 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
                 if stop:
                     break
         arrays = {key: np.asarray(values, dtype=np.float64) for key, values in observations.items()}
-        count = len(arrays["epsilon"])
+        count = len(arrays["delta"])
         result = gates.evaluate(arrays, profile["gates"], seed, count, smoke)
         result.update(stopping_reason=stop, completed_replicates=count)
         np.savez_compressed(directory / "observations.npz", **arrays)
@@ -457,8 +470,8 @@ def replay(bundle):
             if type(count) is not int or count < 2:
                 raise ValueError(f"invalid completed replicate count: {name}")
             if (set(arrays) != gates.OBSERVATIONS or any(a.dtype != np.float64 for a in arrays.values())
-                    or any(arrays[k].shape != (count, buckets) for k in ("delta", "ulp"))
-                    or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error", "epsilon"))):
+                    or arrays["delta"].shape != (count, buckets)
+                    or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error"))):
                 raise ValueError(f"observation shape/dtype mismatch: {name}")
             stop = gates.validate_stopping(arrays, profile["gates"]["vars"], profile["replicates"],
                                            profile["replicates_max"], profile["batch"])

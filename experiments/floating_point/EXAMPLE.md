@@ -1,8 +1,8 @@
 # 从已接受原语到 TritonBench 等价性证明
 
-本例使用 PR #9 的已发布结果，按用户选择直接信任报告，不重新运行或重放 GPU 实验。
-`scripts/export_numerical_rules.py` 检查配置、源码哈希、报告完整性和接受状态，将 42 个实例中的 30 个接受项导出到
-[ReportedAdmission.lean](../../VeriTile/Triton/Float/ReportedAdmission.lean)。WARN、REJECT、定义域事件及不适用条目均无对应的导出规则。
+本例使用主目录当前发布的结果。GPU 观测在发布前独立 CPU 重放；Lean 导出阶段按用户选择信任该报告，不重复运行实验。
+`scripts/export_numerical_rules.py` 检查配置、源码哈希、报告完整性和接受状态，将 42 个实例中的当前接受项导出到
+[ReportedAdmission.lean](../../VeriTile/Triton/Float/ReportedAdmission.lean)。WARN、REJECT、INCONCLUSIVE、定义域事件及不适用条目均无对应的导出规则。
 
 ## 用户看到的 specification
 
@@ -92,7 +92,7 @@ comparator 使用独立输入快照；报告生成和原子绑定必须在证明
 
 ## 范围
 
-导出表已有全部 30 个接受实例，本例完成了其中 fp32 ADD-COMMUTE 到实际 TritonBench 语句的绑定与组合证明。
+导出表包含当前报告的全部接受实例，本例完成了其中 fp32 ADD-COMMUTE 到实际 TritonBench 语句的绑定与组合证明。
 其他原子的参数化语法绑定应按同一方式明确表达舍入/cast/FMA，不能把一个接受行任意套到不同片段。
 导出的 `report:...` 标识绑定发布的 JSON 快照，不伪造仓库外原始 bundle 的 instance key、观测或 PTX 哈希。
 更改报告会产生新的标识；更改数值实验实现会使源码哈希检查失败。

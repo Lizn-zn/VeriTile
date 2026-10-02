@@ -20,8 +20,8 @@ def profile():
 
 
 def observations(count=4, buckets=3):
-    return {"delta": np.zeros((count, buckets)), "ulp": np.ones((count, buckets)),
-            "reference_error": np.zeros(count), "candidate_error": np.zeros(count), "epsilon": np.ones(count)}
+    return {"delta": np.zeros((count, buckets)),
+            "reference_error": np.zeros(count), "candidate_error": np.zeros(count)}
 
 
 class GateTests(unittest.TestCase):
@@ -29,45 +29,73 @@ class GateTests(unittest.TestCase):
         self.config = profile()["gates"]
 
     def test_zero_variance_bias_branches(self):
-        for mean, expected in ((0, "PASS"), (0.5, "WARN"), (2, "FAIL")):
-            result = gates.bias_gate(np.full((8, 2), mean), np.ones((8, 2)), self.config["bias"])
+        for mean, expected in ((0, "PASS"), (0.025, "PASS"), (0.5, "FAIL"), (2, "FAIL")):
+            result = gates.bias_gate(np.full((8, 2), mean), self.config["bias"])
             self.assertEqual(result["status"], expected)
             json.dumps(result, allow_nan=False)
 
     def test_replicates_are_rows_not_elements(self):
         with self.assertRaises(ValueError):
-            gates.bias_gate(np.ones((1, 10000)), np.ones((1, 10000)), self.config["bias"])
+            gates.bias_gate(np.ones((1, 10000)), self.config["bias"])
 
-    def test_nonfinite_statistics_and_invalid_scales_never_pass(self):
+    def test_nonfinite_statistics_never_pass(self):
         for x in (np.nan, np.inf, -np.inf):
             obs = observations()
             obs["delta"][0, 0] = x
             self.assertEqual(gates.evaluate(obs, self.config, 1, 4)["decision"], "REJECT")
-        for x in (0, -1, np.inf, np.nan):
-            self.assertEqual(gates.bias_gate(np.zeros((2, 1)), np.full((2, 1), x), self.config["bias"])["status"], "FAIL")
-        result = gates.bias_gate(np.array([[1e308], [-1e308]]), np.ones((2, 1)), self.config["bias"])
+        result = gates.bias_gate(np.array([[1e308], [-1e308]]), self.config["bias"])
         self.assertEqual(result["status"], "FAIL")
 
     def test_additive_floor_and_zero_denominator(self):
-        actual = gates.amplification([0, 0, 2, 2], [0, 2, 5, 1], [1, 1, 1, 1])
+        actual = gates.amplification([0, 0, 2, 2], [0, 2, 5, 1])
         np.testing.assert_array_equal(actual, [0, np.inf, 2, 0])
-        result = gates.vars_gate([0, 1], [2, 1], [1, 1], self.config["vars"], 1)
+        result = gates.vars_gate([0, 1], [2, 1], self.config["vars"], 1)
         self.assertEqual(result["status"], "FAIL")
 
     def test_empirical_fallback_keeps_large_observed_errors(self):
         for k, expected in ((0, "PASS"), (1, "PASS"), (5, "WARN"), (31.75, "FAIL")):
-            result = gates.vars_gate(np.ones(4096), np.full(4096, k + 1), np.ones(4096), self.config["vars"])
+            result = gates.vars_gate(np.ones(4096), np.full(4096, k + 1), self.config["vars"])
             self.assertEqual(result["status"], expected)
             self.assertTrue(result["empirical_fallback"])
             self.assertFalse(result["valid"])
             self.assertEqual(result["upper"], k)
 
-    def test_bias_uses_pooled_max_ulp(self):
-        floors = np.ones((8, 1))
-        floors[-1] = 4
-        result = gates.bias_gate(np.full((8, 1), 2), floors, self.config["bias"])
-        self.assertEqual(result["status"], "WARN")
-        self.assertEqual(result["ulp"], [4])
+    def test_absolute_floor_is_in_local_ulp_units(self):
+        for mean, expected in ((0.05, "PASS"), (0.0501, "FAIL"), (-0.0501, "FAIL")):
+            result = gates.bias_gate(np.full((8, 1), mean), self.config["bias"])
+            self.assertEqual(result["status"], expected)
+            self.assertEqual(result["units"], "local_ulp")
+
+    def test_significance_does_not_replace_the_bias_budget(self):
+        # A tiny constant offset has infinite z but is inside the ULP budget.
+        result = gates.bias_gate(np.full((8, 2), .03125), self.config['bias'])
+        self.assertEqual(result['abs_z'], ['+inf', '+inf'])
+        self.assertEqual(result['status'], 'PASS')
+        # Symmetric but noisy observations have z=0 and insufficient precision.
+        result = gates.bias_gate(np.array([[-1.], [1.]]), self.config['bias'])
+        self.assertEqual(result['abs_z'], [0.])
+        self.assertEqual(result['status'], 'INCONCLUSIVE')
+        self.assertEqual(result['upper'], 5.)
+
+    def test_every_bucket_and_both_directions_must_meet_the_budget(self):
+        result = gates.bias_gate(np.array([[0., .06], [0., .06]]), self.config['bias'])
+        self.assertEqual(result['status'], 'FAIL')
+        self.assertEqual(result['failing_buckets'], [1])
+        mirrored = gates.bias_gate(np.array([[0., -.06], [0., -.06]]), self.config['bias'])
+        self.assertEqual(mirrored['status'], 'FAIL')
+        self.assertEqual(result['upper'], mirrored['upper'])
+
+    def test_uncertain_bias_cannot_be_accepted_by_allow_warn(self):
+        obs = observations()
+        obs['delta'][:, 0] = [-1, 1, -1, 1]
+        self.config['warning_policy'] = 'allow_warn'
+        self.assertEqual(gates.evaluate(obs, self.config, 1, 4)['decision'], 'INCONCLUSIVE')
+
+    def test_raw_scale_observations_cannot_be_replayed_as_local_ulp(self):
+        obs = observations()
+        obs.update(ulp=np.ones((4, 3)), epsilon=np.ones(4))
+        with self.assertRaisesRegex(ValueError, "unexpected observation fields"):
+            gates.evaluate(obs, self.config, 1, 4)
 
     def test_pwm_and_return_level_against_exponential_quantiles(self):
         samples = -np.log1p(-(np.arange(10000) + 0.5) / 10000)
@@ -83,14 +111,15 @@ class GateTests(unittest.TestCase):
     def test_bootstrap_is_replayable(self):
         config = {**self.config["vars"], "bootstrap": 16, "min_exceedances": 16}
         ratios = np.random.default_rng(12).exponential(0.1, 4096)
-        args = (np.ones(4096), ratios + 1, np.ones(4096), config, 123)
+        args = (np.ones(4096), ratios + 1, config, 123)
         first = gates.vars_gate(*args)
         self.assertEqual(first, gates.vars_gate(*args))
         self.assertEqual(first["branch"], "pot_pwm")
 
     def test_warning_policy_and_smoke(self):
         obs = observations()
-        obs["delta"][:] = 0.5
+        obs['reference_error'][:] = 1
+        obs['candidate_error'][:] = 6
         self.assertEqual(gates.evaluate(obs, self.config, 1, 4)["decision"], "WARN_NOT_ACCEPTED")
         self.config["warning_policy"] = "allow_warn"
         self.assertEqual(gates.evaluate(obs, self.config, 1, 4)["decision"], "ACCEPT_WITH_WARNING")

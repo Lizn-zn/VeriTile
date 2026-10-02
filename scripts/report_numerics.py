@@ -17,8 +17,14 @@ if __package__:
 else:
     import check_numerics as experiment
 
-COLUMNS = ("rule", "format", "replicates", "z", "U", "bias", "vars", "u_kind",
+COLUMNS = ("rule", "format", "replicates", "z", "B", "tau", "U", "bias", "vars", "u_kind",
            "accept", "decision", "state", "replayed", "reason")
+DEFINITIONS = {
+    'error_units': 'per-element output-format ULP at the rounded golden value; normalize before aggregation',
+    'z_definition': 'maximum absolute z of local-ULP bucket means across all output buckets',
+    'b_definition': 'maximum over buckets of abs(mean) + se_multiplier * std / sqrt(R), in local ULPs; not calibrated simultaneous/sequential coverage',
+    'u_definition': 'upper estimate of amplification of peak local-ULP oracle errors with additive allowance 1; empirical_max is not a tail confidence bound',
+}
 TERMINAL = {"Succeeded", "Failed", "Stopped", "Deleted"}
 
 
@@ -46,7 +52,7 @@ def collect(root, profile, cache=None, verify_all=False):
     """
     cache = {} if cache is None else cache
     expected = {(rule, fmt["name"]): {
-        "rule": rule, "format": fmt["name"], "replicates": None, "z": None, "U": None,
+        "rule": rule, "format": fmt["name"], "replicates": None, "z": None, "B": None, "tau": None, "U": None,
         "bias": None, "vars": None, "u_kind": None, "accept": None,
         "decision": "NOT_EVALUATED", "state": "PENDING", "replayed": False, "reason": "",
     } for rule in profile["rules"] for fmt in profile["formats"]}
@@ -107,7 +113,7 @@ def collect(root, profile, cache=None, verify_all=False):
                 if record['decision'] != result['decision']:
                     raise ValueError(f"record decision mismatch: {identity}")
                 row.update(replicates=result['completed_replicates'],
-                           z=maximum_z(bias.get('abs_z')), U=magnitude.get('upper'),
+                           z=maximum_z(bias.get('abs_z')), B=bias.get('upper'), tau=bias.get('tau'), U=magnitude.get('upper'),
                            bias=bias['status'], vars=magnitude['status'],
                            u_kind='empirical_max' if magnitude['empirical_fallback'] else magnitude['branch'])
                 if verification_error:
@@ -126,8 +132,7 @@ def collect(root, profile, cache=None, verify_all=False):
         'states': dict(Counter(r['state'] for r in rows)),
         'accepted': sum(r['accept'] is True for r in rows),
         'replayed': sum(r['replayed'] for r in rows),
-        'z_definition': 'maximum absolute z across all output buckets',
-        'u_definition': 'magnitude upper estimate; empirical_max denotes observed maximum, not a tail confidence bound',
+        **DEFINITIONS,
         'complete': all(r['state'] in {'UNSUPPORTED', 'NUMERIC_EVENT', 'ERROR'} or r['replayed'] for r in rows),
     }
 
@@ -156,16 +161,22 @@ def publish(root, table):
     write_current(root / 'summary.csv', output.getvalue())
     lines = ['# Numerical rule results', '',
              f"{table['total']} instances; {table['replayed']} replayed; {table['accepted']} accepted.", '',
-             'z = max |z| over output buckets. U uses the configured magnitude gate.',
+             'z = max |z| over output buckets (diagnostic only). U uses the configured magnitude gate.',
+             'B = max(abs(mean) + se_multiplier * SE); bias PASS requires B <= tau, in local ULPs.',
+             'Bias FAIL means an interval lies outside tolerance; INCONCLUSIVE means a boundary is crossed.',
+             'The SE bands are engineering criteria, not calibrated simultaneous or optional-stopping confidence guarantees.',
+             'Errors are normalized per element by the output-format ULP at the rounded golden value before aggregation.',
+             'The magnitude gate uses peak normalized oracle errors and an additive allowance of 1 local ULP.',
              '`empirical_max` means an observed maximum, not a fitted tail confidence bound.',
              'Acceptance is statistical under the configured profile, not proof of strict floating-point equivalence.',
              'Accept is pending until CPU replay. Missing statistics are shown as —, never zero.', '',
-             '| Rule | Format | R | z | U | U type | Bias | Vars | Accept | State |',
-             '|---|---|---:|---:|---:|---|---|---|---|---|']
+             '| Rule | Format | R | z | B (ULP) | tau (ULP) | U | U type | Bias | Vars | Accept | State |',
+             '|---|---|---:|---:|---:|---:|---:|---|---|---|---|---|']
     for r in table['rows']:
         accept = 'yes' if r['accept'] is True else 'no' if r['accept'] is False else 'pending'
         values = [r['rule'], r['format'], str(r['replicates']) if r['replicates'] is not None else '—',
-                  display_number(r['z']), display_number(r['U']), r['u_kind'] or '—',
+                  display_number(r['z']), display_number(r['B']), display_number(r['tau']),
+                  display_number(r['U']), r['u_kind'] or '—',
                   r['bias'] or '—', r['vars'] or '—', accept, r['state']]
         lines.append('| ' + ' | '.join(values) + ' |')
     notes = [r for r in table['rows'] if r['reason'] and r['reason'] != 'awaiting bundle replay']

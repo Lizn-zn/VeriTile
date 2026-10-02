@@ -16,16 +16,20 @@ class ExportTests(unittest.TestCase):
         self.assertEqual(len(rows), 30)
         content = exporter.render()
         self.assertEqual(content, exporter.OUTPUT.read_text())
-        self.assertIn('def fp32_add_assoc : ReportedRule', content)
-        self.assertNotIn('def bf16_fma_contract', content)
+        self.assertIn('def bf16_add_assoc : ReportedRule', content)
+        self.assertNotIn('def fp32_add_assoc', content)
+        self.assertNotIn('def bf16_fp32_add_assoc', content)
+        self.assertIn('def bf16_fma_contract', content)
         self.assertNotIn('def fp32_cast_remove', content)
-        self.assertNotIn('def fp32_cast_move', content)
+        for name in ('fp32_cast_move', 'fp32_cancel', 'fp32_fma_contract'):
+            self.assertNotIn(f'def {name}', content)
+        self.assertIn('def bf16_cast_remove', content)
         self.assertNotIn('def fp32_sqrt_rsqrt', content)
         self.assertNotIn('def fp32_bf16_widen_return', content)
         self.assertNotIn('axiom ', content)
 
     def test_warn_fail_domain_and_unsupported_cannot_be_promoted(self):
-        for rule, fmt in [('FMA-CONTRACT', 'bf16'), ('CAST-MOVE', 'fp32'),
+        for rule, fmt in [('CAST-REMOVE', 'fp32'), ('ADD-ASSOC', 'fp32'),
                           ('SQRT-RSQRT', 'fp32'), ('BF16-WIDEN-RETURN', 'fp32')]:
             with self.subTest(rule=rule), tempfile.TemporaryDirectory() as tmp:
                 target = Path(tmp)
@@ -36,6 +40,18 @@ class ExportTests(unittest.TestCase):
                 row['accept'] = True
                 path.write_text(json.dumps(summary))
                 with self.assertRaisesRegex(ValueError, 'accept disagrees'):
+                    exporter.render(target)
+
+    def test_pass_labels_cannot_hide_an_exceeded_budget(self):
+        for field, value in [('B', .051), ('tau', 1.0), ('U', 3.0)]:
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
+                target = Path(tmp)
+                shutil.copytree(exporter.REPORT, target, dirs_exist_ok=True)
+                path = target / 'summary.json'
+                report = json.loads(path.read_text())
+                next(r for r in report['rows'] if r['accept'])[field] = value
+                path.write_text(json.dumps(report))
+                with self.assertRaisesRegex(ValueError, 'budget'):
                     exporter.render(target)
 
     def test_renamed_unknown_rules_and_duplicate_rows_are_rejected(self):

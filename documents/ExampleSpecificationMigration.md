@@ -26,19 +26,19 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Aligned vector addition | `VectorAddCorrect` — checked | `VectorAddFPEquiv` — checked; add commutation |
 | Masked vector addition | `FlatVectorAddCorrect` — checked | `FlatVectorAddFPEquiv` — checked; add commutation |
 | Float dtype addition | `FloatDTypeAddCorrect` — checked, including empty tiles | `FloatDTypeAddFPEquiv` — checked; add commutation; output cast retained |
-| Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — derived from fp32 add commutation and association; forward versus reversed input lanes, arbitrary stride and block size including zero |
+| Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — conditional derivation retained; current local-ULP report rejects fp32 ADD-ASSOC, so association remains unresolved and this example is blocked on admission |
 | Row-wise max | `RowWiseMaxCorrect` — checked | `RowWiseMaxFPEquiv` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
-| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch versus online: pending elementary exp laws and loop/reduction derivation |
+| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch versus online: pending compatible exp binding and loop/reduction derivation |
 | mHC depth | `HyperConnectionsDepthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepthFPEquiv` — checked in the same scope; add commutation |
 | mHC width | `HyperConnectionsWidthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidthFPEquiv` — checked in the same scope; two multiplication commutations |
 | Adam-named Lion update | `AdamUpdateGridLaunchCorrect` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunchFPEquiv` — checked per program; momentum addition commutation, masked in-place stores retained |
-| Stable softmax | `SoftmaxStableCorrect` — checked for both original kernels against the softmax formula | Naive versus stable: missing admitted elementary exp laws |
+| Stable softmax | `SoftmaxStableCorrect` — checked for both original kernels against the softmax formula | Naive versus stable: pending compatible libdevice-exp binding and reduction/division derivation |
 | Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable: missing admitted elementary exp/log laws |
 | Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | `SoftmaxReciprocalFPEquiv` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmaxFPEquiv` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
-| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: missing initialization/division relations, then loop/reduction derivation |
+| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: pending applicable cancellation/count relations and loop/reduction derivation |
 | Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: missing scalar relations for statistics, then loop/reduction derivation |
 
 There are currently 18 correctness modules and 13 FP equivalence modules. The
@@ -62,17 +62,16 @@ declared scratch windows.
 
 ## Admission and proof boundaries
 
-The trusted PR #9 report admits 30 instances. PR #10 adds 32 accepted
-supplemental scalar instances, for **62 accepted instances** across the two
-frozen tables. Neither table contains a whole softmax, logsumexp,
-normalization, reduction or online-recurrence rule. The original numerical
-sources and source hashes remain unchanged.
+The current main and supplemental reports define the accepted precision
+instances. They use a local-ULP mean-bias budget (`tau=0.05`, five SEs) and the
+error-amplification gate; z is diagnostic. Counts are computed from current
+reports, and only dual-PASS rows enter the generated Lean tables. Neither table
+contains a whole softmax, logsumexp, normalization, reduction or recurrence atom.
 
-The supplemental table excludes eight WARN rows, three LOG-MUL domain events,
-and thirteen unsupported fp64 combinations. EXP-SUB and LOG-EXP were not
-admitted. MUL-RCP-CANCEL was admitted only at bf16 input/fp32 work/bf16 output;
-it is not a bare fp32 cancellation law. The old DIV-RCP uses `div_rn`; the new
-DIV-MUL-RCP measures ordinary Triton division separately.
+The supplemental EXP-SUB implementation uses libdevice.exp. Its identity is
+part of the report contract and cannot justify a rewrite using tl.exp without
+matching evidence. LOG-MUL domain events and unsupported fp64 combinations
+remain unaccepted. DIV-RCP uses div_rn; DIV-MUL-RCP tests ordinary division.
 
 The two reciprocal examples use `Guarded.IO`: the signature includes a domain
 contract checking finite exponential values and a finite, nonzero denominator
@@ -91,7 +90,7 @@ interpreter deliberately rejects raw fp64 payload constants and typed fp64
 loads, which these examples do not use. This is not a complete IEEE evaluator.
 
 [The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
-frozen PR #9 algebraic countermodels from the newly admitted rules. Stable
+main-table algebraic countermodels from the supplemental rule set. Stable
 softmax, stable logsumexp, online softmax, Welford and LayerNorm remain pending.
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
@@ -149,8 +148,8 @@ A concrete valid schedule exists even for empty rows.
 The one-input IO view can now use these term derivations to relate actual
 successful abstract executions, with the same typed-output and memory-frame
 obligations as its structural steps. Other primitives stay opaque. The public
-notation remains `lhs ≡[R] rhs`, and the sum example prints only `add_assoc`
-and `add_commute`. This derives a theorem in the selected FP model; it neither
+notation remains `lhs ≡[R] rhs`. The sum example prints `add_commute`
+and an unresolved association premise because its fp32 ADD-ASSOC instance is rejected. This derives a theorem in the selected FP model; it neither
 replays the GPU report nor claims an IEEE or whole-kernel statistical guarantee.
 
 Unsupported syntax still fails explicitly. Further infrastructure is needed
@@ -198,8 +197,9 @@ The checks cover:
   and positive block size. Countermodels keep max input permutations distinct
   and reject empty max reductions; the one-input interface also protects output
   windows, private scratch and successful-execution requirements.
-- Row-wise sum's original mathematical projection, its independent FP proof at
-  arbitrary dimensions including empty rows, and exact two-atom output.
+- Row-wise sum's original mathematical projection, its conditional FP proof at
+  arbitrary dimensions including empty rows, and output identifying add_commute
+  plus the unresolved association premise.
   Reduction-tree countermodels reject removing a zero leaf, erasing precision
   or dropping repeated casts. Opaque sum interpretation does not permit input
   permutations; numerical IO steps still reject failed executions and dtype

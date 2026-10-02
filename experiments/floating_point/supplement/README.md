@@ -1,45 +1,36 @@
 # 补充基础原子实验
 
-在 `codex/fp-example` 分支运行。本目录补充剩余 FP 例子缺少的标量关系；
-现有 30 条准入实例、原实验源码和 two-gates 算法保持不变。
+本目录验证补充的基础标量关系，与主实验共用按元素 ULP 归一化和 two-gates。
 这里没有 softmax、Welford、LayerNorm 或整个 reduction 的准入原子。
-本批 GPU 结果已完成并独立 CPU 回放；当前有 32 个统计接受实例。
-32 个 ACCEPT 已接入 Lean，加上原有 30 个，共 62 个可选准入实例。
+主目录与本目录使用相同的平均偏差预算和 U gate。通过项分别导出到
+`ReportedAdmission` 和 `SupplementalAdmission`；总数从当前报告计算。
 
 ## 当前结果
 
-2026-10-02 在 H200（运行时显示 NVIDIA L20X）运行提交 `c02c21cd` 的默认配置。
-DLC 任务 `dlc1478c22drife5`，名称 `traces_kernel_equivalence_testing`，状态 `Succeeded`。
-87 个 kernel 特化编译通过，smoke 无执行错误；40 个完整正式实例均完成 4096 次
-整张量采样，并通过独立 CPU 回放。运行环境和开发环境生成的五份报告逐字节一致。
+当前配置在 H200（运行时显示 NVIDIA L20X）使用独立种子 20261002，
+固定 `tau=0.05 local ULP`、`se_multiplier=5`。EXP-SUB 的 exp 使用 FP32
+`libdevice.exp`，保留原有输入、减法、除法、中间 cast 和输出 cast。
+DLC 名称为 `traces_kernel_equivalence_testing`。
 
-全部 56 行结果为：32 ACCEPT、8 WARN_NOT_ACCEPTED、0 REJECT、3 INCONCLUSIVE、
-13 UNSUPPORTED。三个 INCONCLUSIVE 均为 LOG-MUL 在正态采样中遇到非正输入。
-13 个 UNSUPPORTED 是除 DIV-MUL-RCP 外的 fp64-work 组合。
-
-[完整 z / U / accept 表](./report/summary.md) 同时提供
+[完整 z / B / tau / U / accept 表](./report/summary.md) 同时提供
 [全精度 CSV](./report/summary.csv) 和 [JSON](./report/summary.json)。
-[运行配置](./report/experiment.json) 记录源码、设备、任务及回放信息，
-[警告明细](./report/warning_audit.json) 保留显著 bucket 数和 ULP 尺度。
+[运行配置](./report/experiment.json) 记录源代码、设备、任务和独立 CPU 回放信息，
+[未接受项明细](./report/warning_audit.json) 区分偏差超预算、区间尚不足以确认和 U gate 状态。
+表中每个配置都单独报告；未测或不适用的统计不填写为零。
 
-| 原子 | bf16 | bf16_fp32 | fp32 |
-|---|---|---|---|
-| MUL-RCP-CANCEL | WARN | ACCEPT | WARN |
-| EXP-SUB | WARN | WARN | WARN |
-| LOG-EXP | WARN | WARN | WARN |
+所有桶的 `abs(mean) + 5*SE <= 0.05` 才满足 bias 预算；z 仅作诊断。
+存在一个桶的区间完全位于容差外就是 FAIL；没有 FAIL、但有区间跨过边界时是
+INCONCLUSIVE。两者都不能准入。
+U gate 沿用幅度阈值 2/10。五个标准误是工程判据，不宣称已经校准多桶或
+自适应停止覆盖率。统计接受不等于无条件 IEEE 等式证明。
 
-八项均触发 bias WARN；fp32 EXP-SUB 还触发 vars WARN，U = 2.9983014620917467。
-其余警告的 vars 门限均通过。当前 `pass_only` 策略下八项全部不接受。
-DIV-MUL-RCP 的四个精度实例均 ACCEPT，包括带最终 fp32 cast 的 fp64-work 实例。
-统计接受仍仅对应采样配置及准确表达式，不是无条件 IEEE 等式证明。
-
-原始 bundle 在 `Logs/numerics-supplement/atomic/`，完整五文件回放报告在
-`Logs/numerics-supplement/report/`；其中 `admission.json` 保留完整统计和准入候选。
-原始观测和 PTX 未放入 Git。下方命令可用于在新目录重新运行。
+原始 bundle 在 `Logs/bias-budget-verification/supplement/atomic/`，独立回放在
+`Logs/bias-budget-verification/supplement/cpu-report/`。原始观测、PTX 和完整统计
+不放入 Git；当前表、配置和审核摘要随代码维护。
 
 ## 直接运行
 
-沿用上次的 NVIDIA CUDA 环境。新环境安装：
+使用 NVIDIA CUDA 环境。新环境安装：
 
 ```bash
 python3 -m pip install -r experiments/floating_point/requirements.txt
@@ -78,7 +69,7 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 
 `report` 在运行机器上用 NumPy 校验并重算统计量，不会重新执行 GPU kernel。
 也可以在同一实验代码版本的 CPU 机器运行该命令。它不会执行 bundle 内的 Python。
-新报告使用独立 schema，不能直接覆盖旧 `report/` 或送入旧 Lean 导出器。
+补充报告使用独立 schema，不能直接覆盖主目录 `report/` 或送入主目录的 Lean 导出器。
 结果回来后，再把通过的**准确表达式、精度和必要定义域**接入 Lean。
 
 ## 测什么
@@ -107,7 +98,7 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 避免把无穷大当成普通有限数套进 exp-sub；它不是 online-softmax 整体关系。
 常数和恒等式可能被编译器折叠，保存的 PTX 反映实际执行图。
 
-14 条关系均测原来的三个精度 profile；额外测一条 fp64-work 的 div-mul-rcp。
+14 条关系均测三个 bf16/fp32 精度 profile；额外测一条 fp64-work 的 div-mul-rcp。
 因此是 **43 个可执行实例、86 个左右两侧 kernel 特化**，外加 1 个 fp64 残差 oracle。完整笛卡尔表有 56 行，
 其中另外 13 个 fp64 组合明确标为 `UNSUPPORTED`，不会制造准入记录。
 
@@ -139,8 +130,16 @@ fp64 实例仅检查 `fp32(a64 / b64)` 与 `fp32(a64 * (1 / b64))`。
 最后的误差除法在 fp64 舍入。oracle 的 PTX 也保存并绑定哈希。
 oracle 仍是受信数值计算，不是精确实数证明。
 
+误差尺度固定为每个元素 golden 值在输出 dtype 下的 ULP。先对每个元素计算
+`(candidate-reference)/ULP(golden)`，再按列取均值、跨 replicate 计算均值、标准误和诊断 z。每个桶的偏差区间均须落在 ±tau 内。
+两侧的 oracle 误差也先逐元素归一化，再分别取最大值 Er、Ec，计算
+`K = max(0, (Ec-1)/Er)` 并拟合 U。fp64-work 的残差误差同样先除以这个尺度。
+零值使用最小 subnormal 间距；输出 dtype 无法表示的 golden 尺度触发失败。
+不使用输出峰值或跨 replicate 的最大 ULP 作为容差。
+
 `/` 是普通 Triton division，**不是**原 `DIV-RCP` 的 `tl.div_rn`。
-exp/log/max 分别使用 `tl.exp`、`tl.log`、`tl.maximum`；禁止隐式 FMA fusion。
+EXP-SUB 使用 `libdevice.exp`；其他 exp 原子使用 `tl.exp`，log/max 使用
+`tl.log` / `tl.maximum`。intrinsic 身份保存在每条规则的契约中；禁止隐式 FMA fusion。
 
 只跑某组关系可以显式选择：
 
@@ -159,7 +158,7 @@ python3 scripts/check_numerics_supplement.py run --rules ADD-ZERO,MUL-ONE,DIV-ON
 exp 中间值的有限性、log 输入的正性等适用条件仍需在使用处处理。
 这不要求在证明第二步固定实验 shape。
 
-这批最初针对七个例子的数值缺口；接入后已完成两个，剩余五个仍需以下工作：
+两个 reciprocal 例子的 FP 证明已完成，其余算法仍需以下工作：
 
 - reciprocal 两例已将普通除法、精度、定义域和最终 cast 与对应原子衔接，完成 FP 证明。
 - stable softmax、logsumexp、online softmax 还需要从基础关系推导 reduction/loop 不变量。
@@ -178,6 +177,7 @@ python3 -m unittest scripts.test_numerics_supplement -v
 TRITON_INTERPRET=1 python3 -m unittest scripts.test_numerics_supplement -v
 python3 scripts/check_supplement_kernels.py
 python3 scripts/export_numerical_rules.py --trust-report --check
+python3 scripts/export_supplemental_rules.py --trust-report --check
 ```
 
 解释器检查涵盖全部 43 对表达式、精度和非整块矩形索引；另有 profile、定义域、
@@ -187,8 +187,8 @@ fp64 除法残差、报告、源/PTX/观测/配置/统计篡改检测测试。�
 ## Lean 接入
 
 `python3 scripts/export_supplemental_rules.py --trust-report` 根据本报告生成
-`VeriTile/Triton/Float/SupplementalAdmission.lean`，只收录 32 个 ACCEPT 实例。
-加上原来的 30 个，共 62 个实例。导出不重放 GPU，也不生成 `EvidenceValidated`
+`VeriTile/Triton/Float/SupplementalAdmission.lean`，只收录当前报告的 ACCEPT 实例。
+总数同时读取主目录和补充目录，避免硬编码某次实验的通过数。导出不重放 GPU，也不生成 `EvidenceValidated`
 证明；沿用用户信任报告、在证明中显式提供原子假设的接口。
 
 `SoftmaxReciprocalFPEquiv.lean` 和 `FloatDTypeSoftmaxFPEquiv.lean` 使用各自精度的

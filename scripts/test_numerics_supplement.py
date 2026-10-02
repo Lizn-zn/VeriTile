@@ -67,7 +67,7 @@ def fixture_bundle(root, smoke=False, fp64=False):
 
 
 class ContractTests(unittest.TestCase):
-    def test_old_sampling_and_gates_unchanged(self):
+    def test_shared_sampling_gates_and_current_report_sources(self):
         old = runner.original.load_module(runner.original.DEFAULT_PROFILE).PROFILE
         p = profile()
         for key in ("shape", "distribution", "seed", "replicates", "replicates_max", "batch", "launch", "gates"):
@@ -86,6 +86,14 @@ class ContractTests(unittest.TestCase):
             bad["formats"][-1][field] = "bf16"
             with self.assertRaises(ValueError):
                 runner.validate_profile(bad)
+
+    def test_exp_sub_admission_identifies_libdevice(self):
+        p = profile()
+        fmt = p['formats'][2]
+        lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
+        for rule, intrinsic in [('EXP-SUB', 'libdevice.exp'), ('LOG-EXP', 'tl.exp')]:
+            config = supplement.contract_for(p, fmt, rule, {}, runner.source_hashes(), lowerings)
+            self.assertEqual(config['numerics']['intrinsics']['exp'], intrinsic)
 
     def test_composite_rejected_before_creating_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -236,7 +244,9 @@ class OracleTests(unittest.TestCase):
         for field, output in (("reference_error", q), ("candidate_error", worse)):
             exact_errors = [abs(Fraction(float(y)) - Fraction(float(x)) / Fraction(float(z)))
                             for y, x, z in zip(output.flatten(), a.flatten(), b.flatten())]
-            self.assertAlmostEqual(obs[field] / float(max(exact_errors)), 1., places=14)
+            scales = runner.original.ulp(torch, a / b, "fp32").flatten().tolist()
+            local_errors = [float(error) / scale for error, scale in zip(exact_errors, scales)]
+            self.assertAlmostEqual(obs[field] / max(local_errors), 1., places=14)
         # The rounded fp64 quotient equals the output, but the exact error is
         # nonzero. Subtracting that rounded oracle would wrongly report zero.
         y = 1. + 2.**-23
@@ -246,7 +256,7 @@ class OracleTests(unittest.TestCase):
         self.assertEqual((a / b).item(), y)
         errors = [cpu_fused_errors(q), cpu_fused_errors(q)]
         obs = supplement.observe(torch, q, q, a / b, profile()["formats"][-1], errors)
-        self.assertEqual(obs["reference_error"], 2.**-75 / b.item())
+        self.assertEqual(obs["reference_error"], 2.**-52 / b.item())
         with self.assertRaisesRegex(ValueError, "residual oracle"):
             supplement.observe(torch, q, q, a / b, profile()["formats"][-1])
 

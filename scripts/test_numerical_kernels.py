@@ -42,20 +42,74 @@ class OracleTests(unittest.TestCase):
         nan = x * float("nan")
         for reference, candidate, oracle in ((x, nan, x), (nan, x, x), (x, x, nan)):
             obs = experiment.observe(torch, reference, candidate, oracle, "fp32")
-            k = gates.amplification([obs["reference_error"]], [obs["candidate_error"]], [obs["epsilon"]])
+            k = gates.amplification([obs["reference_error"]], [obs["candidate_error"]])
             self.assertEqual(k[0], float("inf"))
 
-    def test_vector_buckets_do_not_cancel_and_epsilon_uses_candidate(self):
+    def test_vector_buckets_do_not_cancel_and_scale_uses_golden(self):
         import torch
         ref = torch.tensor([1., 1.])
         cand = torch.tensor([1.25, .75])
         obs = experiment.observe(torch, ref, cand, torch.ones(2).double(), "fp32")
-        self.assertEqual(obs["delta"].tolist(), [.25, -.25])
+        self.assertEqual(obs["delta"].tolist(), [2.**21, -2.**21])
         ref = torch.ones((2, 3))
         cand = torch.full((2, 3), 2.)
         obs = experiment.observe(torch, ref, cand, ref.double(), "fp32")
-        self.assertEqual(obs["epsilon"], 2.**-22)
-        self.assertEqual(obs["ulp"].tolist(), [2.**-22] * 3)
+        self.assertEqual(obs["candidate_error"], 2.**23)
+        self.assertEqual(obs["delta"].tolist(), [2.**23] * 3)
+
+    def test_large_exact_output_does_not_hide_small_output_error(self):
+        import torch
+        from scripts import numerical_gates as gates
+        # A large, error-free row used to inflate the allowance for both rows.
+        # A two-ULP error near 1 must still count as two local ULPs.
+        for fmt, dtype, step in (("bf16", torch.bfloat16, 2.**-7),
+                                 ("fp32", torch.float32, 2.**-23)):
+            with self.subTest(fmt=fmt):
+                ref = torch.tensor([[1.], [1024.]], dtype=dtype)
+                cand = torch.tensor([[1. + 2 * step], [1024.]], dtype=dtype)
+                obs = experiment.observe(torch, ref, cand, ref.double(), fmt)
+                self.assertEqual(obs["delta"].tolist(), [1.])
+                self.assertEqual(obs["candidate_error"], 2.)
+                self.assertEqual(gates.amplification([obs["reference_error"]],
+                                                   [obs["candidate_error"]])[0], float("inf"))
+
+    def test_normalization_precedes_mean_and_is_power_of_two_invariant(self):
+        import torch
+        for fmt, dtype, step in (("bf16", torch.bfloat16, 2.**-7),
+                                 ("fp32", torch.float32, 2.**-23)):
+            # +1 ULP at 1 and -1 ULP at 1024 have a zero normalized mean.
+            ref = torch.tensor([[1.], [1024.]], dtype=dtype)
+            cand = torch.tensor([[1. + step], [1024. - 1024. * step]], dtype=dtype)
+            for multiplier in (1., 8.):
+                with self.subTest(fmt=fmt, multiplier=multiplier):
+                    obs = experiment.observe(torch, ref * multiplier, cand * multiplier,
+                                             ref.double() * multiplier, fmt)
+                    self.assertEqual(obs["delta"].tolist(), [0.])
+                    self.assertEqual(obs["reference_error"], 0.)
+                    self.assertEqual(obs["candidate_error"], 1.)
+
+    def test_zero_and_subnormal_golden_use_minimum_spacing(self):
+        import torch
+        for fmt, dtype, step in (("bf16", torch.bfloat16, 2.**-133),
+                                 ("fp32", torch.float32, 2.**-149)):
+            ref = torch.tensor([0., step], dtype=dtype)
+            cand = torch.tensor([step, 2 * step], dtype=dtype)
+            obs = experiment.observe(torch, ref, cand, ref.double(), fmt)
+            self.assertEqual(obs["delta"].tolist(), [1., 1.])
+            self.assertEqual(obs["candidate_error"], 1.)
+
+    def test_overflowed_golden_scale_cannot_hide_finite_output_errors(self):
+        import torch
+        from scripts import numerical_gates as gates
+        from scripts.test_numerical_gates import profile
+        for fmt, dtype in (("bf16", torch.bfloat16), ("fp32", torch.float32)):
+            golden = torch.full((2, 1), 2. * torch.finfo(dtype).max, dtype=torch.float64)
+            reference, candidate = torch.ones((2, 1), dtype=dtype), torch.zeros((2, 1), dtype=dtype)
+            obs = experiment.observe(torch, reference, candidate, golden, fmt)
+            self.assertEqual(gates.bias_gate([obs["delta"], obs["delta"]],
+                                            profile()["gates"]["bias"])["status"], "FAIL")
+            self.assertEqual(gates.amplification([obs["reference_error"]],
+                                               [obs["candidate_error"]])[0], float("inf"))
 
     def test_ulp_rounds_scale_and_handles_max_finite(self):
         import torch

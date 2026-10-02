@@ -1,8 +1,8 @@
 # 用 two-gates 定义浮点变换的可接受性
 
-更新日期：2026-10-01。
+更新日期：2026-10-02。
 
-状态：**已实现 specification、依赖报告、14 条局部 Triton 原子关系、Python two-gates 与结果重放；GPU 实测及 Lean 规则导入连接待完成。** 依据用户提供的 [tech-report-kernel-gates.md](/home/argustest/.codex/attachments/2fc372e4-f75b-4d94-8766-05f79473b646/tech-report-kernel-gates.md) 整理。该链接指向本次会话附件；附件报告中的实验结果尚未在 VeriTile 中复现，其理论保证也不作为已验证结论引用。
+状态：**已实现 specification、依赖报告、局部 Triton 原子关系、Python two-gates、GPU 实测与 CPU 重放，以及主目录和补充目录结果的 Lean 规则导出。** 两个目录使用相同的逐元素 golden ULP 归一化；当前结果见各目录的 `report/summary.md`。
 
 交付目标为完整浮点支持与接受流程，原语架构和统一完成条件见 [FloatingPointPrimitives.md](./FloatingPointPrimitives.md)。加法重排等小例子用于核对语义，不构成缩减后的交付版本。
 
@@ -91,40 +91,39 @@ Shape 按是否改变计算过程处理：
 
 建议将数值检查绑定到“实现对 + 具体 shape/stride + dtype/运算精度 + 两边的执行配置 + 高斯探针配置”。同一份参数化源码可以产生多个检查实例；新 shape 尚未检查时标为未验证，不能自动继承旧实例的 PASS。已有参数化代数定理可按其前提实例化复用；数值证据的范围单独记录。使用 autotune 时，还需固定或记录本次实际选中的配置。
 
-## 3. Bias gate：候选相对参考的方向性偏差
+## 3. Bias gate：局部 ULP 单位的平均偏差预算
 
-按契约独立抽取 \(R\) 个输入 replicate \(x_r\)，固定共享权重。对桶 \(g\) 计算：
-
-\[
-\Delta_{r,g}
-=\operatorname{mean}_{i\in g}\bigl(Q(x_r)_i-P(x_r)_i\bigr),
-\qquad
-z_g=\sqrt R\,\frac{\bar\Delta_g}{s_g},
-\qquad
-\hat\rho_g=\frac{|\bar\Delta_g|}{s_g}.
-\]
-
-统计单元是 replicate，不能将同一 replicate 内的输出元素计作独立样本。按照报告的判决规则，任一桶同时满足以下三项时，bias gate 返回 FAIL：
+对每个元素使用同一 golden 尺度 \(u_{r,i}=\operatorname{ULP}_d(O(x_r)_i)\)，先归一化，再按最后一维分桶。一个统计样本是整个 replicate 的桶平均，不能把同一 replicate 的元素再次计作独立样本：
 
 \[
-|z_g|>z^\ast,\qquad
-\hat\rho_g>s_{\min},\qquad
-|\bar\Delta_g|>c\,u_g.
+\Delta_{r,g}=\operatorname{mean}_{i\in g}\frac{Q(x_r)_i-P(x_r)_i}{u_{r,i}},
+\qquad SE_g=\frac{s_g}{\sqrt R},\qquad z_g=\frac{|\bar\Delta_g|}{SE_g}.
 \]
 
-若存在统计显著但未同时越过两个效应量地板的桶，且无 FAIL 桶，则返回 WARN；否则返回 PASS。报告使用 \(z^\ast=5\)、\(s_{\min}=10^{-2}\)、\(c=1\)，这里将它们作为待复现的起始配置，不能默认认为已针对所有 bf16/fp32 算子校准。
+当前 profile 固定 \(\tau=0.05\) local ULP、\(c=5\)，对每个桶构造工程判定区间 \([\bar\Delta_g-cSE_g,\bar\Delta_g+cSE_g]\)。定义：
 
-退化情形需要写入 checker 的判定规则。建议采用以下计算约定：当 \(s_g=0,\bar\Delta_g=0\) 时，两个标准化统计量取零；当 \(s_g=0,\bar\Delta_g\ne0\) 时，其绝对值取无穷，仍由 ULP 地板区分 WARN/FAIL。这个约定只处理样本计算，不证明总体方差为零。当前协议对无效 ULP 地板判 FAIL；不完整的采样记录不可准入，不能让 NaN 比较意外变成 PASS。
+\[
+B_g=|\bar\Delta_g|+cSE_g,\qquad
+L_g=\max(0,|\bar\Delta_g|-cSE_g),\qquad B=\max_g B_g.
+\]
 
-探针分布和分桶决定检出能力。对称输入可能抵消乘性偏差；报告使用平移探针来暴露它。平移量与探针族需事先登记，选择多个探针族时一并计入比较范围。平移本身不能保证覆盖训练分布，也不能消除桶内所有抵消机制。
+- **PASS**：所有桶 \(B_g\le\tau\)，即每个区间都完全位于容差内。
+- **FAIL**：存在桶 \(L_g>\tau\)，即至少一个区间完全位于容差外；无效或非有限统计也 FAIL。
+- **INCONCLUSIVE**：没有 FAIL，但至少一个区间跨过容差边界。数据不足以确认满足预算，不能准入。
+
+\(z\) 继续报告，但不决定接受。极小的恒定偏差可以有无穷 z 而满足预算；反过来，均值接近零但标准误很大时，不能仅凭小 z 接受。零样本方差时按观测区间退化为一点计算；这不证明总体方差也为零。\(\tau\) 约束平均有符号偏差，不约束单个输出误差，也不替代 vars gate。
+
+五个标准误是当前明确选择的工程协议，**不是已经校准的多桶、有限样本或自适应停止置信保证**。固定预算后用独立种子检验实现和结论；这也不自动证明协议的覆盖率。需要严格概率保证时，应另行固定检验族和采样规则并论证区间方法。不能逐条修改 tau 直到某个关系通过。
+
+尺度按元素计算，不使用输出峰值给其他元素放宽容差。报告中的 B 是归一化统计量的最差桶；输入分布、精度、cast 位置和 oracle 仍属于不可省略的契约。阈值不是任何 bf16/fp32 算子的通用误差保证，也不自动约束误差在整个训练过程中的传播。
 
 ## 4. Vars gate：相对 oracle 的误差放大与尾部
 
-设高精度 oracle 为 \(O\)。对相同的 replicate 计算：
+使用与 bias gate 相同的逐元素尺度。对相同的 replicate 计算归一化峰值误差：
 
 \[
-E^Q_r=\|Q(x_r)-O(x_r)\|_\infty,\qquad
-E^P_r=\|P(x_r)-O(x_r)\|_\infty .
+E^Q_r=\max_i\frac{|Q(x_r)_i-O(x_r)_i|}{u_{r,i}},\qquad
+E^P_r=\max_i\frac{|P(x_r)_i-O(x_r)_i|}{u_{r,i}} .
 \]
 
 由接受不等式 \(E^Q_r\le K E^P_r+\varepsilon_r\) 反解放大率：
@@ -139,7 +138,7 @@ E^P_r=\|P(x_r)-O(x_r)\|_\infty .
 \end{cases}
 \]
 
-\(\varepsilon_r\) 是契约约定输出尺度上的 ULP 加性地板，位于原不等式右侧，不加进分母。先处理分支可避免 \(0/0\)；\(\hat K_r=0\) 只表示候选在 oracle 的地板误差内，不保证参考也在地板内。
+\(\varepsilon_r=1\)，单位为 local ULP，位于原不等式右侧，不加进分母。先处理分支可避免 \(0/0\)；\(\hat K_r=0\) 只表示候选在 oracle 的地板误差内，不保证参考也在地板内。保留的是归一化误差的最大值，不用输出最大值决定其他元素的容差。
 
 报告用 POT/GPD 估计 \(\hat K\) 在视界 \(T_{\mathrm{tail}}\) 下的 return level，再构造上置信界估计 \(U\)。设阈值为 \(u\)、超阈概率为 \(\zeta\)、GPD 参数为 \((\xi,\sigma)\)，其尾部模型给出：
 
@@ -168,13 +167,13 @@ r_T=u+\frac{\sigma}{\xi}\bigl[(T_{\mathrm{tail}}\zeta)^\xi-1\bigr],
 | Bias gate | Vars gate | 对变换的处理 |
 |---|---|---|
 | PASS | PASS | ACCEPT：满足本次统计接受协议 |
-| WARN | PASS/WARN | ACCEPT_WITH_WARNING：保留报警原因，按契约的 WARN 策略决定是否允许替换 |
-| PASS | WARN | ACCEPT_WITH_WARNING：同上 |
+| PASS | WARN | 默认 pass_only 下 WARN_NOT_ACCEPTED；显式 allow_warn 可记 ACCEPT_WITH_WARNING |
+| INCONCLUSIVE | PASS/WARN | INCONCLUSIVE：不能由 allow_warn 提升为接受 |
 | 任意 | FAIL | REJECT：该契约下拒绝替换 |
 | FAIL | 任意 | REJECT：该契约下拒绝替换 |
 | 无 FAIL，但任一门无有效判定 | — | INCONCLUSIVE：尚无接受依据 |
 
-报告中 WARN 有“记录但不拦截”的用途。框架保留这一选择，通过 `allowWarn` 等显式策略表达；也支持只自动采用双 PASS 的严格策略。采用哪种策略属于契约内容，不能把 WARN 静默改成 PASS。原子准入不能替代两端各自的实数正确性证明。缺少实现对应或验证／重放证据时，可以报告实验数据，但不能把该条目当作已经验证的可用假设。
+当前 bias gate 使用 PASS/FAIL/INCONCLUSIVE；vars gate 保留 WARN。默认 pass_only 只接受双 PASS。显式 allow_warn 只放行 vars WARN，不能放行 bias INCONCLUSIVE。采用哪种策略属于契约内容，不能把 WARN 静默改成 PASS。原子准入不能替代两端各自的实数正确性证明。缺少实现对应或验证／重放证据时，可以报告实验数据，但不能把该条目当作已经验证的可用假设。
 
 概念上，原子准入与实现等价性分成两层：
 
@@ -203,7 +202,7 @@ Q_d(a,b,c)=\operatorname{fl}_d(a+\operatorname{fl}_d(b+c)).
 - `AtomicRule` / `RuleEntry` 绑定原子两侧片段、配置、实例身份和实验记录。`AcceptedAtom` 要求验证与重放前提、身份匹配、artifact 和门策略；当前没有跳过这些条件的准入构造器。
 - `AcceptedAssumptions` 汇总可用的假设；`Derivation` 检查引用、组合、对称和共同语句上下文；`ProgramSyntax` 检查程序签名及语句序列。
 - `#print_spec` 显示实现、声明的原子假设范围及逐项证据、模型前提和依赖公理。声明范围可能包含未使用条目，打印不关闭验证义务。
-- [实验入口](../experiments/floating_point/README.md) 已提供 GPU 原语对、源代码／PTX／后端身份、配置、种子、逐 replicate 统计量、拟合诊断和 CPU 导入重放。GPU 实测仍待用户运行；将重放后的准入表绑定到 Lean 原子关系的连接仍待实现，不能把 JSON 导入视为证明了 `EvidenceValidated`。
+- [实验入口](../experiments/floating_point/README.md) 提供 GPU 原语对、源代码／PTX／后端身份、配置、种子、逐 replicate 统计量、拟合诊断和 CPU 导入重放。主目录的当前接受项导出为 Lean 规则数据，fp32 ADD-COMMUTE 已绑定到具体加法例子；JSON 导入不证明 `EvidenceValidated`，其他原子的语法绑定仍须逐项完成。
 - 不把原子假设注册成具体 IEEE 函数的 Lean 等式或全局代数实例。已有实数正确性和抽象舍入证明不能冒充原子数值记录。
 - 整 kernel 数值复查属于可额外报告的实验，不是这套形式等价性的定义。实际 GPU 结论仍需对应后端证据；软件 profile 结果只覆盖所选软件语义。
 
@@ -211,18 +210,18 @@ Q_d(a,b,c)=\operatorname{fl}_d(a+\operatorname{fl}_d(b+c)).
 
 采用两门的职责、统计量与判决结构，不意味着报告中的强保证已成立。后续理论与实验工作至少需要处理：
 
-1. **PASS 的含义与检出范围。** 不拒绝零均值假设不能证明无偏；报告的 FAIL 还同时要求超过 SNR 和 ULP 地板。因此仅满足 \(\rho_g\ge T_{\mathrm{bias}}^{-1/2}\) 并不保证检出，增加 \(R\) 也无法跨过固定效应量地板。需要针对完整报警区域给出功效目标与预算。[NIST 对检验与第二类错误的说明](https://www.itl.nist.gov/div898/handbook/prc/section1/prc13.htm)。
+1. **偏差预算与区间覆盖。** PASS 表示所有桶的工程区间落在 ±tau 内，不表示严格无偏或逐元素小误差。tau 的应用合理性、区间覆盖率和所需样本量需要分别验证；均值接近零但区间宽时报告 INCONCLUSIVE。
 2. **五西格玛与自适应停止。** 用样本标准差构造的统计量依赖分布和样本量；渐近正态近似不能直接给出有限样本的严格误报界。反复查看置信区间后停止，也不能自动沿用固定样本量的覆盖率。需固定协议或采用经过论证的序贯方法；置信序列是可研究的路径之一：[原始研究](https://arxiv.org/abs/2301.09573)。
 3. **Return level 的含义。** 理想连续模型下，\(r_T\) 对应单次超越概率约 \(1/T\)，不是 \(T\) 次最大值的期望，也不是保证不被超越的最坏值。独立抽样时至少超越一次的概率为 \(1-(1-1/T)^T\)，随 \(T\) 增大趋于约 \(0.632\)。必须区分 return level 的估计置信度和未来运行的超越风险。[NIST 的 return value 定义](https://www.nist.gov/programs-projects/maps-non-hurricane-non-tornadic-extreme-wind-speeds-contiguous-united-states)。
 4. **尾部模型和参数截断。** POT/GPD 拟合有尾部近似及采样假设，不能直接宣称有限样本“分布无关”。报告把正 \(\hat\xi\) 截到零，需要额外依据；当参考误差很小时，误差比可能出现长尾。即使极限尾部有界，也不足以保证有限阈值下的指数拟合保守。截断前后的诊断与覆盖率需要验证。
 5. **从局部误差到训练危害。** \(T\mu\) 与 \(\sqrt T\sigma\) 的比较需要相关性和传播假设。一般训练扰动还经过随时间变化的 Jacobian；存在负曲率不能单独推出整个乘积具有正 Lyapunov 指数。forward 门的通过不能直接推出 backward、训练轨迹或训练质量保证。
-6. **计量与复现。** ULP 在 binade 边界具有方向差异，例如 bf16 在 1 上方的相邻间隔为 \(2^{-7}\)，下方为 \(2^{-8}\)。必须冻结 nextafter 方向及聚合规则。报告中的 29/30 负例检出、35/35 正例无 FAIL，须获得对应源码与原始结果后复现，再作为本项目证据。
+6. **计量与复现。** ULP 在 binade 边界具有方向差异，例如 bf16 在 1 上方的相邻间隔为 \(2^{-7}\)，下方为 \(2^{-8}\)。必须固定 nextafter 方向及聚合规则。改变逐元素尺度会改变所检验的均值与尾部，旧聚合观测不能直接充当新协议的结果。
 
 ### 当前验收协议
 
 双门验收采用自适应停止规则：默认最少 4096 次、每批 512 次、预算上限 50000 次（完整末批可到 50176）；每批检查幅度置信带，达到最小预算后稳定或回退则停止。PWM 保留原始 shape 供诊断，计算 return level 时截断到非正；1000 次固定种子 bootstrap，alpha=1.35e-3。尾部不可拟合时按经验最大 K 判 PASS/WARN/FAIL，明确标记 `empirical_fallback`，不能把它称为尾部置信保证。
 
-Bias 按输出最后一维分桶，一维输出也保留各元素；ULP 以 candidate/reference 和所有 replicate 的共同最大尺度计算。Vars epsilon 使用 candidate 输出峰值。ULP 先转到 comparison dtype，再取 nextafter 间距，最大有限值取朝零间距；非有限误差或地板 FAIL。CPU 回放检查实际采样数及所有自适应检查点。输入分布仍由 VeriTile 的 profile 指定，没有引入新的正值或条件采样。具体参数与运行说明见实验目录，模型限制见第 7 节。
+Bias 按输出最后一维分桶，一维输出也保留各元素。默认 tau=0.05 local ULP，SE 倍数为 5；z 只作诊断，接受要求所有桶的偏差上界不超过 tau。每个元素单独计算 ULP：取 golden 的绝对值，转到输出 dtype，再取向正无穷的 nextafter 间距；最大有限值取朝零间距，零和 subnormal 使用最小间距。golden 转换溢出产生无效尺度并使检查失败。先用该尺度归一化，再计算 bias 的列均值和 vars 的峰值误差；不跨元素或 replicate 取最大 ULP。CPU 回放检查实际采样数及所有自适应检查点。输入分布由 VeriTile 的 profile 指定，不引入新的正值或条件采样。具体参数与运行说明见实验目录，模型限制见第 7 节。
 
 ## 8. 下一步
 
@@ -231,7 +230,8 @@ Bias 按输出最后一维分桶，一维输出也保留各元素；ULP 以 cand
 - [x] 记录高斯探针及 shape 处理建议，指出加法重排的交换对称盲点；具体配置尚未冻结。
 - [x] 按完整交付目标补充原语设计，明确值表示、FMA、混合精度、归约、dot/MMA、特殊值和后端连接。
 - [ ] 完成 bf16/fp32 支持范围内的原语、执行计划与契约；加法重排等案例提供逐位不同见证及对应代数证明。
-- [ ] 获取报告的 checker/实验代码，逐项核对统计实现、退化情形与停止规则；已有结果暂不视为 VeriTile 实验。
-- [ ] 实现可重放的两门检查，校准阈值并报告功效与覆盖率限制。
+- [x] 实现两门检查及 CPU 重放，核对统计实现、退化情形与停止规则。
+- [ ] 校准阈值并验证功效、尾部模型与覆盖率。
 - [x] 实现原子规则、准入条件、形式推导、两种 specification 和逐原子依赖报告；外部验证义务显式保留。
-- [ ] 将原子准入连接到真实执行、证据重放与统计 checker；继续完善适用范围检查及执行层覆盖。
+- [x] 将原子准入连接到 GPU 执行、证据重放与统计 checker。
+- [ ] 继续完善其他原子的语法绑定、适用范围检查及执行层覆盖。

@@ -28,25 +28,31 @@ class FPEquationalTests(unittest.TestCase):
 
     def test_scalar_and_reduction_boundaries(self):
         output = self.lean((ROOT / "bench/tests/FPEquational.lean").read_text())
-        self.assertIn("FP assumptions used by reduction_reorder:\n  add_assoc\n  add_commute\n", output)
+        self.assertIn("FP assumptions used by reduction_reorder:\n", output)
+        self.assertIn("unresolved FP proof:", output)
+        self.assertNotIn("\n  add_assoc\n", output)
         self.assertIn("FP assumptions used by opaque_term:\n  unresolved FP proof: h", output)
         self.assertIn("FP assumptions used by same_tree:\n  none\n", output)
-        self.assertIn("FP assumptions used by reassociation_only:\n  add_assoc\n", output)
+        self.assertIn("FP assumptions used by reassociation_only:\n  unresolved FP proof:", output)
         self.assertIn("FP assumptions used by inside_opaque_exp:\n  add_commute\n", output)
-        self.assertEqual(output.count("unresolved FP proof"), 1)
+        self.assertEqual(output.count("unresolved FP proof"), 3)
 
     def test_current_admissions_do_not_silently_supply_missing_algebra(self):
         self.assertEqual(self.lean((ROOT / "bench/tests/FPAdmissionCoverage.lean").read_text()), "")
 
-    def test_kernel_proof_is_independent_and_prints_only_two_atoms(self):
+    def test_kernel_proof_is_independent_and_reports_unresolved_association(self):
         source = (ROOT / "bench/examples/RowWiseSumFPEquiv.lean").read_text() + '''
 open Lean Elab Command in
 run_cmd do
   if (← getEnv).contains `VeriTile.Bench.Examples.RowWiseSum.rowWiseSumIO then
     throwError "FP proof imported its real correctness counterpart"
 '''
-        self.assertEqual(self.lean(source),
-                         "FP assumptions used by rowwise_sum_equiv:\n  add_assoc\n  add_commute\n")
+        output = self.lean(source)
+        self.assertIn("FP assumptions used by rowwise_sum_equiv:\n", output)
+        self.assertIn("\n  add_commute\n", output)
+        self.assertIn("unresolved FP proof:", output)
+        self.assertEqual(output.count("unresolved FP proof"), 1)
+        self.assertNotIn("\n  add_assoc\n", output)
 
     def test_original_projection_and_symbolic_dimensions_including_zero(self):
         self.lean('''

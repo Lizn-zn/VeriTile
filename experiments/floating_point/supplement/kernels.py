@@ -6,6 +6,7 @@ in output precision. Ordinary / deliberately differs from the old div_rn pair.
 """
 import triton
 import triton.language as tl
+from triton.language.extra.cuda import libdevice
 
 SUPPORTED = {
     "ADD-ZERO", "MUL-ONE", "DIV-ONE", "DIV-MUL-RCP", "MUL-RCP-CANCEL",
@@ -67,9 +68,9 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = one
     elif RULE == "EXP-SUB":
         if SIDE == 0:
-            out = rnd(tl.exp(rnd(a - b, PRECISION)), PRECISION)
+            out = rnd(libdevice.exp(rnd(a - b, PRECISION)), PRECISION)
         else:
-            out = rnd(rnd(tl.exp(a), PRECISION) / rnd(tl.exp(b), PRECISION), PRECISION)
+            out = rnd(rnd(libdevice.exp(a), PRECISION) / rnd(libdevice.exp(b), PRECISION), PRECISION)
     elif RULE == "EXP-ZERO":
         if SIDE == 0:
             out = rnd(tl.exp(zero), PRECISION)

@@ -17,11 +17,11 @@ admitted family changes this obligation instead of being silently ignored. -/
 theorem reported_ids : reportedIDs =
     ["ADD-COMMUTE", "MUL-COMMUTE", "ROUND-IDEM", "BF16-WIDEN-RETURN",
      "ADD-ASSOC", "MUL-ASSOC", "MUL-DISTRIB", "FMA-CONTRACT", "CANCEL",
-     "DIV-RCP", "CAST-MOVE", "ACC-WIDEN"] := by decide
+     "DIV-RCP", "CAST-MOVE", "CAST-REMOVE", "ACC-WIDEN"] := by decide
 
 /-- Every floating format is interpreted by the same carrier in these
-countermodels. Casts are identities, which satisfies even the rejected cast
-removal law; this only strengthens the counterexample's premises. -/
+countermodels. Casts are identities, including the intermediate cast in the
+cast-removal law. These interpretations do not assert IEEE behavior. -/
 structure ScalarModel where
   add : ℚ → ℚ → ℚ
   sub : ℚ → ℚ → ℚ
@@ -55,6 +55,8 @@ def LawFor (M : ScalarModel) : String → Prop
   | "DIV-RCP" => ∀ a b, M.cast (M.divRN a b) = M.cast (M.mul a (M.cast (M.divRN 1 b)))
   | "CAST-MOVE" => ∀ a b,
       M.cast (M.add (M.cast a) (M.cast b)) = M.cast (M.add a b)
+  | "CAST-REMOVE" => ∀ a b c,
+      M.cast (M.mul (M.cast (M.add a b)) c) = M.cast (M.mul (M.add a b) c)
   | "ACC-WIDEN" => ∀ a b c,
       M.cast (M.add (M.cast (M.add a b)) c) = M.cast (M.add (M.add a b) c)
   | _ => False

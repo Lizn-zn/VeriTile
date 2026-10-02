@@ -1,8 +1,8 @@
 # Floating-point rule experiments
 
-For the new basic relations needed by the remaining examples, use the separate
-[supplemental experiment instructions](./supplement/README.md) on `codex/fp-example`.
-The original experiment sources and the 30 admitted instances below are frozen.
+For additional basic relations, use the
+[supplemental experiment instructions](./supplement/README.md).
+Both catalogues use the same per-element ULP normalization and two gates.
 
 Edit [config.py](./config.py), check atomic expression pairs with Triton kernels on an NVIDIA GPU,
 then import the result directory on the development machine (Python + NumPy).
@@ -14,7 +14,7 @@ described in [FloatingPointPrimitives.md](../../documents/FloatingPointPrimitive
 
 ## GPU run and result return
 
-Check out `codex/fp-rules` at the same commit on both machines. Use Linux
+Check out the same experiment revision on both machines. Use Linux
 with an NVIDIA CUDA GPU. For a fresh Python 3.11–3.13 virtual environment:
 
 ```bash
@@ -85,8 +85,8 @@ PTX digests, observation shapes and file hashes, and recomputes the statistics.
 Existing output files are never overwritten. Returned Python source is **not
 executed**, and NPZ is loaded with `allow_pickle=False`.
 
-Per-instance `observations.npz` stores per-replicate bucket delta/ULP and oracle
-peak errors/epsilon. It supports CPU statistical replay, not raw-output replay;
+Per-instance `observations.npz` stores per-replicate bucket deltas and peak oracle
+errors, all in local-ULP units. It supports CPU statistical replay, not raw-output replay;
 frozen seeds and sources support a separate GPU rerun. The manifest includes
 profile, implementation hashes, device/capability, driver, software and launch
 settings. Keep bundles outside Git (`Logs/` and `results/` are ignored).
@@ -136,15 +136,24 @@ and error-amplification checks. Statistics and bundle replay use NumPy on CPU.
 
 - Same quantized inputs feed reference, candidate and the fp64 oracle. The default
   probe draws independent `Normal(1, 1²)` operands; parameters live in `config.py`.
-- Bias buckets are the output's last axis. For the configured matrix shape, each
-  replicate averages signed differences over rows, retaining one bucket per column.
-  Sample std across replicates uses ddof=1.
-- Bias ULP uses the pooled maximum absolute output over **both** candidate/reference
-  and all replicates. We store each replicate's ULP and take their maximum (equivalent
-  for finite scales). Cast to comparison dtype before `nextafter`; at maximum finite
-  use the inward spacing. Invalid differences or floors FAIL.
-- Vars epsilon is one comparison/output-format ULP at the candidate's peak magnitude.
-  Nonfinite candidate/reference/golden errors or epsilon produce K=+inf and FAIL.
+- For each element, set `s = ULP(abs(golden))` in the output dtype. Round the golden
+  value to that dtype before `nextafter`; use the inward spacing at maximum finite
+  and minimum subnormal spacing at zero. Both sides share this golden-based scale;
+  output outliers cannot enlarge another element's allowance.
+- Normalize **before** aggregation: `d = (candidate-reference)/s`,
+  `er = abs(reference-golden)/s`, `ec = abs(candidate-golden)/s`.
+  Bias buckets are the output's last axis. Each replicate averages `d` over rows,
+  retaining one bucket per column. Mean and sample std (ddof=1) across replicates
+  are therefore in local-ULP units. `z = sqrt(R)*abs(mean)/std` is dimensionless.
+  With `SE = std/sqrt(R)`, every bucket must satisfy `abs(mean) + 5*SE <= 0.05`
+  local ULP. A band entirely outside the tolerance FAILs; a boundary-crossing
+  band is INCONCLUSIVE. z is diagnostic only. These are engineering SE bands,
+  not calibrated simultaneous or optional-stopping confidence guarantees.
+- The magnitude gate uses `Er = max(er)`, `Ec = max(ec)` within each replicate,
+  followed by `K = max(0, (Ec-1)/Er)`. The additive allowance is one local ULP.
+  `Ec <= 1` yields zero; `Er == 0` with `Ec > 1` yields infinity.
+  These maxima measure normalized errors, not output magnitudes or ULP budgets.
+  Nonfinite reference/candidate/golden observations produce K=+inf and FAIL.
 - POT targets max(40, round(10% of positive K)) tail samples, using an
   order-statistic threshold and strict exceedances. Fewer than 12 positive K or fewer
   than two strict exceedances return the empirical maximum with `valid=False` and
@@ -157,7 +166,8 @@ and error-amplification checks. Statistics and bundle replay use NumPy on CPU.
   otherwise after the minimum budget, stop for empirical fallback or when the band
   [2*level-U, U] crosses neither threshold. Stop at the full-batch maximum otherwise.
   Replay recomputes **every checkpoint** and rejects a truncated or overrun stream.
-- Default admission is `pass_only`; `allow_warn` explicitly admits warnings.
+- Default admission is `pass_only`; `allow_warn` explicitly admits magnitude warnings,
+  but never bias INCONCLUSIVE. The selected tau is a mean-bias budget, not a per-element error bound.
   Smoke is always `SMOKE_ONLY` and never admitted.
 
 Configuration, replay and sampling regression checks:
@@ -173,17 +183,19 @@ quantized ties and nonfinite errors, plus adaptive stopping and replay integrity
 
 The checked-in [current table](./report/summary.md) contains all 42 instances,
 with full-precision [CSV](./report/summary.csv) and [JSON](./report/summary.json).
-The H200 run (reported by the runtime as NVIDIA L20X) has 30 accepted instances,
-6 warnings that remain unaccepted, 2 rejected instances, 3 square-root domain
-events and 1 unsupported precision profile. The DLC task is named
-`traces_kernel_equivalence_testing`.
+The current H200 run (reported as NVIDIA L20X) uses seed 20261002, tau=0.05
+local ULP and a five-SE bias band. It uses independent samples after fixing
+the protocol and EXP-SUB implementation. Current totals are in the table.
+The DLC task is named `traces_kernel_equivalence_testing`.
 
 [Experiment settings](./report/experiment.json) record the input distribution,
 precision profiles, gates, device/compiler details and checked source hashes.
-The [warning audit](./report/warning_audit.json) recomputes all six warnings from
-the saved observations. [Exact counterexamples](./report/exact_counterexamples.json)
-show why the four warned transformations are not unconditional floating-point
-identities. Lower oracle error does not cancel a directional-bias warning.
+The [nonacceptance audit](./report/warning_audit.json) records all warnings and
+rejections from the replayed observations, with bias means in local-ULP units.
+[Exact counterexamples](./report/exact_counterexamples.json) show why four
+transformations are not unconditional floating-point identities; those examples
+are independent of the statistical classifications. Lower oracle error does not
+cancel a failed or inconclusive bias-budget check.
 Statistical acceptance applies only to the tested contract; it is not proof of
 strict floating-point equivalence. Raw observations and compiled PTX remain in
 the local result bundle and are required to independently replay the table.
@@ -192,21 +204,28 @@ Maintain a complete rule/format table while formal bundles are written under one
 run directory:
 
 ```bash
-python3 scripts/report_numerics.py Logs/numerics
-python3 scripts/report_numerics.py Logs/numerics --watch --job-id <dlc-job-id>
+python3 scripts/report_numerics.py Logs/bias-budget-verification/original
+python3 scripts/report_numerics.py Logs/bias-budget-verification/original --watch --job-id <dlc-job-id>
 ```
 
-After the run completes, refresh the checked-in table from its evidence bundle:
+After both runs complete, publish their independently replayed tables, settings
+and audits together. The run directory must contain `original/atomic`,
+`original/report`, `supplement/atomic`, `supplement/report`, a DLC `status.json`
+with `Status: Succeeded`, and an `exit_code` file containing `0`:
 
 ```bash
-python3 scripts/report_numerics.py Logs/numerics --report-dir experiments/floating_point/report --job-id <dlc-job-id>
+python3 scripts/publish_numerical_results.py Logs/bias-budget-verification --hardware-model H200
+python3 scripts/export_numerical_rules.py --trust-report
+python3 scripts/export_supplemental_rules.py --trust-report
 ```
 
-Keep the experiment settings, warning audit and counterexamples alongside the
-current table consistent with that run. Replace current files when updating them.
+The publisher checks both catalogs and compares the CPU tables against the GPU
+environment's reports before replacing current files. Raw observation bundles
+remain outside Git.
 
 The table includes every rule and precision in `config.py`, even if its run has
 not started. Smoke bundles are excluded. `z` is the maximum absolute bucket z;
+`B` is the largest bias upper bound in local ULPs, `tau` its budget;
 `U` is the magnitude-gate value, with `empirical_max` explicitly distinguished
 from a fitted upper estimate. Missing values remain empty rather than becoming
 zero. `accept` stays pending until CPU replay verifies the bundle.
@@ -229,7 +248,11 @@ proves conditional composition under one ADD-COMMUTE assumption.
 The published report can now be frozen into Lean with
 `python3 scripts/export_numerical_rules.py --trust-report`. This explicit mode
 trusts the report, checks its source hashes/configuration and exports only its
-30 accepted rows. It does not pretend to replay missing raw observations.
+accepted rows. It does not pretend to replay missing raw observations.
+
+The current report rejects fp32 ADD-ASSOC, so it is absent from the exported
+table. The row-wise-sum example retains a conditional derivation with an
+explicit unresolved association premise and is marked blocked on admission.
 
 The [worked example](./EXAMPLE.md) has separate
 [real correctness](../../bench/examples/TritonBenchVectorAdditionCorrect.lean) and
