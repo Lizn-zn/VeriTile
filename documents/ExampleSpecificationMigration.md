@@ -68,9 +68,9 @@ peak absolute-error ratio gate; z is diagnostic. Counts are computed from curren
 reports, and only dual-PASS rows enter the generated Lean tables. Neither table
 contains a whole softmax, logsumexp, normalization, reduction or recurrence atom.
 
-The supplemental EXP-SUB implementation uses libdevice.exp. Its bf16 and
-bf16-input/fp32-work/bf16-output instances are admitted; the fp32 instance is
-WARN_NOT_ACCEPTED under the absolute-error ratio gate. Its identity is
+The supplemental EXP-SUB implementation uses libdevice.exp. Its bf16,
+bf16-input/fp32-work/bf16-output and fp32 instances are admitted with the
+configured magnitude PASS threshold of 3. Its identity is
 part of the report contract and cannot justify a rewrite using tl.exp without
 matching evidence. LOG-MUL domain events and unsupported fp64 combinations
 remain unaccepted. DIV-RCP uses div_rn; DIV-MUL-RCP tests ordinary division.

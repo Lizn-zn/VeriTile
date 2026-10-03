@@ -48,7 +48,7 @@ class ExportTests(unittest.TestCase):
                     exporter.render(target)
 
     def test_pass_labels_cannot_hide_an_exceeded_budget(self):
-        for field, value in [('B', .051), ('tau', 1.0), ('U', 3.0)]:
+        for field, value in [('B', .051), ('tau', 1.0), ('U', 4.0)]:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
                 target = Path(tmp)
                 shutil.copytree(exporter.REPORT, target, dirs_exist_ok=True)

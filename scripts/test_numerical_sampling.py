@@ -65,6 +65,19 @@ class SamplingTests(unittest.TestCase):
             gates.validate_stopping(observations(24), config, 16, 32, 8)
         self.assertEqual(gates.validate_stopping(observations(16), config, 16, 32, 8), 'empirical_fallback')
 
+    def test_changed_magnitude_threshold_changes_stopping(self):
+        # A band [2.8, 3.8] crosses the current PASS boundary, so needs more data.
+        var = dict(valid=True, upper=3.8, return_level=3.3,
+                   warn_threshold=2., fail_threshold=10.)
+        self.assertEqual(gates.stopping_reason(var, 4096, 4096, 50000, 512), 'stable')
+        var['warn_threshold'] = profile()['gates']['vars']['warn']
+        self.assertIsNone(gates.stopping_reason(var, 4096, 4096, 50000, 512))
+        # Conversely, [1.4, 2.4] is wholly inside the current PASS region.
+        var.update(upper=2.4, return_level=1.9)
+        self.assertEqual(gates.stopping_reason(var, 4096, 4096, 50000, 512), 'stable')
+        var['warn_threshold'] = 2.
+        self.assertIsNone(gates.stopping_reason(var, 4096, 4096, 50000, 512))
+
     def test_non_multiple_cap_finishes_full_batch(self):
         var = dict(valid=True, upper=3., return_level=2., warn_threshold=2., fail_threshold=10.)
         with patch.object(gates, 'vars_gate', return_value=var):

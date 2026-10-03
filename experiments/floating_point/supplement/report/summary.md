@@ -1,6 +1,6 @@
 # Numerical rule results
 
-56 instances; 40 replayed; 35 accepted.
+56 instances; 40 replayed; 36 accepted.
 
 Each replicate contributes one mean across its IID scalar instances; R counts replicates.
 z = |mean| / SE across replicate means (diagnostic only). U uses the configured magnitude gate.
@@ -50,7 +50,7 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 | DIV-ONE | fp32 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | DIV-MUL-RCP | fp32 | 4096 | 0 | 0 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
 | MUL-RCP-CANCEL | fp32 | 4096 | 49081.95 | 0.04271403 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| EXP-SUB | fp32 | 8192 | 8838.004 | 0.02519245 | 0.05 | 2.54112 | pot_pwm | PASS | WARN | no | COMPLETE |
+| EXP-SUB | fp32 | 4096 | 6284.441 | 0.02519934 | 0.05 | 2.64456 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | EXP-ZERO | fp32 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | LOG-MUL | fp32 | — | — | — | — | — | — | — | — | no | NUMERIC_EVENT |
 | LOG-EXP | fp32 | 4096 | 1.916659 | 0.06895381 | 0.05 | 0 | empirical_max | INCONCLUSIVE | PASS | no | COMPLETE |

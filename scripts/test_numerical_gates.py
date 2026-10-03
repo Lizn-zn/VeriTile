@@ -73,6 +73,23 @@ class GateTests(unittest.TestCase):
             self.assertEqual(result["status"], expected)
             self.assertEqual(result["units"], "local_ulp")
 
+    def test_magnitude_thresholds_and_default_admission(self):
+        self.assertEqual(self.config["vars"]["warn"], 3.0)
+        self.assertEqual(self.config["vars"]["fail"], 10.0)
+        for k, status, decision in (
+            (3.0, "PASS", "ACCEPT"),
+            (np.nextafter(3.0, np.inf), "WARN", "WARN_NOT_ACCEPTED"),
+            (10.0, "WARN", "WARN_NOT_ACCEPTED"),
+            (np.nextafter(10.0, np.inf), "FAIL", "REJECT"),
+        ):
+            with self.subTest(k=k):
+                obs = observations()
+                obs["reference_error"][:] = 1.0
+                obs["candidate_error"][:] = k
+                result = gates.evaluate(obs, self.config, 1, 4)
+                self.assertEqual(result["vars"]["status"], status)
+                self.assertEqual(result["decision"], decision)
+
     def test_significance_does_not_replace_the_bias_budget(self):
         # A tiny constant offset has infinite z but is inside the ULP budget.
         result = gates.bias_gate(np.full((8, 2), .03125), self.config['bias'])

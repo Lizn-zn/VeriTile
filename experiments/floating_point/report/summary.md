@@ -32,12 +32,12 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 | ADD-ASSOC | bf16 | 4096 | 0.5262654 | 5.747947e-05 | 0.05 | 1.156941 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | ADD-ASSOC | bf16_fp32 | 4096 | 0.06535288 | 2.142983e-08 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
 | ADD-ASSOC | fp32 | 4096 | 0.9255956 | 0.01525995 | 0.05 | 1.163875 | pot_pwm | PASS | PASS | yes | COMPLETE |
-| MUL-ASSOC | bf16 | 4096 | 0.03629942 | 1.147891e-05 | 0.05 | 3.802424 | pot_pwm | PASS | WARN | no | COMPLETE |
+| MUL-ASSOC | bf16 | 9728 | 0.02255322 | 7.395573e-06 | 0.05 | 3.677913 | pot_pwm | PASS | WARN | no | COMPLETE |
 | MUL-ASSOC | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
-| MUL-ASSOC | fp32 | 4096 | 0.6556256 | 1.312948e-05 | 0.05 | 3.850519 | pot_pwm | PASS | WARN | no | COMPLETE |
-| MUL-DISTRIB | bf16 | 6656 | 155.2231 | 0.001221786 | 0.05 | 1.968885 | pot_pwm | PASS | PASS | yes | COMPLETE |
+| MUL-ASSOC | fp32 | 23040 | 0.5333754 | 5.353822e-06 | 0.05 | 3.803527 | pot_pwm | PASS | WARN | no | COMPLETE |
+| MUL-DISTRIB | bf16 | 4096 | 122.4037 | 0.001239349 | 0.05 | 2.338281 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | MUL-DISTRIB | bf16_fp32 | 4096 | 0.4471699 | 1.772632e-10 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
-| MUL-DISTRIB | fp32 | 8192 | 0.9078026 | 0.01033001 | 0.05 | 1.998644 | pot_pwm | PASS | PASS | yes | COMPLETE |
+| MUL-DISTRIB | fp32 | 4096 | 0.0719694 | 0.01296174 | 0.05 | 2.353754 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | FMA-CONTRACT | bf16 | 4096 | 23.85633 | 0.0004666169 | 0.05 | 0.7544843 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | FMA-CONTRACT | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
 | FMA-CONTRACT | fp32 | 4096 | 1.114051 | 0.0267935 | 0.05 | 0.8064917 | pot_pwm | PASS | PASS | yes | COMPLETE |

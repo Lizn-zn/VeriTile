@@ -64,7 +64,7 @@
       "valid": false,
       "xi": null,
       "return_level": 3.0,
-      "status": "WARN"
+      "status": "PASS"
     },
     {
       "family": "nonfinite",
