@@ -94,6 +94,22 @@ theorem fp32_mean_step {α : Type} [Inhabited α] (R : FP.ScalarArithmetic.Rules
         (FP.ScalarArithmetic.mul M mean (M.fromNat (some .fp32) i)) x :=
   FP.Welford.mean_step R M D hM s x mean (M.fromNat (some .fp32) i) hd
 
+/-- The original S update splits into the new sample's squared residual and
+the old-count center-shift contribution, using only admitted scalar atoms. -/
+theorem fp32_variance_step {α : Type} [Inhabited α] (R : FP.ScalarArithmetic.Rules)
+    (M : Algebra α) (D : FP.Guarded.Domain α)
+    (hM : FP.Guarded.Models R.assumptions M D) (s : State α)
+    (i : Nat) (x mean variance : α)
+    (hd : FP.Welford.VarianceStepDomain M D x mean (M.fromNat (some .fp32) i)) :
+    (update (M.withDefaultPrecision .fp32) i x (mean, variance)).2 =
+      FP.ScalarArithmetic.add M variance
+        (FP.ScalarArithmetic.add M
+          (FP.Welford.square M (FP.Welford.residual M x mean (M.fromNat (some .fp32) i)))
+          (FP.ScalarArithmetic.mul M (M.fromNat (some .fp32) i)
+            (FP.Welford.square M (FP.Welford.correction M x mean (M.fromNat (some .fp32) i))))) :=
+  congrArg (FP.ScalarArithmetic.add M variance)
+    (FP.Welford.variance_step R M D hM s x mean (M.fromNat (some .fp32) i) hd)
+
 def recurrence {α : Type} (M : Algebra α) (xs : Fin N → α) : Nat → α × α
   | 0 => (M.literal none .real 0, M.literal none .real 0)
   | i + 1 => if h : i < N then update M i (xs ⟨i, h⟩) (recurrence M xs i)

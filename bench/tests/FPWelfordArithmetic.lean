@@ -105,8 +105,60 @@ example {α : Type} [Inhabited α] (A : Algebra α) (s : State α) :
       some (fun _ => A.cast (some .fp32) .real .bf16 (A.literal (some .fp32) .real 3)) := by
   simp [evalOp_unfold, Algebra.withDefaultPrecision, resolvePrecision, ofFloat, toFloat]
 
+private def boundedDomain : Domain ℚ
+  | .finite => fun a => |a| ≤ 7
+  | .nonzero => fun a => a ≠ 0
+  | .positive => fun a => 0 < a
+
+-- A valid mean step can still produce a residual outside the permitted
+-- domain. The variance step must not silently reuse only the mean guards.
+example : FP.Welford.MeanStepDomain M boundedDomain (-7) 0 (-2) := by
+  constructor <;>
+    norm_num [boundedDomain, M, model, FP.Welford.difference, FP.Welford.nextCount,
+      FP.Welford.correction, FP.Welford.nextMean, add, sub, FP.ScalarArithmetic.mul,
+      div, FP.ScalarArithmetic.one]
+
+example : ¬ FP.Welford.VarianceStepDomain M boundedDomain (-7) 0 (-2) := by
+  intro h
+  have hres := h.residual
+  norm_num [boundedDomain, M, model, FP.Welford.residual, FP.Welford.nextMean,
+    FP.Welford.correction, FP.Welford.difference, FP.Welford.nextCount,
+    add, sub, div, FP.ScalarArithmetic.one] at hres
+
+private def tripleTree : FP.Equational.ReductionTree 3 :=
+  .add (.input 0) (.add (.input 1) (.input 2))
+private def tripleRow (i : Fin 3) : ℚ := if i.val = 0 then -2 else 2
+
+-- Both component trees, all paired leaves and the final paired sum are
+-- finite. Nevertheless, the paired right subtree is 8 and fails its guard.
+-- Reduction linearity must retain the transformed intermediate domains.
+example :
+    FP.ScalarReduction.FiniteTree M boundedDomain tripleRow (zero M) tripleTree ∧
+    (∀ i, boundedDomain .finite (add M (tripleRow i) (tripleRow i))) ∧
+    boundedDomain .finite
+      (FP.ScalarReduction.value M (fun i => add M (tripleRow i) (tripleRow i)) (zero M) tripleTree) ∧
+    ¬ FP.ScalarReduction.FiniteTree M boundedDomain
+      (fun i => add M (tripleRow i) (tripleRow i)) (zero M) tripleTree := by
+  have htwo : (2 : Fin 3) ≠ 0 := by decide
+  refine ⟨?_, ?_, ?_, ?_⟩
+  · norm_num [FP.ScalarReduction.FiniteTree, FP.ScalarReduction.value,
+      tripleTree, tripleRow, boundedDomain, add, zero, M, model]
+  · intro i
+    by_cases h : i.val = 0 <;> norm_num [tripleRow, h, boundedDomain, add, M, model]
+  · norm_num [FP.ScalarReduction.value, tripleTree, tripleRow, boundedDomain, add, zero, M, model, htwo]
+  · norm_num [FP.ScalarReduction.FiniteTree, FP.ScalarReduction.value,
+      tripleTree, tripleRow, boundedDomain, add, zero, M, model, htwo]
+
 #axiomsClean FP.Welford.mean_step
 #axiomsClean WelfordFPExecution.fp32_mean_step
+#axiomsClean FP.ScalarArithmetic.add_right_cancel
+#axiomsClean FP.ScalarArithmetic.sub_add_sub_cancel
+#axiomsClean FP.ScalarReduction.value_add
+#axiomsClean FP.Welford.residual_step
+#axiomsClean FP.Welford.variance_step
+#axiomsClean FP.Welford.square_shift
+#axiomsClean FP.Welford.square_shift_tree
+#axiomsClean WelfordFPExecution.fp32_variance_step
 #axiomsClean all_arithmetic_equations
 #axiomsClean count_conversion_gap
 

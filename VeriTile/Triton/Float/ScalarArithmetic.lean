@@ -180,6 +180,19 @@ theorem add_assoc (a b c : α) (ha : D .finite a) (hb : D .finite b) (hc : D .fi
     add M (add M a b) c = add M a (add M b c) :=
   apply_atom R M D hM s .addAssociate a b c ⟨ha, hb, hc⟩
 
+/-- Exchange the middle terms of two paired sums using only association and
+commutation. Finite cross sums are explicit because leaves alone do not imply
+that reassociated intermediate operations stay in the admitted domain. -/
+theorem add_add_swap (a b c d : α)
+    (ha : D .finite a) (hb : D .finite b) (hc : D .finite c) (hd : D .finite d)
+    (hcd : D .finite (add M c d)) (hbd : D .finite (add M b d)) :
+    add M (add M a b) (add M c d) = add M (add M a c) (add M b d) := by
+  rw [add_assoc R M D hM s a b _ ha hb hcd,
+    ← add_assoc R M D hM s b c d hb hc hd,
+    add_comm R M D hM s b c hb hc,
+    add_assoc R M D hM s c b d hc hb hd,
+    ← add_assoc R M D hM s a c _ ha hc hbd]
+
 theorem mul_comm (a b : α) (ha : D .finite a) (hb : D .finite b) :
     mul M a b = mul M b a :=
   apply_atom R M D hM s .mulCommute a b a ⟨ha, hb⟩
@@ -230,6 +243,34 @@ theorem sub_zero (a : α) (ha : D .finite a) (hz : D .finite (zero M))
 theorem zero_add (a : α) (ha : D .finite a) (hz : D .finite (zero M)) :
     add M (zero M) a = a :=
   (add_comm R M D hM s _ _ hz ha).trans (add_zero R M D hM s a ha)
+
+/-- Recover the summand by adding the derived inverse of the common term.
+Cancellation is proved here; it is not supplied by a group structure. -/
+theorem add_right_cancel (a b c : α) (ha : D .finite a) (hb : D .finite b)
+    (hc : D .finite c) (hz : D .finite (zero M))
+    (hn : D .finite (sub M (zero M) c))
+    (h : add M a c = add M b c) : a = b := by
+  have inverse : add M c (sub M (zero M) c) = zero M :=
+    (add_comm R M D hM s c _ hc hn).trans (sub_add_cancel R M D hM s _ c hz hc)
+  have recover (v : α) (hv : D .finite v) :
+      add M (add M v c) (sub M (zero M) c) = v := by
+    rw [add_assoc R M D hM s v c _ hv hc hn, inverse, add_zero R M D hM s v hv]
+  exact (recover a ha).symm.trans
+    ((congrArg (fun v => add M v (sub M (zero M) c)) h).trans (recover b hb))
+
+/-- Joining two differences follows from CANCEL, association and the derived
+addition cancellation rule, retaining every guard needed at these sites. -/
+theorem sub_add_sub_cancel (a b c : α)
+    (ha : D .finite a) (hb : D .finite b) (hc : D .finite c)
+    (hab : D .finite (sub M a b)) (hbc : D .finite (sub M b c))
+    (hsum : D .finite (add M (sub M a b) (sub M b c)))
+    (hac : D .finite (sub M a c)) (hz : D .finite (zero M))
+    (hn : D .finite (sub M (zero M) c)) :
+    add M (sub M a b) (sub M b c) = sub M a c := by
+  apply add_right_cancel R M D hM s _ _ c hsum hac hc hz hn
+  rw [add_assoc R M D hM s _ _ c hab hbc hc,
+    sub_add_cancel R M D hM s b c hb hc,
+    sub_add_cancel R M D hM s a b ha hb, sub_add_cancel R M D hM s a c ha hc]
 
 /-- Explicit padding zeros may be scaled away only after this derivation.
 The finite intermediate requirements are domain facts, not numerical equations. -/

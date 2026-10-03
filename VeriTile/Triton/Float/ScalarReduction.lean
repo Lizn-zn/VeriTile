@@ -38,6 +38,16 @@ theorem value_congr {α : Type} (M : Algebra α) (xs ys : Fin n → α) (seed se
   | zero => exact hs
   | add a b ih₁ ih₂ => simp only [value, ih₁, ih₂]
 
+theorem finiteTree_congr {α : Type} (M : Algebra α) (D : Domain α)
+    (xs ys : Fin n → α) (seed seed' : α)
+    (h : ∀ i, xs i = ys i) (hs : seed = seed') (tree : ReductionTree n) :
+    FiniteTree M D xs seed tree ↔ FiniteTree M D ys seed' tree := by
+  induction tree with
+  | input i => simp only [FiniteTree, h i]
+  | zero => simp only [FiniteTree, hs]
+  | add a b ih₁ ih₂ =>
+    simp only [FiniteTree, ih₁, ih₂, value_congr M xs ys seed seed' h hs]
+
 section Factor
 variable {α : Type} [Inhabited α] (R : Rules) (M : Algebra α) (D : Domain α)
   (hM : Models R.assumptions M D) (s : State α)
@@ -85,6 +95,42 @@ theorem factor_right (c : α) (hc : D .finite c) (hz : D .finite (zero M))
     _ = mul M c (value M xs (zero M) tree) :=
       factor_left R M D hM s c hc hz hp hn xs tree hf
     _ = _ := mul_comm R M D hM s c _ hc (value_finite M D xs (zero M) tree hf)
+
+/-- Pointwise addition distributes through a fixed explicit addition tree.
+The sum's actual intermediate values must be finite alongside both parts. -/
+theorem value_add_with_seed (xs ys : Fin n → α) (zx zy : α) (tree : ReductionTree n)
+    (hx : FiniteTree M D xs zx tree) (hy : FiniteTree M D ys zy tree)
+    (hxy : FiniteTree M D (fun i => ScalarArithmetic.add M (xs i) (ys i))
+      (ScalarArithmetic.add M zx zy) tree) :
+    value M (fun i => ScalarArithmetic.add M (xs i) (ys i))
+        (ScalarArithmetic.add M zx zy) tree =
+      ScalarArithmetic.add M (value M xs zx tree) (value M ys zy tree) := by
+  induction tree with
+  | input => rfl
+  | zero => rfl
+  | add a b ih₁ ih₂ =>
+    have hright : D .finite (ScalarArithmetic.add M (value M xs zx b) (value M ys zy b)) := by
+      rw [← ih₂ hx.2.1 hy.2.1 hxy.2.1]
+      exact value_finite M D _ _ b hxy.2.1
+    change ScalarArithmetic.add M _ _ = ScalarArithmetic.add M _ _
+    rw [ih₁ hx.1 hy.1 hxy.1, ih₂ hx.2.1 hy.2.1 hxy.2.1]
+    exact add_add_swap R M D hM s _ _ _ _
+      (value_finite M D xs zx a hx.1) (value_finite M D ys zy a hy.1)
+      (value_finite M D xs zx b hx.2.1) (value_finite M D ys zy b hy.2.1)
+      hright hy.2.2
+
+/-- Both reductions retain their literal-zero padding. The padding step uses
+the accepted addition identity instead of silently deleting zero leaves. -/
+theorem value_add (xs ys : Fin n → α) (tree : ReductionTree n)
+    (hz : D .finite (zero M))
+    (hx : FiniteTree M D xs (zero M) tree) (hy : FiniteTree M D ys (zero M) tree)
+    (hxy : FiniteTree M D (fun i => ScalarArithmetic.add M (xs i) (ys i)) (zero M) tree) :
+    value M (fun i => ScalarArithmetic.add M (xs i) (ys i)) (zero M) tree =
+      ScalarArithmetic.add M (value M xs (zero M) tree) (value M ys (zero M) tree) := by
+  have hz' := add_zero R M D hM s (zero M) hz
+  have hxy' : FiniteTree M D (fun i => ScalarArithmetic.add M (xs i) (ys i))
+      (ScalarArithmetic.add M (zero M) (zero M)) tree := by simpa only [hz'] using hxy
+  simpa only [hz'] using value_add_with_seed R M D hM s xs ys (zero M) (zero M) tree hx hy hxy'
 
 end Factor
 

@@ -128,6 +128,34 @@ normal distribution samples floating operands. A separate integer input
 distribution and its conversion experiments await user confirmation; no
 unmeasured conversion law has been added to the admission table.
 
+### Welford variance step and recentering
+
+Let `q = (x-m)/(n+1)` and `m' = m+q`. `Float/Welford.residual_step`
+derives `x-m' = n*q`; `variance_step` then derives
+`(x-m)*(x-m') = (x-m')² + n*q²`. The original loop's variance update is
+connected to this identity by `WelfordExecution.fp32_variance_step`, retaining
+the actual floating conversion of the loop index. These derivations use the
+same admitted scalar theory, with explicit guards for the new residual and
+other intermediate operands.
+
+`square_shift` expands `(x-m')²` around the old mean `m`, keeping its two
+cross terms separate. `ScalarReduction.value_add` and `square_shift_tree`
+lift that expansion through an arbitrary explicit addition tree. Literal-zero
+padding and the intermediate domains of both component trees and their sum
+are retained. The repeated sum of the constant shift square remains a tree;
+it is not silently replaced by an integer-count product.
+
+The arithmetic fixture checks why the additional domains matter: valid mean
+step guards need not imply a finite residual, and finite component trees,
+paired leaves and final result need not imply finite transformed partial
+sums. The fixture also audits these new derivations for unexpected axioms.
+
+These are local identities and reduction lemmas, not a completed Welford FP
+equivalence. Relating the full recurrence to the two-pass statistics still
+requires the count-conversion binding, the global mean/variance invariants
+and the corresponding reduction schedules. The completed example count
+remains 13.
+
 ## Constraints on the supplemental atom set
 
 Further atom sets need a derivation-level dependency check before a GPU run.
