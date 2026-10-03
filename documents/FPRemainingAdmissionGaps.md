@@ -7,6 +7,50 @@ The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
 binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
 instances. Five other algorithmic transformations remain incomplete.
 
+## Next GPU run: relations not yet tested
+
+The following three primitive relations have no matching experiment in the
+current reports. This is a pending-run checklist, not an admission table.
+
+- [ ] **Intrinsic exp-sub, fp32:** compare `tl.exp(a - b)` with
+  `tl.exp(a) / tl.exp(b)`, using fp32 inputs, arithmetic and outputs. Keep the
+  configured independent Normal(1, 1) inputs, shape `[4096, 4096]` and two-gates
+  policy. The accepted EXP-SUB row uses `libdevice.exp`, so it does not cover
+  this implementation. Needed by SoftmaxStable, StableLogSumExp and
+  OnlineSoftmax. Other `tl.exp` relations have already been tested; this gap is
+  specifically the intrinsic exp-sub relation.
+- [ ] **Integer conversion of zero:** compare `fromNat_fp32(0)` with the fp32
+  literal `0`. Needed by Welford and FusedLayerNorm. This is a constant relation
+  with no random operand.
+- [ ] **Integer conversion of a successor:** compare `fromNat_fp32(i + 1)`
+  with `fromNat_fp32(i) + 1`, with fp32 addition. Needed by Welford and
+  FusedLayerNorm. The nonnegative integer range and sampling distribution
+  remain to be selected; the floating Normal(1, 1) profile does not specify an
+  integer-count experiment.
+
+Keep the intrinsic exp-sub result distinct from the existing libdevice result.
+The two integer-conversion candidates still need experiment support. This
+checklist does not change the runner, sampling configuration or admitted rules.
+
+### Already attempted, but not admitted
+
+- **LOG-MUL, fp32:** the run reported `NUMERIC_EVENT`. The relation
+  `log(a * b) = log(a) + log(b)` requires `a > 0` and `b > 0`. Independent
+  Normal(1, 1) operands can be negative; for example, `a = -1, b = 2` makes
+  both `log(a)` and `log(a * b)` invalid as finite real logarithms. The runner
+  detects any nonpositive operand and stops this instance before a completed
+  two-gates decision. It does not take absolute values, discard samples or
+  resample them. This is an input-domain mismatch, not a measured bias/vars
+  rejection. A future run needs an explicitly chosen positive-input sampling
+  policy; none has been selected here.
+- **LOG-EXP, fp32:** the run completed; the bias gate is `INCONCLUSIVE`
+  (`B` approximately `0.06895381`, threshold `0.05`) and the vars gate passes.
+  It remains unadmitted under `pass_only`. The accepted bf16-input/output row
+  cannot supply the required uncast fp32 relation.
+
+See the [supplemental report](../experiments/floating_point/supplement/report/summary.md)
+and the [LOG-MUL domain check](../scripts/supplement_numerics.py).
+
 ## Checked algebraic evidence
 
 [FPAdmissionCoverage.lean](../bench/tests/FPAdmissionCoverage.lean) checks
