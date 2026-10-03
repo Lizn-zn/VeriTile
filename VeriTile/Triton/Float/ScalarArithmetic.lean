@@ -258,6 +258,14 @@ theorem add_right_cancel (a b c : α) (ha : D .finite a) (hb : D .finite b)
   exact (recover a ha).symm.trans
     ((congrArg (fun v => add M v (sub M (zero M) c)) h).trans (recover b hb))
 
+/-- Self-subtraction follows from CANCEL and derived addition cancellation. -/
+theorem sub_self (a : α) (ha : D .finite a) (hz : D .finite (zero M))
+    (hs : D .finite (sub M a a)) (hn : D .finite (sub M (zero M) a)) :
+    sub M a a = zero M := by
+  apply add_right_cancel R M D hM s _ _ a hs hz ha hz hn
+  exact (sub_add_cancel R M D hM s a a ha ha).trans
+    (zero_add R M D hM s a ha hz).symm
+
 /-- Joining two differences follows from CANCEL, association and the derived
 addition cancellation rule, retaining every guard needed at these sites. -/
 theorem sub_add_sub_cancel (a b c : α)

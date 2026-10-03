@@ -207,6 +207,27 @@ the count conversions, initialization, induction over all loop iterations and
 comparison with the batch kernel's reduction schedule remain to be connected.
 No original source kernel or experiment rule was changed for this derivation.
 
+### Literal-zero initialization and singleton statistics
+
+`Float/WelfordInit` supplies the scalar induction base: starting the mean,
+square-deviation sum and floating count at literal zero, the first Welford
+update returns mean `x` and square-deviation sum zero. Self-subtraction and
+zero multiplication are derived from the existing scalar atoms. The same
+results hold for a singleton appended to any empty padding tree, and its
+count is literal one. `initial_statistics` aligns these two computations;
+`singleton_variance` also establishes the normalized singleton variance.
+
+This base case avoids applying the nonzero-count mean theorem to an empty
+row. The domain record checks the actual residual operations; it does not
+require `x*x` to be finite. The arithmetic fixture checks that these domains
+can hold even when the input's square is outside its finite-value domain.
+
+The original kernel still initializes its converted loop count through
+`fromNat(0)`, so the missing conversion binding is not discharged by these
+literal-zero lemmas. Full Welford equivalence also needs the loop induction,
+reduction-schedule comparison and a public guarded specification observing
+both output cells. The current `Guarded.IO` surface only covers `KernelIO₁`.
+
 ## Constraints on the supplemental atom set
 
 Further atom sets need a derivation-level dependency check before a GPU run.

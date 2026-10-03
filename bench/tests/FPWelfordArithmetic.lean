@@ -5,6 +5,7 @@ it makes no claim to model the unrelated transcendental admission families. -/
 import VeriTile.Triton.Float.Welford
 import VeriTile.Triton.Float.WelfordReduction
 import VeriTile.Triton.Float.WelfordAppend
+import VeriTile.Triton.Float.WelfordInit
 import VeriTile.Triton.Float.ScalarReduction
 import bench.examples.support.WelfordExecution
 import VeriTile.Meta.StatementAudit
@@ -194,13 +195,26 @@ theorem count_initialization_gap :
       WelfordFPExecution.recurrence, WelfordFPExecution.update, offsetModel, model, offsetCount,
       row, FP.ScalarReduction.inputs, TileShape.axisDim, TileShape.insertAxisIndex]
 
+-- Initialization uses the squared residual, not the input's square. The
+-- needed domains can hold even when squaring the input leaves the domain.
+example : FP.WelfordInit.InitDomain M boundedDomain 7 ∧
+    ¬ boundedDomain .finite (FP.Welford.square M 7) := by
+  constructor
+  · constructor <;>
+      norm_num [boundedDomain, M, model, zero, FP.ScalarArithmetic.one, sub,
+        FP.ScalarArithmetic.mul, FP.Welford.square]
+  · norm_num [boundedDomain, M, model, FP.ScalarArithmetic.mul, FP.Welford.square]
+
 #axiomsClean FP.Welford.mean_step
 #axiomsClean WelfordFPExecution.fp32_mean_step
 #axiomsClean FP.ScalarArithmetic.add_right_cancel
 #axiomsClean FP.ScalarArithmetic.sub_add_sub_cancel
+#axiomsClean FP.ScalarArithmetic.sub_self
 #axiomsClean FP.ScalarArithmetic.square_eq_of_add_eq_zero
 #axiomsClean FP.ScalarReduction.value_add
 #axiomsClean FP.ScalarReduction.constant_value
+#axiomsClean FP.ScalarReduction.value_empty
+#axiomsClean FP.ScalarReduction.value_zero
 #axiomsClean FP.ScalarReduction.deviations_add_center
 #axiomsClean FP.WelfordReduction.centered_sum_zero
 #axiomsClean FP.WelfordReduction.cross_sum_zero
@@ -208,6 +222,8 @@ theorem count_initialization_gap :
 #axiomsClean FP.WelfordAppend.mean_append
 #axiomsClean FP.WelfordAppend.shift_square
 #axiomsClean FP.WelfordAppend.variance_append
+#axiomsClean FP.WelfordInit.initial_statistics
+#axiomsClean FP.WelfordInit.singleton_variance
 #axiomsClean FP.Welford.residual_step
 #axiomsClean FP.Welford.variance_step
 #axiomsClean FP.Welford.square_shift

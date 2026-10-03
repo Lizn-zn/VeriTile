@@ -53,6 +53,22 @@ variable {α : Type} [Inhabited α] (R : Rules) (M : Algebra α) (D : Domain α)
   (hM : Models R.assumptions M D) (s : State α)
 include R hM s
 
+/-- Even an all-zero tree keeps its additions and padding; their identity is
+derived from the accepted scalar addition law. -/
+theorem value_zero (tree : ReductionTree n) (hz : D .finite (zero M)) :
+    value M (fun _ => zero M) (zero M) tree = zero M := by
+  induction tree with
+  | input => rfl
+  | zero => rfl
+  | add a b ih₁ ih₂ =>
+    simp only [value, ih₁, ih₂]
+    exact add_zero R M D hM s _ hz
+
+theorem value_empty (xs : Fin 0 → α) (tree : ReductionTree 0) (hz : D .finite (zero M)) :
+    value M xs (zero M) tree = zero M :=
+  (value_congr M xs (fun _ => zero M) _ _ (fun i => Fin.elim0 i) rfl tree).trans
+    (value_zero R M D hM s tree hz)
+
 /-- Transforming both inputs and padding uses distribution alone. -/
 theorem factor_with_seed (c : α) (hc : D .finite c) (xs : Fin n → α) (seed : α)
     (tree : ReductionTree n) (hf : FiniteTree M D xs seed tree) :
