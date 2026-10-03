@@ -194,9 +194,9 @@ exp 中间值的有限性、log 输入的正性等适用条件仍需在使用处
   `tl.log(libdevice.exp(a)) = a` 还未测过，旧 LOG-EXP 使用的是 `tl.exp`。
 - online softmax 的 libdevice EXP-SUB、reduction/loop 不变量与执行已接通，
   仍需确定公开 specification 的观察对象。
-- Welford/LayerNorm 的 count 零转换及 successor 已有独立 GPU 实验；successor
-  仅覆盖 `0 <= i < 2^24`，还需保留整数范围的 Lean 绑定及非零/可表示性证明。
-  空行的实数总除法行为也不能直接当作 IEEE 浮点的 `0/0` 行为。
+- Welford/LayerNorm 已通过专用导出器接入 count 零转换和有界 successor，
+  完成 FP 证明并保留 `N <= 2^24`。Welford 要求非空行；LayerNorm 的空行没有
+  输出写入，仍被覆盖。空行的实数总除法行为没有用作 FP 的 `0/0` 定律。
 - 原 online softmax 只维护 m/l 寄存器，没有输出 store；仍保留其原有作用范围。
 
 sub-zero 等可以从已选加法/CANCEL 和 add-zero 推导的关系，不重复登记。

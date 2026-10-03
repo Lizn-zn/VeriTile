@@ -1,7 +1,7 @@
 /- The original LayerNorm transformation under the selected scalar theory.
 The statistics comparison is derived before the common affine suffix. Count
-conversion still requires primitive admission, so no completed FP headline
-is exported here. -/
+conversion is explicit in this reusable support module; FusedLayerNormFPEquiv
+supplies it from the accepted bounded scalar atoms. -/
 import bench.examples.support.LayerNormExecution
 import bench.examples.support.WelfordContract
 

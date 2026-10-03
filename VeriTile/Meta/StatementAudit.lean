@@ -379,7 +379,7 @@ private structure FPAssumptionState where
   printedAdmissions : Array (Expr × Expr) := #[]
   unresolved : Bool := false
   fpConstants : Std.HashMap Name Bool := {}
-  remaining : Nat := 10000
+  remaining : Nat := 100000
 
 /-- Conservative reachability, including declaration types and projection
 functions. A closed dependency graph without an FP proof type cannot hide an
@@ -552,7 +552,13 @@ Works on ordinary theorems as well as registered `specification` headlines. -/
 elab "#print_fp_assumptions " id:ident : command => do
   let name ← liftCoreM <| realizeGlobalConstNoOverload id
   let info ← liftCoreM <| getConstInfo name
-  liftTermElabM <| Meta.forallTelescope info.type fun params conclusion => do
+  -- Scalar-derived recurrence proofs can contain tens of thousands of
+  -- instantiated nodes. Keep inspection bounded at ordinary call sites too.
+  -- Core stores heartbeats in units 1000 times the public option value.
+  liftTermElabM <| withTheReader Core.Context (fun ctx =>
+      { ctx with maxHeartbeats :=
+          if ctx.maxHeartbeats == 0 then 0 else max ctx.maxHeartbeats 4000000000 }) <|
+      Meta.forallTelescope info.type fun params conclusion => do
     let target ← specConclusion conclusion
     unless (match target.getAppFn with | .const name _ => fpProofType name | _ => false) do
       throwError "{name}: expected a floating-point equivalence or derivation"

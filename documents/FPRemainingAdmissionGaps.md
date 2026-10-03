@@ -1,11 +1,11 @@
 # Remaining FP example prerequisites
 
-The migration has 18 real correctness files and 14 FP equivalence files.
+The migration has 18 real correctness files and 16 FP equivalence files.
 The current main and supplemental reports select numerical assumptions using
 a local-ULP mean-bias budget and a peak absolute-error ratio gate.
 The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
 binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
-instances. Four other algorithmic transformations remain incomplete.
+instances. Two other algorithmic transformations remain incomplete.
 
 ## Current primitive experiment results
 
@@ -31,14 +31,17 @@ The successor probe draws uniform int32 counts in `[0, 2^24)`, converting them
 inside the kernel. A separate exhaustive GPU check also verifies every one of
 those 16,777,216 integers exactly. The out-of-range `i=16,777,217` counterexample
 is preserved: reference 16,777,218 versus candidate 16,777,216. Thus a Welford
-binding must retain `N <= 2^24`; the current symbolic-N CountConversion premise
-is not automatically discharged. COUNT-ZERO is constant; its repeated
+binding retains `N <= 2^24`; `Float/CountConversion.conversion` now derives
+the symbolic-N conversion premise within that bound. COUNT-ZERO is constant; its repeated
 execution adds no stochastic coverage. Both count U values use empirical-max
 fallback with zero reference and candidate errors.
 
-The integer experiment is numerical evidence, not a newly bound Lean rule.
-The generic scalar exporter rejects count rules until an integer-range-aware
-binding is provided. See the [current report](../experiments/floating_point/primitives/report/summary.md)
+The integer experiment is numerical evidence. `scripts/export_count_rules.py`
+now exports the two accepted rows with their integer bound. The successor atom
+encodes its guard in scalar syntax: outside the admitted range both fragments
+return the same zero. Extracting the actual conversion equality requires
+`i < upperExclusive`. The generic scalar exporter still rejects these rules,
+so they cannot be accidentally imported without this integer-range-aware binding. See the [current report](../experiments/floating_point/primitives/report/summary.md)
 and [reproduction instructions](../experiments/floating_point/primitives/README.md).
 
 ### Already attempted, but not admitted
@@ -97,8 +100,8 @@ formats. It supplies no fp64 instance.
 | `SoftmaxStable` | fp32 libdevice EXP-SUB is admitted and bound together with the scalar arithmetic rules. | `SoftmaxStableFPEquiv.softmax_stable_equiv` completes the guarded, scheduled equivalence; max, bf16 stores, output frames and symbolic positive row length are retained. |
 | `StableLogSumExp` | libdevice EXP-SUB is bound; uncast fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need matching admission. The existing LOG-EXP report used tl.exp. | Both libdevice source variants are connected under the two remaining log obligations. Rerun LOG-MUL with domain filtering and test the new log/libdevice-exp pair. |
 | `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | Both libdevice executions and their normalized-value comparison now use admitted scalar atoms; the online source still has no output store, so the public observation scope remains to be selected. |
-| `Welford` | PR #12 accepts COUNT-ZERO and COUNT-SUCCESSOR for integer `0 <= i < 2^24`; the bounded Lean binding remains pending. | Retain `N <= 2^24` when binding the accepted count relations to the existing scheduled contract. |
-| `FusedLayerNorm` | The same accepted, bounded count relations as Welford still need a Lean binding. | Reuse the bounded Welford statistics in the existing affine-suffix derivation; empty rows need no numerical law. |
+| `Welford` | Both count atoms are admitted and bound for integer `0 <= i < 2^24`. | `WelfordFPEquiv.welford_equiv` closes the original comparison for `0 < N <= 2^24`, retaining both bf16 outputs and frames. |
+| `FusedLayerNorm` | The same two count atoms are admitted and bound. | `FusedLayerNormFPEquiv.layernorm_equiv` closes the original comparison for `N <= 2^24`; empty output rows remain covered. |
 
 This table lists prerequisites, not newly available assumptions. It does not
 assert that any proposed numerical experiment will pass.
@@ -145,7 +148,7 @@ failure, in-place execution, contract satisfiability and the nonzero boundary.
 Its rational fixtures are logical checks, not experimental evidence. An opaque
 whole-kernel premise prints `unresolved FP proof`; it cannot be reported as
 having no atomic assumptions. `SoftmaxStableFPEquiv.softmax_stable_equiv`
-closes this case with admitted arithmetic and EXP-SUB atoms; the FP count is 14.
+closes this case with admitted arithmetic and EXP-SUB atoms; the FP count is 16.
 
 ### Original stable logsumexp connection
 
@@ -170,7 +173,7 @@ The regression shows that EXP-SUB and LOG-MUL can hold with the domain while
 the original stored outputs still differ without LOG-EXP. It also checks why
 an equality after a noninjective bf16 cast cannot replace an uncast equality
 inside the final addition. These are logical fixtures, not GPU results.
-The assumption printer recognizes libdevice exp, pending log and count-conversion
+The assumption printer recognizes libdevice exp, pending log and generic count-conversion
 records, including their projected fields, and reports external premises as
 `unresolved FP proof`. Reconstructing a record does not hide its provenance.
 
@@ -236,7 +239,7 @@ The public specification choice is pending: retain the existing Correct
 example's batch-output/online-formula scope, or explicitly add an online output
 stage and compare complete kernels. No output stage has been added. The
 libdevice exp-sub admission is connected; only this public-scope choice remains
-for the online example. The completed FP count is 14.
+for the online example. The completed FP count is 16.
 
 ### Welford mean step and integer conversion
 
@@ -292,7 +295,7 @@ sums. The fixture also audits these new derivations for unexpected axioms.
 These are local identities and reduction lemmas, not a completed Welford FP
 equivalence. The full recurrence and reduction-schedule comparisons are
 connected below under explicit count-conversion obligations. The accepted
-bounded count relations still need a Lean binding; the completed example count is 14.
+bounded count relations are now bound by `Float/CountConversion`; the completed example count is 16.
 
 ### Centered sums and vanishing variance cross terms
 
@@ -314,8 +317,8 @@ identity. They do not replace the original kernel's `fromNat(N)` denominator
 with the tree count. The arithmetic fixture checks this distinction in its
 existing conversion countermodel: a singleton tree padded by two zeros still
 counts as one, while `fromNat(1)` is two. It also checks that the nonzero-count
-guard rejects an empty tree. Connecting these row identities to the original
-recurrence still requires the conversion binding and global invariant proof.
+guard rejects an empty tree. The connection below supplies the bounded
+conversion binding and global invariant proof for the original recurrence.
 
 ### Appending a sample to the row statistics
 
@@ -395,7 +398,8 @@ variance equal the statistics of an explicit prefix tree, with the original
 empty padding tree retained. A corresponding `ReductionPlan` proves that each
 input occurs exactly once and that padding is preserved.
 
-`CountConversion` records exactly two primitive obligations not yet bound to the accepted bounded count report:
+`WelfordInduction.CountConversion` records the two primitive obligations now derived
+by `Float/CountConversion.conversion` under the admitted row-length bound:
 `fromNat(0) = literal(0)` and, for every `i < N`,
 `fromNat(i + 1) = fromNat(i) + literal(1)`. From these, `converted_count`
 derives the equality with the prefix tree's sum of ones. There is no supplied
@@ -460,9 +464,10 @@ input lanes, and confirms that explicit fp64 reductions remain opaque. The
 ordinary rational fixture satisfies the schedule conditions for arbitrary
 valid plans, so these predicates are not vacuous.
 
-The comparison remains conditional rather than a completed public FP example.
-The accepted count relations still need a range-aware Lean binding. The scheduled public IO contract
-below now binds the execution model and all loop/rewrite domains. The original
+This support comparison keeps its count premises explicit. The completed
+Welford and LayerNorm specifications discharge them through the range-aware
+count binding. The scheduled public IO contract below binds the execution
+model and all loop/rewrite domains. The original
 guarded IO relation continues to run an arbitrary opaque algebra directly; it
 does not silently identify its `reduceSum` field with an addition tree.
 
@@ -492,8 +497,11 @@ two-pass IO objects independently of the real-correctness file. It keeps row
 length and stride symbolic and uses the fp32 scheduled profile. The theorem
 `original_runs_under_count` connects the syntactic domain to the original
 execution comparison, including both bf16 outputs and both memory frames.
-`CountConversion` is still an explicit premise, outside the domain syntax;
-there is no completed Welford FP specification or new admitted atom.
+`CountConversion` remains an explicit premise of this reusable support theorem,
+outside the domain syntax. `WelfordFPEquiv.welford_equiv` discharges it using
+the accepted count atoms with `0 < N <= 2^24`. The positive-length condition
+excludes the empty mean's division by zero; the Correct theorem retains its
+separate total-real interpretation.
 
 The fixtures check that the reified contract is satisfiable in the ordinary
 rational model for arbitrary batch schedules, rejects a later inadmissible
@@ -530,10 +538,11 @@ unrounded statistics from the scalar theory, then applies congruence through
 the common affine suffix. Gamma, beta and epsilon need no additional domain
 restriction because this suffix is unchanged.
 
-The comparison is conditional on the existing primitive `CountConversion`
-obligations; no LayerNorm, sqrt, affine, or whole-reduction identity is admitted.
-There is still no completed general LayerNorm FP headline, and the completed
-FP example count is 14. Source-identity checks, independence from Correct,
+The support comparison takes the generic primitive `CountConversion`
+obligations. `FusedLayerNormFPEquiv.layernorm_equiv` now discharges them from
+the two accepted count atoms for `N <= 2^24`, including the empty output case.
+No LayerNorm, sqrt, affine, or whole-reduction identity is admitted. The
+completed FP example count is 16. Source-identity checks, independence from Correct,
 layout/profile/domain signature counterexamples, memory-frame checks, and
 opaque-premise assumption-printer checks cover this connection.
 

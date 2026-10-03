@@ -1,6 +1,7 @@
 /- Scheduled public IO objects for the original Welford pair. Their domain
 is computed syntax containing only value checks. The run comparison remains
-conditional on the two unadmitted scalar count-conversion relations. -/
+conditional on scalar count conversion; WelfordFPEquiv discharges those
+premises from the accepted bounded atoms. -/
 import bench.examples.support.WelfordComparison
 import VeriTile.Triton.Float.WelfordConditions
 import VeriTile.Triton.Float.ScheduledIO
@@ -54,7 +55,7 @@ theorem same_signature (x mean variance : RegionName) (N stride : Nat) (empty : 
 
 /-- Both original runs, both typed output cells, and both memory frames under
 the syntactic contract. This is a support theorem, not a completed `≡[R]`
-specification: CountConversion is still an explicit unadmitted obligation. -/
+specification: CountConversion is supplied by the admitted public theorem within its bound. -/
 theorem original_runs_under_count {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
     (x mean variance : RegionName) (N stride : Nat) (hN : 0 < N) (hdistinct : mean ≠ variance)

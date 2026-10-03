@@ -1,6 +1,6 @@
 /- FP execution of the original Welford sources, before the numerical
 comparison with the two-pass kernel. Operations, count conversion and output
-casts remain opaque. This file does not assert the pending FP equivalence. -/
+casts remain opaque. The admitted FP headline is defined independently in WelfordFPEquiv. -/
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.Control
 import VeriTile.Triton.Float.ExecutionProfile
@@ -132,7 +132,7 @@ theorem fp32_recurrence_prefix {α : Type} (M : Algebra α) (xs : Nat → α)
     rfl
 
 /-- All original loop iterations now inherit the scalar-derived statistics
-invariant. The two primitive count laws are explicit unadmitted premises;
+invariant. The two primitive count laws are explicit premises, supplied by Float/CountConversion within its bound;
 no whole-row or whole-kernel equality is supplied as an assumption. -/
 theorem fp32_recurrence_statistics {α : Type} [Inhabited α]
     (R : FP.ScalarArithmetic.Rules) (M : Algebra α) (D : FP.Guarded.Domain α)

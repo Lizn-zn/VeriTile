@@ -1,6 +1,6 @@
 /- Conditional comparison of the two original Welford kernels under explicit
-fp32 reduction schedules. Count conversion still requires two unadmitted
-primitive laws, so this file deliberately supplies no completed FP spec. -/
+fp32 reduction schedules. The scalar count-conversion premises remain explicit here;
+WelfordFPEquiv supplies them from the admitted bounded count atoms. -/
 import bench.examples.support.WelfordExecution
 import VeriTile.Triton.Float.WelfordSchedule
 

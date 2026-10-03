@@ -1,5 +1,5 @@
 /- Induction for the original Welford arithmetic recurrence. The conversion
-of the natural loop index remains explicit, with its two missing scalar laws
+of the natural loop index remains explicit, with its two scalar conversion laws
 named as premises. No count law, reduction identity or kernel equivalence is
 admitted by this module. -/
 import VeriTile.Triton.Float.WelfordInit
@@ -45,8 +45,8 @@ def state {α : Type} (M : Algebra α) (xs : Nat → α) : Nat → α × α
   | n + 1 => update M n (xs n) (state M xs n)
 
 /-- Primitive conversion obligations, bounded by the actual row length.
-Neither field is in the current admission table. This record has no default
-instance and is not an experimental certificate or a whole-row equality. -/
+Float/CountConversion derives this record from the accepted bounded atoms.
+It has no default instance and is not a whole-row equality. -/
 structure CountConversion {α : Type} (M : Algebra α) (N : Nat) : Prop where
   zero : M.fromNat (some .fp32) 0 = ScalarArithmetic.zero M
   successor : ∀ i, i < N → M.fromNat (some .fp32) (i + 1) =
@@ -88,7 +88,7 @@ theorem converted_count (empty : ReductionTree 0) (N : Nat)
 
 /-- Both statistics of the converted-index recurrence equal those of the
 explicit prefix tree. Every iteration is covered. This is conditional on the
-two unadmitted conversion laws; it is not a completed kernel specification. -/
+two primitive conversion laws; it is not a completed kernel specification. -/
 theorem state_statistics (xs : Nat → α) (empty : ReductionTree 0) (N : Nat)
     (hN : 0 < N) (hc : CountConversion M N) (hd : IterationDomain M D xs empty N) :
     state M xs N = statistics M (rowPrefix xs N) (tree empty N) := by

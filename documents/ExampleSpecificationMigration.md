@@ -8,7 +8,8 @@ The correctness statement is `Spec.Real (io ⊨ mathematical_formula)`.
 The FP statement is `originalKernel … ≡[R] optimizedKernel …` (or the corresponding
 IO contracts for transformations with private scratch), with
 `#print_fp_assumptions` listing the numerical atoms used by its proof. FP files
-define their own kernels and never import their correctness counterpart.
+define their own kernels, sometimes in independent FP support modules, and
+never import their correctness counterpart.
 
 Experimental shape and distribution select assumptions. They are not extra
 shape conditions on the subsequent Lean derivation. Kernel dimensions remain
@@ -38,12 +39,12 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmaxFPEquiv` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
-| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: scalar loop/reduction derivation and scheduled IO/domain contract connected; the accepted PR #12 count relations still need a binding retaining `N <= 2^24` |
-| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: original executions, unrounded-statistics replacement, affine suffix and scheduled IO/domain contract connected; the same bounded count relations still need a Lean binding |
+| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | `WelfordFPEquiv` — checked under scalar arithmetic and the two bounded count atoms, for `0 < N <= 2^24`; both original bf16 outputs and memory frames retained |
+| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | `FusedLayerNormFPEquiv` — checked for `N <= 2^24`, including empty output rows; original statistics, affine suffix, bf16 stores and frames retained |
 
-There are currently 18 correctness modules and 14 FP equivalence modules. The
-eight legacy equivalence modules remain as source references; three of their
-original transformations still await FP migration. Their presence does not
+There are currently 18 correctness modules and 16 FP equivalence modules. The
+eight legacy equivalence modules remain as source references; one of their
+original transformations still awaits FP migration. Their presence does not
 complete the pending FP entries above.
 
 The SiLU and SwiGLU materialized kernels retain the original `ComputeKernel.seq`
@@ -51,7 +52,8 @@ scope: one concatenation of stage bodies. Both real and FP specifications explic
 declare scratch windows and prove that every cell outside output and scratch
 windows is preserved. They do not claim a new separate-launch theorem.
 
-Welford and LayerNorm retain symbolic row length and stride. These are
+Welford and LayerNorm retain symbolic row length and stride. The FP count rules additionally require `N <= 2^24`;
+Welford requires a nonempty row because its empty mean divides by zero. These are
 per-program specifications: the original Welford sources write each scalar
 output at offset zero, so this does not assert a race-free multi-program
 Welford launch. Both proofs also cover zero-length rows under Lean's total
@@ -62,10 +64,10 @@ declared scratch windows.
 
 ## Admission and proof boundaries
 
-The current main and supplemental reports define the accepted precision
+The main, supplemental and bounded-count reports define the accepted precision
 instances. They use a local-ULP mean-bias budget (`tau=0.05`, five SEs) and the
 peak absolute-error ratio gate; z is diagnostic. Counts are computed from current
-reports, and only dual-PASS rows enter the generated Lean tables. Neither table
+reports, and only dual-PASS rows enter the generated Lean tables. No table
 contains a whole softmax, logsumexp, normalization, reduction or recurrence atom.
 
 The supplemental EXP-SUB implementation uses libdevice.exp. Its bf16,
@@ -95,7 +97,7 @@ loads, which these examples do not use. This is not a complete IEEE evaluator.
 
 [The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
 main-table algebraic countermodels from the supplemental rule set. Stable
-logsumexp, online softmax, Welford and LayerNorm remain pending.
+logsumexp and online softmax remain pending.
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently
@@ -159,9 +161,10 @@ replays the GPU report nor claims an IEEE or whole-kernel statistical guarantee.
 Unsupported syntax still fails explicitly. Counted loops and conditionals
 now have execution lemmas. Welford also has scalar-derived loop and schedule
 comparisons plus a scheduled IO contract with syntactic domain checks; its two
-integer-count conversion atoms now have PR #12 results but need a bounded Lean binding. LayerNorm reuses the
-unrounded statistics through its unchanged affine suffix and has a scheduled
-three-input contract with the same admission gap. Real ring identities
+integer-count conversion atoms are bound to the accepted PR #12 report. The
+public Welford FP theorem retains `0 < N <= 2^24`. LayerNorm reuses the
+unrounded statistics through its unchanged affine suffix and completes its
+three-input FP contract for `N <= 2^24`, including empty output rows. Real ring identities
 cannot be installed as structural FP rules.
 
 Stable softmax has independent libdevice source definitions and a scheduled
@@ -190,6 +193,15 @@ bf16 memory cell a real memory cell. This distinction matters for the
 
 The checks cover:
 
+- The bounded-count update passes `lake build VeriTile TritonBenchSpecExamples`
+  and 28 regression tests. It checks the two public FP specifications, their
+  13 printed scalar atoms, source independence, the last admitted successor,
+  a failing out-of-range conversion, and the common guarded result outside
+  that range. Report-import tests reject incompatible scopes, precisions,
+  incomplete/rejected results and contradictory metadata. LayerNorm's empty
+  output and the admitted upper row-length boundary are exercised explicitly.
+  Independent comparator replay accepts all 58 theorem targets in the count
+  admission/binding, both new FP files, their boundary fixture and StatementAudit.
 - The libdevice update passes `lake build VeriTile TritonBenchSpecExamples`
   and 26 related regression tests. The new fixture distinguishes the two
   exp symbols through nested syntax and fp32 annotations, gives them the

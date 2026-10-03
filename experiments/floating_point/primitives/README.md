@@ -25,9 +25,20 @@ N <= 2^24. Both count probes have zero observed error, z=B=U=0; their U
 uses empirical-max fallback rather than a fitted tail bound.
 
 All three gate runs use shape 4096x4096, R=4096, tau=0.05 local ULP, five
-standard errors, and magnitude thresholds 10/100. The reports do not change
-the completed Lean-example count. Count evidence still needs a binding that
-retains the integer range; the generic scalar exporter rejects it.
+standard errors, and magnitude thresholds 10/100. The accepted count rows
+are now bound by `Float/CountConversion`: the successor fragment returns the
+same zero on both sides outside the admitted integer range. Extracting the
+conversion law requires `i < upperExclusive`, so Welford and LayerNorm retain
+`N <= 2^24`. Welford's FP contract also requires a nonempty row; LayerNorm
+covers empty output rows. No whole-recurrence atom is introduced.
+
+The dedicated exporter preserves this range and validates the report metadata;
+the generic scalar exporter still rejects count rules:
+
+```bash
+python3 scripts/export_count_rules.py --trust-report --check
+python3 -m unittest scripts.test_count_admission scripts.test_fp_counts -v
+```
 
 ## Reproduce
 
