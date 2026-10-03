@@ -39,7 +39,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
 | Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: scalar loop/reduction derivation and scheduled IO/domain contract connected; the two integer-count conversion relations still need admission |
-| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: missing scalar relations for statistics, then loop/reduction derivation |
+| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: original executions, unrounded-statistics replacement, affine suffix and scheduled IO/domain contract connected; the same two integer-count conversion relations still need admission |
 
 There are currently 18 correctness modules and 13 FP equivalence modules. The
 eight legacy equivalence modules remain as source references; four of their
@@ -157,7 +157,9 @@ replays the GPU report nor claims an IEEE or whole-kernel statistical guarantee.
 Unsupported syntax still fails explicitly. Counted loops and conditionals
 now have execution lemmas. Welford also has scalar-derived loop and schedule
 comparisons plus a scheduled IO contract with syntactic domain checks; its two
-integer-count conversion atoms still need admission. Real ring identities
+integer-count conversion atoms still need admission. LayerNorm reuses the
+unrounded statistics through its unchanged affine suffix and has a scheduled
+three-input contract with the same admission gap. Real ring identities
 cannot be installed as structural FP rules.
 
 Legacy `KernelIO.Equiv` proofs quantify over a boundary-rounding model. They

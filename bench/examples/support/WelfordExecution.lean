@@ -168,6 +168,22 @@ private theorem iteration {α : Type} [Inhabited α] (M : Algebra α)
 
 /-- The original loop successfully computes its exact opaque recurrence. No
 law about arithmetic, count conversion or finite values is needed to execute. -/
+theorem loop_run_with_pid {α : Type} [Inhabited α] (M : Algebra α)
+    (xReg : RegionName) (stride : Nat) (xs : Fin N → α) (origin : State α)
+    (hx : ∀ i : Fin N, (origin.mem xReg (origin.pids 0 * stride + i.val)).read .real = xs i) :
+    ∃ t, run M (initialCode ++ [.forLoop "i" N (body xReg stride)]) origin = some t ∧
+      t.regs .real [] "M" = some (fun _ => (recurrence M xs N).1) ∧
+      t.regs .real [] "S" = some (fun _ => (recurrence M xs N).2) ∧
+      t.regs .nat [] "pid" = some (fun _ => origin.pids 0) ∧
+      t.mem = origin.mem ∧ t.pids = origin.pids := by
+  let s := ((origin.setReg "pid" .nat [] (fun _ => origin.pids 0)).setReg "M" .real []
+    (fun _ => M.literal none .real 0)).setReg "S" .real [] (fun _ => M.literal none .real 0)
+  have hs : Invariant M xs origin 0 s := by simp [Invariant, recurrence, s, State.setReg]
+  obtain ⟨t, ht, hm, hv, hpid, hmem, hpids⟩ := forLoop_invariant M hs (iteration M xReg stride xs origin hx)
+  refine ⟨t, ?_, hm, hv, hpid, hmem, hpids⟩
+  rw [run_append]
+  simpa [initialCode, run, step, evalExpr, evalOp_unfold, s] using ht
+
 theorem loop_run {α : Type} [Inhabited α] (M : Algebra α)
     (xReg : RegionName) (stride : Nat) (xs : Fin N → α) (origin : State α)
     (hx : ∀ i : Fin N, (origin.mem xReg (origin.pids 0 * stride + i.val)).read .real = xs i) :
@@ -175,13 +191,8 @@ theorem loop_run {α : Type} [Inhabited α] (M : Algebra α)
       t.regs .real [] "M" = some (fun _ => (recurrence M xs N).1) ∧
       t.regs .real [] "S" = some (fun _ => (recurrence M xs N).2) ∧
       t.mem = origin.mem ∧ t.pids = origin.pids := by
-  let s := ((origin.setReg "pid" .nat [] (fun _ => origin.pids 0)).setReg "M" .real []
-    (fun _ => M.literal none .real 0)).setReg "S" .real [] (fun _ => M.literal none .real 0)
-  have hs : Invariant M xs origin 0 s := by simp [Invariant, recurrence, s, State.setReg]
-  obtain ⟨t, ht, hm, hv, _, hmem, hpids⟩ := forLoop_invariant M hs (iteration M xReg stride xs origin hx)
-  refine ⟨t, ?_, hm, hv, hmem, hpids⟩
-  rw [run_append]
-  simpa [initialCode, run, step, evalExpr, evalOp_unfold, s] using ht
+  obtain ⟨t, ht, hm, hv, _, hmem, hpids⟩ := loop_run_with_pid M xReg stride xs origin hx
+  exact ⟨t, ht, hm, hv, hmem, hpids⟩
 
 def meanValue {α : Type} (M : Algebra α) (xs : Fin N → α) : α :=
   M.cast none .real .bf16 (recurrence M xs N).1

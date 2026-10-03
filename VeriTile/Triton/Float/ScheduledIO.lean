@@ -54,4 +54,38 @@ instance : Spec.ProgramSyntax IO₁ₓ₂ where
   numerical := Equivalent₁ₓ₂
   sameContext := fun lhs rhs => lhs = rhs
 
+/-- Three input rows and one output, including LayerNorm's x/gamma/beta
+layout. The execution profile and domain syntax use the same public notation. -/
+structure IO₃ where
+  io : KernelIO₃
+  profile : Profile
+  domain : Schedules → GuardExpression.Condition
+
+def Equivalent₃ (R : Spec.Assumptions GuardedFragment) (lhs rhs : IO₃) : Prop :=
+  PrivateScratch lhs.io ∧ PrivateScratch rhs.io ∧
+  ∀ (α : Type) [Inhabited α] (M : Algebra α) (D : Domain α), Models R M D →
+    ∀ (plans : Schedules) (s : State α), (lhs.domain plans).Holds M D s →
+      ∃ a b, Structural.exec (lhs.profile.algebra M plans) lhs.io.kernel s = some a ∧
+        Structural.exec (rhs.profile.algebra M plans) rhs.io.kernel s = some b ∧
+        (∀ i : Fin lhs.io.Bout,
+          a.mem lhs.io.out (lhs.io.write (s.pids 0) + i.val) =
+            b.mem rhs.io.out (rhs.io.write (s.pids 0) + i.val)) ∧
+        Frame lhs.io s a ∧ Frame rhs.io s b
+
+theorem Equivalent₃.ofStructural (R : Spec.Assumptions GuardedFragment) {lhs rhs : IO₃}
+    (hp : lhs.profile = rhs.profile) (h : Structural.IO₃Equiv lhs.io rhs.io) :
+    Equivalent₃ R lhs rhs := by
+  refine ⟨h.1, h.2.1, ?_⟩
+  intro α _ M _ _ plans s _
+  simpa only [← hp] using h.2.2 α (lhs.profile.algebra M plans) s
+
+instance : Spec.ProgramSyntax IO₃ where
+  Statement := GuardedFragment
+  Signature := IO₃Signature × Profile × (Schedules → GuardExpression.Condition)
+  signature p := (ioSignature p.io, p.profile, p.domain)
+  body p := [⟨[], p.io.kernel.surfaceBody⟩]
+  structural := some (fun _ _ => False)
+  numerical := Equivalent₃
+  sameContext := fun lhs rhs => lhs = rhs
+
 end VeriTile.Triton.FP.Scheduled

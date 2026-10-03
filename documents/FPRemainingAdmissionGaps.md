@@ -5,7 +5,7 @@ The current main and supplemental reports select numerical assumptions using
 a local-ULP mean-bias budget and a peak absolute-error ratio gate.
 The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
 binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
-instances. Five other algorithmic transformations still need derivations.
+instances. Five other algorithmic transformations remain incomplete.
 
 ## Checked algebraic evidence
 
@@ -43,7 +43,7 @@ formats. It supplies no fp64 instance.
 | `StableLogSumExp` | The fp32 libdevice EXP-SUB instance is admitted; select a compatible accepted LOG-EXP precision instance. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
 | `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Relate the now-proved opaque loop recurrence to the batch expression using scalar atoms. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
 | `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | Both original kernels are compared under arbitrary valid fp32 schedules; the public IO objects now bind the execution profile and syntactic iteration/rewrite domains. Count admission still blocks the completed specification. |
-| `FusedLayerNorm` | The Welford prerequisites at the actual arithmetic precision. | Derive the statistics replacement and preserve the common normalization, affine operations and bf16 output conversion. |
+| `FusedLayerNorm` | The same two integer-count conversion laws as Welford remain unadmitted. | Both original implementations are compared using the unrounded Welford statistics, the unchanged affine suffix and the scheduled three-input contract. Empty rows need no numerical law. |
 
 This table lists prerequisites, not newly available assumptions. It does not
 assert that any proposed numerical experiment will pass.
@@ -363,6 +363,41 @@ operands. Signature checks reject profile or domain changes. The assumption
 printer reports an opaque scheduled-equivalence premise as unresolved, while
 a structural store-reordering proof still prints `none`.
 
+### LayerNorm execution and unrounded statistics
+
+`WelfordComparison.original_statistics` exposes the mean and normalized
+variance before their bf16 stores. Equality only after a noninjective output
+cast would not justify substituting those statistics into another expression.
+The LayerNorm fixture demonstrates this with an opaque cast that equates two
+means while their final affine outputs differ; it is a logical countermodel,
+not an IEEE claim or an experiment.
+
+`bench/examples/support/LayerNormExecution` independently copies both original
+Triton sources. The fused version uses the same Welford loop proof, retaining
+its pid register and unchanged input memory for the second x read. Both
+execution lemmas preserve symbolic row length, stride and epsilon, the original
+sqrt/reciprocal and affine operation order, feature-offset gamma/beta loads,
+and the final bf16 cast. They establish every output cell and the frame of all
+other cells, including in-place output. The explicit three-input IO declaration
+lists x/gamma/beta once each; the DSL's occurrence-based input metadata otherwise
+lists x twice in the fused source. The original statement bodies are identical.
+
+`Float/ScheduledIO.IO₃` retains all three input layouts, the output layout,
+execution profile and domain syntax in its signature and uses the existing
+`≡[R]` notation. `LayerNormContract` supplies both original IO objects. Empty
+rows have a structural execution comparison with no domain checks or numerical
+laws. For nonempty rows, `original_runs_under_count` derives equality of the
+unrounded statistics from the scalar theory, then applies congruence through
+the common affine suffix. Gamma, beta and epsilon need no additional domain
+restriction because this suffix is unchanged.
+
+The comparison is conditional on the existing primitive `CountConversion`
+obligations; no LayerNorm, sqrt, affine, or whole-reduction identity is admitted.
+There is still no completed general LayerNorm FP headline, and the completed
+FP example count remains 13. Source-identity checks, independence from Correct,
+layout/profile/domain signature counterexamples, memory-frame checks, and
+opaque-premise assumption-printer checks cover this connection.
+
 ## Constraints on the supplemental atom set
 
 Further atom sets need a derivation-level dependency check before a GPU run.
@@ -408,7 +443,7 @@ python3 scripts/export_numerical_rules.py --trust-report --check
 python3 scripts/export_supplemental_rules.py --trust-report --check
 python3 -m unittest scripts.test_export_supplemental_rules scripts.test_fp_supplemental
 python3 -m unittest scripts.test_fp_scalar_arithmetic
-python3 -m unittest scripts.test_fp_control scripts.test_fp_dual_output
+python3 -m unittest scripts.test_fp_control scripts.test_fp_dual_output scripts.test_fp_layernorm
 lake build TritonBenchSpecExamples
 ```
 
