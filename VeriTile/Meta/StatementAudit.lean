@@ -245,6 +245,10 @@ private def fpProofType (name : Name) : Bool :=
     `VeriTile.Triton.FP.Scheduled.Equivalent₁ₓ₂,
     `VeriTile.Triton.FP.Scheduled.Equivalent₃,
     `VeriTile.Triton.FP.Scheduled.Equivalent₁,
+    `VeriTile.Triton.FP.SoftmaxShift.IntrinsicExpSub,
+    `VeriTile.Triton.FP.LogSumExpShift.IntrinsicLogMul,
+    `VeriTile.Triton.FP.LogSumExpShift.IntrinsicLogExp,
+    `VeriTile.Triton.FP.WelfordInduction.CountConversion,
     `VeriTile.Triton.FP.Structural.CellRelated,
     `VeriTile.Triton.FP.Structural.ValueRelated].contains name
 
@@ -504,7 +508,13 @@ private partial def visitFPAssumptions (proof : Expr) :
     let rec projectionRoot : Expr → Expr
       | .proj _ _ base => projectionRoot base.getAppFn
       | head => head
-    if opaqueHead && !(← get).internalProofVars.contains (projectionRoot proof.getAppFn) then
+    let root := projectionRoot proof.getAppFn
+    if let .proj _ _ base := proof.getAppFn then
+      -- A primitive-law record can be consumed only through a projected
+      -- equality. Inspect its record premise as well as the equality's type,
+      -- which by itself no longer identifies the pending numerical law.
+      visitFPAssumptions base
+    if opaqueHead && !(← get).internalProofVars.contains root then
       let type ← specConclusion (← Meta.inferType proof)
       if (match type.getAppFn with | .const name _ => fpProofType name | _ => false) then
         modify fun s => { s with unresolved := true }

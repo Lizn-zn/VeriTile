@@ -40,7 +40,7 @@ formats. It supplies no fp64 instance.
 |---|---|---|
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
 | `SoftmaxStable` | EXP-SUB is admitted for libdevice.exp; the original tl.exp primitive still needs matching admission. | The scalar-derived normalization, original executions and scheduled IO/domain contract are connected conditionally on that primitive. Max, exp and the bf16 stores are retained. |
-| `StableLogSumExp` | The fp32 libdevice EXP-SUB instance is admitted; select a compatible accepted LOG-EXP precision instance. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
+| `StableLogSumExp` | The original tl.exp EXP-SUB, uncast fp32 LOG-EXP and LOG-MUL obligations remain unadmitted. The available LOG-EXP row has bf16 input/output; LOG-MUL has domain events under the configured distribution. | Scalar sum recovery, the original executions and the scheduled IO/domain contract are connected conditionally on those three primitive relations. |
 | `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Relate the now-proved opaque loop recurrence to the batch expression using scalar atoms. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
 | `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | Both original kernels are compared under arbitrary valid fp32 schedules; the public IO objects now bind the execution profile and syntactic iteration/rewrite domains. Count admission still blocks the completed specification. |
 | `FusedLayerNorm` | The same two integer-count conversion laws as Welford remain unadmitted. | Both original implementations are compared using the unrounded Welford statistics, the unchanged affine suffix and the scheduled three-input contract. Empty rows need no numerical law. |
@@ -92,6 +92,31 @@ Its rational fixtures are logical checks, not experimental evidence. An opaque
 whole-kernel premise prints `unresolved FP proof`; it cannot be reported as
 having no atomic assumptions. This connection leaves the completed FP count at
 13 until matching intrinsic admission is available.
+
+### Original stable logsumexp connection
+
+`Float/LogSumExpShift.recover_sum` factors the shifted exponential row through
+its explicit addition tree and cancels the common reciprocal using accepted
+scalar arithmetic. `shifted_result` then applies only the pending intrinsic
+EXP-SUB, LOG-MUL and LOG-EXP obligations. Each is a scalar equation with the
+experiment's operand-domain shape; none is a reduction or logsumexp identity.
+The checked domain includes actual partial sums, reciprocal intermediates and
+positive log-product operands, and contains no equality premise.
+
+`support/StableLogSumExpExecution` preserves both original sources, including
+their single bf16 output at `pid`, symbolic positive row length and unchanged
+memory outside that one cell. `StableLogSumExpContract` connects the scalar
+derivation to both successful executions under the scheduled fp32 profile.
+In-place output is allowed. The original max and final bf16 conversion remain
+opaque. This is a conditional connection, not a completed admitted FP example.
+
+The regression shows that EXP-SUB and LOG-MUL can hold with the domain while
+the original stored outputs still differ without LOG-EXP. It also checks why
+an equality after a noninjective bf16 cast cannot replace an uncast equality
+inside the final addition. These are logical fixtures, not GPU results.
+The assumption printer now recognizes all pending exp/log and count-conversion
+records, including their projected fields, and reports external premises as
+`unresolved FP proof`. Reconstructing a record does not hide its provenance.
 
 ### Implemented loop execution
 
@@ -468,6 +493,7 @@ python3 -m unittest scripts.test_export_supplemental_rules scripts.test_fp_suppl
 python3 -m unittest scripts.test_fp_scalar_arithmetic
 python3 -m unittest scripts.test_fp_control scripts.test_fp_dual_output scripts.test_fp_layernorm
 python3 -m unittest scripts.test_fp_softmax_stable
+python3 -m unittest scripts.test_fp_logsumexp
 lake build TritonBenchSpecExamples
 ```
 

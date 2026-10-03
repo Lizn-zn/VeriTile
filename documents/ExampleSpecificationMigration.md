@@ -33,7 +33,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | mHC width | `HyperConnectionsWidthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidthFPEquiv` — checked in the same scope; two multiplication commutations |
 | Adam-named Lion update | `AdamUpdateGridLaunchCorrect` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunchFPEquiv` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStableCorrect` — checked for both original kernels against the softmax formula | Naive versus stable: scalar normalization, original executions and scheduled IO/domain contract connected; EXP-SUB still needs admission for the original tl.exp implementation |
-| Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable: missing admitted elementary exp/log laws |
+| Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable: scalar sum recovery, original executions and scheduled IO/domain contract connected; matching intrinsic EXP-SUB, fp32 LOG-EXP and LOG-MUL relations still need admission |
 | Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | `SoftmaxReciprocalFPEquiv` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmaxFPEquiv` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
@@ -168,6 +168,13 @@ from scalar atoms, conditional on a matching EXP-SUB law for `tl.exp`; the
 published libdevice.exp result does not discharge that obligation. Its max
 operation and bf16 output casts remain opaque, and the nonempty-row requirement
 matches the original source. It remains a pending FP entry.
+
+Stable logsumexp retains its original single bf16 store at `pid`. Its scalar
+sum recovery and scheduled execution comparison are connected conditionally
+on matching EXP-SUB, LOG-MUL and LOG-EXP relations. The accepted bf16-output
+LOG-EXP instance cannot supply an uncast fp32 identity inside the final sum.
+Pending exp/log and integer-conversion premises remain visible to the
+assumption printer, even when their equations are used through record fields.
 
 Legacy `KernelIO.Equiv` proofs quantify over a boundary-rounding model. They
 are not proofs under the new two-gates-selected atom calculus and do not count
