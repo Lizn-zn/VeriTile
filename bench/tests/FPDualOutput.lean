@@ -2,6 +2,7 @@
 preserve every other cell. Store reordering needs no numerical assumption. -/
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.GuardedIO
+import VeriTile.Triton.Float.ScheduledIO
 import VeriTile.Meta.StatementAudit
 
 namespace FPDualOutputTests
@@ -69,6 +70,63 @@ specification opaque_guarded_outputs
     guardedForward ≡[guardedRules] guardedReverse :=
   Spec.FloatingPoint.ofNumerical (structural := fun _ _ => False) rfl rfl h
 
+def scheduledForward : FP.Scheduled.IO₁ₓ₂ :=
+  ⟨forwardIO, FP.Scheduled.fp32, fun _ => .top⟩
+def scheduledReverse : FP.Scheduled.IO₁ₓ₂ :=
+  ⟨reverseIO, FP.Scheduled.fp32, fun _ => .top⟩
+
+specification scheduled_reordered_outputs : scheduledForward ≡[guardedRules] scheduledReverse :=
+  Spec.FloatingPoint.ofNumerical (structural := fun _ _ => False) rfl rfl
+    (FP.Scheduled.Equivalent₁ₓ₂.ofStructural guardedRules rfl reordered)
+
+specification opaque_scheduled_outputs
+    (h : FP.Scheduled.Equivalent₁ₓ₂ guardedRules scheduledForward scheduledReverse) :
+    scheduledForward ≡[guardedRules] scheduledReverse :=
+  Spec.FloatingPoint.ofNumerical (structural := fun _ _ => False) rfl rfl h
+
+-- Both parts of the execution profile and the exact condition syntax belong
+-- to the signature; none can silently change inside an equivalence step.
+theorem scheduled_precision_is_observable :
+    Spec.ProgramSyntax.signature scheduledForward ≠ Spec.ProgramSyntax.signature
+      { scheduledForward with profile := ⟨.fp64, Bool.true⟩ } := by
+  intro h
+  have hp := congrArg (fun sig => sig.2.1.defaultPrecision) h
+  cases hp
+
+theorem scheduled_reduction_model_is_observable :
+    Spec.ProgramSyntax.signature scheduledForward ≠ Spec.ProgramSyntax.signature
+      { scheduledForward with profile := ⟨.fp32, Bool.false⟩ } := by
+  intro h
+  have hp := congrArg (fun sig => sig.2.1.fp32SumTrees) h
+  cases hp
+
+theorem scheduled_domain_is_observable :
+    Spec.ProgramSyntax.signature scheduledForward ≠ Spec.ProgramSyntax.signature
+      { scheduledForward with domain := fun _ => .guard .finite (.fromNat (some .fp32) 0) } := by
+  intro h
+  have hp := congrArg (fun sig => sig.2.2 FP.Equational.seededSchedules) h
+  cases hp
+
+example {α : Type} (A : Algebra α) (plans : FP.Equational.Schedules) (a b : α) :
+    (FP.Scheduled.fp32.algebra A plans).binary none .bf16 .add a b =
+      A.binary (some .fp32) .bf16 .add a b := rfl
+
+example {α : Type} (A : Algebra α) (plans : FP.Equational.Schedules) (a b : α) :
+    (FP.Scheduled.fp32.algebra A plans).binary (some .fp64) .real .add a b =
+      A.binary (some .fp64) .real .add a b := rfl
+
+example {α : Type} (A : Algebra α) (plans : FP.Equational.Schedules) (n : Nat) :
+    (FP.Scheduled.fp32.algebra A plans).fromNat none n = A.fromNat (some .fp32) n := rfl
+
+example {α : Type} (A : Algebra α) (plans : FP.Equational.Schedules)
+    (xs : Values α .real [2]) :
+    (FP.Scheduled.fp32.algebra A plans).reduceSum (some .fp64) ⟨0, by simp⟩ Bool.false xs =
+      A.reduceSum (some .fp64) ⟨0, by simp⟩ Bool.false xs := rfl
+
+example {α : Type} (A : Algebra α) (plans : FP.Equational.Schedules) (a : α) :
+    (FP.Scheduled.fp32.algebra A plans).cast none .real .bf16 a =
+      A.cast (some .fp32) .real .bf16 a := rfl
+
 private def M : Algebra Nat where
   literal := fun _ _ _ => 0
   negInf := 0
@@ -88,6 +146,20 @@ private def initial : State Nat where
   pids := fun _ => 0
   numPids := fun _ => 1
   undef := fun d _ _ => defaultValue d
+
+-- Reified domain inputs read the original row and preserve the requested
+-- storage type; a differently typed cell is not an implicit cast.
+example : FP.GuardExpression.MemoryInput.read
+    (initial.write "x" 5 (.mk .bf16 7)) ⟨"x", fun pid => pid * 10 + 5, .bf16⟩ = 7 := by decide
+example : FP.GuardExpression.MemoryInput.read
+    (initial.write "x" 5 (.mk .bf16 7)) ⟨"x", fun pid => pid * 10 + 5, .real⟩ = 0 := by decide
+
+-- Reification retains repeated casts and integer conversion operations.
+example : FP.GuardExpression.Expr.eval M (fun _ : Unit => 4)
+    (.cast (some .fp32) .bf16 .bf16
+      (.cast (some .fp32) .real .bf16 (.input ()))) = 6 := rfl
+example : FP.GuardExpression.Expr.eval M (fun _ : Unit => 4)
+    (.fromNat (some .fp32) 9) = 9 := rfl
 
 private def changedKernel (xReg mReg vReg : RegionName) : ComputeKernel := triton {
   x := tl.load($(xReg))
@@ -201,8 +273,16 @@ theorem syntax_preserves_scratch :
 
 #axiomsClean reordered_outputs
 #axiomsClean guarded_reordered_outputs
+#axiomsClean FP.Scheduled.Equivalent₁ₓ₂.ofStructural
+#axiomsClean scheduled_reordered_outputs
+#axiomsClean scheduled_precision_is_observable
+#axiomsClean scheduled_reduction_model_is_observable
+#axiomsClean scheduled_domain_is_observable
 #print_fp_assumptions reordered_outputs
 #print_fp_assumptions guarded_reordered_outputs
 #print_fp_assumptions opaque_guarded_outputs
+
+#print_fp_assumptions scheduled_reordered_outputs
+#print_fp_assumptions opaque_scheduled_outputs
 
 end FPDualOutputTests

@@ -38,7 +38,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmaxFPEquiv` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
-| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: pending applicable cancellation/count relations and loop/reduction derivation |
+| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: scalar loop/reduction derivation and scheduled IO/domain contract connected; the two integer-count conversion relations still need admission |
 | Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: missing scalar relations for statistics, then loop/reduction derivation |
 
 There are currently 18 correctness modules and 13 FP equivalence modules. The
@@ -154,8 +154,10 @@ notation remains `lhs ≡[R] rhs`. The sum example prints `add_commute`
 and `add_assoc`, each bound to an accepted fp32 instance. This derives a theorem in the selected FP model; it neither
 replays the GPU report nor claims an IEEE or whole-kernel statistical guarantee.
 
-Unsupported syntax still fails explicitly. Further infrastructure is needed
-for loop bodies and additional memory transformations. Real ring identities
+Unsupported syntax still fails explicitly. Counted loops and conditionals
+now have execution lemmas. Welford also has scalar-derived loop and schedule
+comparisons plus a scheduled IO contract with syntactic domain checks; its two
+integer-count conversion atoms still need admission. Real ring identities
 cannot be installed as structural FP rules.
 
 Legacy `KernelIO.Equiv` proofs quantify over a boundary-rounding model. They

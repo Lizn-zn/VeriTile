@@ -10,6 +10,7 @@ import VeriTile.Triton.Float.WelfordInduction
 import VeriTile.Triton.Float.WelfordSchedule
 import VeriTile.Triton.Float.ScalarReduction
 import bench.examples.support.WelfordExecution
+import bench.examples.support.WelfordContract
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
 import Mathlib.Tactic.Ring
@@ -307,6 +308,46 @@ example (N : Nat) :
       ((List.finRange N).map some ++ List.replicate (FP.WelfordInduction.plan emptyPlan N).padding none) := by
   rw [← FP.WelfordInduction.plan_tree emptyPlan N]
   exact (FP.WelfordInduction.plan emptyPlan N).valid
+
+private def pairState : State ℚ where
+  mem := fun _ offset => .mk .real (pairValues offset)
+  regs := fun _ _ _ => none
+  pids := fun _ => 0
+  numPids := fun _ => 1
+  undef := fun d _ _ => defaultValue d
+
+private theorem pair_row (stride : Nat) :
+    WelfordFPContract.rowValues pairState "x" stride = pairValues := by
+  funext i
+  simp [WelfordFPContract.rowValues, pairState]
+
+-- The public syntactic contract is satisfiable for every batch schedule,
+-- including a different padding count from the prefix plan. Its proof uses
+-- the complete semantic domain records through the compiler's iff theorem.
+theorem reified_contract_satisfiable (plans : FP.Equational.Schedules) :
+    (WelfordFPContract.requirements "x" 2 2 emptyPlan plans).Holds
+      ordinaryCountModel domain pairState := by
+  rw [WelfordFPContract.requirements_holds, pair_row]
+  exact ⟨ordinary_iteration_domain, ordinary_schedule_domain _ _ _⟩
+
+private def badRowState : State ℚ :=
+  { pairState with mem := fun _ offset => .mk .real (if offset = 0 then 1 else 100) }
+
+-- The first sample is admissible, but an intermediate loop operand is not.
+-- The reified public contract must reject this even with arbitrary schedules.
+theorem reified_contract_checks_later_samples (plans : FP.Equational.Schedules) :
+    ¬ (WelfordFPContract.requirements "x" 2 2 emptyPlan plans).Holds
+      ordinaryCountModel boundedDomain badRowState := by
+  intro h
+  have hi := ((WelfordFPContract.requirements_holds
+    ordinaryCountModel boundedDomain badRowState "x" 2 2 emptyPlan plans).mp h).1
+  have hx := (hi.steps 1 (by decide) (by decide)).step.input
+  norm_num [boundedDomain, WelfordFPContract.rowValues, badRowState, pairState] at hx
+
+#axiomsClean WelfordFPContract.requirements_holds
+#axiomsClean WelfordFPContract.original_runs_under_count
+#axiomsClean reified_contract_satisfiable
+#axiomsClean reified_contract_checks_later_samples
 
 #axiomsClean FP.Welford.mean_step
 #axiomsClean WelfordFPExecution.fp32_mean_step

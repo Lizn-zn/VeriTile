@@ -42,7 +42,7 @@ formats. It supplies no fp64 instance.
 | `SoftmaxStable` | The fp32 EXP-SUB instance is admitted; bind the tested libdevice implementation at the exact precision. This admission does not cover a tl.exp implementation. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
 | `StableLogSumExp` | The fp32 libdevice EXP-SUB instance is admitted; select a compatible accepted LOG-EXP precision instance. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
 | `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Relate the now-proved opaque loop recurrence to the batch expression using scalar atoms. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
-| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | Both original kernels are compared conditionally under arbitrary valid fp32 reduction schedules. Bind that scheduled execution model and all iteration/rewrite domains in the final specification. |
+| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | Both original kernels are compared under arbitrary valid fp32 schedules; the public IO objects now bind the execution profile and syntactic iteration/rewrite domains. Count admission still blocks the completed specification. |
 | `FusedLayerNorm` | The Welford prerequisites at the actual arithmetic precision. | Derive the statistics replacement and preserve the common normalization, affine operations and bf16 output conversion. |
 
 This table lists prerequisites, not newly available assumptions. It does not
@@ -91,9 +91,9 @@ Source-equality tests compare these copies with the existing correctness
 files; the execution proofs do not import those files.
 
 These are execution prerequisites, not new completed FP equivalences. The
-Welford recurrence still needs to be related to its two-pass expression using
-the accepted scalar theory at the actual arithmetic precision. Count
-conversion remains an opaque operation: loop support does not imply
+Welford scalar derivation, loop induction, schedule comparison and public
+domain contract are connected below. Count conversion remains an opaque
+operation: loop support does not imply
 `toReal(i + 1) = toReal(i) + 1`. The OnlineSoftmax comparison still needs the
 matching exponential implementation and a scalar-derived invariant relating
 the recurrence to the batch expression.
@@ -151,10 +151,9 @@ paired leaves and final result need not imply finite transformed partial
 sums. The fixture also audits these new derivations for unexpected axioms.
 
 These are local identities and reduction lemmas, not a completed Welford FP
-equivalence. Relating the full recurrence to the two-pass statistics still
-requires the count-conversion binding, the global mean/variance invariants
-and the corresponding reduction schedules. The completed example count
-remains 13.
+equivalence. The full recurrence and reduction-schedule comparisons are
+connected below under explicit count-conversion obligations. Admission of
+those obligations is still missing; the completed example count remains 13.
 
 ### Centered sums and vanishing variance cross terms
 
@@ -204,7 +203,7 @@ has been obtained. Neither conversion relation is currently admitted.
 
 The append step alone does not establish the full original-kernel equivalence.
 Initialization, loop induction and batch-schedule comparison are connected
-below; count conversion admission and the final public contract remain.
+below, together with the public contract; count conversion admission remains.
 No original source kernel or experiment rule was changed for this derivation.
 
 ### Literal-zero initialization and singleton statistics
@@ -323,10 +322,46 @@ ordinary rational fixture satisfies the schedule conditions for arbitrary
 valid plans, so these predicates are not vacuous.
 
 The comparison remains conditional rather than a completed public FP example.
-The count relations still need admission, and the final `≡[R]` interface must
-bind this scheduled execution model plus all loop and rewrite domains. The
-existing guarded IO relation runs an arbitrary opaque algebra directly and
-cannot silently identify its `reduceSum` field with an addition tree.
+The count relations still need admission. The scheduled public IO contract
+below now binds the execution model and all loop/rewrite domains. The original
+guarded IO relation continues to run an arbitrary opaque algebra directly; it
+does not silently identify its `reduceSum` field with an addition tree.
+
+### Scheduled IO and syntactic loop domains
+
+`Float/ScheduledIO.IO₁ₓ₂` uses the existing `lhs ≡[R] rhs` notation. Its
+signature includes the two typed output windows, default compute precision,
+whether fp32 sums expand into explicit addition trees, and the exact domain
+expression generator. Numerical equivalence requires successful runs of both
+kernels under every valid schedule, agreement of both outputs, and both
+memory frames. A structural execution proof also works under a shared profile.
+
+`Float/GuardExpression` represents numerical expressions without interpreting
+any floating law. Precision, storage dtype, casts, loads, integer conversion,
+and reduction layout remain explicit. Conditions contain only a `GuardKind`
+check, conjunction, or finite index enumeration. They cannot take arbitrary
+semantic predicates or equations as input.
+
+`Float/WelfordConditions` compiles every field of the initialization, update,
+centering, append and schedule-domain records into these conditions. Its iff
+and interpretation lemmas establish exact correspondence with those records.
+All loop iterations and the intermediate operands on both normalization paths
+remain covered; checking only the input leaves or final output is insufficient.
+
+`bench/examples/support/WelfordContract` defines the original online and
+two-pass IO objects independently of the real-correctness file. It keeps row
+length and stride symbolic and uses the fp32 scheduled profile. The theorem
+`original_runs_under_count` connects the syntactic domain to the original
+execution comparison, including both bf16 outputs and both memory frames.
+`CountConversion` is still an explicit premise, outside the domain syntax;
+there is no completed Welford FP specification or new admitted atom.
+
+The fixtures check that the reified contract is satisfiable in the ordinary
+rational model for arbitrary batch schedules, rejects a later inadmissible
+sample despite admissible initialization, and retains intermediate rewrite
+operands. Signature checks reject profile or domain changes. The assumption
+printer reports an opaque scheduled-equivalence premise as unresolved, while
+a structural store-reordering proof still prints `none`.
 
 ## Constraints on the supplemental atom set
 
@@ -373,7 +408,7 @@ python3 scripts/export_numerical_rules.py --trust-report --check
 python3 scripts/export_supplemental_rules.py --trust-report --check
 python3 -m unittest scripts.test_export_supplemental_rules scripts.test_fp_supplemental
 python3 -m unittest scripts.test_fp_scalar_arithmetic
-python3 -m unittest scripts.test_fp_control
+python3 -m unittest scripts.test_fp_control scripts.test_fp_dual_output
 lake build TritonBenchSpecExamples
 ```
 

@@ -1,6 +1,7 @@
 /- Guarded schedule rewrites, explicit padding and intermediate-domain
 boundaries. These integer countermodels are not IEEE or GPU observations. -/
 import VeriTile.Triton.Float.ReductionSchedule
+import VeriTile.Triton.Float.WelfordConditions
 import bench.examples.support.WelfordComparison
 import VeriTile.Meta.StatementAudit
 
@@ -63,6 +64,11 @@ theorem finite_source_is_insufficient : ¬ (normalize source.tree).Domain M boun
   intro h
   exact transformed_operand_is_not_finite (h generatedOperand transformed_operand_is_listed)
 
+theorem syntactic_conditions_keep_rewrite_operands :
+    ¬ (FP.WelfordConditions.schedule M row4 source target).Holds bounded := by
+  rw [FP.WelfordConditions.schedule_holds]
+  exact fun h => finite_source_is_insufficient h.left
+
 theorem finite_endpoints_do_not_check_the_path :
     FiniteTree M bounded row4 (zero M) source.tree ∧
     FiniteTree M bounded row4 (zero M) target.tree ∧
@@ -121,5 +127,7 @@ run_cmd do
 #axiomsClean WelfordFPComparison.original_values
 #axiomsClean WelfordFPComparison.original_runs
 #axiomsClean finite_source_is_insufficient
+
+#axiomsClean syntactic_conditions_keep_rewrite_operands
 
 end FPReductionScheduleTests

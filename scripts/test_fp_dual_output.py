@@ -10,7 +10,7 @@ class FPDualOutputTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ["lake", "build", "VeriTile.Triton.Float.GuardedIO", "VeriTile.Meta.StatementAudit"],
+            ["lake", "build", "VeriTile.Triton.Float.ScheduledIO", "VeriTile.Meta.StatementAudit"],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -26,6 +26,9 @@ class FPDualOutputTests(unittest.TestCase):
                          "FP assumptions used by reordered_outputs:\n  none\n"
                          "FP assumptions used by guarded_reordered_outputs:\n  none\n"
                          "FP assumptions used by opaque_guarded_outputs:\n"
+                         "  unresolved FP proof: h (atomic assumptions unavailable)\n"
+                         "FP assumptions used by scheduled_reordered_outputs:\n  none\n"
+                         "FP assumptions used by opaque_scheduled_outputs:\n"
                          "  unresolved FP proof: h (atomic assumptions unavailable)\n")
 
 
