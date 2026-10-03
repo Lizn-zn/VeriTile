@@ -29,6 +29,16 @@ class CountAdmissionTests(unittest.TestCase):
         self.assertNotIn('axiom ', output)
         self.assertNotIn('def exp', output)
 
+    def test_frozen_pr12_source_identity_and_version_are_retained(self):
+        files = self.fixture()
+        manifest = files['experiment.json']['bundles']['counts']
+        self.assertEqual(exporter.runner.sha(exporter.canonical(manifest['sources'])),
+                         exporter.PR12_SOURCE_SNAPSHOT)
+        self.assertEqual(manifest['bundle_version'], 'scalar-supplement-7')
+        self.assertNotEqual(manifest['sources'], exporter.runner.source_hashes())
+        manifest['bundle_version'] = exporter.runner.BUNDLE_VERSION
+        self.check_rejected(files)
+
     def test_invalid_range_precision_smoke_and_sources_are_rejected(self):
         for case in ('range', 'negative', 'precision', 'smoke', 'sources', 'manifest'):
             files = self.fixture()

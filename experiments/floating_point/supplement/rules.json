@@ -118,6 +118,14 @@
       "category": "two_gates_candidate"
     },
     {
+      "id": "LOG-EXP-LIBDEVICE",
+      "reference": "Q(tl.log(Q(libdevice.exp(a))))",
+      "candidate": "a",
+      "domain": "finite a",
+      "operands": ["a"],
+      "category": "two_gates_candidate"
+    },
+    {
       "id": "MAX-COMMUTE",
       "reference": "max(a, b)",
       "candidate": "max(b, a)",

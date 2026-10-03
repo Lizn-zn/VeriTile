@@ -32,6 +32,32 @@ U gate 的幅度阈值为 10/100：`U <= 10` 为 PASS，`10 < U <= 100` 为 WARN
 
 ## 直接运行
 
+### 本轮只补 log 的两个原子
+
+[log_config.py](./log_config.py) 保留 `4096×4096`、独立 `Normal(1,1)`、
+fp32 输入/计算/输出及现有 two-gates 参数，只运行：
+
+- `LOG-MUL`：`tl.log(a*b)` 与 `tl.log(a)+tl.log(b)`，跳过 `a<=0` 或 `b<=0` 的输入对。
+- `LOG-EXP-LIBDEVICE`：`tl.log(libdevice.exp(a))` 与 `a`，保留负的有限 `a`。
+
+第二条是新原子，不能复用旧 `LOG-EXP`（`tl.exp`）的实验结果。
+PR #12 的 `tl.exp` exp-sub 不满足当前偏差条件，因此相关例子使用 `libdevice.exp`。
+本配置尚无 GPU 准入结果；有效输入上出现非有限输出仍算失败，不会被过滤。
+
+在仓库根目录、安装下述依赖后执行：
+
+```bash
+python3 scripts/check_numerics_supplement.py check --profile experiments/floating_point/supplement/log_config.py
+python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_config.py --smoke --output Logs/fp-log-libdevice-smoke
+python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_config.py --output Logs/fp-log-libdevice
+python3 scripts/check_numerics_supplement.py report Logs/fp-log-libdevice --output-dir Logs/fp-log-libdevice-report
+```
+
+确认 smoke 没有 `ERROR` 后运行正式实验，再带回 `Logs/fp-log-libdevice-report/`。
+本轮使用 `scalar-supplement-8`，请用新目录；已有报告及其源码版本保持不变。
+
+### 全部补充实验
+
 使用 NVIDIA CUDA 环境。新环境安装：
 
 ```bash
@@ -89,7 +115,8 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 | exp-sub | `exp(a - b) → exp(a) / exp(b)` | 推导移位与缩放 |
 | exp-zero | `exp(0) → 1` | 指数初值 |
 | log-mul | `log(a * b) → log(a) + log(b)` | 对数因子分解，`a,b > 0` |
-| log-exp | `log(exp(a)) → a` | 对数与指数消去 |
+| log-exp | `tl.log(tl.exp(a)) → a` | 原 intrinsic 组合 |
+| log-exp-libdevice | `tl.log(libdevice.exp(a)) → a` | 本轮待测的 libdevice 组合 |
 | max-commute | `max(a,b) → max(b,a)` | max 标量换序 |
 | max-assoc | `max(max(a,b),c) → max(a,max(b,c))` | max 标量重组 |
 | max-idem | `max(a,a) → a` | 消去重复 max 项 |
@@ -171,7 +198,8 @@ python3 scripts/check_numerics_supplement.py run --rules ADD-ZERO,MUL-ONE,DIV-ON
 NPZ 的 `valid_samples` 保存每次抽样的有效元组数，record 保存尝试次数、空批次、
 有效及跳过总数，报告的 Valid / Skipped 两列显示元组总数。
 
-新 bundle 版本为 `scalar-supplement-7`，须使用新的输出目录。已提交的 PR #11
+定义域过滤最初使用 `scalar-supplement-7`；本轮新增 libdevice 组合后使用版本 8，
+须使用新的输出目录。已提交的 PR #11
 报告仍保留旧策略及其 `NUMERIC_EVENT` 结果，不能当作新策略已通过的证据。
 导出器保留对该历史报告准确源码标识的识别。下一轮可单独重跑：
 
@@ -192,8 +220,8 @@ exp 中间值的有限性、log 输入的正性等适用条件仍需在使用处
   不满足当前准入条件；不能用 libdevice 的结果替代它的结果。
 - logsumexp 的 libdevice EXP-SUB 已接入；LOG-MUL 需按上述定义域过滤策略重跑，
   `tl.log(libdevice.exp(a)) = a` 还未测过，旧 LOG-EXP 使用的是 `tl.exp`。
-- online softmax 的 libdevice EXP-SUB、reduction/loop 不变量与执行已接通，
-  仍需确定公开 specification 的观察对象。
+- online softmax 已完成公开 FP specification，比较 batch 输出和实际在线 m/l
+  寄存器的归一化值，沿用原 Correct 的观察范围。
 - Welford/LayerNorm 已通过专用导出器接入 count 零转换和有界 successor，
   完成 FP 证明并保留 `N <= 2^24`。Welford 要求非空行；LayerNorm 的空行没有
   输出写入，仍被覆盖。空行的实数总除法行为没有用作 FP 的 `0/0` 定律。
@@ -213,7 +241,9 @@ python3 scripts/export_numerical_rules.py --trust-report --check
 python3 scripts/export_supplemental_rules.py --trust-report --check
 ```
 
-解释器检查涵盖默认浮点 profile 的 44 对表达式、精度和非整块矩形索引；另有 profile、定义域、
+默认浮点 profile 有 47 对表达式。CPU 解释器检查其中 41 对的精度和非整块矩形索引；
+六个 libdevice.exp 组合明确跳过，因为解释器不支持 CUDA `extern_elementwise`，
+这些组合用离线编译和真实 GPU 实验验证，不用 tl.exp 替代。另有 profile、定义域、
 fp64 除法残差、报告、源/PTX/观测/配置/统计篡改检测测试。离线编译不需要 GPU，
 默认目标 sm_80。解释器和离线编译结果均不是 GPU two-gates 准入结果。
 

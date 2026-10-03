@@ -16,6 +16,9 @@ REPORT = ROOT / 'experiments/floating_point/primitives/report'
 OUTPUT = ROOT / 'VeriTile/Triton/Float/CountAdmission.lean'
 RULES = ('COUNT-ZERO', 'COUNT-SUCCESSOR')
 canonical = runner.original.registry.canonical_json
+# Exact PR #12 runtime snapshot. Later probes do not relabel the historical
+# count experiment as if it had used the new runner or catalogue.
+PR12_SOURCE_SNAPSHOT = 'c5632710b2b44bff9a5e8fca67927d210a4194ab49f2a220fc2326075c942bf9'
 
 
 def load_report(directory):
@@ -23,9 +26,11 @@ def load_report(directory):
              ('experiment.json', 'summary.json', 'admission.json')}
     manifest = files['experiment.json']['bundles']['counts']
     profile = runner.validate_profile(deepcopy(manifest['profile']))
-    if manifest['sources'] != runner.source_hashes():
+    legacy = runner.sha(canonical(manifest['sources'])) == PR12_SOURCE_SNAPSHOT
+    if manifest['sources'] != runner.source_hashes() and not legacy:
         raise ValueError('count report source hashes differ from the implementation')
-    if manifest['bundle_version'] != runner.BUNDLE_VERSION or manifest['smoke'] is not False:
+    expected_version = 'scalar-supplement-7' if legacy else runner.BUNDLE_VERSION
+    if manifest['bundle_version'] != expected_version or manifest['smoke'] is not False:
         raise ValueError('only formal count bundles can be imported')
     expected_format = dict(name='int32_fp32', input='int32', compute='fp32', accumulator='fp32', output='fp32')
     if profile['formats'] != [expected_format] or profile['rules'] != list(RULES):

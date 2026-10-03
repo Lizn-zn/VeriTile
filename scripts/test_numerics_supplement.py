@@ -85,8 +85,8 @@ class ContractTests(unittest.TestCase):
 
     def test_supported_matrix_and_invalid_precision(self):
         p = profile()
-        self.assertEqual(len(p["rules"]), 17)
-        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 44)
+        self.assertEqual(len(p["rules"]), 18)
+        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 47)
         for field in ("input", "output", "accumulator"):
             bad = deepcopy(p)
             bad["formats"][-1][field] = "bf16"
@@ -97,9 +97,27 @@ class ContractTests(unittest.TestCase):
         p = profile()
         fmt = p['formats'][2]
         lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
-        for rule, intrinsic in [('EXP-SUB', 'libdevice.exp'), ('EXP-SUB-INTRINSIC', 'tl.exp'), ('LOG-EXP', 'tl.exp')]:
+        for rule, intrinsic in [('EXP-SUB', 'libdevice.exp'), ('EXP-SUB-INTRINSIC', 'tl.exp'),
+                                ('LOG-EXP', 'tl.exp'), ('LOG-EXP-LIBDEVICE', 'libdevice.exp')]:
             config = supplement.contract_for(p, fmt, rule, {}, runner.source_hashes(), lowerings)
             self.assertEqual(config['numerics']['intrinsics']['exp'], intrinsic)
+
+    def test_log_rerun_keeps_sampling_and_separates_exp_implementations(self):
+        p = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'log_config.py').PROFILE))
+        common = profile()
+        self.assertEqual(p['rules'], ['LOG-MUL', 'LOG-EXP-LIBDEVICE'])
+        self.assertEqual(p['formats'], [common['formats'][2]])
+        for field in ('shape', 'distribution', 'seed', 'replicates', 'replicates_max',
+                      'batch', 'launch', 'gates'):
+            self.assertEqual(p[field], common[field])
+        args = (p, p['formats'][0])
+        lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
+        configs = [supplement.contract_for(*args, r, {}, runner.source_hashes(), lowerings)
+                   for r in ('LOG-EXP', 'LOG-EXP-LIBDEVICE')]
+        self.assertNotEqual(*[supplement.instance_key(c) for c in configs])
+        self.assertEqual(runner.domains.policy('LOG-MUL')['positive'], ['a', 'b'])
+        self.assertEqual(runner.domains.policy('LOG-EXP-LIBDEVICE')['positive'], [])
 
     def test_composite_rejected_before_creating_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -199,6 +217,23 @@ class ContractTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TORCH, "optional CPU numerical wiring checks require torch")
 class OracleTests(unittest.TestCase):
+    def test_libdevice_log_inverse_keeps_negative_inputs_and_nonfinite_failures(self):
+        import torch
+        a = torch.tensor([-2., 0., 1., 1000., float('inf')])
+        inputs = [a, torch.zeros_like(a), torch.zeros_like(a)]
+        valid = runner.domains.mask(torch, 'LOG-EXP-LIBDEVICE', inputs)
+        self.assertEqual(valid.tolist(), [True, True, True, True, False])
+        self.assertTrue(torch.equal(supplement.oracle(torch, 'LOG-EXP-LIBDEVICE', inputs), a.double()))
+        # 1000 is in the input domain. An overflowing exponential result must
+        # fail, not be removed by a result-dependent mask.
+        reference = a.clone()
+        reference[3] = float('inf')
+        obs = supplement.observe(torch, reference, a, a.double(), profile()['formats'][2], valid=valid)
+        self.assertTrue(np.isinf(obs['reference_error']))
+        arrays = {key: np.repeat(np.asarray(value)[None], 4, axis=0) for key, value in obs.items()}
+        result = runner.gates.evaluate(arrays, profile()['gates'], 123, 4, False)
+        self.assertEqual(result['decision'], 'REJECT')
+
     def test_supplement_combines_ulp_bias_with_absolute_peak_errors(self):
         import torch
         reference = torch.tensor([[1., 2.], [4., 8.]])
@@ -294,7 +329,7 @@ class OracleTests(unittest.TestCase):
 
 @unittest.skipUnless(INTERPRET, "set TRITON_INTERPRET=1 with torch/triton for CPU wiring checks")
 class InterpreterTests(unittest.TestCase):
-    def test_all_44_pairs_and_masked_rectangular_layout(self):
+    def test_supported_pairs_and_masked_rectangular_layout(self):
         import torch
         import triton
         module = runner.load_module(runner.KERNELS)
@@ -320,6 +355,11 @@ class InterpreterTests(unittest.TestCase):
                 if supplement.unsupported(rule, fmt):
                     continue
                 with self.subTest(rule=rule, fmt=fmt["name"]):
+                    if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE"}:
+                        # CUDA extern_elementwise has no CPU interpreter
+                        # implementation. Do not substitute tl.exp: offline
+                        # compilation and the GPU run check these exact calls.
+                        self.skipTest('libdevice.exp requires CUDA; validate with check_supplement_kernels.py and GPU')
                     # Positive *test fixture* for LOG-MUL; production still samples
                     # the configured unconditioned normal distribution.
                     dtype = {"bf16": torch.bfloat16, "fp32": torch.float32, "fp64": torch.float64}[fmt["input"]]

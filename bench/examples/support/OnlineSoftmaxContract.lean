@@ -5,6 +5,7 @@ import bench.examples.support.OnlineSoftmaxComparison
 import bench.examples.support.OnlineSoftmaxBatch
 import bench.examples.support.SoftmaxStableContract
 import VeriTile.Triton.Float.Exponential
+import VeriTile.Triton.Float.ObservedRow
 
 namespace VeriTile.Bench.Examples.OnlineSoftmaxFPContract
 open VeriTile Triton FP.Structural FP.Guarded FP.ScalarArithmetic FP.GuardExpression
@@ -112,5 +113,82 @@ theorem original_normalization_runs {α : Type} [Inhabited α] (R : FP.Exponenti
   exact (hva i).trans (congrArg (Cell.mk .real)
     (normalized_values R.arithmetic M D (FP.Exponential.arithmetic_models R M D hM) s xs N hN plans
       (FP.Exponential.exp_sub R M D hM s) ((requirements_holds M D s x N plans).mp hd) i))
+
+/-- The online source has no reduction operation. Expanding the batch sum
+schedule therefore leaves its scalar recurrence unchanged. -/
+theorem scheduled_recurrence {α : Type} (M : Algebra α) (plans : Schedules)
+    (xs : Nat → α) (N i : Nat) (hi : i ≤ N) :
+    OnlineSoftmaxFPExecution.recurrence (SoftmaxStableFPContract.engine M plans)
+      (fun k : Fin N => xs k.val) i = FP.OnlineSoftmax.state M xs i := by
+  induction i with
+  | zero => rfl
+  | succ i ih =>
+    rw [OnlineSoftmaxFPExecution.recurrence, dif_pos (by omega), ih (by omega)]
+    rfl
+
+def loadRow (r : RegionName) (N pid i : Nat) : Op .real [] :=
+  .load .real (.region r (.constNat (pid * N + i))) .none
+
+/-- Observe the stored batch result, at its original real dtype. -/
+def batchOutput (x y : RegionName) (N : Nat) : FP.ObservedRow.Program where
+  input := x
+  output := y
+  size := N
+  offset := fun pid => pid * N
+  kernel := OnlineSoftmaxFPBatch.stableSoftmaxKernel x y N
+  observe := fun pid i => loadRow y N pid i.val
+  writesOutput := Bool.true
+  profile := FP.Scheduled.fp32
+  domain := requirements x N
+
+/-- Read the original online source's final m/l, then evaluate the normalized
+value. This is the same observation scope as OnlineSoftmaxCorrect; it is a
+read-only expression, not an additional store in the online kernel. -/
+def normalizedOnline (x y : RegionName) (N : Nat) : FP.ObservedRow.Program where
+  input := x
+  output := y
+  size := N
+  offset := fun pid => pid * N
+  kernel := OnlineSoftmaxFPExecution.onlineSoftmaxKernel x y N
+  observe := fun pid i => .div .real .nil
+    (.libdeviceExp (.sub .real .nil (loadRow x N pid i.val) (.ref .real [] "m")))
+    (.ref .real [] "l")
+  writesOutput := Bool.false
+  profile := FP.Scheduled.fp32
+  domain := requirements x N
+
+set_option maxHeartbeats 1600000 in
+theorem observed_equivalent (R : FP.Exponential.Rules) (x y : RegionName)
+    (N : Nat) (hN : 0 < N) :
+    FP.ObservedRow.Equivalent R.assumptions (batchOutput x y N) (normalizedOnline x y N) := by
+  intro α _ M D hM plans s hd
+  let xs := rowValues s x N
+  obtain ⟨a, ha, hva, hfa⟩ := OnlineSoftmaxFPBatch.batch_run (SoftmaxStableFPContract.engine M plans)
+    x y N hN (fun i : Fin N => xs i.val) s (fun _ => rfl)
+  obtain ⟨b, hb, hm, hl, hmem, _⟩ := OnlineSoftmaxFPExecution.online_run
+    (SoftmaxStableFPContract.engine M plans) x y (fun i : Fin N => xs i.val) s (fun _ => rfl)
+  rw [scheduled_recurrence M plans xs N N le_rfl] at hm hl
+  let values := fun i => div M
+    (FP.SoftmaxShift.exp M (sub M (xs i) (FP.OnlineSoftmax.state M xs N).1))
+    (FP.OnlineSoftmax.state M xs N).2
+  refine ⟨a, b, values, ha, hb, ?_, ?_, ?_, ?_⟩
+  · intro i
+    have hv := (hva i).trans (congrArg (Cell.mk .real)
+      (normalized_values R.arithmetic M D (FP.Exponential.arithmetic_models R M D hM) s
+        xs N hN plans (FP.Exponential.exp_sub R M D hM s)
+        ((requirements_holds M D s x N plans).mp hd) i))
+    simp [batchOutput, loadRow, evalOp_unfold, Region.cast, hv, values]
+  · intro i
+    simp [normalizedOnline, loadRow, evalOp_unfold, numeric,
+      hm, hl, hmem, Region.cast, values, xs, rowValues,
+      FP.SoftmaxShift.exp, sub, div,
+      FP.Scheduled.fp32, FP.Scheduled.Profile.algebra, Algebra.withDefaultPrecision,
+      FP.ScalarReduction.algebra]
+    rfl
+  · intro r o ho
+    apply hfa r o
+    simpa [batchOutput] using ho
+  · intro r o _
+    exact congrFun (congrFun hmem r) o
 
 end VeriTile.Bench.Examples.OnlineSoftmaxFPContract

@@ -104,7 +104,7 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
         node_formats={"arithmetic": fmt["compute"], "transcendental": fmt["compute"],
                       "details": "bf16 nodes execute in fp32 then explicitly round bf16; see bound source"},
         accumulator_formats={},  # Every expression is scalar; no reduction accumulator.
-        intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule == "EXP-SUB" else "tl.exp",
+        intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE"} else "tl.exp",
                     "log": "tl.log", "max": "tl.maximum",
                     "oracle": "torch fp64 mathematical reference on the same quantized operands"})
     config["probe"]["special_values"]["literals"] = "only explicit -inf literals in the relation"
@@ -171,7 +171,7 @@ def oracle(torch, rule, inputs):
     if rule in {"MAX-COMMUTE", "MAX-ASSOC"}:
         ab = torch.maximum(a, b)
         return torch.maximum(ab, c) if rule == "MAX-ASSOC" else ab
-    if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "MAX-IDEM", "MAX-NEG-INF"}:
+    if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "LOG-EXP-LIBDEVICE", "MAX-IDEM", "MAX-NEG-INF"}:
         return a
     raise ValueError("unknown supplemental oracle")
 

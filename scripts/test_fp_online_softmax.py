@@ -11,7 +11,7 @@ class OnlineSoftmaxFPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ['lake', 'build', 'bench.examples.support.OnlineSoftmaxContract',
+            ['lake', 'build', 'bench.examples.OnlineSoftmaxFPEquiv',
              'bench.examples.OnlineSoftmaxCorrect', 'VeriTile.Meta.StatementAudit'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
@@ -51,6 +51,24 @@ run_cmd do
 
     def test_invariant_initialization_iteration_domains_and_unchanged_memory(self):
         self.check_lean((ROOT / 'bench/tests/FPOnlineSoftmax.lean').read_text())
+
+    def test_public_observation_spec_uses_only_admitted_scalar_atoms(self):
+        output = self.check_lean('''
+import bench.examples.OnlineSoftmaxFPEquiv
+#print_fp_assumptions VeriTile.Bench.Examples.OnlineSoftmaxFPEquiv.online_softmax_equiv
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  if env.contains `VeriTile.Bench.Examples.OnlineSoftmax.onlineSoftmaxKernel then
+    throwError "FP specification imported its correctness counterpart"
+''')
+        self.assertEqual(set(output.splitlines()[1:]), {
+            '  add_commute', '  add_assoc', '  mul_commute', '  mul_assoc',
+            '  mul_distrib', '  cancel', '  add_zero', '  mul_one',
+            '  div_mul_rcp', '  mul_rcp_cancel', '  exp_sub'})
+
+    def test_observation_requires_final_registers_and_preserves_source_effects(self):
+        self.check_lean((ROOT / 'bench/tests/FPObservedRow.lean').read_text())
 
 
 if __name__ == '__main__':

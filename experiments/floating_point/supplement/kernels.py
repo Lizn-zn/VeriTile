@@ -12,7 +12,7 @@ SUPPORTED = {
     "ADD-ZERO", "MUL-ONE", "DIV-ONE", "DIV-MUL-RCP", "MUL-RCP-CANCEL",
     "EXP-SUB", "EXP-ZERO", "LOG-MUL", "LOG-EXP", "MAX-COMMUTE",
     "MAX-ASSOC", "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB",
-    "EXP-SUB-INTRINSIC", "COUNT-ZERO", "COUNT-SUCCESSOR",
+    "EXP-SUB-INTRINSIC", "COUNT-ZERO", "COUNT-SUCCESSOR", "LOG-EXP-LIBDEVICE",
 }
 
 
@@ -101,6 +101,14 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
     elif RULE == "LOG-EXP":
         if SIDE == 0:
             out = rnd(tl.log(rnd(tl.exp(a), PRECISION)), PRECISION)
+        else:
+            out = a
+    elif RULE == "LOG-EXP-LIBDEVICE":
+        # Keep a distinct identity: prior LOG-EXP results tested tl.exp.
+        # PR #12 rejected the fp32 tl.exp exp-sub rewrite; the examples use
+        # libdevice.exp, whose log-inverse relation needs its own experiment.
+        if SIDE == 0:
+            out = rnd(tl.log(rnd(libdevice.exp(a), PRECISION)), PRECISION)
         else:
             out = a
     elif RULE == "MAX-COMMUTE":

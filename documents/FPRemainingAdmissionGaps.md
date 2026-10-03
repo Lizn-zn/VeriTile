@@ -1,11 +1,11 @@
 # Remaining FP example prerequisites
 
-The migration has 18 real correctness files and 16 FP equivalence files.
+The migration has 18 real correctness files and 17 FP equivalence files.
 The current main and supplemental reports select numerical assumptions using
 a local-ULP mean-bias budget and a peak absolute-error ratio gate.
 The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
 binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
-instances. Two other algorithmic transformations remain incomplete.
+instances. StableLogSumExp is the remaining incomplete transformation.
 
 ## Current primitive experiment results
 
@@ -99,7 +99,7 @@ formats. It supplies no fp64 instance.
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
 | `SoftmaxStable` | fp32 libdevice EXP-SUB is admitted and bound together with the scalar arithmetic rules. | `SoftmaxStableFPEquiv.softmax_stable_equiv` completes the guarded, scheduled equivalence; max, bf16 stores, output frames and symbolic positive row length are retained. |
 | `StableLogSumExp` | libdevice EXP-SUB is bound; uncast fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need matching admission. The existing LOG-EXP report used tl.exp. | Both libdevice source variants are connected under the two remaining log obligations. Rerun LOG-MUL with domain filtering and test the new log/libdevice-exp pair. |
-| `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | Both libdevice executions and their normalized-value comparison now use admitted scalar atoms; the online source still has no output store, so the public observation scope remains to be selected. |
+| `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | `OnlineSoftmaxFPEquiv.online_softmax_equiv` completes the original Correct observation scope: batch stored values versus read-only normalization using actual final online m/l registers. Both original executions and separate memory frames are retained; no output store is added. |
 | `Welford` | Both count atoms are admitted and bound for integer `0 <= i < 2^24`. | `WelfordFPEquiv.welford_equiv` closes the original comparison for `0 < N <= 2^24`, retaining both bf16 outputs and frames. |
 | `FusedLayerNorm` | The same two count atoms are admitted and bound. | `FusedLayerNormFPEquiv.layernorm_equiv` closes the original comparison for `N <= 2^24`; empty output rows remain covered. |
 
@@ -148,7 +148,7 @@ failure, in-place execution, contract satisfiability and the nonzero boundary.
 Its rational fixtures are logical checks, not experimental evidence. An opaque
 whole-kernel premise prints `unresolved FP proof`; it cannot be reported as
 having no atomic assumptions. `SoftmaxStableFPEquiv.softmax_stable_equiv`
-closes this case with admitted arithmetic and EXP-SUB atoms; the FP count is 16.
+closes this case with admitted arithmetic and EXP-SUB atoms; the FP count is 17.
 
 ### Original stable logsumexp connection
 
@@ -168,6 +168,15 @@ derivation to both successful executions under the scheduled fp32 profile.
 two log obligations remain explicit.
 In-place output is allowed. The original max and final bf16 conversion remain
 opaque. This is a conditional connection, not a completed admitted FP example.
+
+The dedicated `experiments/floating_point/supplement/log_config.py` profile runs
+LOG-MUL/fp32 with input-domain filtering and the new LOG-EXP-LIBDEVICE/fp32 probe.
+The latter evaluates `tl.log(libdevice.exp(a))` with a separate rule ID and
+implementation contract; the old LOG-EXP results cannot authorize it. Both use
+the existing shape, Normal(1,1) distribution and gates. Invalid inputs are skipped
+without resampling, and nonfinite outputs on valid inputs remain failures.
+See the supplemental README for the GPU commands. No new admission is claimed
+until those results are returned.
 
 The regression shows that EXP-SUB and LOG-MUL can hold with the domain while
 the original stored outputs still differ without LOG-EXP. It also checks why
@@ -235,11 +244,13 @@ negative-infinity sentinel finite, a later step whose valid domains do not
 cover an invalid initialization, retained prefix padding, both original source
 copies and aliased memory behavior. They supply no experimental evidence.
 
-The public specification choice is pending: retain the existing Correct
-example's batch-output/online-formula scope, or explicitly add an online output
-stage and compare complete kernels. No output stage has been added. The
-libdevice exp-sub admission is connected; only this public-scope choice remains
-for the online example. The completed FP count is 16.
+`OnlineSoftmaxFPEquiv.online_softmax_equiv` retains the existing Correct
+example's observation scope through `Float/ObservedRow`: successful batch
+output reads equal read-only normalization using the actual final online m/l.
+It uses admitted libdevice exp-sub and arithmetic atoms. An absent register
+makes the readback fail; two failures cannot establish a numerical step.
+Each source retains its own memory frame, and no online output store is added.
+The completed FP count is 17.
 
 ### Welford mean step and integer conversion
 
@@ -295,7 +306,7 @@ sums. The fixture also audits these new derivations for unexpected axioms.
 These are local identities and reduction lemmas, not a completed Welford FP
 equivalence. The full recurrence and reduction-schedule comparisons are
 connected below under explicit count-conversion obligations. The accepted
-bounded count relations are now bound by `Float/CountConversion`; the completed example count is 16.
+bounded count relations are now bound by `Float/CountConversion`; the completed example count is 17.
 
 ### Centered sums and vanishing variance cross terms
 
@@ -542,7 +553,7 @@ The support comparison takes the generic primitive `CountConversion`
 obligations. `FusedLayerNormFPEquiv.layernorm_equiv` now discharges them from
 the two accepted count atoms for `N <= 2^24`, including the empty output case.
 No LayerNorm, sqrt, affine, or whole-reduction identity is admitted. The
-completed FP example count is 16. Source-identity checks, independence from Correct,
+completed FP example count is 17. Source-identity checks, independence from Correct,
 layout/profile/domain signature counterexamples, memory-frame checks, and
 opaque-premise assumption-printer checks cover this connection.
 

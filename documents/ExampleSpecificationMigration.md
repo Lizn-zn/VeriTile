@@ -29,7 +29,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype addition | `FloatDTypeAddCorrect` — checked, including empty tiles | `FloatDTypeAddFPEquiv` — checked; add commutation; output cast retained |
 | Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
 | Row-wise max | `RowWiseMaxCorrect` — checked | `RowWiseMaxFPEquiv` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
-| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch output versus normalized online m/l: scalar loop invariant, normalization and schedule comparison connected to both original executions; the libdevice EXP-SUB admission is connected; the public observation scope remains pending |
+| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | `OnlineSoftmaxFPEquiv` — checked in that same observation scope: stored batch values versus read-only normalization of the actual online m/l registers; libdevice EXP-SUB and scalar arithmetic, symbolic positive row length and separate memory frames |
 | mHC depth | `HyperConnectionsDepthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepthFPEquiv` — checked in the same scope; add commutation |
 | mHC width | `HyperConnectionsWidthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidthFPEquiv` — checked in the same scope; two multiplication commutations |
 | Adam-named Lion update | `AdamUpdateGridLaunchCorrect` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunchFPEquiv` — checked per program; momentum addition commutation, masked in-place stores retained |
@@ -42,7 +42,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | `WelfordFPEquiv` — checked under scalar arithmetic and the two bounded count atoms, for `0 < N <= 2^24`; both original bf16 outputs and memory frames retained |
 | Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | `FusedLayerNormFPEquiv` — checked for `N <= 2^24`, including empty output rows; original statistics, affine suffix, bf16 stores and frames retained |
 
-There are currently 18 correctness modules and 16 FP equivalence modules. The
+There are currently 18 correctness modules and 17 FP equivalence modules. The
 eight legacy equivalence modules remain as source references; one of their
 original transformations still awaits FP migration. Their presence does not
 complete the pending FP entries above.
@@ -97,7 +97,8 @@ loads, which these examples do not use. This is not a complete IEEE evaluator.
 
 [The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
 main-table algebraic countermodels from the supplemental rule set. Stable
-logsumexp and online softmax remain pending.
+logsumexp remains pending; its two missing scalar probes are in
+`experiments/floating_point/supplement/log_config.py`.
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently
@@ -173,6 +174,17 @@ reduction and normalization from the admitted scalar arithmetic and libdevice
 EXP-SUB atoms. Max and bf16 casts remain opaque; the row length is symbolic
 and positive. `#print_fp_assumptions` lists only the scalar assumptions.
 
+`OnlineSoftmaxFPEquiv.online_softmax_equiv` compares `batchOutput` with
+`normalizedOnline` using `Float/ObservedRow`. The latter executes the original
+online kernel and then reads `exp(x - m) / l` using its actual final registers.
+Both executions and all readbacks must succeed; missing registers cannot make
+two failed observations count as equal. The batch retains its real-typed row
+store and frames all other cells, while the online kernel preserves all memory.
+The observation adds no store. Its signature retains the row layout, fp32
+execution profile, symbolic size and reified finite/nonzero domain; syntax-only
+steps cannot change the readback or memory frame. This preserves the existing
+Correct scope, not an equality between the kernels' final memories.
+
 Stable logsumexp retains its single bf16 store at `pid` while replacing both
 exp implementations with libdevice.exp. Its exp-sub law is admitted; LOG-MUL
 and `tl.log(libdevice.exp(a)) = a` remain explicit obligations. The existing
@@ -193,6 +205,15 @@ bf16 memory cell a real memory cell. This distinction matters for the
 
 The checks cover:
 
+- The OnlineSoftmax observation update passes the full library/example build
+  and independent comparator checking of 43 theorem targets across its view,
+  execution contract, public specification and boundary fixture. Regressions
+  check its eleven printed scalar atoms, source independence, missing-register
+  failure, aliased readback and both memory frames. The log rerun profile's
+  four fp32 kernel specializations compile for sm_90; no new GPU results or
+  admissions are claimed. CPU tests retain negative log-exp inputs and reject
+  nonfinite outputs on valid inputs, and existing admission tables remain
+  byte-for-byte reproducible from their frozen reports.
 - The bounded-count update passes `lake build VeriTile TritonBenchSpecExamples`
   and 28 regression tests. It checks the two public FP specifications, their
   13 printed scalar atoms, source independence, the last admitted successor,
