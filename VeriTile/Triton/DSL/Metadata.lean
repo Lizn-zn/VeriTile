@@ -93,6 +93,8 @@ private partial def exprRegions (assigned : List String) :
             | _ => acc) []
       exprRegions assigned cmp ++ exprRegions assigned v ++ kwargRegions ++ staticPtrRegions assigned p
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions assigned e
+  | `(tritonExpr| libdevice.exp($e:tritonExpr))  => exprRegions assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.exp($e:tritonExpr)) => exprRegions assigned e
   | `(tritonExpr| tl.exp2($e:tritonExpr))        => exprRegions assigned e
   | `(tritonExpr| tl.math.exp2($e:tritonExpr))   => exprRegions assigned e
   | `(tritonExpr| tl.extra.cuda.libdevice.pow($a:tritonExpr, $b:tritonExpr)) =>

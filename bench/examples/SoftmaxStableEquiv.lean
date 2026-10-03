@@ -1,3 +1,6 @@
+/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
+with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 import VeriTile.Triton
 import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
@@ -73,7 +76,7 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKerne
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
-  e    := tl.exp(x)
+  e    := libdevice.exp(x)
   s    := tl.sum(e, axis=0)
   y    := e / s
   tl.store($(yReg) + offs, (y).to(tl.bfloat16))
@@ -86,7 +89,7 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := e / s
   tl.store($(yReg) + offs, (y).to(tl.bfloat16))

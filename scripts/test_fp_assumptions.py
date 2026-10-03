@@ -158,6 +158,45 @@ theorem repeated (n : Nat) (ha : Spec.AcceptedAtom used) :
         self.assertNotIn('unresolved', output)
         self.assertNotIn('  none', output)
 
+    def test_weakening_reports_input_atoms_and_opaque_inputs_not_branch_binders(self):
+        output = self.run_lean("""
+theorem weaken {rules : Spec.Assumptions Nat} {lhs rhs : List Nat}
+    (h : Spec.Derivation rules lhs rhs) :
+    Spec.Derivation (rules ++ [unused]) lhs rhs := by
+  induction h with
+  | refl code => exact .refl code
+  | atom e he ha => exact .atom e (List.mem_append_left _ he) ha
+  | symm _ ih => exact .symm ih
+  | trans _ _ ih₁ ih₂ => exact .trans ih₁ ih₂
+  | frame beforeCode afterCode _ ih => exact .frame beforeCode afterCode ih
+theorem weakened (h : Spec.AcceptedAtom used) :
+    Spec.Derivation ([used] ++ [unused]) [0] [1] :=
+  weaken (step [used] used (by simp) h)
+#print_fp_assumptions weakened
+theorem weakenedOpaque (h : Spec.Derivation [used] [0] [1]) :
+    Spec.Derivation ([used] ++ [unused]) [0] [1] := weaken h
+#print_fp_assumptions weakenedOpaque
+""")
+        self.assertEqual(output.count('  used\n'), 1)
+        self.assertNotIn('symbolic atom', output)
+        self.assertIn('unresolved FP proof: h', output)
+        self.assertNotIn('  unused', output)
+        self.assertNotIn('  none', output)
+
+    def test_unpacking_a_symbolic_entry_does_not_hide_its_admission(self):
+        output = self.run_lean("""
+structure Packed where
+  atom : Spec.RuleEntry Nat
+  accepted : Spec.AcceptedAtom atom
+theorem unpacked (p : Packed) :
+    Spec.Derivation [p.atom] p.atom.rule.lhs p.atom.rule.rhs := by
+  cases p with
+  | mk atom accepted => exact .atom atom (by simp) accepted
+#print_fp_assumptions unpacked
+""")
+        self.assertIn('[symbolic atom]', output)
+        self.assertNotIn('  none', output)
+
     def test_structural_composition_keeps_atoms_and_opaque_steps_visible(self):
         output = self.run_lean("""
 structure Code where

@@ -1,4 +1,7 @@
-/- Opaque execution of the original naive and stable tl.exp softmax kernels.
+/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
+with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
+/- Opaque execution of the naive and stable libdevice.exp softmax kernels.
 The outputs retain their bf16 casts; max, exp and sum have no implicit laws. -/
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.StructuralIO
@@ -12,7 +15,7 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := tri
   pid := tl.program_id(0)
   offs := pid * $(B) + tl.arange(0, $(B))
   x := tl.load($(xReg) + offs)
-  e := tl.exp(x)
+  e := libdevice.exp(x)
   s := tl.sum(e, axis=0)
   y := e / s
   tl.store($(yReg) + offs, (y).to(tl.bfloat16))
@@ -23,7 +26,7 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := tr
   offs := pid * $(B) + tl.arange(0, $(B))
   x := tl.load($(xReg) + offs)
   m := tl.max(x, axis=0)
-  e := tl.exp(x - m)
+  e := libdevice.exp(x - m)
   s := tl.sum(e, axis=0)
   y := e / s
   tl.store($(yReg) + offs, (y).to(tl.bfloat16))
@@ -33,10 +36,10 @@ def maximum {α : Type} (M : Algebra α) (xs : Fin B → α) : α :=
   M.reduceMax none (shape := [B]) ⟨0, by simp⟩ Bool.false (fun i => xs i.1) PUnit.unit
 
 def exponentials {α : Type} (M : Algebra α) (xs : Fin B → α) : Fin B → α :=
-  fun i => M.unary none .exp (xs i)
+  fun i => M.unary none .libdeviceExp (xs i)
 
 def shifted {α : Type} (M : Algebra α) (xs : Fin B → α) : Fin B → α :=
-  fun i => M.unary none .exp (M.binary none .real .sub (xs i) (maximum M xs))
+  fun i => M.unary none .libdeviceExp (M.binary none .real .sub (xs i) (maximum M xs))
 
 def rowSum {α : Type} (M : Algebra α) (xs : Fin B → α) : α :=
   M.reduceSum none (shape := [B]) ⟨0, by simp⟩ Bool.false (fun i => xs i.1) PUnit.unit

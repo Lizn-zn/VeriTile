@@ -102,6 +102,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .shiftLeft bc a b => .shiftLeft bc a.eraseDType b.eraseDType
   | .shiftRight bc a b => .shiftRight bc a.eraseDType b.eraseDType
   | .exp a => .exp a.eraseDType
+  | .libdeviceExp a => .libdeviceExp a.eraseDType
   | .exp2 a => .exp2 a.eraseDType
   | .log a => .log a.eraseDType
   | .log2 a => .log2 a.eraseDType

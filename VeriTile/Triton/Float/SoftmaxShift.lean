@@ -1,6 +1,6 @@
-/- Conditional softmax shift derived through scalar arithmetic and an explicit
-sum tree. The original tl.exp EXP-SUB relation still needs matching admission:
-the published libdevice.exp row is deliberately not bound to this symbol. -/
+/- Softmax shift derived through scalar arithmetic and an explicit sum tree.
+Exp denotes libdevice.exp. Float/Exponential obtains its scalar EXP-SUB law
+from the admitted report; PR #12's tl.exp version failed the bias budget. -/
 import VeriTile.Triton.Float.WelfordConditions
 
 namespace VeriTile.Triton.FP.SoftmaxShift
@@ -8,7 +8,7 @@ open Structural Guarded ScalarArithmetic ScalarReduction GuardExpression
 open Equational (ReductionTree)
 open WelfordConditions
 
-def exp {α : Type} (M : Algebra α) (a : α) : α := M.unary (some .fp32) .exp a
+def exp {α : Type} (M : Algebra α) (a : α) : α := M.unary (some .fp32) .libdeviceExp a
 
 def exponentials {α : Type} (M : Algebra α) (xs : Fin N → α) : Fin N → α :=
   fun i => exp M (xs i)
@@ -18,9 +18,9 @@ def shifted {α : Type} (M : Algebra α) (xs : Fin N → α) (m : α) : Fin N �
 
 def scale {α : Type} (M : Algebra α) (m : α) : α := div M (one M) (exp M m)
 
-/-- A scalar obligation for the original intrinsic, not an admitted rule or
-whole-softmax premise. Its two operands retain their finite-value guards. -/
-structure IntrinsicExpSub {α : Type} (M : Algebra α) (D : Domain α) : Prop where
+/-- Scalar libdevice law, supplied from the admitted fragment by Exponential.
+Its two operands retain their finite-value guards. -/
+structure LibdeviceExpSub {α : Type} (M : Algebra α) (D : Domain α) : Prop where
   apply : ∀ a b, D .finite a → D .finite b →
     exp M (sub M a b) = div M (exp M a) (exp M b)
 
@@ -36,7 +36,7 @@ structure ShiftDomain {α : Type} (M : Algebra α) (D : Domain α)
 
 theorem shifted_lane {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α)
-    (hExp : IntrinsicExpSub M D) (xs : Fin N → α) (m : α) (tree : ReductionTree N)
+    (hExp : LibdeviceExpSub M D) (xs : Fin N → α) (m : α) (tree : ReductionTree N)
     (hd : ShiftDomain M D xs m tree) (i : Fin N) :
     shifted M xs m i = mul M (exponentials M xs i) (scale M m) := by
   unfold shifted scale exponentials
@@ -47,7 +47,7 @@ theorem shifted_lane {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
 scalar atoms; neither a reduction nor a softmax identity is assumed. -/
 theorem normalized {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α)
-    (hExp : IntrinsicExpSub M D) (xs : Fin N → α) (m : α) (tree : ReductionTree N)
+    (hExp : LibdeviceExpSub M D) (xs : Fin N → α) (m : α) (tree : ReductionTree N)
     (hd : ShiftDomain M D xs m tree) (i : Fin N) :
     div M (shifted M xs m i) (value M (shifted M xs m) (zero M) tree) =
       div M (exponentials M xs i) (value M (exponentials M xs) (zero M) tree) := by

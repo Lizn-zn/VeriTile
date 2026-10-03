@@ -1,4 +1,4 @@
-/- Original softmax execution and the boundary of the pending intrinsic law.
+/- Libdevice softmax execution and the boundary of its scalar law.
 The rational fixtures are logical models, not GPU evidence or FP admissions. -/
 import bench.examples.support.SoftmaxStableContract
 import VeriTile.Meta.StatementAudit
@@ -59,14 +59,14 @@ private def initial : State ℚ where
   numPids := fun _ => 2
   undef := fun d _ _ => defaultValue d
 
--- The required intrinsic equation is satisfiable independently of any
+-- The required libdevice equation is satisfiable independently of any
 -- experimental claim. It is not a law of an arbitrary unary interpretation.
-theorem constant_one_exp_sub : FP.SoftmaxShift.IntrinsicExpSub (model fun _ => 1) domain := by
+theorem constant_one_exp_sub : FP.SoftmaxShift.LibdeviceExpSub (model fun _ => 1) domain := by
   constructor
   intros
   norm_num [FP.SoftmaxShift.exp, FP.ScalarArithmetic.div, model]
 
-theorem arbitrary_exp_sub_fails : ¬ FP.SoftmaxShift.IntrinsicExpSub (model fun a => a + 1) domain := by
+theorem arbitrary_exp_sub_fails : ¬ FP.SoftmaxShift.LibdeviceExpSub (model fun a => a + 1) domain := by
   intro h
   have bad := h.apply 0 1 trivial trivial
   norm_num [FP.SoftmaxShift.exp, FP.ScalarArithmetic.sub, FP.ScalarArithmetic.div, model] at bad
@@ -91,7 +91,7 @@ theorem domain_is_satisfiable :
 
 -- Even EXP-SUB alone does not justify inverse cancellation: constant zero
 -- satisfies that equation over rationals but fails the nonzero domain.
-theorem zero_exp_sub : FP.SoftmaxShift.IntrinsicExpSub (model fun _ => 0) domain := by
+theorem zero_exp_sub : FP.SoftmaxShift.LibdeviceExpSub (model fun _ => 0) domain := by
   constructor
   intros
   norm_num [FP.SoftmaxShift.exp, FP.ScalarArithmetic.div, model]

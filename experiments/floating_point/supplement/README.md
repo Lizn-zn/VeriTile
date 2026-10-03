@@ -184,10 +184,16 @@ python3 scripts/check_numerics_supplement.py report Logs/fp-log-mul-domain --out
 exp 中间值的有限性、log 输入的正性等适用条件仍需在使用处处理。
 这不要求在证明第二步固定实验 shape。
 
-两个 reciprocal 例子的 FP 证明已完成，其余算法仍需以下工作：
+两个 reciprocal 例子和 stable softmax 的 FP 证明已完成，其余算法仍需以下工作：
 
 - reciprocal 两例已将普通除法、精度、定义域和最终 cast 与对应原子衔接，完成 FP 证明。
-- stable softmax、logsumexp、online softmax 还需要从基础关系推导 reduction/loop 不变量。
+- stable softmax 已用通过准入的 `libdevice.exp` EXP-SUB 和基础算术原子完成证明。
+  PR #12 的 fp32 `tl.exp` EXP-SUB-INTRINSIC 测得 B=0.1608954387 > 0.05，
+  不满足当前准入条件；不能用 libdevice 的结果替代它的结果。
+- logsumexp 的 libdevice EXP-SUB 已接入；LOG-MUL 需按上述定义域过滤策略重跑，
+  `tl.log(libdevice.exp(a)) = a` 还未测过，旧 LOG-EXP 使用的是 `tl.exp`。
+- online softmax 的 libdevice EXP-SUB、reduction/loop 不变量与执行已接通，
+  仍需确定公开 specification 的观察对象。
 - Welford/LayerNorm 的 count 零转换及 successor 已有独立 GPU 实验；successor
   仅覆盖 `0 <= i < 2^24`，还需保留整数范围的 Lean 绑定及非零/可表示性证明。
   空行的实数总除法行为也不能直接当作 IEEE 浮点的 `0/0` 行为。

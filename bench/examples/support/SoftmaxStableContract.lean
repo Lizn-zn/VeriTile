@@ -1,6 +1,5 @@
-/- The original tl.exp softmax shift, conditional on a matching scalar
-EXP-SUB law. The accepted libdevice.exp report does not establish that
-obligation. All reduction and normalization identities are derived below. -/
+/- The libdevice.exp softmax shift, derived from its scalar EXP-SUB law.
+All reduction and normalization identities are derived below. -/
 import bench.examples.support.SoftmaxStableExecution
 import VeriTile.Triton.Float.SoftmaxShift
 import VeriTile.Triton.Float.ScheduledIO
@@ -63,10 +62,10 @@ theorem sum_value {α : Type} (M : Algebra α) (plans : Schedules) (xs : Fin B �
     rowSum (engine M plans) xs = value M xs (zero M) (rowPlan plans B).tree := rfl
 
 /-- The common output cast preserves the scalar-derived normalization
-identity. Exp itself is still the original intrinsic, not the tested libdevice variant. -/
+identity. Exp retains the tested libdevice implementation identity. -/
 theorem original_values {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
-    (hExp : FP.SoftmaxShift.IntrinsicExpSub M D) (xs : Fin B → α)
+    (hExp : FP.SoftmaxShift.LibdeviceExpSub M D) (xs : Fin B → α)
     (hd : FP.SoftmaxShift.ShiftDomain M D xs (center M xs) (rowPlan plans B).tree) (i : Fin B) :
     normalizedValue (engine M plans) (shifted (engine M plans) xs) i =
       normalizedValue (engine M plans) (exponentials (engine M plans) xs) i := by
@@ -77,11 +76,11 @@ theorem original_values {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
 
 /-- The original programs succeed, agree in every bf16 output lane and frame
 all other memory under the selected arithmetic theory, syntactic domain and
-matching scalar EXP-SUB obligation. This is not a completed FP specification. -/
+matching scalar EXP-SUB law. SoftmaxStableFPEquiv binds that law to admission. -/
 theorem original_runs_under_exp {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
     (x y : RegionName) (B : Nat) (hB : 0 < B)
-    (hExp : FP.SoftmaxShift.IntrinsicExpSub M D) (hd : (requirements x B plans).Holds M D s) :
+    (hExp : FP.SoftmaxShift.LibdeviceExpSub M D) (hd : (requirements x B plans).Holds M D s) :
     IO₁PrivateScratch (stable x y B).io ∧ IO₁PrivateScratch (naive x y B).io ∧
     ∃ a b,
       FP.Structural.exec ((stable x y B).profile.algebra M plans) (stable x y B).io.kernel s = some a ∧

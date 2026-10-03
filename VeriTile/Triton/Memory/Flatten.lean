@@ -204,6 +204,7 @@ def flattenOp (A : FlatAlloc) :
   | _, _, .shiftLeft bc a b => .shiftLeft bc (A.flattenOp a) (A.flattenOp b)
   | _, _, .shiftRight bc a b => .shiftRight bc (A.flattenOp a) (A.flattenOp b)
   | _, _, .exp a => .exp (A.flattenOp a)
+  | _, _, .libdeviceExp a => .libdeviceExp (A.flattenOp a)
   | _, _, .exp2 a => .exp2 (A.flattenOp a)
   | _, _, .log a => .log (A.flattenOp a)
   | _, _, .log2 a => .log2 (A.flattenOp a)
@@ -480,6 +481,7 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .shiftLeft _ a b => a.FlattenOk ∧ b.FlattenOk
   | .shiftRight _ a b => a.FlattenOk ∧ b.FlattenOk
   | .exp a => a.FlattenOk
+  | .libdeviceExp a => a.FlattenOk
   | .exp2 a => a.FlattenOk
   | .log a => a.FlattenOk
   | .log2 a => a.FlattenOk
@@ -582,6 +584,7 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .shiftLeft _ a b => a.FlattenOkR ∧ b.FlattenOkR
   | .shiftRight _ a b => a.FlattenOkR ∧ b.FlattenOkR
   | .exp a => a.FlattenOkR
+  | .libdeviceExp a => a.FlattenOkR
   | .exp2 a => a.FlattenOkR
   | .log a => a.FlattenOkR
   | .log2 a => a.FlattenOkR
@@ -835,6 +838,7 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .shiftLeft _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .shiftRight _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .exp a => a.SafeAt bounds s
+  | .libdeviceExp a => a.SafeAt bounds s
   | .exp2 a => a.SafeAt bounds s
   | .log a => a.SafeAt bounds s
   | .log2 a => a.SafeAt bounds s
@@ -1203,6 +1207,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .int) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .exp a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .libdeviceExp a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,

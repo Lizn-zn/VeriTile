@@ -39,7 +39,7 @@ private def initial : State ℚ where
   numPids := fun _ => 2
   undef := fun d _ _ => defaultValue d
 
-theorem exp_sub_holds : FP.SoftmaxShift.IntrinsicExpSub model domain := by
+theorem exp_sub_holds : FP.SoftmaxShift.LibdeviceExpSub model domain := by
   constructor
   intros
   norm_num [FP.SoftmaxShift.exp, FP.ScalarArithmetic.div, model]

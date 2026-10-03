@@ -1,3 +1,6 @@
+/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
+with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 /- Opaque FP execution of the original online softmax recurrence. The source
 has no store: the result lives in m/l, and all memory is preserved. Equating
 this recurrence to the batch result still needs the admitted numerical atoms. -/
@@ -16,7 +19,7 @@ def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : ComputeKernel := t
   tl.for i in $(N) {
     xi    := tl.load($(xReg) + (pid * $(N) + i))
     m_new := tl.max(m, xi)
-    l     := tl.exp(m - m_new) * l + tl.exp(xi - m_new)
+    l     := libdevice.exp(m - m_new) * l + libdevice.exp(xi - m_new)
     m     := m_new
   }
 }
@@ -29,8 +32,8 @@ def body (xReg : RegionName) (N : Nat) : List ComputeStmt :=
         (.ref .nat [] "i"))) .none)),
    .assign .real [] "m_new" (.alg (.max2 .nil (ref "m") (ref "xi"))),
    .assign .real [] "l" (.alg (.add .real .nil
-      (.mul .real .nil (.exp (.sub .real .nil (ref "m") (ref "m_new"))) (ref "l"))
-      (.exp (.sub .real .nil (ref "xi") (ref "m_new"))))),
+      (.mul .real .nil (.libdeviceExp (.sub .real .nil (ref "m") (ref "m_new"))) (ref "l"))
+      (.libdeviceExp (.sub .real .nil (ref "xi") (ref "m_new"))))),
    .assign .real [] "m" (.alg (ref "m_new"))]
 
 def initialCode : List ComputeStmt :=
@@ -46,8 +49,8 @@ def update {α : Type} (M : Algebra α) (x : α) (acc : α × α) : α × α :=
   let m := M.binary none .real .max acc.1 x
   (m, M.binary none .real .add
     (M.binary none .real .mul
-      (M.unary none .exp (M.binary none .real .sub acc.1 m)) acc.2)
-    (M.unary none .exp (M.binary none .real .sub x m)))
+      (M.unary none .libdeviceExp (M.binary none .real .sub acc.1 m)) acc.2)
+    (M.unary none .libdeviceExp (M.binary none .real .sub x m)))
 
 def recurrence {α : Type} (M : Algebra α) (xs : Fin N → α) : Nat → α × α
   | 0 => (M.negInf, M.literal none .real 0)

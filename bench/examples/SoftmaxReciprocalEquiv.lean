@@ -1,3 +1,6 @@
+/- Use the shared softmax libdevice.exp implementation. PR #12 rejected
+fp32 tl.exp exp-sub under the configured probe (B = 0.1608954387 > 0.05).
+The reciprocal rewrite itself treats exp opaquely, at its stated precision. -/
 import VeriTile.Triton
 import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
@@ -76,7 +79,7 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := e / s
   tl.store($(yReg) + offs, (y).to(tl.bfloat16))
@@ -89,7 +92,7 @@ def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKerne
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x      := tl.load($(xReg) + offs)
   m      := tl.max(x, axis=0)
-  e      := tl.exp(x - m)
+  e      := libdevice.exp(x - m)
   s      := tl.sum(e, axis=0)
   inv_s  := 1 / s
   y      := e * inv_s

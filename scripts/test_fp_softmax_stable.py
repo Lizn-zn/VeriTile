@@ -1,4 +1,4 @@
-"""Original tl.exp softmax, conditional normalization and scheduled IO boundaries."""
+"""Libdevice softmax, scalar normalization and scheduled IO boundaries."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -49,7 +49,7 @@ run_cmd do
     throwError "FP proof imported its correctness counterpart"
 ''')
 
-    def test_intrinsic_domain_execution_and_assumption_reporting(self):
+    def test_libdevice_domain_execution_and_assumption_reporting(self):
         output = self.check_lean((ROOT / 'bench/tests/FPSoftmaxStable.lean').read_text())
         self.assertEqual(output[output.index('FP assumptions used by'):],
                          'FP assumptions used by opaque_softmax:\n'

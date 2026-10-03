@@ -1,3 +1,6 @@
+/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
+with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 /-
 bench/examples/OnlineSoftmax
 
@@ -56,7 +59,7 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := e / s
   tl.store($(yReg) + offs, y)
@@ -72,7 +75,7 @@ def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : ComputeKernel := t
   tl.for i in $(N) {
     xi    := tl.load($(xReg) + (pid * $(N) + i))
     m_new := tl.max(m, xi)
-    l     := tl.exp(m - m_new) * l + tl.exp(xi - m_new)
+    l     := libdevice.exp(m - m_new) * l + libdevice.exp(xi - m_new)
     m     := m_new
   }
 }
@@ -89,10 +92,10 @@ private def onlineSoftmaxLoopBody (xReg : RegionName) (N : Nat) : List Stmt :=
     Stmt.assign .real [] "l"
       (Op.add .real .nil
         (Op.mul .real .nil
-          (Op.exp (Op.sub .real .nil
+          (Op.libdeviceExp (Op.sub .real .nil
             (Op.ref .real [] "m") (Op.ref .real [] "m_new")))
           (Op.ref .real [] "l"))
-        (Op.exp (Op.sub .real .nil
+        (Op.libdeviceExp (Op.sub .real .nil
           (Op.ref .real [] "xi") (Op.ref .real [] "m_new")))),
     Stmt.assign .real [] "m" (Op.ref .real [] "m_new")]
 
@@ -398,10 +401,10 @@ theorem online_softmax_correct
           Stmt.assign .real [] "l"
             (Op.add .real .nil
               (Op.mul .real .nil
-                (Op.exp (Op.sub .real .nil
+                (Op.libdeviceExp (Op.sub .real .nil
                   (Op.ref .real [] "m") (Op.ref .real [] "m_new")))
                 (Op.ref .real [] "l"))
-              (Op.exp (Op.sub .real .nil
+              (Op.libdeviceExp (Op.sub .real .nil
                 (Op.ref .real [] "xi") (Op.ref .real [] "m_new")))),
           Stmt.assign .real [] "m" (Op.ref .real [] "m_new")]
         s0 = some sLoop := by

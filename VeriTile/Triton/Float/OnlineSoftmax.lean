@@ -5,7 +5,7 @@ import VeriTile.Triton.Float.SoftmaxShift
 
 namespace VeriTile.Triton.FP.OnlineSoftmax
 open Structural Guarded ScalarArithmetic ScalarReduction
-open SoftmaxShift (exp IntrinsicExpSub)
+open SoftmaxShift (exp LibdeviceExpSub)
 
 def maximum {α : Type} (M : Algebra α) (a b : α) : α :=
   M.binary (some .fp32) .real .max a b
@@ -75,7 +75,7 @@ theorem IterationDomain.restrict {α : Type} {M : Algebra α} {D : Domain α} {x
 
 section Derivation
 variable {α : Type} [Inhabited α] (R : Rules) (M : Algebra α) (D : Domain α)
-  (hM : Models R.assumptions M D) (s : State α) (hExp : IntrinsicExpSub M D)
+  (hM : Models R.assumptions M D) (s : State α) (hExp : LibdeviceExpSub M D)
 include R hM s hExp
 
 theorem initial_recovery (x : α) (hd : InitDomain M D x) :

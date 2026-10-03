@@ -120,6 +120,9 @@ inductive Op : TileDType → TileShape → Type where
   | shiftLeft : Broadcast a b out → Op .nat a → Op .nat b → Op .nat out
   | shiftRight : Broadcast a b out → Op .nat a → Op .nat b → Op .nat out
   | exp       : Op .real shape → Op .real shape
+  /-- CUDA libdevice exp. Real semantics is exp, but FP interpretation must
+  retain its identity separately from Triton's approximate `tl.exp`. -/
+  | libdeviceExp : Op .real shape → Op .real shape
   | exp2      : Op .real shape → Op .real shape
   | log       : Op .real shape → Op .real shape
   | log2      : Op .real shape → Op .real shape

@@ -1,8 +1,9 @@
 /- Original logsumexp programs connected through scalar-derived sum recovery.
-The intrinsic exp/log obligations below remain unadmitted. -/
+Libdevice exp-sub is admitted; the two log obligations remain pending. -/
 import bench.examples.support.StableLogSumExpExecution
 import bench.examples.support.SoftmaxStableContract
 import VeriTile.Triton.Float.LogSumExpShift
+import VeriTile.Triton.Float.Exponential
 
 namespace VeriTile.Bench.Examples.StableLogSumExpFPContract
 open VeriTile Triton FP.Structural FP.Guarded FP.ScalarArithmetic
@@ -36,8 +37,8 @@ theorem same_signature (x y : RegionName) (B : Nat) :
 
 theorem original_values {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
-    (hExp : FP.SoftmaxShift.IntrinsicExpSub M D)
-    (hMul : FP.LogSumExpShift.IntrinsicLogMul M D) (hLogExp : FP.LogSumExpShift.IntrinsicLogExp M D)
+    (hExp : FP.SoftmaxShift.LibdeviceExpSub M D)
+    (hMul : FP.LogSumExpShift.IntrinsicLogMul M D) (hLogExp : FP.LogSumExpShift.LogLibdeviceExp M D)
     (xs : Fin B → α)
     (hd : FP.LogSumExpShift.ShiftDomain M D xs (center M xs) (rowPlan plans B).tree) :
     stableValue (engine M plans) xs = directValue (engine M plans) xs := by
@@ -48,13 +49,12 @@ theorem original_values {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
       (center M xs) (rowPlan plans B).tree hd)
 
 /-- Both original kernels succeed and agree at the original scalar bf16
-output, preserving all other cells. Only primitive exp/log obligations remain;
+output, preserving all other cells. Only primitive log obligations remain;
 this conditional theorem is not a completed admitted FP specification. -/
-theorem original_runs_under_exp_log {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
+theorem original_runs_under_log {α : Type} [Inhabited α] (R : FP.Exponential.Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
     (x y : RegionName) (B : Nat) (hB : 0 < B)
-    (hExp : FP.SoftmaxShift.IntrinsicExpSub M D)
-    (hMul : FP.LogSumExpShift.IntrinsicLogMul M D) (hLogExp : FP.LogSumExpShift.IntrinsicLogExp M D)
+    (hMul : FP.LogSumExpShift.IntrinsicLogMul M D) (hLogExp : FP.LogSumExpShift.LogLibdeviceExp M D)
     (hd : (requirements x B plans).Holds M D s) :
     IO₁PrivateScratch (stable x y B).io ∧ IO₁PrivateScratch (direct x y B).io ∧
     ∃ a b,
@@ -69,7 +69,8 @@ theorem original_runs_under_exp_log {α : Type} [Inhabited α] (R : Rules) (M : 
   refine ⟨by simp [stable, IO₁PrivateScratch, stableIO, directIO],
     by simp [direct, IO₁PrivateScratch, directIO], a, b, ha, hb, ?_, ?_, ?_⟩
   · exact hva.trans ((congrArg (Cell.mk .bf16)
-      (original_values R M D hM s plans hExp hMul hLogExp xs hd')).trans hvb.symm)
+      (original_values R.arithmetic M D (FP.Exponential.arithmetic_models R M D hM) s plans
+        (FP.Exponential.exp_sub R M D hM s) hMul hLogExp xs hd')).trans hvb.symm)
   · intro r o ho _
     apply hfa r o
     simpa only [stable, stableIO, directIO, Fin.forall_fin_one, Fin.val_zero, Nat.add_zero] using ho

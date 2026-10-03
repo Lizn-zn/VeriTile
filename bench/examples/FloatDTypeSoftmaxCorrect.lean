@@ -1,3 +1,6 @@
+/- Use the shared softmax libdevice.exp implementation. PR #12 rejected
+fp32 tl.exp exp-sub under the configured probe (B = 0.1608954387 > 0.05).
+The reciprocal rewrite itself treats exp opaquely, at its stated precision. -/
 /- Real correctness of the original fp32-load, fp64-work softmax pair.
 Both original kernels are written here; their numerical annotations are erased
 only when stating mathematical correctness. -/
@@ -18,7 +21,7 @@ def floatStableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : Comput
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := (tl.load($(xReg) + offs, dtype=tl.float32)).to(tl.float64)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := e / s
   tl.store($(yReg) + offs, (y).to(tl.float32))
@@ -31,7 +34,7 @@ def floatSoftmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : Compute
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x      := (tl.load($(xReg) + offs, dtype=tl.float32)).to(tl.float64)
   m      := tl.max(x, axis=0)
-  e      := tl.exp(x - m)
+  e      := libdevice.exp(x - m)
   s      := tl.sum(e, axis=0)
   inv_s  := 1 / s
   y      := e * inv_s

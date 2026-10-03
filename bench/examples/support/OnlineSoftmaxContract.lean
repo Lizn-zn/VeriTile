@@ -4,6 +4,7 @@ does not claim that the online source stores an output array. -/
 import bench.examples.support.OnlineSoftmaxComparison
 import bench.examples.support.OnlineSoftmaxBatch
 import bench.examples.support.SoftmaxStableContract
+import VeriTile.Triton.Float.Exponential
 
 namespace VeriTile.Bench.Examples.OnlineSoftmaxFPContract
 open VeriTile Triton FP.Structural FP.Guarded FP.ScalarArithmetic FP.GuardExpression
@@ -31,7 +32,7 @@ structure ComparisonDomain {α : Type} (M : Algebra α) (D : Domain α)
 theorem normalized_values {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α)
     (xs : Nat → α) (N : Nat) (hN : 0 < N) (plans : Schedules)
-    (hExp : FP.SoftmaxShift.IntrinsicExpSub M D) (hd : ComparisonDomain M D xs N plans) (i : Fin N) :
+    (hExp : FP.SoftmaxShift.LibdeviceExpSub M D) (hd : ComparisonDomain M D xs N plans) (i : Fin N) :
     OnlineSoftmaxFPBatch.outputValue (SoftmaxStableFPContract.engine M plans) (fun i : Fin N => xs i.val) i =
       div M (FP.SoftmaxShift.exp M (sub M (xs i.val) (FP.OnlineSoftmax.state M xs N).1))
         (FP.OnlineSoftmax.state M xs N).2 := by
@@ -85,9 +86,9 @@ theorem requirements_holds {α : Type} [Inhabited α] (M : Algebra α) (D : Doma
 /-- Preserve both original executions. The batch writes its original real
 cells and frames other memory; the online loop only computes registers and
 preserves all memory. The comparison observes their normalized numerical values. -/
-theorem original_normalization_runs {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
+theorem original_normalization_runs {α : Type} [Inhabited α] (R : FP.Exponential.Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
-    (x y : RegionName) (N : Nat) (hN : 0 < N) (hExp : FP.SoftmaxShift.IntrinsicExpSub M D)
+    (x y : RegionName) (N : Nat) (hN : 0 < N)
     (hd : (requirements x N plans).Holds M D s) :
     ∃ batch online m l,
       FP.Structural.exec (SoftmaxStableFPContract.engine M plans)
@@ -109,6 +110,7 @@ theorem original_normalization_runs {α : Type} [Inhabited α] (R : Rules) (M : 
     ha, hb, hm, hl, ?_, hfa, hmem, hpids⟩
   intro i
   exact (hva i).trans (congrArg (Cell.mk .real)
-    (normalized_values R M D hM s xs N hN plans hExp ((requirements_holds M D s x N plans).mp hd) i))
+    (normalized_values R.arithmetic M D (FP.Exponential.arithmetic_models R M D hM) s xs N hN plans
+      (FP.Exponential.exp_sub R M D hM s) ((requirements_holds M D s x N plans).mp hd) i))
 
 end VeriTile.Bench.Examples.OnlineSoftmaxFPContract

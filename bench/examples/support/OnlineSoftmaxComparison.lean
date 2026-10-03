@@ -43,7 +43,7 @@ original loop's full memory preservation and unchanged program IDs. No output
 store, maximum equality or whole-recurrence numerical assumption is supplied. -/
 theorem original_recovery_run {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α)
-    (x y : RegionName) (N : Nat) (hN : 0 < N) (hExp : FP.SoftmaxShift.IntrinsicExpSub M D)
+    (x y : RegionName) (N : Nat) (hN : 0 < N) (hExp : FP.SoftmaxShift.LibdeviceExpSub M D)
     (hd : (requirements x N).Holds M D s) :
     ∃ t m l, FP.Structural.exec (engine M) (onlineSoftmaxKernel x y N) s = some t ∧
       t.regs .real [] "m" = some (fun _ => m) ∧ t.regs .real [] "l" = some (fun _ => l) ∧

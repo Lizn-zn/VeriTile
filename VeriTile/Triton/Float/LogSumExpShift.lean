@@ -1,10 +1,12 @@
-/- Scalar-derived logsumexp shift. The three intrinsic transcendental laws
-are explicit pending obligations, not entries in the admission table. -/
+/- Scalar-derived logsumexp shift using libdevice.exp. EXP-SUB is supplied
+by Float/Exponential; tl.log product and tl.log(libdevice.exp(a)) cancellation
+still require matching admission. The old tl.log(tl.exp(a)) report cannot
+establish the latter relation. -/
 import VeriTile.Triton.Float.SoftmaxShift
 
 namespace VeriTile.Triton.FP.LogSumExpShift
 open Structural Guarded ScalarArithmetic ScalarReduction GuardExpression
-open SoftmaxShift (exp exponentials shifted scale IntrinsicExpSub)
+open SoftmaxShift (exp exponentials shifted scale LibdeviceExpSub)
 open WelfordConditions
 open Equational (ReductionTree)
 
@@ -14,7 +16,7 @@ structure IntrinsicLogMul {α : Type} (M : Algebra α) (D : Domain α) : Prop wh
   apply : ∀ a b, D .finite a → D .finite b → D .positive a → D .positive b →
     log M (mul M a b) = add M (log M a) (log M b)
 
-structure IntrinsicLogExp {α : Type} (M : Algebra α) (D : Domain α) : Prop where
+structure LogLibdeviceExp {α : Type} (M : Algebra α) (D : Domain α) : Prop where
   apply : ∀ a, D .finite a → log M (exp M a) = a
 
 /-- Only domain predicates on concrete operands and intermediate results.
@@ -38,7 +40,7 @@ structure ShiftDomain {α : Type} (M : Algebra α) (D : Domain α)
 
 theorem recover_sum {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α)
-    (hExp : IntrinsicExpSub M D) (xs : Fin N → α) (m : α) (tree : ReductionTree N)
+    (hExp : LibdeviceExpSub M D) (xs : Fin N → α) (m : α) (tree : ReductionTree N)
     (hd : ShiftDomain M D xs m tree) :
     mul M (value M (shifted M xs m) (zero M) tree) (exp M m) =
       value M (exponentials M xs) (zero M) tree := by
@@ -60,7 +62,7 @@ theorem recover_sum {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
 cancel log(exp(m)). Max is still opaque and no whole-row identity is assumed. -/
 theorem shifted_result {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α)
-    (hExp : IntrinsicExpSub M D) (hMul : IntrinsicLogMul M D) (hLogExp : IntrinsicLogExp M D)
+    (hExp : LibdeviceExpSub M D) (hMul : IntrinsicLogMul M D) (hLogExp : LogLibdeviceExp M D)
     (xs : Fin N → α) (m : α) (tree : ReductionTree N) (hd : ShiftDomain M D xs m tree) :
     add M m (log M (value M (shifted M xs m) (zero M) tree)) =
       log M (value M (exponentials M xs) (zero M) tree) := by

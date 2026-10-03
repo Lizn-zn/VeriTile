@@ -45,7 +45,7 @@ inductive Binary where
   deriving DecidableEq, Repr
 
 inductive Unary where
-  | exp | exp2 | log | log2 | sigmoid | sqrt | rsqrt | tanh
+  | exp | libdeviceExp | exp2 | log | log2 | sigmoid | sqrt | rsqrt | tanh
   | sin | cos | tan | atan | cosh | sinh | erf
   deriving DecidableEq, Repr
 
@@ -286,6 +286,7 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .mul d bc a b, s => return bop (numeric M p .mul d) bc (← evalOp M p a s) (← evalOp M p b s)
   | .div d bc a b, s => return bop (numeric M p .div d) bc (← evalOp M p a s) (← evalOp M p b s)
   | .exp a, s => return (M.unary p .exp) ∘ (← evalOp M p a s)
+  | .libdeviceExp a, s => return (M.unary p .libdeviceExp) ∘ (← evalOp M p a s)
   | .exp2 a, s => return (M.unary p .exp2) ∘ (← evalOp M p a s)
   | .log a, s => return (M.unary p .log) ∘ (← evalOp M p a s)
   | .log2 a, s => return (M.unary p .log2) ∘ (← evalOp M p a s)

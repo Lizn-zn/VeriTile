@@ -971,6 +971,13 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let term ← `(Op.exp $eTerm)
       let (ct, cp) ← floatingComputeArith? "tl.exp" term e' e'
       pure ⟨term, .real, e'.shape, ct, cp⟩
+  | `(tritonExpr| libdevice.exp($e:tritonExpr))
+  | `(tritonExpr| tl.extra.cuda.libdevice.exp($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "libdevice.exp" e'
+      let term ← `(Op.libdeviceExp $eTerm)
+      let (ct, cp) ← floatingComputeArith? "libdevice.exp" term e' e'
+      pure ⟨term, .real, e'.shape, ct, cp⟩
   | `(tritonExpr| tl.exp2($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.exp2" e'

@@ -1,3 +1,6 @@
+/- Use the shared softmax libdevice.exp implementation. PR #12 rejected
+fp32 tl.exp exp-sub under the configured probe (B = 0.1608954387 > 0.05).
+The reciprocal rewrite itself treats exp opaquely, at its stated precision. -/
 /- Ordinary division versus one reciprocal shared by the output lanes.
 The common max/exp/sum prefix is opaque. The only numerical rewrite is the
 accepted scalar div_mul_rcp instance, with finite operands and a nonzero divisor.
@@ -18,7 +21,7 @@ def commonPrefix (xReg : RegionName) (B : Nat) : ComputeKernel := triton {
   x32  := tl.load($(xReg) + offs, dtype=tl.float32)
   x    := x32.to(tl.float64)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
 }
 
@@ -28,7 +31,7 @@ def originalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := triton 
   x32  := tl.load($(xReg) + offs, dtype=tl.float32)
   x    := x32.to(tl.float64)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := e / s
   tl.store($(yReg) + offs, (y).to(tl.float32))
@@ -40,7 +43,7 @@ def reciprocalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := trito
   x32  := tl.load($(xReg) + offs, dtype=tl.float32)
   x    := x32.to(tl.float64)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
   inv_s := 1 / s
   y     := e * inv_s
@@ -50,7 +53,7 @@ def reciprocalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := trito
 def loaded {α : Type} (M : Algebra α) (a : α) : α := M.cast (some .fp64) .real .real (M.fp32Load a)
 
 def exponentials {α : Type} (M : Algebra α) (B : Nat) (xs : Fin B → α) : Fin B → α :=
-  fun i => M.unary (some .fp64) .exp
+  fun i => M.unary (some .fp64) .libdeviceExp
     (M.binary (some .fp64) .real .sub (loaded M (xs i))
       (M.reduceMax (some .fp64) (shape := [B]) ⟨0, by simp⟩ Bool.false
         (fun j => loaded M (xs j.1)) PUnit.unit))

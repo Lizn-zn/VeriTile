@@ -1,3 +1,6 @@
+/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
+with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 /- Real correctness of both original softmax implementations. The public
 formula is exp(x[i]) / sum(exp(x)); dtype erasure belongs only to this real
 interpretation. The numerical shift rewrite needs a separate FP proof. -/
@@ -17,7 +20,7 @@ def naiveSoftmaxKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := tri
   pid := tl.program_id(0)
   offs := pid * $(B) + tl.arange(0, $(B))
   x := tl.load($(xReg) + offs)
-  e := tl.exp(x)
+  e := libdevice.exp(x)
   s := tl.sum(e, axis=0)
   y := e / s
   tl.store($(yReg) + offs, (y).to(tl.bfloat16))
@@ -28,7 +31,7 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := tr
   offs := pid * $(B) + tl.arange(0, $(B))
   x := tl.load($(xReg) + offs)
   m := tl.max(x, axis=0)
-  e := tl.exp(x - m)
+  e := libdevice.exp(x - m)
   s := tl.sum(e, axis=0)
   y := e / s
   tl.store($(yReg) + offs, (y).to(tl.bfloat16))
@@ -39,7 +42,7 @@ def naiveMathKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := triton
   pid := tl.program_id(0)
   offs := pid * $(B) + tl.arange(0, $(B))
   x := tl.load($(xReg) + offs)
-  e := tl.exp(x)
+  e := libdevice.exp(x)
   s := tl.sum(e, axis=0)
   y := e / s
   tl.store($(yReg) + offs, y)

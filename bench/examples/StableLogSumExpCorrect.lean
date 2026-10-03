@@ -1,3 +1,6 @@
+/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
+with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 /- Real correctness of direct and max-shifted logsumexp. Both source kernels
 retain their bf16 store; only the mathematical interpretation erases dtype. -/
 import VeriTile.Triton
@@ -16,7 +19,7 @@ def directLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel :
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
-  e    := tl.exp(x)
+  e    := libdevice.exp(x)
   s    := tl.sum(e, axis=0)
   y    := tl.log(s)
   tl.store($(yReg) + pid, (y).to(tl.bfloat16))
@@ -29,7 +32,7 @@ def stableLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel :
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := m + tl.log(s)
   tl.store($(yReg) + pid, (y).to(tl.bfloat16))
@@ -40,7 +43,7 @@ def directMathKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel 
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
-  e    := tl.exp(x)
+  e    := libdevice.exp(x)
   s    := tl.sum(e, axis=0)
   y    := tl.log(s)
   tl.store($(yReg) + pid, y)
@@ -52,7 +55,7 @@ def stableMathKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel 
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x    := tl.load($(xReg) + offs)
   m    := tl.max(x, axis=0)
-  e    := tl.exp(x - m)
+  e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
   y    := m + tl.log(s)
   tl.store($(yReg) + pid, y)

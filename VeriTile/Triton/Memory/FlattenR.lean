@@ -156,6 +156,7 @@ def Op.SafeAtR (R : RoundingModel) (bounds : RegionBounds) (s : BlockState) : Op
   | .shiftLeft _ a b => a.SafeAtR R bounds s ∧ b.SafeAtR R bounds s
   | .shiftRight _ a b => a.SafeAtR R bounds s ∧ b.SafeAtR R bounds s
   | .exp a => a.SafeAtR R bounds s
+  | .libdeviceExp a => a.SafeAtR R bounds s
   | .exp2 a => a.SafeAtR R bounds s
   | .log a => a.SafeAtR R bounds s
   | .log2 a => a.SafeAtR R bounds s
@@ -528,6 +529,12 @@ theorem FlatAlloc.evalOpR_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .int) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .exp a, s, hms, hok, hu => by
+      simp only [Op.SafeAtR] at hms
+      simp only [Op.FlattenOkR] at hok
+      simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R a s hms hok hu,
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .libdeviceExp a, s, hms, hok, hu => by
       simp only [Op.SafeAtR] at hms
       simp only [Op.FlattenOkR] at hok
       simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R a s hms hok hu,

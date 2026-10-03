@@ -84,6 +84,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .shiftLeft _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .shiftRight _ a b => a.MemorySafe bounds ∧ b.MemorySafe bounds
   | .exp a => a.MemorySafe bounds
+  | .libdeviceExp a => a.MemorySafe bounds
   | .exp2 a => a.MemorySafe bounds
   | .log a => a.MemorySafe bounds
   | .log2 a => a.MemorySafe bounds

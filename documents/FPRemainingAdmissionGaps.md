@@ -1,11 +1,11 @@
 # Remaining FP example prerequisites
 
-The migration has 18 real correctness files and 13 FP equivalence files.
+The migration has 18 real correctness files and 14 FP equivalence files.
 The current main and supplemental reports select numerical assumptions using
 a local-ULP mean-bias budget and a peak absolute-error ratio gate.
 The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
 binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
-instances. Five other algorithmic transformations remain incomplete.
+instances. Four other algorithmic transformations remain incomplete.
 
 ## Current primitive experiment results
 
@@ -19,9 +19,13 @@ the 0.05 local-ULP bias budget, and U thresholds 10/100.
 | `fromNat_fp32(0)` vs literal fp32 zero | 0 | 0 | 0 | ACCEPT: constant relation |
 | `fromNat_fp32(i+1)` vs fp32 `fromNat_fp32(i)+1` | 0 | 0 | 0 | ACCEPT: integer `0 <= i < 2^24` |
 
-The intrinsic exp-sub uses independent Normal(1,1) operands. It remains distinct
-from the accepted libdevice EXP-SUB and cannot supply the original softmax
-primitive assumption because its bias gate fails.
+The intrinsic exp-sub uses independent Normal(1,1) operands and fails the bias
+gate. At the user's request, the stable softmax, online softmax and logsumexp
+examples now use `libdevice.exp`. Their independent Correct and FP source
+copies explicitly document why `tl.exp` cannot supply this rewrite under the
+configured probe. `Op.libdeviceExp` and the FP unary symbol retain a distinct
+implementation identity; the real evaluator gives both exponential operations
+the same mathematical meaning.
 
 The successor probe draws uniform int32 counts in `[0, 2^24)`, converting them
 inside the kernel. A separate exhaustive GPU check also verifies every one of
@@ -90,11 +94,11 @@ formats. It supplies no fp64 instance.
 | Case | Numerical prerequisites still to settle | Implementation work after admission |
 |---|---|---|
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
-| `SoftmaxStable` | EXP-SUB is admitted for libdevice.exp; the original tl.exp primitive still needs matching admission. | The scalar-derived normalization, original executions and scheduled IO/domain contract are connected conditionally on that primitive. Max, exp and the bf16 stores are retained. |
-| `StableLogSumExp` | The original tl.exp EXP-SUB, uncast fp32 LOG-EXP and LOG-MUL obligations remain unadmitted. The available LOG-EXP row has bf16 input/output; LOG-MUL has domain events under the configured distribution. | Scalar sum recovery, the original executions and the scheduled IO/domain contract are connected conditionally on those three primitive relations. |
-| `OnlineSoftmax` | The original tl.exp EXP-SUB still needs matching admission. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom; it retains explicit domains for the actual seed factor and centers. | The loop invariant, normalization and arbitrary batch sum schedule are connected to both original executions. The online source has no output store; the public observation scope still awaits user confirmation. |
-| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | Both original kernels are compared under arbitrary valid fp32 schedules; the public IO objects now bind the execution profile and syntactic iteration/rewrite domains. Count admission still blocks the completed specification. |
-| `FusedLayerNorm` | The same two integer-count conversion laws as Welford remain unadmitted. | Both original implementations are compared using the unrounded Welford statistics, the unchanged affine suffix and the scheduled three-input contract. Empty rows need no numerical law. |
+| `SoftmaxStable` | fp32 libdevice EXP-SUB is admitted and bound together with the scalar arithmetic rules. | `SoftmaxStableFPEquiv.softmax_stable_equiv` completes the guarded, scheduled equivalence; max, bf16 stores, output frames and symbolic positive row length are retained. |
+| `StableLogSumExp` | libdevice EXP-SUB is bound; uncast fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need matching admission. The existing LOG-EXP report used tl.exp. | Both libdevice source variants are connected under the two remaining log obligations. Rerun LOG-MUL with domain filtering and test the new log/libdevice-exp pair. |
+| `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | Both libdevice executions and their normalized-value comparison now use admitted scalar atoms; the online source still has no output store, so the public observation scope remains to be selected. |
+| `Welford` | PR #12 accepts COUNT-ZERO and COUNT-SUCCESSOR for integer `0 <= i < 2^24`; the bounded Lean binding remains pending. | Retain `N <= 2^24` when binding the accepted count relations to the existing scheduled contract. |
+| `FusedLayerNorm` | The same accepted, bounded count relations as Welford still need a Lean binding. | Reuse the bounded Welford statistics in the existing affine-suffix derivation; empty rows need no numerical law. |
 
 This table lists prerequisites, not newly available assumptions. It does not
 assert that any proposed numerical experiment will pass.
@@ -116,20 +120,19 @@ values; finite input leaves alone do not discharge these conditions. Its
 execution adapter expands fp32 sums and preserves other precisions, casts and
 opaque max/exp operations.
 
-These are reusable prerequisites, not another completed example. The original
-`SoftmaxStable` kernels still use `tl.exp`; the accepted EXP-SUB experiment uses
-`libdevice.exp`. Selecting a libdevice variant or obtaining evidence for the
-original intrinsic remains necessary before the full FP equivalence is closed.
+`Float/Exponential` binds fp32 libdevice EXP-SUB to its exact scalar syntax,
+combines it with the arithmetic table and derives `LibdeviceExpSub`. The public
+stable-softmax specification now uses that admitted law.
 
 ### Original stable softmax connection
 
 `Float/SoftmaxShift` derives the shifted exponential row's common factor and
 then its normalized output using the scalar arithmetic theory and an explicit
-sum tree. `IntrinsicExpSub` is an explicit, still-unadmitted scalar obligation
-for the original `tl.exp` symbol. No softmax or reduction equality is a premise.
+sum tree. `LibdeviceExpSub` is obtained from `Float/Exponential`
+and the accepted libdevice EXP-SUB row. No softmax or reduction equality is a premise.
 The shift may be any opaque finite value: the derivation needs no law for max.
 
-`support/SoftmaxStableExecution` independently copies both original kernels.
+`support/SoftmaxStableExecution` independently defines both libdevice kernels.
 `SoftmaxStableContract.original_runs_under_exp` connects their successful runs,
 all bf16 output cells and memory frames to this conditional derivation. Row
 length remains symbolic and positive because the original max rejects an empty
@@ -141,23 +144,25 @@ The regression checks source identity, independence from Correct, empty-row
 failure, in-place execution, contract satisfiability and the nonzero boundary.
 Its rational fixtures are logical checks, not experimental evidence. An opaque
 whole-kernel premise prints `unresolved FP proof`; it cannot be reported as
-having no atomic assumptions. This connection leaves the completed FP count at
-13 until matching intrinsic admission is available.
+having no atomic assumptions. `SoftmaxStableFPEquiv.softmax_stable_equiv`
+closes this case with admitted arithmetic and EXP-SUB atoms; the FP count is 14.
 
 ### Original stable logsumexp connection
 
 `Float/LogSumExpShift.recover_sum` factors the shifted exponential row through
 its explicit addition tree and cancels the common reciprocal using accepted
-scalar arithmetic. `shifted_result` then applies only the pending intrinsic
-EXP-SUB, LOG-MUL and LOG-EXP obligations. Each is a scalar equation with the
+scalar arithmetic. `shifted_result` uses libdevice EXP-SUB and the still-pending
+LOG-MUL and `LogLibdeviceExp` obligations. Each is a scalar equation with the
 experiment's operand-domain shape; none is a reduction or logsumexp identity.
 The checked domain includes actual partial sums, reciprocal intermediates and
 positive log-product operands, and contains no equality premise.
 
-`support/StableLogSumExpExecution` preserves both original sources, including
+`support/StableLogSumExpExecution` uses libdevice.exp in both sources, retaining
 their single bf16 output at `pid`, symbolic positive row length and unchanged
 memory outside that one cell. `StableLogSumExpContract` connects the scalar
 derivation to both successful executions under the scheduled fp32 profile.
+`original_runs_under_log` discharges exp-sub from the admitted table; the
+two log obligations remain explicit.
 In-place output is allowed. The original max and final bf16 conversion remain
 opaque. This is a conditional connection, not a completed admitted FP example.
 
@@ -165,7 +170,7 @@ The regression shows that EXP-SUB and LOG-MUL can hold with the domain while
 the original stored outputs still differ without LOG-EXP. It also checks why
 an equality after a noninjective bf16 cast cannot replace an uncast equality
 inside the final addition. These are logical fixtures, not GPU results.
-The assumption printer now recognizes all pending exp/log and count-conversion
+The assumption printer recognizes libdevice exp, pending log and count-conversion
 records, including their projected fields, and reports external premises as
 `unresolved FP proof`. Reconstructing a record does not hide its provenance.
 
@@ -195,7 +200,7 @@ domain contract are connected below. Count conversion remains an opaque
 operation: loop support does not imply
 `toReal(i + 1) = toReal(i) + 1`. The OnlineSoftmax connection below derives its
 recurrence invariant and normalized-value comparison, conditional on the
-matching exponential law.
+admitted libdevice exponential law.
 
 ### Original online softmax normalization
 
@@ -204,8 +209,8 @@ positive-length prefix of the original recurrence. The first step preserves
 the actual `exp(-inf - newMax)` expression and requires its result and the
 zero-product intermediates to be finite. It does not declare `-inf` finite or
 silently remove that expression. Subsequent steps derive the invariant using
-scalar distribution, association and reciprocal cancellation plus the pending
-intrinsic EXP-SUB obligation. Every update's domain is checked.
+scalar distribution, association and reciprocal cancellation plus the admitted
+libdevice EXP-SUB relation. Every update's domain is checked.
 
 `normalized_prefix` then derives the online normalized values using the actual
 computed m/l. The prefix sum is an explicit valid addition tree with its seed
@@ -229,9 +234,9 @@ copies and aliased memory behavior. They supply no experimental evidence.
 
 The public specification choice is pending: retain the existing Correct
 example's batch-output/online-formula scope, or explicitly add an online output
-stage and compare complete kernels. No output stage has been added. Neither
-this choice nor the missing intrinsic admission is treated as settled, and
-the completed FP count remains 13.
+stage and compare complete kernels. No output stage has been added. The
+libdevice exp-sub admission is connected; only this public-scope choice remains
+for the online example. The completed FP count is 14.
 
 ### Welford mean step and integer conversion
 
@@ -258,10 +263,9 @@ and the online mean is `2`. This is a proof-library coverage check, not a GPU
 failure or a model of the transcendental rule families.
 
 An integer-conversion relation consequently needs a matching primitive binding
-before the original count-based invariant can close. The existing configured
-normal distribution samples floating operands. A separate integer input
-distribution and its conversion experiments await user confirmation; no
-unmeasured conversion law has been added to the admission table.
+before the original count-based invariant can close. PR #12 now supplies accepted
+integer probes, including successor conversion for `0 <= i < 2^24`. Their Lean
+binding must retain that range; no unrestricted conversion law has been added.
 
 ### Welford variance step and recentering
 
@@ -287,8 +291,8 @@ sums. The fixture also audits these new derivations for unexpected axioms.
 
 These are local identities and reduction lemmas, not a completed Welford FP
 equivalence. The full recurrence and reduction-schedule comparisons are
-connected below under explicit count-conversion obligations. Admission of
-those obligations is still missing; the completed example count remains 13.
+connected below under explicit count-conversion obligations. The accepted
+bounded count relations still need a Lean binding; the completed example count is 14.
 
 ### Centered sums and vanishing variance cross terms
 
@@ -391,7 +395,7 @@ variance equal the statistics of an explicit prefix tree, with the original
 empty padding tree retained. A corresponding `ReductionPlan` proves that each
 input occurs exactly once and that padding is preserved.
 
-`CountConversion` records exactly two still-unadmitted primitive obligations:
+`CountConversion` records exactly two primitive obligations not yet bound to the accepted bounded count report:
 `fromNat(0) = literal(0)` and, for every `i < N`,
 `fromNat(i + 1) = fromNat(i) + literal(1)`. From these, `converted_count`
 derives the equality with the prefix tree's sum of ones. There is no supplied
@@ -457,7 +461,7 @@ ordinary rational fixture satisfies the schedule conditions for arbitrary
 valid plans, so these predicates are not vacuous.
 
 The comparison remains conditional rather than a completed public FP example.
-The count relations still need admission. The scheduled public IO contract
+The accepted count relations still need a range-aware Lean binding. The scheduled public IO contract
 below now binds the execution model and all loop/rewrite domains. The original
 guarded IO relation continues to run an arbitrary opaque algebra directly; it
 does not silently identify its `reduceSum` field with an addition tree.
@@ -529,7 +533,7 @@ restriction because this suffix is unchanged.
 The comparison is conditional on the existing primitive `CountConversion`
 obligations; no LayerNorm, sqrt, affine, or whole-reduction identity is admitted.
 There is still no completed general LayerNorm FP headline, and the completed
-FP example count remains 13. Source-identity checks, independence from Correct,
+FP example count is 14. Source-identity checks, independence from Correct,
 layout/profile/domain signature counterexamples, memory-frame checks, and
 opaque-premise assumption-printer checks cover this connection.
 

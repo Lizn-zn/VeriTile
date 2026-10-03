@@ -245,9 +245,9 @@ private def fpProofType (name : Name) : Bool :=
     `VeriTile.Triton.FP.Scheduled.Equivalent₁ₓ₂,
     `VeriTile.Triton.FP.Scheduled.Equivalent₃,
     `VeriTile.Triton.FP.Scheduled.Equivalent₁,
-    `VeriTile.Triton.FP.SoftmaxShift.IntrinsicExpSub,
+    `VeriTile.Triton.FP.SoftmaxShift.LibdeviceExpSub,
     `VeriTile.Triton.FP.LogSumExpShift.IntrinsicLogMul,
-    `VeriTile.Triton.FP.LogSumExpShift.IntrinsicLogExp,
+    `VeriTile.Triton.FP.LogSumExpShift.LogLibdeviceExp,
     `VeriTile.Triton.FP.WelfordInduction.CountConversion,
     `VeriTile.Triton.FP.Structural.CellRelated,
     `VeriTile.Triton.FP.Structural.ValueRelated].contains name
@@ -374,6 +374,7 @@ private def printFPAtom (entry : Expr) (details : Bool := false) : MetaM Unit :=
 private structure FPAssumptionState where
   seen : Std.HashSet Expr := {}
   internalProofVars : Std.HashSet Expr := {}
+  forwardedAtoms : Std.HashSet Expr := {}
   entries : Array Expr := #[]
   printedAdmissions : Array (Expr × Expr) := #[]
   unresolved : Bool := false
@@ -456,6 +457,9 @@ private partial def visitFPAssumptions (proof : Expr) :
       -- once when it is applied at several sites. Different experimental
       -- contracts/evidence stay distinct even when their textual IDs coincide.
       let normalized ← Meta.withTransparency .all <| Meta.whnf entry
+      -- Only atoms forwarded by Derivation induction are covered by its
+      -- inspected input proof. Other symbolic entries must remain visible.
+      if (← get).forwardedAtoms.contains normalized then return
       unless (← get).entries.contains normalized do
         modify fun s => { s with entries := s.entries.push normalized }
         let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[entry]
@@ -480,6 +484,29 @@ private partial def visitFPAssumptions (proof : Expr) :
         unless duplicate do
           modify fun s => { s with printedAdmissions := s.printedAdmissions.push identity }
           printFPAtom entry
+      return
+    if proof.isAppOf ``VeriTile.Spec.Derivation.rec then
+      for i in [:args.size] do
+        let arg := args[i]!
+        -- Parameters and motive precede the refl and atom minor premises.
+        -- The atom branch re-emits an atom from the input derivation, whose
+        -- actual proof is also visited below. Do not generalize this to data
+        -- recursors: unpacking an entry there can introduce a new assumption.
+        if i == 4 then
+          Meta.lambdaTelescope arg fun params body => do
+            let previousVars := (← get).internalProofVars
+            let previousAtoms := (← get).forwardedAtoms
+            let forwarded := match params[0]? with
+              | some entry => previousAtoms.insert entry
+              | none => previousAtoms
+            modify fun s => { s with
+              internalProofVars := params.foldl (·.insert ·) previousVars
+              forwardedAtoms := forwarded }
+            visitFPAssumptions body
+            modify fun s => { s with
+              internalProofVars := previousVars
+              forwardedAtoms := previousAtoms }
+        else if ← Meta.isProof arg then visitFPAssumptions arg
       return
     let env ← getEnv
     if let .const name levels := proof.getAppFn then

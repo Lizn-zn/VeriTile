@@ -34,7 +34,7 @@ private noncomputable def model (logarithm : ℚ → ℚ) : Algebra ℚ where
     | .max => max a b
     | .pow => a
   unary := fun _ op a => match op with
-    | .exp => 1
+    | .libdeviceExp => 1
     | .log => logarithm a
     | _ => 0
   cast := fun _ _ _ a => if a = 0 then 0 else 1
@@ -57,7 +57,7 @@ private def initial : State ℚ where
   numPids := fun _ => 2
   undef := fun d _ _ => defaultValue d
 
-theorem exp_sub_holds : FP.SoftmaxShift.IntrinsicExpSub (model fun _ => 0) domain := by
+theorem exp_sub_holds : FP.SoftmaxShift.LibdeviceExpSub (model fun _ => 0) domain := by
   constructor
   intros
   norm_num [FP.SoftmaxShift.exp, FP.ScalarArithmetic.div, model]
@@ -67,7 +67,7 @@ theorem log_mul_holds : FP.LogSumExpShift.IntrinsicLogMul (model fun _ => 0) dom
   intros
   norm_num [FP.LogSumExpShift.log, FP.ScalarArithmetic.add, model]
 
-theorem log_exp_still_missing : ¬ FP.LogSumExpShift.IntrinsicLogExp (model fun _ => 0) domain := by
+theorem log_exp_still_missing : ¬ FP.LogSumExpShift.LogLibdeviceExp (model fun _ => 0) domain := by
   intro h
   have bad := h.apply 1 trivial
   norm_num [FP.LogSumExpShift.log, FP.SoftmaxShift.exp, model] at bad
@@ -134,7 +134,7 @@ specification opaque_logsumexp (h : FP.Scheduled.Equivalent₁ [] lhs rhs) : lhs
 -- Rebuilding a record from its projected equations must not conceal an
 -- external, unadmitted scalar premise from the assumption printer.
 theorem rebuilt_exp_sub {α : Type} (M : Algebra α) (D : FP.Guarded.Domain α)
-    (h : FP.SoftmaxShift.IntrinsicExpSub M D) : FP.SoftmaxShift.IntrinsicExpSub M D :=
+    (h : FP.SoftmaxShift.LibdeviceExpSub M D) : FP.SoftmaxShift.LibdeviceExpSub M D :=
   ⟨fun a b ha hb => h.apply a b ha hb⟩
 
 theorem rebuilt_log_mul {α : Type} (M : Algebra α) (D : FP.Guarded.Domain α)
@@ -142,7 +142,7 @@ theorem rebuilt_log_mul {α : Type} (M : Algebra α) (D : FP.Guarded.Domain α)
   ⟨fun a b ha hb hpa hpb => h.apply a b ha hb hpa hpb⟩
 
 theorem rebuilt_log_exp {α : Type} (M : Algebra α) (D : FP.Guarded.Domain α)
-    (h : FP.LogSumExpShift.IntrinsicLogExp M D) : FP.LogSumExpShift.IntrinsicLogExp M D :=
+    (h : FP.LogSumExpShift.LogLibdeviceExp M D) : FP.LogSumExpShift.LogLibdeviceExp M D :=
   ⟨fun a ha => h.apply a ha⟩
 
 theorem rebuilt_count {α : Type} (M : Algebra α) (N : Nat)
@@ -158,7 +158,7 @@ theorem wrapped_log_mul {α : Type} (M : Algebra α) (D : FP.Guarded.Domain α)
 
 #axiomsClean FP.LogSumExpShift.recover_sum
 #axiomsClean FP.LogSumExpShift.shifted_result
-#axiomsClean StableLogSumExpFPContract.original_runs_under_exp_log
+#axiomsClean StableLogSumExpFPContract.original_runs_under_log
 #axiomsClean stable_empty_fails
 #axiomsClean domain_is_satisfiable
 #axiomsClean exp_sub_holds

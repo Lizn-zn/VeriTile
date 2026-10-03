@@ -28,21 +28,21 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype addition | `FloatDTypeAddCorrect` — checked, including empty tiles | `FloatDTypeAddFPEquiv` — checked; add commutation; output cast retained |
 | Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
 | Row-wise max | `RowWiseMaxCorrect` — checked | `RowWiseMaxFPEquiv` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
-| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch output versus normalized online m/l: scalar loop invariant, normalization and schedule comparison connected to both original executions; matching tl.exp admission and the public observation scope remain pending |
+| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch output versus normalized online m/l: scalar loop invariant, normalization and schedule comparison connected to both original executions; the libdevice EXP-SUB admission is connected; the public observation scope remains pending |
 | mHC depth | `HyperConnectionsDepthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepthFPEquiv` — checked in the same scope; add commutation |
 | mHC width | `HyperConnectionsWidthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidthFPEquiv` — checked in the same scope; two multiplication commutations |
 | Adam-named Lion update | `AdamUpdateGridLaunchCorrect` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunchFPEquiv` — checked per program; momentum addition commutation, masked in-place stores retained |
-| Stable softmax | `SoftmaxStableCorrect` — checked for both original kernels against the softmax formula | Naive versus stable: scalar normalization, original executions and scheduled IO/domain contract connected; EXP-SUB still needs admission for the original tl.exp implementation |
-| Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable: scalar sum recovery, original executions and scheduled IO/domain contract connected; matching intrinsic EXP-SUB, fp32 LOG-EXP and LOG-MUL relations still need admission |
+| Stable softmax | `SoftmaxStableCorrect` — checked for both original kernels against the softmax formula | `SoftmaxStableFPEquiv` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
+| Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable libdevice kernels: EXP-SUB connected; fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need admission |
 | Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | `SoftmaxReciprocalFPEquiv` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
 | Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmaxFPEquiv` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
 | Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
 | Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
-| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: scalar loop/reduction derivation and scheduled IO/domain contract connected; the two integer-count conversion relations still need admission |
-| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: original executions, unrounded-statistics replacement, affine suffix and scheduled IO/domain contract connected; the same two integer-count conversion relations still need admission |
+| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | Two-pass versus online variance: scalar loop/reduction derivation and scheduled IO/domain contract connected; the accepted PR #12 count relations still need a binding retaining `N <= 2^24` |
+| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | Two-pass versus online statistics: original executions, unrounded-statistics replacement, affine suffix and scheduled IO/domain contract connected; the same bounded count relations still need a Lean binding |
 
-There are currently 18 correctness modules and 13 FP equivalence modules. The
-eight legacy equivalence modules remain as source references; four of their
+There are currently 18 correctness modules and 14 FP equivalence modules. The
+eight legacy equivalence modules remain as source references; three of their
 original transformations still await FP migration. Their presence does not
 complete the pending FP entries above.
 
@@ -71,8 +71,10 @@ contains a whole softmax, logsumexp, normalization, reduction or recurrence atom
 The supplemental EXP-SUB implementation uses libdevice.exp. Its bf16,
 bf16-input/fp32-work/bf16-output and fp32 instances are admitted with the
 configured magnitude PASS threshold of 10. Its identity is
-part of the report contract and cannot justify a rewrite using tl.exp without
-matching evidence. LOG-MUL domain events and unsupported fp64 combinations
+part of the report contract. PR #12 tested the tl.exp version and rejected it
+(B=0.1608954387 ULP > 0.05). The stable/online softmax and logsumexp examples
+therefore explicitly use libdevice.exp in both their Correct and FP sources,
+with separate AST and opaque FP symbols for the two implementations. LOG-MUL domain events and unsupported fp64 combinations
 remain unaccepted. DIV-RCP uses div_rn; DIV-MUL-RCP tests ordinary division.
 
 The two reciprocal examples use `Guarded.IO`: the signature includes a domain
@@ -93,7 +95,7 @@ loads, which these examples do not use. This is not a complete IEEE evaluator.
 
 [The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
 main-table algebraic countermodels from the supplemental rule set. Stable
-softmax, stable logsumexp, online softmax, Welford and LayerNorm remain pending.
+logsumexp, online softmax, Welford and LayerNorm remain pending.
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently
@@ -157,24 +159,23 @@ replays the GPU report nor claims an IEEE or whole-kernel statistical guarantee.
 Unsupported syntax still fails explicitly. Counted loops and conditionals
 now have execution lemmas. Welford also has scalar-derived loop and schedule
 comparisons plus a scheduled IO contract with syntactic domain checks; its two
-integer-count conversion atoms still need admission. LayerNorm reuses the
+integer-count conversion atoms now have PR #12 results but need a bounded Lean binding. LayerNorm reuses the
 unrounded statistics through its unchanged affine suffix and has a scheduled
 three-input contract with the same admission gap. Real ring identities
 cannot be installed as structural FP rules.
 
-Stable softmax also has an independent original-source execution proof and a
-scheduled one-input contract. Its reduction and normalization identities follow
-from scalar atoms, conditional on a matching EXP-SUB law for `tl.exp`; the
-published libdevice.exp result does not discharge that obligation. Its max
-operation and bf16 output casts remain opaque, and the nonempty-row requirement
-matches the original source. It remains a pending FP entry.
+Stable softmax has independent libdevice source definitions and a scheduled
+one-input contract. `SoftmaxStableFPEquiv.softmax_stable_equiv` derives its
+reduction and normalization from the admitted scalar arithmetic and libdevice
+EXP-SUB atoms. Max and bf16 casts remain opaque; the row length is symbolic
+and positive. `#print_fp_assumptions` lists only the scalar assumptions.
 
-Stable logsumexp retains its original single bf16 store at `pid`. Its scalar
-sum recovery and scheduled execution comparison are connected conditionally
-on matching EXP-SUB, LOG-MUL and LOG-EXP relations. The accepted bf16-output
-LOG-EXP instance cannot supply an uncast fp32 identity inside the final sum.
-Pending exp/log and integer-conversion premises remain visible to the
-assumption printer, even when their equations are used through record fields.
+Stable logsumexp retains its single bf16 store at `pid` while replacing both
+exp implementations with libdevice.exp. Its exp-sub law is admitted; LOG-MUL
+and `tl.log(libdevice.exp(a)) = a` remain explicit obligations. The existing
+LOG-EXP experiment used tl.exp, so it does not cover the new composition.
+Pending log and integer-conversion premises remain visible to the assumption
+printer, including equations accessed through record fields.
 
 Legacy `KernelIO.Equiv` proofs quantify over a boundary-rounding model. They
 are not proofs under the new two-gates-selected atom calculus and do not count
@@ -189,6 +190,15 @@ bf16 memory cell a real memory cell. This distinction matters for the
 
 The checks cover:
 
+- The libdevice update passes `lake build VeriTile TritonBenchSpecExamples`
+  and 26 related regression tests. The new fixture distinguishes the two
+  exp symbols through nested syntax and fp32 annotations, gives them the
+  same real meaning, and checks a model where libdevice EXP-SUB holds but
+  intrinsic EXP-SUB does not. The printer tests cover derivation-table
+  extension without hiding external symbolic atoms or opaque premises.
+  Independent comparator replay accepts all 63 theorem targets across
+  `StatementAudit`, `Float/Exponential`, `SoftmaxStableFPEquiv`, the online
+  and logsumexp contracts, and `FPLibdeviceExp`.
 - `lake build TritonBenchSpecExamples` (all currently present example modules).
 - The admission, assumption-printer and specification-surface tests. Repeated
   uses of the same admission at different rewrite sites print once; distinct
@@ -255,7 +265,8 @@ the elaborator's name lookup cannot retrieve them. The tests retain rejection
 checks for `sorry` and unapproved axioms.
 
 Compile each changed module and run its axiom/statement audits. The
-`TritonBenchSpecExamples` Lake target now includes all `bench.examples` modules,
+`TritonBenchSpecExamples` Lake target includes all `bench.examples` modules
+and the imported TritonBench vector-addition module in its build globs,
 so missing companion dependencies cannot hide behind the lightweight default
 library build. Run the admission/printer tests after changing their consumers,
 and run the independent comparator on the resulting proofs before declaring

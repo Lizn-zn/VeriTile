@@ -76,6 +76,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .shiftLeft bc a b, s => return Tile.bop (· <<< ·) bc (← evalOp a s) (← evalOp b s)
   | .shiftRight bc a b, s => return Tile.bop (· >>> ·) bc (← evalOp a s) (← evalOp b s)
   | .exp a, s => return Tile.uop WithBot.realExp (← evalOp a s)
+  | .libdeviceExp a, s => return Tile.uop WithBot.realExp (← evalOp a s)
   | .exp2 a, s => return Tile.uop WithBot.realExp2 (← evalOp a s)
   | .log a, s => return Tile.uop WithBot.realLog (← evalOp a s)
   | .log2 a, s => return Tile.uop WithBot.realLog2 (← evalOp a s)
@@ -339,6 +340,12 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
 
 @[simp] theorem evalOp_exp (x : Op .real shape) (s : BlockState) :
     evalOp (.exp x) s = (do
+      let vx ← evalOp x s
+      some (Tile.uop WithBot.realExp vx)) := by
+  simp [evalOp]
+
+@[simp] theorem evalOp_libdeviceExp (x : Op .real shape) (s : BlockState) :
+    evalOp (.libdeviceExp x) s = (do
       let vx ← evalOp x s
       some (Tile.uop WithBot.realExp vx)) := by
   simp [evalOp]
