@@ -26,6 +26,8 @@ LEGACY_SOURCE_SNAPSHOT = "22154c3275d43497000aed762e953fd6a83d40f3810404d8cf470f
 
 
 def domain(rule):
+    if rule in experiment.supplemental.COUNT_RULES:
+        raise ValueError("count-conversion evidence requires an integer-range-aware Lean binding")
     catalog = experiment.supplemental.load_catalog()
     guards = [(name, "finite") for name in catalog[rule]["operands"]]
     if rule == "DIV-MUL-RCP":

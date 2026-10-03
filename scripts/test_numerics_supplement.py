@@ -85,8 +85,8 @@ class ContractTests(unittest.TestCase):
 
     def test_supported_matrix_and_invalid_precision(self):
         p = profile()
-        self.assertEqual(len(p["rules"]), 14)
-        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 43)
+        self.assertEqual(len(p["rules"]), 17)
+        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 44)
         for field in ("input", "output", "accumulator"):
             bad = deepcopy(p)
             bad["formats"][-1][field] = "bf16"
@@ -97,7 +97,7 @@ class ContractTests(unittest.TestCase):
         p = profile()
         fmt = p['formats'][2]
         lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
-        for rule, intrinsic in [('EXP-SUB', 'libdevice.exp'), ('LOG-EXP', 'tl.exp')]:
+        for rule, intrinsic in [('EXP-SUB', 'libdevice.exp'), ('EXP-SUB-INTRINSIC', 'tl.exp'), ('LOG-EXP', 'tl.exp')]:
             config = supplement.contract_for(p, fmt, rule, {}, runner.source_hashes(), lowerings)
             self.assertEqual(config['numerics']['intrinsics']['exp'], intrinsic)
 
@@ -294,7 +294,7 @@ class OracleTests(unittest.TestCase):
 
 @unittest.skipUnless(INTERPRET, "set TRITON_INTERPRET=1 with torch/triton for CPU wiring checks")
 class InterpreterTests(unittest.TestCase):
-    def test_all_43_pairs_and_masked_rectangular_layout(self):
+    def test_all_44_pairs_and_masked_rectangular_layout(self):
         import torch
         import triton
         module = runner.load_module(runner.KERNELS)

@@ -12,6 +12,7 @@ SUPPORTED = {
     "ADD-ZERO", "MUL-ONE", "DIV-ONE", "DIV-MUL-RCP", "MUL-RCP-CANCEL",
     "EXP-SUB", "EXP-ZERO", "LOG-MUL", "LOG-EXP", "MAX-COMMUTE",
     "MAX-ASSOC", "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB",
+    "EXP-SUB-INTRINSIC", "COUNT-ZERO", "COUNT-SUCCESSOR",
 }
 
 
@@ -41,7 +42,18 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
     zero = tl.full((BLOCK,), 0, a.dtype)
     one = tl.full((BLOCK,), 1, a.dtype)
     neginf = tl.full((BLOCK,), float("-inf"), a.dtype)
-    if RULE == "ADD-ZERO":
+    if RULE == "COUNT-ZERO":
+        if SIDE == 0:
+            out = tl.full((BLOCK,), 0, tl.int32).to(tl.float32)
+        else:
+            out = zero
+    elif RULE == "COUNT-SUCCESSOR":
+        i = tl.load(A + offs, mask, other=0)
+        if SIDE == 0:
+            out = (i + 1).to(tl.float32)
+        else:
+            out = i.to(tl.float32) + 1.0
+    elif RULE == "ADD-ZERO":
         if SIDE == 0:
             out = rnd(a + zero, PRECISION)
         else:
@@ -71,6 +83,11 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = rnd(libdevice.exp(rnd(a - b, PRECISION)), PRECISION)
         else:
             out = rnd(rnd(libdevice.exp(a), PRECISION) / rnd(libdevice.exp(b), PRECISION), PRECISION)
+    elif RULE == "EXP-SUB-INTRINSIC":
+        if SIDE == 0:
+            out = tl.exp(a - b)
+        else:
+            out = tl.exp(a) / tl.exp(b)
     elif RULE == "EXP-ZERO":
         if SIDE == 0:
             out = rnd(tl.exp(zero), PRECISION)

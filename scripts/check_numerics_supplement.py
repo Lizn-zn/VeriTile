@@ -21,7 +21,7 @@ KERNELS = supplemental.KERNELS
 SOURCES = [*original.SOURCES, Path(__file__).resolve(), Path(supplemental.__file__),
            KERNELS, supplemental.CATALOG]
 ACCEPTED = original.ACCEPTED
-BUNDLE_VERSION = "scalar-supplement-6"
+BUNDLE_VERSION = "scalar-supplement-7"
 gates = original.gates
 domains = original.domains
 NumericEvent = original.NumericEvent
@@ -51,13 +51,9 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
     try:
         stop = None
         generator = torch.Generator(device="cuda").manual_seed(seed)
-        dtype = {"bf16": torch.bfloat16, "fp32": torch.float32, "fp64": torch.float64}[fmt["input"]]
         limit = ((profile["replicates_max"] + profile["batch"] - 1) // profile["batch"]) * profile["batch"]
         for replicate in range(limit):
-            dist = profile["distribution"]
-            shapes = shapes_for(profile, rule)
-            inputs = [(torch.randn(shapes[key], device="cuda", dtype=torch.float64, generator=generator)
-                       * dist["std"] + dist["mean"]).to(dtype) for key in ("a", "b", "c")]
+            inputs = supplemental.sample_inputs(torch, profile, fmt, rule, generator)
             valid = domains.mask(torch, rule, inputs)
             valid_counts.append(int(valid.sum().item()))
             if valid_counts[-1] == 0:

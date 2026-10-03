@@ -3,6 +3,30 @@
   "semantics": "Q rounds each node to compute precision; both entire expressions are finally cast to output precision; / is ordinary Triton division, never tl.div_rn",
   "rules": [
     {
+      "id": "EXP-SUB-INTRINSIC",
+      "reference": "tl.exp(a - b)",
+      "candidate": "tl.exp(a) / tl.exp(b)",
+      "domain": "finite fp32 a,b; original tl.exp intrinsic",
+      "operands": ["a", "b"],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "COUNT-ZERO",
+      "reference": "fromNat_fp32(0)",
+      "candidate": "literal_fp32(0)",
+      "domain": "constant integer zero",
+      "operands": [],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "COUNT-SUCCESSOR",
+      "reference": "fromNat_fp32(a + 1)",
+      "candidate": "fp32(fromNat_fp32(a) + 1)",
+      "domain": "nonnegative int32 a in the frozen integer sampling interval; a+1 cannot overflow",
+      "operands": ["a"],
+      "category": "two_gates_candidate"
+    },
+    {
       "id": "ADD-ZERO",
       "reference": "Q(a + 0)",
       "candidate": "a",

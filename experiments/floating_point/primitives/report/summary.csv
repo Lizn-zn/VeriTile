@@ -1,0 +1,4 @@
+rule,format,replicates,z,B,tau,U,bias,vars,u_kind,accept,decision,state,replayed,reason,valid_samples,skipped_samples
+EXP-SUB-INTRINSIC,fp32,4096,33630.259713977735,0.16089543869858958,0.05,3.9584637807920062,FAIL,PASS,pot_pwm,False,REJECT,COMPLETE,True,,68719476736,0
+COUNT-ZERO,int32_fp32,4096,0.0,0.0,0.05,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,constant zero conversion; repeated execution does not enlarge its domain,68719476736,0
+COUNT-SUCCESSOR,int32_fp32,4096,0.0,0.0,0.05,0.0,PASS,PASS,empirical_max,True,ACCEPT,COMPLETE,True,integer 0 <= i < 16777216 only; out-of-range equality is false,68719476736,0

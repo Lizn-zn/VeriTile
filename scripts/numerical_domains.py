@@ -9,8 +9,8 @@ OPERANDS = {
     **dict.fromkeys(("ROUND-IDEM", "BF16-WIDEN-RETURN", "SQRT-RSQRT", "ADD-ZERO",
                      "MUL-ONE", "DIV-ONE", "MUL-RCP-CANCEL", "LOG-EXP",
                      "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB"), "a"),
-    **dict.fromkeys(("DIV-MUL-RCP", "EXP-SUB", "LOG-MUL", "MAX-COMMUTE"), "ab"),
-    "MAX-ASSOC": "abc", "EXP-ZERO": "",
+    **dict.fromkeys(("DIV-MUL-RCP", "EXP-SUB", "EXP-SUB-INTRINSIC", "LOG-MUL", "MAX-COMMUTE"), "ab"),
+    "MAX-ASSOC": "abc", "EXP-ZERO": "", "COUNT-ZERO": "", "COUNT-SUCCESSOR": "a",
 }
 POSITIVE = {"SQRT-RSQRT": "a", "LOG-MUL": "ab"}
 NONZERO = {"DIV-RCP": "b", "DIV-MUL-RCP": "b", "MUL-RCP-CANCEL": "a"}
@@ -23,7 +23,9 @@ def policy(rule):
         "positive": list(POSITIVE.get(rule, "")),
         "nonzero": list(NONZERO.get(rule, "")),
         "selection": "same input-only mask for both sides and oracle, after input quantization",
-        "sampling": "configured normal draws; skip invalid tuples without replacement or resampling",
+        "sampling": ("constant zero" if rule == "COUNT-ZERO" else
+                     "uniform int32 draws in the frozen profile interval" if rule == "COUNT-SUCCESSOR" else
+                     "configured normal draws; skip invalid tuples without replacement or resampling"),
         "aggregation": "one mean and two error maxima over valid tuples per nonempty replicate",
         "empty": "skip empty replicates; insufficient nonempty replicates within draw budget is inconclusive",
         "outputs": "nonfinite results on valid inputs remain gate failures",

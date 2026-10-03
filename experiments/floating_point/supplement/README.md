@@ -100,9 +100,11 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 避免把无穷大当成普通有限数套进 exp-sub；它不是 online-softmax 整体关系。
 常数和恒等式可能被编译器折叠，保存的 PTX 反映实际执行图。
 
-14 条关系均测三个 bf16/fp32 精度 profile；额外测一条 fp64-work 的 div-mul-rcp。
-因此是 **43 个可执行实例、86 个左右两侧 kernel 特化**，外加 1 个 fp64 残差 oracle。完整笛卡尔表有 56 行，
-其中另外 13 个 fp64 组合明确标为 `UNSUPPORTED`，不会制造准入记录。
+目录现在包含 17 条关系。默认浮点 profile 有 **44 个可执行实例、88 个左右两侧 kernel 特化**，
+外加 1 个 fp64 残差 oracle；完整笛卡尔表有 68 行，其余组合明确标为 `UNSUPPORTED`。
+其中 EXP-SUB-INTRINSIC 只支持原始 fp32 primitive。COUNT-ZERO、COUNT-SUCCESSOR
+使用独立的 int32 输入配置，不能用正态浮点输入替代，见
+[三个新增 primitive 的配置与当前结果](../primitives/README.md)。
 
 ## 配置与精度
 
@@ -169,7 +171,7 @@ python3 scripts/check_numerics_supplement.py run --rules ADD-ZERO,MUL-ONE,DIV-ON
 NPZ 的 `valid_samples` 保存每次抽样的有效元组数，record 保存尝试次数、空批次、
 有效及跳过总数，报告的 Valid / Skipped 两列显示元组总数。
 
-新 bundle 版本为 `scalar-supplement-6`，须使用新的输出目录。已提交的 PR #11
+新 bundle 版本为 `scalar-supplement-7`，须使用新的输出目录。已提交的 PR #11
 报告仍保留旧策略及其 `NUMERIC_EVENT` 结果，不能当作新策略已通过的证据。
 导出器保留对该历史报告准确源码标识的识别。下一轮可单独重跑：
 
@@ -186,8 +188,8 @@ exp 中间值的有限性、log 输入的正性等适用条件仍需在使用处
 
 - reciprocal 两例已将普通除法、精度、定义域和最终 cast 与对应原子衔接，完成 FP 证明。
 - stable softmax、logsumexp、online softmax 还需要从基础关系推导 reduction/loop 不变量。
-- Welford/LayerNorm 还需要 count 的自然数转换及非零/可表示性证明。
-  正态浮点采样不能证明任意整数 count 的 cast-successor 恒等式；本批没有伪造此类原子。
+- Welford/LayerNorm 的 count 零转换及 successor 已有独立 GPU 实验；successor
+  仅覆盖 `0 <= i < 2^24`，还需保留整数范围的 Lean 绑定及非零/可表示性证明。
   空行的实数总除法行为也不能直接当作 IEEE 浮点的 `0/0` 行为。
 - 原 online softmax 只维护 m/l 寄存器，没有输出 store；仍保留其原有作用范围。
 
@@ -205,7 +207,7 @@ python3 scripts/export_numerical_rules.py --trust-report --check
 python3 scripts/export_supplemental_rules.py --trust-report --check
 ```
 
-解释器检查涵盖全部 43 对表达式、精度和非整块矩形索引；另有 profile、定义域、
+解释器检查涵盖默认浮点 profile 的 44 对表达式、精度和非整块矩形索引；另有 profile、定义域、
 fp64 除法残差、报告、源/PTX/观测/配置/统计篡改检测测试。离线编译不需要 GPU，
 默认目标 sm_80。解释器和离线编译结果均不是 GPU two-gates 准入结果。
 

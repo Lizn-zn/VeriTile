@@ -2,6 +2,7 @@
 """Offline compilation of supplemental atoms. This produces no GPU evidence."""
 import argparse
 from copy import deepcopy
+from pathlib import Path
 
 if __package__:
     from . import supplement_numerics as experiment
@@ -14,6 +15,9 @@ def main():
     parser.add_argument("--arch", type=int, default=80)
     parser.add_argument("--rows", type=int, default=32)
     parser.add_argument("--columns", type=int, default=33)
+    parser.add_argument("--profile", type=Path, default=experiment.DEFAULT_PROFILE)
+    parser.add_argument("--rules", help="comma-separated rule IDs")
+    parser.add_argument("--formats", help="comma-separated format names")
     args = parser.parse_args()
     if args.rows <= 0 or args.columns <= 0:
         parser.error("positive dimensions required")
@@ -22,7 +26,15 @@ def main():
     from triton.compiler import ASTSource
 
     kernels = experiment.original.load_module(experiment.KERNELS)
-    profile = experiment.validate_profile(deepcopy(experiment.original.load_module(experiment.DEFAULT_PROFILE).PROFILE))
+    profile = experiment.validate_profile(deepcopy(experiment.original.load_module(args.profile).PROFILE))
+    if args.rules:
+        profile["rules"] = args.rules.split(",")
+    if args.formats:
+        wanted = set(args.formats.split(","))
+        if not wanted <= {fmt["name"] for fmt in profile["formats"]}:
+            parser.error("unknown format")
+        profile["formats"] = [fmt for fmt in profile["formats"] if fmt["name"] in wanted]
+    experiment.validate_profile(profile)
     if kernels.SUPPORTED != set(experiment.load_catalog()):
         raise ValueError("catalogue and kernels disagree")
     count = 0
@@ -33,7 +45,7 @@ def main():
             for side in (0, 1):
                 constants = dict(N=args.rows * args.columns, RULE=rule, SIDE=side,
                                  PRECISION=fmt["compute"], BLOCK=1024)
-                pointers = {k: "*" + fmt["input"] for k in ("A", "B", "C")}
+                pointers = {k: "*" + ("i32" if fmt["input"] == "int32" else fmt["input"]) for k in ("A", "B", "C")}
                 pointers["O"] = "*" + fmt["output"]
                 source = ASTSource(kernels.elementwise,
                                    {**pointers, **{k: "constexpr" for k in constants}}, constants)

@@ -7,30 +7,35 @@ The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
 binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
 instances. Five other algorithmic transformations remain incomplete.
 
-## Next GPU run: relations not yet tested
+## Current primitive experiment results
 
-The following three primitive relations have no matching experiment in the
-current reports. This is a pending-run checklist, not an admission table.
+All three probes completed on H200 in DLC job `dlc1qojvuygw2t0b`, followed by
+independent CPU replay. Each uses 4096 replicates of shape `[4096, 4096]`,
+the 0.05 local-ULP bias budget, and U thresholds 10/100.
 
-- [ ] **Intrinsic exp-sub, fp32:** compare `tl.exp(a - b)` with
-  `tl.exp(a) / tl.exp(b)`, using fp32 inputs, arithmetic and outputs. Keep the
-  configured independent Normal(1, 1) inputs, shape `[4096, 4096]` and two-gates
-  policy. The accepted EXP-SUB row uses `libdevice.exp`, so it does not cover
-  this implementation. Needed by SoftmaxStable, StableLogSumExp and
-  OnlineSoftmax. Other `tl.exp` relations have already been tested; this gap is
-  specifically the intrinsic exp-sub relation.
-- [ ] **Integer conversion of zero:** compare `fromNat_fp32(0)` with the fp32
-  literal `0`. Needed by Welford and FusedLayerNorm. This is a constant relation
-  with no random operand.
-- [ ] **Integer conversion of a successor:** compare `fromNat_fp32(i + 1)`
-  with `fromNat_fp32(i) + 1`, with fp32 addition. Needed by Welford and
-  FusedLayerNorm. The nonnegative integer range and sampling distribution
-  remain to be selected; the floating Normal(1, 1) profile does not specify an
-  integer-count experiment.
+| Primitive | z | B (local ULP) | U | Decision |
+|---|---:|---:|---:|---|
+| `tl.exp(a-b)` vs `tl.exp(a)/tl.exp(b)`, fp32 | 33630.25971 | 0.1608954387 | 3.958463781 | REJECT: bias |
+| `fromNat_fp32(0)` vs literal fp32 zero | 0 | 0 | 0 | ACCEPT: constant relation |
+| `fromNat_fp32(i+1)` vs fp32 `fromNat_fp32(i)+1` | 0 | 0 | 0 | ACCEPT: integer `0 <= i < 2^24` |
 
-Keep the intrinsic exp-sub result distinct from the existing libdevice result.
-The two integer-conversion candidates still need experiment support. Listing
-these pending experiments does not admit new rules.
+The intrinsic exp-sub uses independent Normal(1,1) operands. It remains distinct
+from the accepted libdevice EXP-SUB and cannot supply the original softmax
+primitive assumption because its bias gate fails.
+
+The successor probe draws uniform int32 counts in `[0, 2^24)`, converting them
+inside the kernel. A separate exhaustive GPU check also verifies every one of
+those 16,777,216 integers exactly. The out-of-range `i=16,777,217` counterexample
+is preserved: reference 16,777,218 versus candidate 16,777,216. Thus a Welford
+binding must retain `N <= 2^24`; the current symbolic-N CountConversion premise
+is not automatically discharged. COUNT-ZERO is constant; its repeated
+execution adds no stochastic coverage. Both count U values use empirical-max
+fallback with zero reference and candidate errors.
+
+The integer experiment is numerical evidence, not a newly bound Lean rule.
+The generic scalar exporter rejects count rules until an integer-range-aware
+binding is provided. See the [current report](../experiments/floating_point/primitives/report/summary.md)
+and [reproduction instructions](../experiments/floating_point/primitives/README.md).
 
 ### Already attempted, but not admitted
 
