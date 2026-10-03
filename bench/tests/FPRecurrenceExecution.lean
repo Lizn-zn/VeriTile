@@ -29,6 +29,33 @@ example {α : Type} [Inhabited α] (M : Algebra α) (stride : Nat) (s : State α
   exact WelfordFPExecution.online_run M "x" "m" "v" stride Fin.elim0 s (by decide)
     (fun i => Fin.elim0 i)
 
+-- Both executions now discharge the dual-output IO frame with symbolic sizes,
+-- while retaining the two distinct opaque numerical expressions.
+example {α : Type} [Inhabited α] (M : Algebra α) (N stride : Nat)
+    (xs : Fin N → α) (s : State α)
+    (hx : ∀ i : Fin N, (s.mem "x" (s.pids 0 * stride + i.val)).read .real = xs i) :
+    IO₁ₓ₂PrivateScratch (WelfordFPExecution.onlineIO "x" "m" "v" N stride) ∧
+    ∃ t, FP.Structural.exec M (WelfordFPExecution.onlineIO "x" "m" "v" N stride).kernel s = some t ∧
+      t.mem "m" 0 = .mk .bf16 (WelfordFPExecution.meanValue M xs) ∧
+      t.mem "v" 0 = .mk .bf16 (WelfordFPExecution.varianceValue M xs) ∧
+      IO₁ₓ₂Frame (WelfordFPExecution.onlineIO "x" "m" "v" N stride) s t :=
+  WelfordFPExecution.online_io_run M "x" "m" "v" stride xs s (by decide) hx
+
+example {α : Type} [Inhabited α] (M : Algebra α) (N stride : Nat)
+    (xs : Fin N → α) (s : State α)
+    (hx : ∀ i : Fin N, (s.mem "x" (s.pids 0 * stride + i.val)).read .real = xs i) :
+    IO₁ₓ₂PrivateScratch (WelfordFPExecution.twopassIO "x" "m" "v" N stride) ∧
+    ∃ t, FP.Structural.exec M (WelfordFPExecution.twopassIO "x" "m" "v" N stride).kernel s = some t ∧
+      t.mem "m" 0 = .mk .bf16 (M.cast none .real .bf16 (WelfordFPExecution.twopassMean M xs)) ∧
+      t.mem "v" 0 = .mk .bf16 (M.cast none .real .bf16 (WelfordFPExecution.twopassVariance M xs)) ∧
+      IO₁ₓ₂Frame (WelfordFPExecution.twopassIO "x" "m" "v" N stride) s t :=
+  WelfordFPExecution.twopass_io_run M "x" "m" "v" stride xs s (by decide) hx
+
+example (x mean variance : RegionName) (N stride : Nat) :
+    Spec.ProgramSyntax.signature (WelfordFPExecution.onlineIO x mean variance N stride) =
+      Spec.ProgramSyntax.signature (WelfordFPExecution.twopassIO x mean variance N stride) :=
+  WelfordFPExecution.io_same_signature x mean variance N stride
+
 -- -inf is opaque and survives the empty online-softmax loop unchanged.
 example {α : Type} [Inhabited α] (M : Algebra α) (s : State α) :
     ∃ t, FP.Structural.exec M (OnlineSoftmaxFPExecution.onlineSoftmaxKernel "x" "y" 0) s = some t ∧
@@ -64,6 +91,8 @@ run_cmd do
 
 #axiomsClean WelfordFPExecution.online_run
 #axiomsClean WelfordFPExecution.twopass_run
+#axiomsClean WelfordFPExecution.online_io_run
+#axiomsClean WelfordFPExecution.twopass_io_run
 #axiomsClean OnlineSoftmaxFPExecution.online_run
 
 end FPRecurrenceExecutionTests

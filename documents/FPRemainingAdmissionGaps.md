@@ -224,9 +224,29 @@ can hold even when the input's square is outside its finite-value domain.
 
 The original kernel still initializes its converted loop count through
 `fromNat(0)`, so the missing conversion binding is not discharged by these
-literal-zero lemmas. Full Welford equivalence also needs the loop induction,
-reduction-schedule comparison and a public guarded specification observing
-both output cells. The current `Guarded.IO` surface only covers `KernelIO₁`.
+literal-zero lemmas. Full Welford equivalence still needs the loop induction,
+the domain obligations at every iteration and the reduction-schedule comparison.
+
+### Two-output FP specifications
+
+`Structural.IO₁ₓ₂Equiv` and `Guarded.IO₁ₓ₂` now support `KernelIO₁ₓ₂` with the
+existing `lhs ≡[R] rhs` notation. The signature retains both output regions,
+lengths and address functions, as well as the input, kernel ports and guarded
+domain. Both runs must succeed, both complete typed output windows must agree,
+and each implementation must preserve cells outside its two output windows and
+declared private scratch. Scratch cannot alias the input or either output.
+
+`WelfordExecution.onlineIO` and `twopassIO` expose the original kernels through
+this interface, retaining symbolic row length/stride and both bf16 stores.
+`online_io_run` and `twopass_io_run` prove the resulting execution and frame
+obligations. These are execution results, not the pending numerical equality
+between online and two-pass statistics.
+
+The dual-output regression proves a structural store reordering, rejects an
+implementation changing only the second output, and checks output dtype,
+window, scratch, failure and signature boundaries. Assumption printing stays
+unchanged: the structural proof prints `none`; an opaque guarded equivalence
+premise prints `unresolved FP proof` instead of claiming an atomic derivation.
 
 ## Constraints on the supplemental atom set
 

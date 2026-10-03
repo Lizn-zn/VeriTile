@@ -100,6 +100,59 @@ def IO₁Equiv (lhs rhs : KernelIO₁) : Prop :=
           b.mem rhs.out (rhs.write (s.pids 0) + i.val)) ∧
       IO₁Frame lhs s a ∧ IO₁Frame rhs s b
 
+/-- Both output identities, sizes and address functions belong to the public
+signature. A proof cannot hide one output by shortening its window. -/
+structure IO₁ₓ₂Signature where
+  ports : List RegionName × List RegionName
+  inp : RegionName
+  out1 : RegionName
+  out2 : RegionName
+  Bin : Nat
+  Bout1 : Nat
+  Bout2 : Nat
+  read : Nat → Nat
+  write1 : Nat → Nat
+  write2 : Nat → Nat
+
+def io₁ₓ₂Signature (io : KernelIO₁ₓ₂) : IO₁ₓ₂Signature where
+  ports := match io.kernel with | .mk ins outs _ => (ins, outs)
+  inp := io.inp
+  out1 := io.out1
+  out2 := io.out2
+  Bin := io.Bin
+  Bout1 := io.Bout1
+  Bout2 := io.Bout2
+  read := io.read
+  write1 := io.write1
+  write2 := io.write2
+
+def IO₁ₓ₂PrivateScratch (io : KernelIO₁ₓ₂) : Prop :=
+  ∀ p ∈ io.scratch, p.buf ≠ io.inp ∧ p.buf ≠ io.out1 ∧ p.buf ≠ io.out2
+
+/-- Only the union of the two output windows and declared private scratch
+windows may change. Other offsets in any of those regions stay observable. -/
+def IO₁ₓ₂Frame {α : Type} (io : KernelIO₁ₓ₂) (before after : State α) : Prop :=
+  ∀ (r : RegionName) o,
+    (r ≠ io.out1 ∨ ∀ i : Fin io.Bout1, o ≠ io.write1 (before.pids 0) + i.val) →
+    (r ≠ io.out2 ∨ ∀ i : Fin io.Bout2, o ≠ io.write2 (before.pids 0) + i.val) →
+    (∀ p ∈ io.scratch, r = p.buf → ∀ i : Fin p.len, o ≠ p.win (before.pids 0) + i.val) →
+    after.mem r o = before.mem r o
+
+/-- Both complete output windows are observed with their dtype tags. -/
+def IO₁ₓ₂Outputs {α : Type} (lhs rhs : KernelIO₁ₓ₂) (before a b : State α) : Prop :=
+  (∀ i : Fin lhs.Bout1,
+    a.mem lhs.out1 (lhs.write1 (before.pids 0) + i.val) =
+      b.mem rhs.out1 (rhs.write1 (before.pids 0) + i.val)) ∧
+  (∀ i : Fin lhs.Bout2,
+    a.mem lhs.out2 (lhs.write2 (before.pids 0) + i.val) =
+      b.mem rhs.out2 (rhs.write2 (before.pids 0) + i.val))
+
+def IO₁ₓ₂Equiv (lhs rhs : KernelIO₁ₓ₂) : Prop :=
+  IO₁ₓ₂PrivateScratch lhs ∧ IO₁ₓ₂PrivateScratch rhs ∧
+  ∀ (α : Type) [Inhabited α] (M : Algebra α) (s : State α),
+    ∃ a b, exec M lhs.kernel s = some a ∧ exec M rhs.kernel s = some b ∧
+      IO₁ₓ₂Outputs lhs rhs s a b ∧ IO₁ₓ₂Frame lhs s a ∧ IO₁ₓ₂Frame rhs s b
+
 /-- Floating values are related by the generated term theory; discrete values
 and dtype tags still have to agree exactly. -/
 def ValueRelated (R : Spec.Assumptions ComputeStmt) : (d : TileDType) →
@@ -190,6 +243,14 @@ instance kernelIO₁FPProgramSyntax : Spec.ProgramSyntax KernelIO₁ where
   body := fun io => io.kernel.surfaceBody
   structural := some FP.Structural.IO₁Equiv
   numerical := FP.Structural.IO₁NumericalEquiv
+  sameContext := fun lhs rhs => lhs.scratch = rhs.scratch
+
+instance kernelIO₁ₓ₂FPProgramSyntax : Spec.ProgramSyntax KernelIO₁ₓ₂ where
+  Statement := ComputeStmt
+  Signature := FP.Structural.IO₁ₓ₂Signature
+  signature := FP.Structural.io₁ₓ₂Signature
+  body := fun io => io.kernel.surfaceBody
+  structural := some FP.Structural.IO₁ₓ₂Equiv
   sameContext := fun lhs rhs => lhs.scratch = rhs.scratch
 
 instance maskedKernelIO₂FPProgramSyntax : Spec.ProgramSyntax MaskedKernelIO₂ where

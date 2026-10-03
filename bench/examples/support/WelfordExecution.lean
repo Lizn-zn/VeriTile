@@ -216,4 +216,70 @@ theorem twopass_run {α : Type} [Inhabited α] (M : Algebra α)
   simp only [if_neg (by tauto : ¬ (r = varReg ∧ o = 0)),
     if_neg (by tauto : ¬ (r = meanReg ∧ o = 0))]
 
+/-- The original implementations expose both statistics, with symbolic row
+length and stride. These contracts add no numerical relation between them. -/
+def onlineIO (x mean variance : RegionName) (N stride : Nat) : KernelIO₁ₓ₂ where
+  kernel := onlineWelfordKernel x mean variance N stride
+  projection := by rfl
+  inp := x
+  out1 := mean
+  out2 := variance
+  Bin := N
+  Bout1 := 1
+  Bout2 := 1
+  read := fun pid => pid * stride
+  write1 := fun _ => 0
+  write2 := fun _ => 0
+
+def twopassIO (x mean variance : RegionName) (N stride : Nat) : KernelIO₁ₓ₂ :=
+  { onlineIO x mean variance N stride with
+    kernel := twopassWelfordKernel x mean variance N stride
+    projection := by rfl }
+
+theorem io_same_signature (x mean variance : RegionName) (N stride : Nat) :
+    io₁ₓ₂Signature (onlineIO x mean variance N stride) =
+      io₁ₓ₂Signature (twopassIO x mean variance N stride) := rfl
+
+private theorem scalar_outputs_frame {α : Type} {io : KernelIO₁ₓ₂} {s t : State α}
+    (h₁ : io.Bout1 = 1) (h₂ : io.Bout2 = 1)
+    (hw₁ : io.write1 (s.pids 0) = 0) (hw₂ : io.write2 (s.pids 0) = 0)
+    (h : ∀ r o, (r ≠ io.out1 ∨ o ≠ 0) → (r ≠ io.out2 ∨ o ≠ 0) →
+      t.mem r o = s.mem r o) : IO₁ₓ₂Frame io s t := by
+  intro r o hm hv _
+  apply h r o
+  · rcases hm with hm | hm
+    · exact Or.inl hm
+    · exact Or.inr (by simpa [hw₁] using hm ⟨0, by omega⟩)
+  · rcases hv with hv | hv
+    · exact Or.inl hv
+    · exact Or.inr (by simpa [hw₂] using hv ⟨0, by omega⟩)
+
+/-- Successful execution supplies both typed output cells and the public
+two-output frame. In particular, proving only the mean is insufficient. -/
+theorem online_io_run {α : Type} [Inhabited α] (M : Algebra α)
+    (x mean variance : RegionName) (stride : Nat) (xs : Fin N → α) (s : State α)
+    (hd : mean ≠ variance)
+    (hx : ∀ i : Fin N, (s.mem x (s.pids 0 * stride + i.val)).read .real = xs i) :
+    IO₁ₓ₂PrivateScratch (onlineIO x mean variance N stride) ∧
+    ∃ t, FP.Structural.exec M (onlineIO x mean variance N stride).kernel s = some t ∧
+      t.mem mean 0 = .mk .bf16 (meanValue M xs) ∧
+      t.mem variance 0 = .mk .bf16 (varianceValue M xs) ∧
+      IO₁ₓ₂Frame (onlineIO x mean variance N stride) s t := by
+  obtain ⟨t, ht, hm, hv, hf⟩ := online_run M x mean variance stride xs s hd hx
+  refine ⟨by simp [IO₁ₓ₂PrivateScratch, onlineIO], t, ht, hm, hv, ?_⟩
+  exact scalar_outputs_frame rfl rfl rfl rfl hf
+
+theorem twopass_io_run {α : Type} [Inhabited α] (M : Algebra α)
+    (x mean variance : RegionName) (stride : Nat) (xs : Fin N → α) (s : State α)
+    (hd : mean ≠ variance)
+    (hx : ∀ i : Fin N, (s.mem x (s.pids 0 * stride + i.val)).read .real = xs i) :
+    IO₁ₓ₂PrivateScratch (twopassIO x mean variance N stride) ∧
+    ∃ t, FP.Structural.exec M (twopassIO x mean variance N stride).kernel s = some t ∧
+      t.mem mean 0 = .mk .bf16 (M.cast none .real .bf16 (twopassMean M xs)) ∧
+      t.mem variance 0 = .mk .bf16 (M.cast none .real .bf16 (twopassVariance M xs)) ∧
+      IO₁ₓ₂Frame (twopassIO x mean variance N stride) s t := by
+  obtain ⟨t, ht, hm, hv, hf⟩ := twopass_run M x mean variance stride xs s hd hx
+  refine ⟨by simp [IO₁ₓ₂PrivateScratch, twopassIO, onlineIO], t, ht, hm, hv, ?_⟩
+  exact scalar_outputs_frame rfl rfl rfl rfl hf
+
 end VeriTile.Bench.Examples.WelfordFPExecution

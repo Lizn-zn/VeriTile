@@ -64,4 +64,32 @@ instance : Spec.ProgramSyntax IO where
   -- These IO proofs use successful execution, never unchecked syntax rewrites.
   sameContext := fun lhs rhs => lhs = rhs
 
+/-- A guarded one-input/two-output contract, such as mean and variance.
+Its public FP specification uses the same equivalence notation as `IO`. -/
+structure IO₁ₓ₂ where
+  io : KernelIO₁ₓ₂
+  domain : Precondition
+
+def Equivalent₁ₓ₂ (R : Spec.Assumptions GuardedFragment) (lhs rhs : IO₁ₓ₂) : Prop :=
+  IO₁ₓ₂PrivateScratch lhs.io ∧ IO₁ₓ₂PrivateScratch rhs.io ∧
+  ∀ (α : Type) [Inhabited α] (M : Algebra α) (D : Domain α), Models R M D →
+    ∀ s, lhs.domain.Holds M D s →
+      ∃ a b, Structural.exec M lhs.io.kernel s = some a ∧ Structural.exec M rhs.io.kernel s = some b ∧
+        IO₁ₓ₂Outputs lhs.io rhs.io s a b ∧ IO₁ₓ₂Frame lhs.io s a ∧ IO₁ₓ₂Frame rhs.io s b
+
+/-- Structural proofs remain usable under a guarded contract without adding
+any numerical assumption. The specification separately checks signatures. -/
+theorem Equivalent₁ₓ₂.ofStructural (R : Spec.Assumptions GuardedFragment) {lhs rhs : IO₁ₓ₂}
+    (h : Structural.IO₁ₓ₂Equiv lhs.io rhs.io) : Equivalent₁ₓ₂ R lhs rhs :=
+  ⟨h.1, h.2.1, fun α _ M _ _ s _ => h.2.2 α M s⟩
+
+instance : Spec.ProgramSyntax IO₁ₓ₂ where
+  Statement := GuardedFragment
+  Signature := IO₁ₓ₂Signature × Precondition
+  signature p := (io₁ₓ₂Signature p.io, p.domain)
+  body p := [⟨[], p.io.kernel.surfaceBody⟩]
+  structural := some (fun _ _ => False)
+  numerical := Equivalent₁ₓ₂
+  sameContext := fun lhs rhs => lhs = rhs
+
 end VeriTile.Triton.FP.Guarded
