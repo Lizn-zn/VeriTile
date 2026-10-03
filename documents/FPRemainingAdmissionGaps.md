@@ -179,6 +179,34 @@ counts as one, while `fromNat(1)` is two. It also checks that the nonzero-count
 guard rejects an empty tree. Connecting these row identities to the original
 recurrence still requires the conversion binding and global invariant proof.
 
+### Appending a sample to the row statistics
+
+`Float/WelfordAppend` embeds every old lane into a row of length `N+1` and
+appends the new sample to its explicit addition tree. `appendPlan` proves that
+this preserves reduction-plan validity and the old padding count. The count
+of the extended tree is consequently the old floating tree count plus one;
+this is structural evaluation of the tree, not an integer-conversion law.
+
+`mean_append` derives the equality between the Welford mean update and the
+mean of this extended tree. `shift_square` derives equality of the backwards
+mean-shift square and correction square using distribution and cancellation.
+Combining this with the centered-row lemmas and the local variance update,
+`variance_append` derives the appended row's sum of squared deviations.
+All extra premises are finite/nonzero conditions on the explicit operations;
+the updated means, variances and reduction values are not equality premises.
+
+The arithmetic fixture also separates the two count obligations. Interpreting
+`fromNat(n)` as `n+1` satisfies the successor relation and every selected
+arithmetic atom, but on singleton input `[2]` the two-pass variance is `1/2`
+and the online variance is `1`. Thus the initialization relation
+`fromNat(0) = literal(0)` cannot be omitted merely because a successor relation
+has been obtained. Neither conversion relation is currently admitted.
+
+The append step does not yet establish the full original-kernel equivalence:
+the count conversions, initialization, induction over all loop iterations and
+comparison with the batch kernel's reduction schedule remain to be connected.
+No original source kernel or experiment rule was changed for this derivation.
+
 ## Constraints on the supplemental atom set
 
 Further atom sets need a derivation-level dependency check before a GPU run.

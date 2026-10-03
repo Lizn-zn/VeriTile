@@ -292,6 +292,27 @@ theorem mul_zero (a : α) (ha : D .finite a) (hz : D .finite (zero M))
       _ = zero M := hnp
   exact (zero_add R M D hM s p hp hz).symm.trans hzp
 
+/-- Opposite summands have equal squares, derived using distribution and
+cancellation. The opposite-sum equation is consumed as a local lemma premise;
+no negation operation or ring structure is introduced. -/
+theorem square_eq_of_add_eq_zero (a b : α)
+    (ha : D .finite a) (hb : D .finite b) (hz : D .finite (zero M))
+    (haa : D .finite (mul M a a)) (hbb : D .finite (mul M b b))
+    (hab : D .finite (mul M a b)) (hnab : D .finite (sub M (zero M) (mul M a b)))
+    (ha0 : D .finite (mul M a (zero M)))
+    (hna0 : D .finite (sub M (zero M) (mul M a (zero M))))
+    (hb0 : D .finite (mul M b (zero M)))
+    (hnb0 : D .finite (sub M (zero M) (mul M b (zero M))))
+    (h : add M a b = zero M) : mul M a a = mul M b b := by
+  have left : add M (mul M a a) (mul M a b) = zero M := by
+    rw [← mul_distrib R M D hM s a a b ha ha hb, h,
+      mul_zero R M D hM s a ha hz ha0 hna0]
+  have right : add M (mul M b b) (mul M a b) = zero M := by
+    rw [mul_comm R M D hM s a b ha hb,
+      ← mul_distrib R M D hM s b b a hb hb ha, add_comm R M D hM s b a hb ha, h,
+      mul_zero R M D hM s b hb hz hb0 hnb0]
+  exact add_right_cancel R M D hM s _ _ _ haa hbb hab hz hnab (left.trans right.symm)
+
 /-- A derived cancellation principle for a common nonzero right factor. -/
 theorem mul_right_cancel (a b c : α) (ha : D .finite a) (hb : D .finite b)
     (hc : D .finite c) (hn : D .nonzero c) (hi : D .finite (div M (one M) c))

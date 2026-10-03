@@ -4,6 +4,7 @@ It checks the eleven guarded arithmetic equations used by the scalar library;
 it makes no claim to model the unrelated transcendental admission families. -/
 import VeriTile.Triton.Float.Welford
 import VeriTile.Triton.Float.WelfordReduction
+import VeriTile.Triton.Float.WelfordAppend
 import VeriTile.Triton.Float.ScalarReduction
 import bench.examples.support.WelfordExecution
 import VeriTile.Meta.StatementAudit
@@ -168,16 +169,45 @@ example : ¬ FP.WelfordReduction.MeanDomain M domain (fun _ : Fin 0 => (0 : ℚ)
   have hn := h.countNonzero
   norm_num [domain, FP.WelfordReduction.count, FP.ScalarReduction.value, zero, M, model] at hn
 
+private def offsetCount (n : Nat) : ℚ := n + 1
+private noncomputable def offsetModel := model offsetCount
+
+-- A successor law alone still leaves the conversion of zero unspecified.
+theorem offset_count_successor (n : Nat) :
+    offsetModel.fromNat (some .fp32) (n + 1) =
+      add offsetModel (offsetModel.fromNat (some .fp32) n) (FP.ScalarArithmetic.one offsetModel) := by
+  norm_num [offsetModel, model, offsetCount, add, FP.ScalarArithmetic.one, Nat.cast_add]
+
+/-- All selected scalar equations and the count successor law hold, but
+variance disagrees when conversion gives zero a nonzero weight. This checks
+the initialization obligation independently of the successor obligation. -/
+theorem count_initialization_gap :
+    (∀ atom a b c, Inputs domain a b c atom →
+      leftValue offsetModel a b c atom = rightValue offsetModel a b c atom) ∧
+    offsetModel.fromNat (some .fp32) 0 ≠ zero offsetModel ∧
+    WelfordFPExecution.twopassVariance offsetModel row ≠
+      WelfordFPExecution.varianceValue offsetModel row := by
+  refine ⟨all_arithmetic_equations offsetCount, ?_, ?_⟩
+  · norm_num [offsetModel, model, offsetCount, zero]
+  · norm_num [WelfordFPExecution.twopassVariance, WelfordFPExecution.twopassMean,
+      WelfordFPExecution.sumValue, WelfordFPExecution.varianceValue,
+      WelfordFPExecution.recurrence, WelfordFPExecution.update, offsetModel, model, offsetCount,
+      row, FP.ScalarReduction.inputs, TileShape.axisDim, TileShape.insertAxisIndex]
+
 #axiomsClean FP.Welford.mean_step
 #axiomsClean WelfordFPExecution.fp32_mean_step
 #axiomsClean FP.ScalarArithmetic.add_right_cancel
 #axiomsClean FP.ScalarArithmetic.sub_add_sub_cancel
+#axiomsClean FP.ScalarArithmetic.square_eq_of_add_eq_zero
 #axiomsClean FP.ScalarReduction.value_add
 #axiomsClean FP.ScalarReduction.constant_value
 #axiomsClean FP.ScalarReduction.deviations_add_center
 #axiomsClean FP.WelfordReduction.centered_sum_zero
 #axiomsClean FP.WelfordReduction.cross_sum_zero
 #axiomsClean FP.WelfordReduction.centered_square_shift
+#axiomsClean FP.WelfordAppend.mean_append
+#axiomsClean FP.WelfordAppend.shift_square
+#axiomsClean FP.WelfordAppend.variance_append
 #axiomsClean FP.Welford.residual_step
 #axiomsClean FP.Welford.variance_step
 #axiomsClean FP.Welford.square_shift
@@ -185,5 +215,7 @@ example : ¬ FP.WelfordReduction.MeanDomain M domain (fun _ : Fin 0 => (0 : ℚ)
 #axiomsClean WelfordFPExecution.fp32_variance_step
 #axiomsClean all_arithmetic_equations
 #axiomsClean count_conversion_gap
+#axiomsClean offset_count_successor
+#axiomsClean count_initialization_gap
 
 end FPWelfordArithmeticTests
