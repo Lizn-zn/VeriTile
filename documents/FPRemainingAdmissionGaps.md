@@ -41,8 +41,8 @@ formats. It supplies no fp64 instance.
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
 | `SoftmaxStable` | The fp32 EXP-SUB instance is admitted; bind the tested libdevice implementation at the exact precision. This admission does not cover a tl.exp implementation. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
 | `StableLogSumExp` | The fp32 libdevice EXP-SUB instance is admitted; select a compatible accepted LOG-EXP precision instance. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
-| `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Prove the loop invariant in the original recurrence scope. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
-| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; integer-count conversion, precision and nonzero-count obligations remain. | Connect explicit reduction trees to the online loop and retain both output windows and memory framing. |
+| `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Relate the now-proved opaque loop recurrence to the batch expression using scalar atoms. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
+| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; integer-count conversion, precision and nonzero-count obligations remain. | Both original executions and output frames are proved; derive equality between the explicit reduction trees and the online recurrence. |
 | `FusedLayerNorm` | The Welford prerequisites at the actual arithmetic precision. | Derive the statistics replacement and preserve the common normalization, affine operations and bf16 output conversion. |
 
 This table lists prerequisites, not newly available assumptions. It does not
@@ -69,6 +69,34 @@ These are reusable prerequisites, not another completed example. The original
 `SoftmaxStable` kernels still use `tl.exp`; the accepted EXP-SUB experiment uses
 `libdevice.exp`. Selecting a libdevice variant or obtaining evidence for the
 original intrinsic remains necessary before the full FP equivalence is closed.
+
+### Implemented loop execution
+
+The opaque FP interpreter now executes compute-level counted loops, static and
+dynamic ranges, and conditional branches, including nesting. It captures
+dynamic range bounds once, resets the exact natural index before each
+iteration, propagates reached failures, and skips inactive bodies. The range
+zero-step behavior matches the existing operational semantics. `Float/Control`
+provides successful-execution induction principles for both loop forms; it
+does not add arithmetic assumptions.
+
+The independent `bench/examples/support/WelfordExecution` and
+`OnlineSoftmaxExecution` modules retain the original Triton sources. Welford's
+online loop computes the opaque recurrence and writes both bf16 output cells;
+the two-pass execution retains both original sum operations. Their proofs
+cover symbolic row length and stride, including empty rows, and frame every
+untouched cell. OnlineSoftmax computes its recurrence in `m` and `l` and
+preserves all memory, matching the original source's lack of an output store.
+Source-equality tests compare these copies with the existing correctness
+files; the execution proofs do not import those files.
+
+These are execution prerequisites, not new completed FP equivalences. The
+Welford recurrence still needs to be related to its two-pass expression using
+the accepted scalar theory at the actual arithmetic precision. Count
+conversion remains an opaque operation: loop support does not imply
+`toReal(i + 1) = toReal(i) + 1`. The OnlineSoftmax comparison still needs the
+matching exponential implementation and a scalar-derived invariant relating
+the recurrence to the batch expression.
 
 ## Constraints on the supplemental atom set
 
@@ -115,6 +143,7 @@ python3 scripts/export_numerical_rules.py --trust-report --check
 python3 scripts/export_supplemental_rules.py --trust-report --check
 python3 -m unittest scripts.test_export_supplemental_rules scripts.test_fp_supplemental
 python3 -m unittest scripts.test_fp_scalar_arithmetic
+python3 -m unittest scripts.test_fp_control
 lake build TritonBenchSpecExamples
 ```
 

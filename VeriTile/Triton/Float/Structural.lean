@@ -438,6 +438,8 @@ noncomputable def stepAlg {α : Type} [Inhabited α] (M : Algebra α) :
       store M mem mask (← evalOp M none e s) s
   | _, _ => none
 
+mutual
+
 noncomputable def step {α : Type} [Inhabited α] (M : Algebra α) :
     ComputeStmt → State α → Option (State α)
   | .alg st, s => stepAlg M st s
@@ -446,12 +448,60 @@ noncomputable def step {α : Type} [Inhabited α] (M : Algebra α) :
       return s.setReg n d sh v
   | .store _ _ mem e mask, s => do
       store M mem mask (← evalExpr M e s) s
+  | .forLoop idx n body, s => loop M idx 0 n body s
+  | .forRange idx start stop stride body, s => range M idx start stop stride body s
+  | .forRangeDyn idx start stop stride body, s => do
+      let a ← evalOp M none start s
+      let b ← evalOp M none stop s
+      let d ← evalOp M none stride s
+      range M idx (a PUnit.unit) (b PUnit.unit) (d PUnit.unit) body s
+  | .ifThen cond body, s => do
+      let c ← evalOp M none cond s
+      if c PUnit.unit then run M body s else some s
+  | .ifThenElse cond yes no, s => do
+      let c ← evalOp M none cond s
+      if c PUnit.unit then run M yes s else run M no s
   | _, _ => none
+termination_by st _ => (sizeOf st, 0)
+decreasing_by
+  all_goals simp_wf
+  all_goals (try omega)
+  all_goals (have : 0 < sizeOf idx := by cases idx; simp)
+  all_goals omega
 
 noncomputable def run {α : Type} [Inhabited α] (M : Algebra α) :
     List ComputeStmt → State α → Option (State α)
   | [], s => some s
   | st :: rest, s => do run M rest (← step M st s)
+termination_by code _ => (sizeOf code, 0)
+decreasing_by all_goals (simp_wf; omega)
+
+/-- Counted loops bind the exact natural index before every iteration. The
+floating operations inside the body still use the same opaque algebra. -/
+noncomputable def loop {α : Type} [Inhabited α] (M : Algebra α)
+    (idx : RegName) (start stop : Nat) (body : List ComputeStmt) :
+    State α → Option (State α)
+  | s => if start < stop then do
+      let t ← run M body (s.setReg idx .nat [] (fun _ => start))
+      loop M idx (start + 1) stop body t
+    else some s
+termination_by _ => (sizeOf body + 1, stop - start)
+decreasing_by all_goals omega
+
+/-- Range bounds are evaluated once on entry. As in the existing operational
+semantics, a zero stride or an empty interval executes no iterations. -/
+noncomputable def range {α : Type} [Inhabited α] (M : Algebra α)
+    (idx : RegName) (cur stop stride : Nat) (body : List ComputeStmt) :
+    State α → Option (State α)
+  | s => if stride = 0 then some s
+    else if cur < stop then do
+      let t ← run M body (s.setReg idx .nat [] (fun _ => cur))
+      range M idx (cur + stride) stop stride body t
+    else some s
+termination_by _ => (sizeOf body + 1, stop - cur)
+decreasing_by all_goals omega
+
+end
 
 noncomputable def exec {α : Type} [Inhabited α] (M : Algebra α) :
     ComputeKernel → State α → Option (State α)
@@ -461,7 +511,7 @@ theorem run_append {α : Type} [Inhabited α] (M : Algebra α)
     (before after : List ComputeStmt) (s : State α) :
     run M (before ++ after) s = (run M before s).bind (run M after) := by
   induction before generalizing s with
-  | nil => rfl
+  | nil => simp [run]
   | cons st rest ih =>
     simp only [List.cons_append, run]
     cases step M st s with
@@ -478,6 +528,7 @@ theorem exec_seq_cons {α : Type} [Inhabited α] (M : Algebra α)
 
 theorem exec_seq_nil {α : Type} [Inhabited α] (M : Algebra α)
     (ins outs : List RegionName) (s : State α) :
-    exec M (ComputeKernel.seq ins outs []) s = some s := rfl
+    exec M (ComputeKernel.seq ins outs []) s = some s := by
+  simp [ComputeKernel.seq, exec, run]
 
 end VeriTile.Triton.FP.Structural
