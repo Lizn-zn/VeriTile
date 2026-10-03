@@ -3,6 +3,7 @@ countermodel is not an IEEE execution, GPU experiment or newly admitted law.
 It checks the eleven guarded arithmetic equations used by the scalar library;
 it makes no claim to model the unrelated transcendental admission families. -/
 import VeriTile.Triton.Float.Welford
+import VeriTile.Triton.Float.WelfordReduction
 import VeriTile.Triton.Float.ScalarReduction
 import bench.examples.support.WelfordExecution
 import VeriTile.Meta.StatementAudit
@@ -149,11 +150,34 @@ example :
   · norm_num [FP.ScalarReduction.FiniteTree, FP.ScalarReduction.value,
       tripleTree, tripleRow, boundedDomain, add, zero, M, model, htwo]
 
+private def paddedSingleton : FP.Equational.ReductionTree 1 :=
+  .add .zero (.add (.input 0) .zero)
+
+-- Padding is not an extra input, and the explicit sum of ones does not
+-- inherit the arbitrary fromNat interpretation from the original kernel.
+example : FP.WelfordReduction.count M paddedSingleton = 1 ∧
+    FP.WelfordReduction.mean M row paddedSingleton = 2 ∧
+    FP.WelfordReduction.count M paddedSingleton ≠ M.fromNat (some .fp32) 1 := by
+  norm_num [FP.WelfordReduction.count, FP.WelfordReduction.mean, FP.ScalarReduction.value,
+    paddedSingleton, row, zero, FP.ScalarArithmetic.one, add, div, M, model, doubledCount]
+
+-- Even with literal zero correctly represented, the tree-based mean cannot
+-- be used on an empty tree without its explicit nonzero-count guard.
+example : ¬ FP.WelfordReduction.MeanDomain M domain (fun _ : Fin 0 => (0 : ℚ)) .zero := by
+  intro h
+  have hn := h.countNonzero
+  norm_num [domain, FP.WelfordReduction.count, FP.ScalarReduction.value, zero, M, model] at hn
+
 #axiomsClean FP.Welford.mean_step
 #axiomsClean WelfordFPExecution.fp32_mean_step
 #axiomsClean FP.ScalarArithmetic.add_right_cancel
 #axiomsClean FP.ScalarArithmetic.sub_add_sub_cancel
 #axiomsClean FP.ScalarReduction.value_add
+#axiomsClean FP.ScalarReduction.constant_value
+#axiomsClean FP.ScalarReduction.deviations_add_center
+#axiomsClean FP.WelfordReduction.centered_sum_zero
+#axiomsClean FP.WelfordReduction.cross_sum_zero
+#axiomsClean FP.WelfordReduction.centered_square_shift
 #axiomsClean FP.Welford.residual_step
 #axiomsClean FP.Welford.variance_step
 #axiomsClean FP.Welford.square_shift

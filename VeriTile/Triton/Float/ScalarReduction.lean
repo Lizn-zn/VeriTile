@@ -132,6 +132,34 @@ theorem value_add (xs ys : Fin n → α) (tree : ReductionTree n)
       (ScalarArithmetic.add M (zero M) (zero M)) tree := by simpa only [hz'] using hxy
   simpa only [hz'] using value_add_with_seed R M D hM s xs ys (zero M) (zero M) tree hx hy hxy'
 
+/-- A constant row factors into its value times an explicit tree of ones.
+This does not identify the floating tree count with conversion of an integer. -/
+theorem constant_value (c : α) (hc : D .finite c) (hz : D .finite (zero M))
+    (hp : D .finite (mul M c (zero M)))
+    (hn : D .finite (sub M (zero M) (mul M c (zero M))))
+    (tree : ReductionTree n) (hf : FiniteTree M D (fun _ => one M) (zero M) tree) :
+    value M (fun _ => c) (zero M) tree =
+      mul M c (value M (fun _ => one M) (zero M) tree) := by
+  calc
+    _ = value M (fun _ => mul M c (one M)) (zero M) tree :=
+      value_congr M _ _ _ _ (fun _ => (mul_one R M D hM s c hc).symm) rfl tree
+    _ = _ := factor_left R M D hM s c hc hz hp hn _ tree hf
+
+/-- Sum of deviations plus the same-tree sum of the center recovers the
+original sum. Scalar CANCEL is lifted through the tree, with no reduction atom. -/
+theorem deviations_add_center (xs : Fin n → α) (c : α) (tree : ReductionTree n)
+    (hxs : ∀ i, D .finite (xs i)) (hc : D .finite c) (hz : D .finite (zero M))
+    (hx : FiniteTree M D xs (zero M) tree)
+    (hd : FiniteTree M D (fun i => sub M (xs i) c) (zero M) tree)
+    (hm : FiniteTree M D (fun _ => c) (zero M) tree) :
+    ScalarArithmetic.add M (value M (fun i => sub M (xs i) c) (zero M) tree)
+      (value M (fun _ => c) (zero M) tree) = value M xs (zero M) tree := by
+  have hp (i : Fin n) : ScalarArithmetic.add M (sub M (xs i) c) c = xs i :=
+    sub_add_cancel R M D hM s (xs i) c (hxs i) hc
+  have hf := (finiteTree_congr M D _ _ (zero M) (zero M) hp rfl tree).mpr hx
+  exact (value_add R M D hM s _ _ tree hz hd hm hf).symm.trans
+    (value_congr M _ _ (zero M) (zero M) hp rfl tree)
+
 end Factor
 
 /-- Arithmetic domains needed when normalizing a row before/after a common

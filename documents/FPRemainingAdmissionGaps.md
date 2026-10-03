@@ -156,6 +156,29 @@ requires the count-conversion binding, the global mean/variance invariants
 and the corresponding reduction schedules. The completed example count
 remains 13.
 
+### Centered sums and vanishing variance cross terms
+
+`Float/WelfordReduction` defines the floating count of an explicit tree as
+that tree's sum of literal ones with literal-zero padding. From the accepted
+scalar atoms, `ScalarReduction.constant_value` factors a constant row into
+its value times this count, and `deviations_add_center` recovers the original
+sum by adding back the constant center row.
+
+For a mean defined as the input sum divided by this explicit count,
+`centered_sum_zero` derives that the sum of deviations is zero. The denominator
+must be nonzero, and the record of required domains contains no equality
+premises. `cross_sum_zero` then factors and cancels the cross terms in the
+variance expansion. `centered_square_shift` concludes that the recentered
+square sum equals the old square sum plus the sum of shift squares.
+
+These lemmas support the variance invariant without assuming a whole-row
+identity. They do not replace the original kernel's `fromNat(N)` denominator
+with the tree count. The arithmetic fixture checks this distinction in its
+existing conversion countermodel: a singleton tree padded by two zeros still
+counts as one, while `fromNat(1)` is two. It also checks that the nonzero-count
+guard rejects an empty tree. Connecting these row identities to the original
+recurrence still requires the conversion binding and global invariant proof.
+
 ## Constraints on the supplemental atom set
 
 Further atom sets need a derivation-level dependency check before a GPU run.

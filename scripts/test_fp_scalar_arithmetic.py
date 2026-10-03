@@ -12,7 +12,7 @@ class ScalarArithmeticTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ['lake', 'build', 'VeriTile.Triton.Float.ScalarReduction',
-             'VeriTile.Triton.Float.Welford', 'bench.examples.support.WelfordExecution'], cwd=ROOT,
+             'VeriTile.Triton.Float.WelfordReduction', 'bench.examples.support.WelfordExecution'], cwd=ROOT,
             text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -32,7 +32,7 @@ class ScalarArithmeticTests(unittest.TestCase):
         self.assertNotIn('unresolved FP proof', result.stdout)
         self.assertNotIn('\n  add_assoc\n', result.stdout)
 
-    def test_welford_mean_step_and_count_conversion_boundary(self):
+    def test_welford_steps_centering_and_count_conversion_boundary(self):
         result = self.lean((ROOT / 'bench/tests/FPWelfordArithmetic.lean').read_text())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('warning:', result.stdout)
