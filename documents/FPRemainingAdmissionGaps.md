@@ -41,7 +41,7 @@ formats. It supplies no fp64 instance.
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
 | `SoftmaxStable` | EXP-SUB is admitted for libdevice.exp; the original tl.exp primitive still needs matching admission. | The scalar-derived normalization, original executions and scheduled IO/domain contract are connected conditionally on that primitive. Max, exp and the bf16 stores are retained. |
 | `StableLogSumExp` | The original tl.exp EXP-SUB, uncast fp32 LOG-EXP and LOG-MUL obligations remain unadmitted. The available LOG-EXP row has bf16 input/output; LOG-MUL has domain events under the configured distribution. | Scalar sum recovery, the original executions and the scheduled IO/domain contract are connected conditionally on those three primitive relations. |
-| `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Relate the now-proved opaque loop recurrence to the batch expression using scalar atoms. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
+| `OnlineSoftmax` | The original tl.exp EXP-SUB still needs matching admission. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom; it retains explicit domains for the actual seed factor and centers. | The loop invariant, normalization and arbitrary batch sum schedule are connected to both original executions. The online source has no output store; the public observation scope still awaits user confirmation. |
 | `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | Both original kernels are compared under arbitrary valid fp32 schedules; the public IO objects now bind the execution profile and syntactic iteration/rewrite domains. Count admission still blocks the completed specification. |
 | `FusedLayerNorm` | The same two integer-count conversion laws as Welford remain unadmitted. | Both original implementations are compared using the unrounded Welford statistics, the unchanged affine suffix and the scheduled three-input contract. Empty rows need no numerical law. |
 
@@ -142,9 +142,45 @@ These are execution prerequisites, not new completed FP equivalences. The
 Welford scalar derivation, loop induction, schedule comparison and public
 domain contract are connected below. Count conversion remains an opaque
 operation: loop support does not imply
-`toReal(i + 1) = toReal(i) + 1`. The OnlineSoftmax comparison still needs the
-matching exponential implementation and a scalar-derived invariant relating
-the recurrence to the batch expression.
+`toReal(i + 1) = toReal(i) + 1`. The OnlineSoftmax connection below derives its
+recurrence invariant and normalized-value comparison, conditional on the
+matching exponential law.
+
+### Original online softmax normalization
+
+`Float/OnlineSoftmax` derives `l * exp(m) = prefixSum(exp(x))` for every
+positive-length prefix of the original recurrence. The first step preserves
+the actual `exp(-inf - newMax)` expression and requires its result and the
+zero-product intermediates to be finite. It does not declare `-inf` finite or
+silently remove that expression. Subsequent steps derive the invariant using
+scalar distribution, association and reciprocal cancellation plus the pending
+intrinsic EXP-SUB obligation. Every update's domain is checked.
+
+`normalized_prefix` then derives the online normalized values using the actual
+computed m/l. The prefix sum is an explicit valid addition tree with its seed
+retained. `OnlineSoftmaxContract.normalized_values` compares it with an
+arbitrary valid batch schedule through the existing scalar rewrite paths and
+their intermediate domains. Both centers remain opaque; neither a max-tree
+identity nor equality of the online and batch maxima is a premise.
+
+`OnlineSoftmaxComparison` connects the invariant to the original loop's actual
+registers. `OnlineSoftmaxBatch` independently copies the original batch kernel,
+including its real-typed row store (there is no bf16 conversion in this case).
+`original_normalization_runs` proves both successful executions, identifies
+every batch output with the normalized online result, frames untouched batch
+cells and preserves all memory on the online side. The reified comparison
+domain contains only the iteration, normalization and schedule checks.
+
+The fixtures check complete-domain satisfiability without declaring the
+negative-infinity sentinel finite, a later step whose valid domains do not
+cover an invalid initialization, retained prefix padding, both original source
+copies and aliased memory behavior. They supply no experimental evidence.
+
+The public specification choice is pending: retain the existing Correct
+example's batch-output/online-formula scope, or explicitly add an online output
+stage and compare complete kernels. No output stage has been added. Neither
+this choice nor the missing intrinsic admission is treated as settled, and
+the completed FP count remains 13.
 
 ### Welford mean step and integer conversion
 
@@ -494,6 +530,7 @@ python3 -m unittest scripts.test_fp_scalar_arithmetic
 python3 -m unittest scripts.test_fp_control scripts.test_fp_dual_output scripts.test_fp_layernorm
 python3 -m unittest scripts.test_fp_softmax_stable
 python3 -m unittest scripts.test_fp_logsumexp
+python3 -m unittest scripts.test_fp_online_softmax
 lake build TritonBenchSpecExamples
 ```
 

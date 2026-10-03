@@ -28,7 +28,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype addition | `FloatDTypeAddCorrect` — checked, including empty tiles | `FloatDTypeAddFPEquiv` — checked; add commutation; output cast retained |
 | Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
 | Row-wise max | `RowWiseMaxCorrect` — checked | `RowWiseMaxFPEquiv` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
-| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch versus online: pending compatible exp binding and loop/reduction derivation |
+| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch output versus normalized online m/l: scalar loop invariant, normalization and schedule comparison connected to both original executions; matching tl.exp admission and the public observation scope remain pending |
 | mHC depth | `HyperConnectionsDepthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepthFPEquiv` — checked in the same scope; add commutation |
 | mHC width | `HyperConnectionsWidthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidthFPEquiv` — checked in the same scope; two multiplication commutations |
 | Adam-named Lion update | `AdamUpdateGridLaunchCorrect` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunchFPEquiv` — checked per program; momentum addition commutation, masked in-place stores retained |
