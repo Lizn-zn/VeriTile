@@ -48,6 +48,28 @@ formats. It supplies no fp64 instance.
 This table lists prerequisites, not newly available assumptions. It does not
 assert that any proposed numerical experiment will pass.
 
+### Implemented scalar and reduction derivations
+
+`Float/ScalarArithmetic` binds eleven accepted fp32 arithmetic instances to
+explicit scalar fragments, including their operand guards. The binding checks
+the rule ID, all precision fields and domain against the current report.
+Executing the fragments in a model of these assumptions yields the scalar
+laws; no Real ring instance or extra numerical axiom is supplied.
+
+The module derives subtraction by zero, multiplication by zero, multiplicative
+cancellation and shared-scale division normalization. `Float/ScalarReduction`
+then derives common-factor extraction through an arbitrary explicit addition
+tree, with its padding retained, and shared-scale row normalization. The
+finite/nonzero conditions include intermediate partial sums and reciprocal
+values; finite input leaves alone do not discharge these conditions. Its
+execution adapter expands fp32 sums and preserves other precisions, casts and
+opaque max/exp operations.
+
+These are reusable prerequisites, not another completed example. The original
+`SoftmaxStable` kernels still use `tl.exp`; the accepted EXP-SUB experiment uses
+`libdevice.exp`. Selecting a libdevice variant or obtaining evidence for the
+original intrinsic remains necessary before the full FP equivalence is closed.
+
 ## Constraints on the supplemental atom set
 
 Further atom sets need a derivation-level dependency check before a GPU run.
@@ -92,6 +114,7 @@ python3 -m unittest scripts.test_fp_equational
 python3 scripts/export_numerical_rules.py --trust-report --check
 python3 scripts/export_supplemental_rules.py --trust-report --check
 python3 -m unittest scripts.test_export_supplemental_rules scripts.test_fp_supplemental
+python3 -m unittest scripts.test_fp_scalar_arithmetic
 lake build TritonBenchSpecExamples
 ```
 
