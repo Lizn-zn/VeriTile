@@ -4,7 +4,7 @@ casts remain opaque. This file does not assert the pending FP equivalence. -/
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.Control
 import VeriTile.Triton.Float.ExecutionProfile
-import VeriTile.Triton.Float.Welford
+import VeriTile.Triton.Float.WelfordInduction
 
 namespace VeriTile.Bench.Examples.WelfordFPExecution
 open VeriTile Triton FP.Structural
@@ -114,6 +114,37 @@ def recurrence {α : Type} (M : Algebra α) (xs : Fin N → α) : Nat → α × 
   | 0 => (M.literal none .real 0, M.literal none .real 0)
   | i + 1 => if h : i < N then update M i (xs ⟨i, h⟩) (recurrence M xs i)
       else recurrence M xs i
+
+/-- The scalar induction is the exact arithmetic of the original update at
+its fp32 default precision, including the natural-index conversion. -/
+theorem fp32_update {α : Type} (M : Algebra α) (i : Nat) (x : α) (acc : α × α) :
+    update (M.withDefaultPrecision .fp32) i x acc =
+      FP.WelfordInduction.update M i x acc := rfl
+
+theorem fp32_recurrence_prefix {α : Type} (M : Algebra α) (xs : Nat → α)
+    (N k : Nat) (hk : k ≤ N) :
+    recurrence (M.withDefaultPrecision .fp32) (FP.WelfordInduction.rowPrefix xs N) k =
+      FP.WelfordInduction.state M xs k := by
+  induction k with
+  | zero => rfl
+  | succ k ih =>
+    rw [recurrence, dif_pos (by omega), ih (by omega), fp32_update]
+    rfl
+
+/-- All original loop iterations now inherit the scalar-derived statistics
+invariant. The two primitive count laws are explicit unadmitted premises;
+no whole-row or whole-kernel equality is supplied as an assumption. -/
+theorem fp32_recurrence_statistics {α : Type} [Inhabited α]
+    (R : FP.ScalarArithmetic.Rules) (M : Algebra α) (D : FP.Guarded.Domain α)
+    (hM : FP.Guarded.Models R.assumptions M D) (s : State α)
+    (xs : Nat → α) (empty : FP.Equational.ReductionTree 0) (N : Nat) (hN : 0 < N)
+    (hc : FP.WelfordInduction.CountConversion M N)
+    (hd : FP.WelfordInduction.IterationDomain M D xs empty N) :
+    recurrence (M.withDefaultPrecision .fp32) (FP.WelfordInduction.rowPrefix xs N) N =
+      FP.WelfordInduction.statistics M (FP.WelfordInduction.rowPrefix xs N)
+        (FP.WelfordInduction.tree empty N) := by
+  rw [fp32_recurrence_prefix M xs N N le_rfl]
+  exact FP.WelfordInduction.state_statistics R M D hM s xs empty N hN hc hd
 
 private def Invariant {α : Type} [Inhabited α] (M : Algebra α) (xs : Fin N → α)
     (origin : State α) (i : Nat) (s : State α) : Prop :=
@@ -281,5 +312,43 @@ theorem twopass_io_run {α : Type} [Inhabited α] (M : Algebra α)
   obtain ⟨t, ht, hm, hv, hf⟩ := twopass_run M x mean variance stride xs s hd hx
   refine ⟨by simp [IO₁ₓ₂PrivateScratch, twopassIO, onlineIO], t, ht, hm, hv, ?_⟩
   exact scalar_outputs_frame rfl rfl rfl rfl hf
+
+/-- Conditional numerical result for the original online kernel, including
+both bf16 stores and the full memory frame. The count laws are not admitted
+yet, and the prefix tree is not assumed equal to an arbitrary batch schedule. -/
+theorem fp32_online_statistics_run {α : Type} [Inhabited α]
+    (R : FP.ScalarArithmetic.Rules) (M : Algebra α) (D : FP.Guarded.Domain α)
+    (hM : FP.Guarded.Models R.assumptions M D) (s : State α)
+    (x mean variance : RegionName) (N stride : Nat) (hN : 0 < N) (hdistinct : mean ≠ variance)
+    (xs : Nat → α) (empty : FP.Equational.ReductionTree 0)
+    (hx : ∀ i : Fin N, (s.mem x (s.pids 0 * stride + i.val)).read .real = xs i.val)
+    (hc : FP.WelfordInduction.CountConversion M N)
+    (hd : FP.WelfordInduction.IterationDomain M D xs empty N) :
+    IO₁ₓ₂PrivateScratch (onlineIO x mean variance N stride) ∧
+    ∃ t, FP.Structural.exec (M.withDefaultPrecision .fp32)
+        (onlineIO x mean variance N stride).kernel s = some t ∧
+      t.mem mean 0 = .mk .bf16 (M.cast (some .fp32) .real .bf16
+        (FP.WelfordInduction.statistics M (FP.WelfordInduction.rowPrefix xs N)
+          (FP.WelfordInduction.tree empty N)).1) ∧
+      t.mem variance 0 = .mk .bf16 (M.cast (some .fp32) .real .bf16
+        (FP.ScalarArithmetic.div M
+          (FP.WelfordInduction.statistics M (FP.WelfordInduction.rowPrefix xs N)
+            (FP.WelfordInduction.tree empty N)).2
+          (FP.WelfordReduction.count M (FP.WelfordInduction.tree empty N)))) ∧
+      IO₁ₓ₂Frame (onlineIO x mean variance N stride) s t := by
+  obtain ⟨hp, t, ht, hm, hv, hf⟩ := online_io_run (M.withDefaultPrecision .fp32)
+    x mean variance stride (FP.WelfordInduction.rowPrefix xs N) s hdistinct hx
+  have hs := fp32_recurrence_statistics R M D hM s xs empty N hN hc hd
+  have hn := FP.WelfordInduction.converted_count R M D hM s empty N hc hd.initial.zero N le_rfl
+  refine ⟨hp, t, ht, ?_, ?_, hf⟩
+  · change t.mem mean 0 = .mk .bf16 (M.cast (some .fp32) .real .bf16
+      (recurrence (M.withDefaultPrecision .fp32) (FP.WelfordInduction.rowPrefix xs N) N).1) at hm
+    exact hm.trans (congrArg (fun acc : α × α => Cell.mk .bf16
+      (M.cast (some .fp32) .real .bf16 acc.1)) hs)
+  · change t.mem variance 0 = .mk .bf16 (M.cast (some .fp32) .real .bf16
+      (FP.ScalarArithmetic.div M
+        (recurrence (M.withDefaultPrecision .fp32) (FP.WelfordInduction.rowPrefix xs N) N).2
+        (M.fromNat (some .fp32) N))) at hv
+    simpa only [hs, hn] using hv
 
 end VeriTile.Bench.Examples.WelfordFPExecution

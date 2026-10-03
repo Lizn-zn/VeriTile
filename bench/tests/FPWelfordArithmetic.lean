@@ -6,6 +6,7 @@ import VeriTile.Triton.Float.Welford
 import VeriTile.Triton.Float.WelfordReduction
 import VeriTile.Triton.Float.WelfordAppend
 import VeriTile.Triton.Float.WelfordInit
+import VeriTile.Triton.Float.WelfordInduction
 import VeriTile.Triton.Float.ScalarReduction
 import bench.examples.support.WelfordExecution
 import VeriTile.Meta.StatementAudit
@@ -205,6 +206,101 @@ example : FP.WelfordInit.InitDomain M boundedDomain 7 ∧
         FP.ScalarArithmetic.mul, FP.Welford.square]
   · norm_num [boundedDomain, M, model, FP.ScalarArithmetic.mul, FP.Welford.square]
 
+private noncomputable def ordinaryCountModel := model (fun n => n)
+
+-- The conversion record is satisfiable, but neither existing countermodel
+-- can supply it. Zero and successor are independent primitive obligations.
+theorem ordinary_count_conversion (N : Nat) :
+    FP.WelfordInduction.CountConversion ordinaryCountModel N := by
+  constructor
+  · norm_num [ordinaryCountModel, model, zero]
+  · intro i _
+    norm_num [ordinaryCountModel, model, add, FP.ScalarArithmetic.one, Nat.cast_add]
+
+example : ¬ FP.WelfordInduction.CountConversion M 1 := by
+  intro h
+  have hs := h.successor 0 (by decide)
+  norm_num [M, model, doubledCount, add, FP.ScalarArithmetic.one] at hs
+
+example (N : Nat) : ¬ FP.WelfordInduction.CountConversion offsetModel N := by
+  intro h
+  have hz := h.zero
+  norm_num [offsetModel, model, offsetCount, zero] at hz
+
+private def middleBadCount (n : Nat) : ℚ := if n = 1 then 100 else n
+private noncomputable def middleBadModel := model middleBadCount
+private def pairValues (i : Nat) : ℚ := if i = 0 then 2 else 4
+
+-- Conversion at zero and at the final row length is correct, and all
+-- arithmetic atoms hold, but conversion at an intermediate index changes
+-- both statistics. Checking the final count alone cannot justify induction.
+theorem intermediate_count_gap :
+    (∀ atom a b c, Inputs domain a b c atom →
+      leftValue middleBadModel a b c atom = rightValue middleBadModel a b c atom) ∧
+    middleBadModel.fromNat (some .fp32) 0 = zero middleBadModel ∧
+    middleBadModel.fromNat (some .fp32) 2 = 2 ∧
+    (FP.WelfordInduction.state middleBadModel pairValues 2).1 = 204 / 101 ∧
+    (FP.WelfordInduction.statistics middleBadModel (FP.WelfordInduction.rowPrefix pairValues 2)
+      (FP.WelfordInduction.tree .zero 2)).1 = 3 ∧
+    div middleBadModel (FP.WelfordInduction.state middleBadModel pairValues 2).2
+      (middleBadModel.fromNat (some .fp32) 2) = 200 / 101 := by
+  refine ⟨all_arithmetic_equations middleBadCount, ?_⟩
+  norm_num [FP.WelfordInduction.state, FP.WelfordInduction.update, FP.WelfordInduction.statistics,
+    FP.WelfordInduction.tree, FP.WelfordInduction.rowPrefix, FP.WelfordAppend.appendTree,
+    FP.WelfordAppend.liftTree, FP.WelfordReduction.mean, FP.WelfordReduction.count,
+    FP.ScalarReduction.value, FP.Welford.nextMean, FP.Welford.correction,
+    FP.Welford.difference, FP.Welford.nextCount, FP.Welford.increment, FP.Welford.residual,
+    middleBadModel, model, middleBadCount, pairValues, zero, FP.ScalarArithmetic.one,
+    add, sub, FP.ScalarArithmetic.mul, div]
+
+private theorem rational_finite_tree (A : Algebra ℚ) (xs : Fin n → ℚ) (seed : ℚ)
+    (t : FP.Equational.ReductionTree n) : FP.ScalarReduction.FiniteTree A domain xs seed t := by
+  induction t with
+  | input => trivial
+  | zero => trivial
+  | add a b ih₁ ih₂ => exact ⟨ih₁, ih₂, trivial⟩
+
+-- A complete two-step domain can be discharged in the ordinary rational
+-- model; the induction theorem does not hide an impossible premise.
+theorem ordinary_iteration_domain :
+    FP.WelfordInduction.IterationDomain ordinaryCountModel domain pairValues (.add .zero .zero) 2 := by
+  constructor
+  · constructor <;> trivial
+  · intro i hi hn
+    have he : i = 1 := by omega
+    subst i
+    repeat' first | exact rational_finite_tree _ _ _ _ | constructor | intro
+    all_goals norm_num [domain, ordinaryCountModel, model, FP.WelfordReduction.count,
+      FP.WelfordInduction.tree, FP.WelfordAppend.appendTree, FP.WelfordAppend.liftTree,
+      FP.ScalarReduction.value, FP.Welford.nextCount, zero, FP.ScalarArithmetic.one, add] at *
+
+-- The first sample may meet all initialization guards even though the next
+-- sample leaves the domain. The loop theorem must not inspect only its base.
+example : FP.WelfordInit.InitDomain ordinaryCountModel boundedDomain 1 ∧
+    ¬ FP.WelfordInduction.IterationDomain ordinaryCountModel boundedDomain
+      (fun i => if i = 0 then 1 else 100) .zero 2 := by
+  constructor
+  · constructor <;>
+      norm_num [ordinaryCountModel, model, boundedDomain, zero, FP.ScalarArithmetic.one,
+        sub, FP.ScalarArithmetic.mul, FP.Welford.square]
+  · intro h
+    have hx := (h.steps 1 (by decide) (by decide)).step.input
+    norm_num [boundedDomain] at hx
+
+-- A nonempty padded seed survives every append and still forms a valid
+-- reduction plan. No padding leaf is dropped by the recurrence induction.
+private def emptyPlan : FP.Equational.ReductionPlan 0 where
+  tree := .add .zero .zero
+  padding := 2
+  valid := by simp [FP.Equational.ReductionTree.leaves]
+
+example : (FP.WelfordInduction.plan emptyPlan 3).padding = 2 := rfl
+example (N : Nat) :
+    (FP.WelfordInduction.tree emptyPlan.tree N).leaves.Perm
+      ((List.finRange N).map some ++ List.replicate (FP.WelfordInduction.plan emptyPlan N).padding none) := by
+  rw [← FP.WelfordInduction.plan_tree emptyPlan N]
+  exact (FP.WelfordInduction.plan emptyPlan N).valid
+
 #axiomsClean FP.Welford.mean_step
 #axiomsClean WelfordFPExecution.fp32_mean_step
 #axiomsClean FP.ScalarArithmetic.add_right_cancel
@@ -233,5 +329,13 @@ example : FP.WelfordInit.InitDomain M boundedDomain 7 ∧
 #axiomsClean count_conversion_gap
 #axiomsClean offset_count_successor
 #axiomsClean count_initialization_gap
+#axiomsClean FP.WelfordInduction.converted_count
+#axiomsClean FP.WelfordInduction.state_statistics
+#axiomsClean FP.WelfordInduction.normalized_statistics
+#axiomsClean WelfordFPExecution.fp32_recurrence_prefix
+#axiomsClean WelfordFPExecution.fp32_recurrence_statistics
+#axiomsClean WelfordFPExecution.fp32_online_statistics_run
+#axiomsClean intermediate_count_gap
+#axiomsClean ordinary_iteration_domain
 
 end FPWelfordArithmeticTests

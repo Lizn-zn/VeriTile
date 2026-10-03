@@ -42,7 +42,7 @@ formats. It supplies no fp64 instance.
 | `SoftmaxStable` | The fp32 EXP-SUB instance is admitted; bind the tested libdevice implementation at the exact precision. This admission does not cover a tl.exp implementation. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
 | `StableLogSumExp` | The fp32 libdevice EXP-SUB instance is admitted; select a compatible accepted LOG-EXP precision instance. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
 | `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Relate the now-proved opaque loop recurrence to the batch expression using scalar atoms. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
-| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; integer-count conversion, precision and nonzero-count obligations remain. | Both original executions and output frames are proved; derive equality between the explicit reduction trees and the online recurrence. |
+| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | The original online loop is related to its explicit prefix tree conditionally on those laws. Compare with the batch reduction schedule and expose the per-iteration domains in the final specification. |
 | `FusedLayerNorm` | The Welford prerequisites at the actual arithmetic precision. | Derive the statistics replacement and preserve the common normalization, affine operations and bf16 output conversion. |
 
 This table lists prerequisites, not newly available assumptions. It does not
@@ -202,9 +202,9 @@ and the online variance is `1`. Thus the initialization relation
 `fromNat(0) = literal(0)` cannot be omitted merely because a successor relation
 has been obtained. Neither conversion relation is currently admitted.
 
-The append step does not yet establish the full original-kernel equivalence:
-the count conversions, initialization, induction over all loop iterations and
-comparison with the batch kernel's reduction schedule remain to be connected.
+The append step alone does not establish the full original-kernel equivalence.
+Initialization and loop induction are connected below; count conversion
+admission and comparison with the batch kernel's reduction schedule remain.
 No original source kernel or experiment rule was changed for this derivation.
 
 ### Literal-zero initialization and singleton statistics
@@ -224,8 +224,8 @@ can hold even when the input's square is outside its finite-value domain.
 
 The original kernel still initializes its converted loop count through
 `fromNat(0)`, so the missing conversion binding is not discharged by these
-literal-zero lemmas. Full Welford equivalence still needs the loop induction,
-the domain obligations at every iteration and the reduction-schedule comparison.
+literal-zero lemmas. The induction below retains these primitive conversion
+premises, rather than treating initialization as evidence for them.
 
 ### Two-output FP specifications
 
@@ -247,6 +247,43 @@ implementation changing only the second output, and checks output dtype,
 window, scratch, failure and signature boundaries. Assumption printing stays
 unchanged: the structural proof prints `none`; an opaque guarded equivalence
 premise prints `unresolved FP proof` instead of claiming an atomic derivation.
+
+### Induction for the original converted-index loop
+
+`Float/WelfordInduction.state_statistics` connects the initialization and
+append lemmas for every nonempty row length. Its recurrence uses the original
+fp32 `fromNat(i)` operation at each step. The resulting mean and unnormalized
+variance equal the statistics of an explicit prefix tree, with the original
+empty padding tree retained. A corresponding `ReductionPlan` proves that each
+input occurs exactly once and that padding is preserved.
+
+`CountConversion` records exactly two still-unadmitted primitive obligations:
+`fromNat(0) = literal(0)` and, for every `i < N`,
+`fromNat(i + 1) = fromNat(i) + literal(1)`. From these, `converted_count`
+derives the equality with the prefix tree's sum of ones. There is no supplied
+reduction-count equality, statistics invariant or whole-kernel equality.
+`IterationDomain` contains the finite/nonzero predicates for initialization
+and every subsequent append; checking only the final iteration is insufficient.
+
+`WelfordExecution.fp32_recurrence_prefix` identifies this recurrence with the
+original source's executed loop, including every converted index.
+`fp32_online_statistics_run` carries the conditional result through both
+original bf16 stores and retains the two-output memory frame.
+`normalized_statistics` also retains the final division by the converted row
+length before deriving its prefix-tree form.
+
+The arithmetic fixture supplies a concrete rational model satisfying the
+conversion and iteration conditions. It also checks a countermodel where
+conversion is correct at zero and at the final length `2`, but converts the
+intermediate index `1` to `100`. All selected scalar arithmetic equations
+still hold, yet the online mean of `[2,4]` is `204/101` instead of `3`, and its
+normalized variance is `200/101` instead of `1`. This is an algebraic boundary
+check, not a GPU result or an IEEE claim.
+
+This does not add a completed FP example. The conversion premises must still
+come from admitted atomic relations; no such admission is manufactured here.
+The prefix tree must also be related to the batch kernel's actual reduction
+schedule, and the final public domain must cover all iteration guards.
 
 ## Constraints on the supplemental atom set
 
