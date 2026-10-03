@@ -192,6 +192,15 @@ theorem mul_distrib (a b c : α) (ha : D .finite a) (hb : D .finite b) (hc : D .
     mul M a (add M b c) = add M (mul M a b) (mul M a c) :=
   apply_atom R M D hM s .mulDistribute a b c ⟨ha, hb, hc⟩
 
+/-- Distribution with the sum on the left is derived from the admitted
+orientation and commutation. The intermediate sum must also be finite. -/
+theorem add_mul (a b c : α) (ha : D .finite a) (hb : D .finite b)
+    (hc : D .finite c) (hsum : D .finite (add M a b)) :
+    mul M (add M a b) c = add M (mul M a c) (mul M b c) := by
+  rw [mul_comm R M D hM s _ c hsum hc,
+    mul_distrib R M D hM s c a b hc ha hb,
+    mul_comm R M D hM s c a hc ha, mul_comm R M D hM s c b hc hb]
+
 theorem sub_add_cancel (a b : α) (ha : D .finite a) (hb : D .finite b) :
     add M (sub M a b) b = a :=
   apply_atom R M D hM s .cancel a b a ⟨ha, hb⟩

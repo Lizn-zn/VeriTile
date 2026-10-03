@@ -98,6 +98,36 @@ conversion remains an opaque operation: loop support does not imply
 matching exponential implementation and a scalar-derived invariant relating
 the recurrence to the batch expression.
 
+### Welford mean step and integer conversion
+
+`Float/Welford.mean_step` derives
+`(m + (x-m)/(n+1)) * (n+1) = m*n + x` from the accepted scalar arithmetic
+atoms. Every intermediate finite/nonzero requirement is explicit. The result
+is connected to the original loop update by `WelfordExecution.fp32_mean_step`.
+Here `n` remains the actual `fromNat(i)` value: identifying its successor with
+`fromNat(i+1)` is not part of the proof.
+
+`Float/ExecutionProfile` selects fp32 for implicit arithmetic in these source
+kernels while retaining explicit ComputeOp precisions, integer conversions,
+reductions and output casts. It does not supply numerical equalities. The
+execution and scalar-law connection therefore uses an explicit precision
+selection, without treating algorithm-typed operations as Real arithmetic.
+
+[FPWelfordArithmetic.lean](../bench/tests/FPWelfordArithmetic.lean) checks a
+countermodel for all eleven guarded arithmetic equations in
+`Float/ScalarArithmetic`, including the supplemental identity and inverse
+laws. Arithmetic and reductions use rational numbers, casts are identities,
+and `fromNat(n)` is interpreted as `2*n`. Conversion of zero is correct and
+every positive count is nonzero, but on input `[2]` the two-pass mean is `1`
+and the online mean is `2`. This is a proof-library coverage check, not a GPU
+failure or a model of the transcendental rule families.
+
+An integer-conversion relation consequently needs a matching primitive binding
+before the original count-based invariant can close. The existing configured
+normal distribution samples floating operands. A separate integer input
+distribution and its conversion experiments await user confirmation; no
+unmeasured conversion law has been added to the admission table.
+
 ## Constraints on the supplemental atom set
 
 Further atom sets need a derivation-level dependency check before a GPU run.

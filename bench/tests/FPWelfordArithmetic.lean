@@ -1,0 +1,113 @@
+/- Arithmetic coverage and count-conversion boundary for Welford. The rational
+countermodel is not an IEEE execution, GPU experiment or newly admitted law.
+It checks the eleven guarded arithmetic equations used by the scalar library;
+it makes no claim to model the unrelated transcendental admission families. -/
+import VeriTile.Triton.Float.Welford
+import VeriTile.Triton.Float.ScalarReduction
+import bench.examples.support.WelfordExecution
+import VeriTile.Meta.StatementAudit
+import Mathlib.Tactic.NormNum
+import Mathlib.Tactic.Ring
+
+namespace FPWelfordArithmeticTests
+open VeriTile Triton FP.Structural FP.Guarded
+open FP.ScalarArithmetic
+open VeriTile.Bench.Examples
+
+private def domain : Domain ℚ
+  | .finite => fun _ => True
+  | .nonzero => fun a => a ≠ 0
+  | .positive => fun a => 0 < a
+
+private noncomputable def model (count : Nat → ℚ) : Algebra ℚ where
+  literal := fun _ _ r => if r = 0 then 0 else 1
+  negInf := 0
+  binary := fun _ _ op a b => match op with
+    | .add => a + b
+    | .sub => a - b
+    | .mul => a * b
+    | .div => a / b
+    | .max => max a b
+    | .pow => a
+  unary := fun _ _ a => a
+  cast := fun _ _ _ a => a
+  fromNat := fun _ => count
+  fromInt := fun _ n => n
+  fp32Bits := fun b => b.bits.toNat
+  fp32Load := id
+  reduceMax := fun _ _ _ _ _ => 0
+  reduceSum := fun _ {shape} ax keepDims xs i =>
+    ∑ k : Fin (TileShape.axisDim shape ax), FP.ScalarReduction.inputs shape ax keepDims xs i k
+
+/-- Every selected arithmetic atom holds, independently of how integer
+conversion is interpreted. Nonzero guards on inverse cancellation are kept. -/
+theorem all_arithmetic_equations (count : Nat → ℚ) (atom : Atom) (a b c : ℚ)
+    (h : Inputs domain a b c atom) :
+    leftValue (model count) a b c atom = rightValue (model count) a b c atom := by
+  cases atom <;>
+    simp_all [Inputs, domain, leftValue, rightValue, add, sub, FP.ScalarArithmetic.mul, div, zero, FP.ScalarArithmetic.one,
+      model, div_eq_mul_inv]
+  all_goals ring
+
+private def doubledCount (n : Nat) : ℚ := 2 * n
+private noncomputable def M := model doubledCount
+private def row : Fin 1 → ℚ := fun _ => 2
+
+-- The initial conversion is correct and every positive count stays nonzero;
+-- these weaker properties still do not supply the missing successor relation.
+theorem initial_count : M.fromNat none 0 = zero M := by norm_num [M, model, doubledCount, zero]
+theorem positive_count (n : Nat) (hn : 0 < n) : M.fromNat none n ≠ 0 := by
+  simp only [M, model, doubledCount, ne_eq, mul_eq_zero, OfNat.ofNat_ne_zero, false_or]
+  exact_mod_cast (Nat.ne_of_gt hn)
+
+theorem successor_count_is_not_forced :
+    M.fromNat none 1 ≠ M.binary none .real .add (M.fromNat none 0) (M.literal none .real 1) := by
+  norm_num [M, model, doubledCount]
+
+theorem batch_mean : WelfordFPExecution.twopassMean M row = 1 := by
+  norm_num [WelfordFPExecution.twopassMean, WelfordFPExecution.sumValue,
+    M, model, row, doubledCount, FP.ScalarReduction.inputs, TileShape.axisDim,
+    TileShape.insertAxisIndex]
+
+theorem online_mean : (WelfordFPExecution.recurrence M row 1).1 = 2 := by
+  norm_num [WelfordFPExecution.recurrence, WelfordFPExecution.update, M, model, row, doubledCount]
+
+/-- Welford's two actual execution expressions disagree already on a single
+input, although all eleven arithmetic equations hold and denominators are
+nonzero. Thus arbitrary integer conversion cannot be hidden by a ring proof. -/
+theorem count_conversion_gap :
+    (∀ atom a b c, Inputs domain a b c atom →
+      leftValue M a b c atom = rightValue M a b c atom) ∧
+    WelfordFPExecution.twopassMean M row ≠ (WelfordFPExecution.recurrence M row 1).1 := by
+  refine ⟨all_arithmetic_equations doubledCount, ?_⟩
+  rw [batch_mean, online_mean]
+  norm_num
+
+-- The arithmetic update cannot be applied with a zero floating denominator.
+example : ¬ FP.Welford.MeanStepDomain M domain 2 0 (-1) := by
+  intro h
+  have hn := h.countNonzero
+  norm_num [domain, FP.Welford.nextCount, add, FP.ScalarArithmetic.one, M, model] at hn
+
+-- Choosing fp32 for implicit operations cannot override an explicit fp64
+-- computation, or erase the original bf16 output conversion.
+example {α : Type} [Inhabited α] (A : Algebra α) (s : State α) :
+    evalComputeOp (A.withDefaultPrecision .fp32)
+      (.alg .fp64 (.add .real .nil (.const 1) (.const 2))) s =
+      some (fun _ => A.binary (some .fp64) .real .add
+        (A.literal (some .fp64) .real 1) (A.literal (some .fp64) .real 2)) := by
+  simp [evalComputeOp, evalOp_unfold, numeric, Algebra.withDefaultPrecision,
+    resolvePrecision]
+  rfl
+
+example {α : Type} [Inhabited α] (A : Algebra α) (s : State α) :
+    evalOp (A.withDefaultPrecision .fp32) none (.castFloat .real .bf16 (.const 3)) s =
+      some (fun _ => A.cast (some .fp32) .real .bf16 (A.literal (some .fp32) .real 3)) := by
+  simp [evalOp_unfold, Algebra.withDefaultPrecision, resolvePrecision, ofFloat, toFloat]
+
+#axiomsClean FP.Welford.mean_step
+#axiomsClean WelfordFPExecution.fp32_mean_step
+#axiomsClean all_arithmetic_equations
+#axiomsClean count_conversion_gap
+
+end FPWelfordArithmeticTests
