@@ -1,4 +1,4 @@
-"""Supplemental catalogue, contracts and oracles using the shared ULP protocol.
+"""Supplemental catalogue, contracts and oracles using the shared two gates.
 
 No GPU dependency at import time. This module reuses the original profile
 validator and observation definitions, without modifying their module globals.

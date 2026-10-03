@@ -26,7 +26,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Aligned vector addition | `VectorAddCorrect` — checked | `VectorAddFPEquiv` — checked; add commutation |
 | Masked vector addition | `FlatVectorAddCorrect` — checked | `FlatVectorAddFPEquiv` — checked; add commutation |
 | Float dtype addition | `FloatDTypeAddCorrect` — checked, including empty tiles | `FloatDTypeAddFPEquiv` — checked; add commutation; output cast retained |
-| Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — conditional derivation retained; current local-ULP report rejects fp32 ADD-ASSOC, so association remains unresolved and this example is blocked on admission |
+| Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
 | Row-wise max | `RowWiseMaxCorrect` — checked | `RowWiseMaxFPEquiv` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
 | Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | Batch versus online: pending compatible exp binding and loop/reduction derivation |
 | mHC depth | `HyperConnectionsDepthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepthFPEquiv` — checked in the same scope; add commutation |
@@ -64,11 +64,13 @@ declared scratch windows.
 
 The current main and supplemental reports define the accepted precision
 instances. They use a local-ULP mean-bias budget (`tau=0.05`, five SEs) and the
-error-amplification gate; z is diagnostic. Counts are computed from current
+peak absolute-error ratio gate; z is diagnostic. Counts are computed from current
 reports, and only dual-PASS rows enter the generated Lean tables. Neither table
 contains a whole softmax, logsumexp, normalization, reduction or recurrence atom.
 
-The supplemental EXP-SUB implementation uses libdevice.exp. Its identity is
+The supplemental EXP-SUB implementation uses libdevice.exp. Its bf16 and
+bf16-input/fp32-work/bf16-output instances are admitted; the fp32 instance is
+WARN_NOT_ACCEPTED under the absolute-error ratio gate. Its identity is
 part of the report contract and cannot justify a rewrite using tl.exp without
 matching evidence. LOG-MUL domain events and unsupported fp64 combinations
 remain unaccepted. DIV-RCP uses div_rn; DIV-MUL-RCP tests ordinary division.
@@ -149,7 +151,7 @@ The one-input IO view can now use these term derivations to relate actual
 successful abstract executions, with the same typed-output and memory-frame
 obligations as its structural steps. Other primitives stay opaque. The public
 notation remains `lhs ≡[R] rhs`. The sum example prints `add_commute`
-and an unresolved association premise because its fp32 ADD-ASSOC instance is rejected. This derives a theorem in the selected FP model; it neither
+and `add_assoc`, each bound to an accepted fp32 instance. This derives a theorem in the selected FP model; it neither
 replays the GPU report nor claims an IEEE or whole-kernel statistical guarantee.
 
 Unsupported syntax still fails explicitly. Further infrastructure is needed

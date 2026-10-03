@@ -1,7 +1,5 @@
 /- Row-wise sum with forward versus reversed input lanes. The conditional proof
-requires fp32 add_commute and add_assoc. The current numerical report rejects
-fp32 ADD-ASSOC, so association remains an explicit unresolved derivation premise;
-this example is not fully admitted by the current table. Both definitions are
+uses the admitted fp32 add_commute and add_assoc instances. Both definitions are
 independent of the Correct file; stride and row length remain symbolic. -/
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.StructuralIO
@@ -80,14 +78,13 @@ def reversedIO (nCol B : Nat) : KernelIO₁ :=
   { originalIO nCol B with kernel := reversedKernel "x" "y" nCol B, projection := by rfl }
 
 def addCommute := FP.ReportedAdmission.fp32_add_commute.bind commuteLHS commuteRHS
+def addAssociate := FP.ReportedAdmission.fp32_add_assoc.bind associateLHS associateRHS
 
 structure Rules where
-  extra : Spec.Assumptions ComputeStmt
   add_comm : Spec.EvidenceValidated addCommute.rule addCommute.evidence
-  /-- Required derivation; the current GPU report supplies no accepted fp32 row. -/
-  add_assoc : Spec.Derivation (addCommute :: extra) associateLHS associateRHS
+  add_assoc : Spec.EvidenceValidated addAssociate.rule addAssociate.evidence
 
-def Rules.assumptions (R : Rules) : Spec.Assumptions ComputeStmt := addCommute :: R.extra
+def Rules.assumptions (_R : Rules) : Spec.Assumptions ComputeStmt := [addCommute, addAssociate]
 
 instance : CoeOut Rules (Spec.Assumptions (Spec.ProgramSyntax.Statement KernelIO₁)) :=
   ⟨Rules.assumptions⟩
@@ -96,22 +93,23 @@ theorem admitted_commute (R : Rules) : Spec.Derivation R.assumptions commuteLHS 
   .atom addCommute (by simp [Rules.assumptions])
     (FP.ReportedAdmission.fp32_add_commute.admit _ _ R.add_comm)
 
-theorem required_associate (R : Rules) : Spec.Derivation R.assumptions associateLHS associateRHS :=
-  R.add_assoc
+theorem admitted_associate (R : Rules) : Spec.Derivation R.assumptions associateLHS associateRHS :=
+  .atom addAssociate (by simp [Rules.assumptions])
+    (FP.ReportedAdmission.fp32_add_assoc.admit _ _ R.add_assoc)
 
 theorem reduced_equiv (R : Rules) (plans : Schedules) (B : Nat) (xs : Fin B → Term α) :
     TermEq R.assumptions (reducedValue (algebra plans) B xs)
       (reducedValue (algebra plans) B (fun i => xs i.rev)) := by
   simp only [reducedValue, algebra, reductionInputs, TileShape.insertAxisIndex,
     SumTree.evalAt_fp32]
-  exact ReductionPlan.reorder (admitted_commute R) (required_associate R) _
+  exact ReductionPlan.reorder (admitted_commute R) (admitted_associate R) _
     (fun i => .app .fp32Load [xs i]) _ Fin.revPerm
 
 open scoped VeriTile.Spec
 
-/-- Reversal changes the addition order. The derivation is conditional on an
-association proof in addition to admitted commutation; it is not currently
-instantiated from the numerical table. Dimensions and schedules are arbitrary. -/
+/-- Reversal changes the addition order. The derivation uses the admitted
+commutation and association assumptions. Dimensions and schedules are arbitrary;
+the numerical table does not supply a whole-reduction IEEE guarantee. -/
 specification rowwise_sum_equiv (nCol B : Nat) (R : Rules) :
     originalIO nCol B ≡[R] reversedIO nCol B := by
   apply Spec.FloatingPoint.ofNumerical (lhs := originalIO nCol B) (rhs := reversedIO nCol B)

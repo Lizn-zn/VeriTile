@@ -17,8 +17,12 @@ class ExportTests(unittest.TestCase):
         content = exporter.render()
         self.assertEqual(content, exporter.OUTPUT.read_text())
         self.assertIn('def bf16_add_assoc : ReportedRule', content)
-        self.assertNotIn('def fp32_add_assoc', content)
-        self.assertNotIn('def bf16_fp32_add_assoc', content)
+        self.assertIn('def fp32_add_assoc', content)
+        self.assertIn('def bf16_fp32_add_assoc', content)
+        for name in ('bf16_mul_distrib', 'fp32_mul_distrib'):
+            self.assertIn(f'def {name}', content)
+        for name in ('bf16_mul_assoc', 'fp32_mul_assoc', 'bf16_div_rcp', 'fp32_div_rcp'):
+            self.assertNotIn(f'def {name}', content)
         self.assertIn('def bf16_fma_contract', content)
         self.assertNotIn('def fp32_cast_remove', content)
         self.assertNotIn('def fp32_cast_move', content)
@@ -30,7 +34,7 @@ class ExportTests(unittest.TestCase):
         self.assertNotIn('axiom ', content)
 
     def test_warn_fail_domain_and_unsupported_cannot_be_promoted(self):
-        for rule, fmt in [('CAST-REMOVE', 'fp32'), ('ADD-ASSOC', 'fp32'),
+        for rule, fmt in [('CAST-REMOVE', 'fp32'), ('MUL-ASSOC', 'fp32'), ('DIV-RCP', 'fp32'),
                           ('SQRT-RSQRT', 'fp32'), ('BF16-WIDEN-RETURN', 'fp32')]:
             with self.subTest(rule=rule), tempfile.TemporaryDirectory() as tmp:
                 target = Path(tmp)

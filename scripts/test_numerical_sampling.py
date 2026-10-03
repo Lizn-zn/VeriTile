@@ -28,7 +28,7 @@ class SamplingTests(unittest.TestCase):
                     'ties': lambda: rng.integers(0, 4, n).astype(float),
                     'nonfinite': lambda: np.r_[np.zeros(n - 1), np.inf],
                 }[case['family']]()
-                result = gates.vars_gate(np.ones(n), k + 1, profile()['gates']['vars'], 123456)
+                result = gates.vars_gate(np.ones(n), k, profile()['gates']['vars'], 123456)
                 self.assertEqual(result['status'], case['status'])
                 self.assertEqual(result['valid'], case['valid'])
                 for actual, expected in ((result['upper'], case['U']), (result.get('xi'), case['xi'])):

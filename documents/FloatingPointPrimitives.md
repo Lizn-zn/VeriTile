@@ -1,6 +1,6 @@
 # 浮点运算原语：完整设计
 
-更新日期：2026-10-02。状态：**主目录报告覆盖 42 个实例，接受项以当前逐元素 ULP 结果表为准；可从受信报告生成 Lean 规则数据，TritonBench fp32 加法例子已绑定并证明；其他原子的语法绑定及通用自动化继续复用现有 agent/comparator**。
+更新日期：2026-10-03。状态：**主目录报告覆盖 42 个实例，接受项以当前局部 ULP bias／绝对误差比结果表为准；可从受信报告生成 Lean 规则数据，TritonBench fp32 加法例子已绑定并证明；其他原子的语法绑定及通用自动化继续复用现有 agent/comparator**。
 
 用户要求交付完整的“配置 → 检查原语 → 生成规则集 → 自动证明”流程，不以标量演示代替完整流程。已确认的实现路线减少了对自研执行器的要求：实际浮点运算交给 Triton/GPU，two-gates 在 Python 中运行，Lean 检查规则假设下的推导。[TwoGatesAcceptance.md](./TwoGatesAcceptance.md) 定义变换接受协议。
 
@@ -86,7 +86,7 @@ bf16 描述包含 16 位、8 位指数和 7 位显式 fraction；fp32 包含 32 
 | min / max / arg selection | NaN 传播策略、signed-zero 与相等时的选择规则 | 明确选择哪一项 |
 | floor / ceil / trunc / round-to-integral | 格式、舍入或取整规则 | 区分浮点结果与整数转换 |
 | float↔integer | 整数位宽/符号、舍入、越界处理 | 保留转换域；未定义情形不能用任意数值默认值掩盖 |
-| nextafter / ULP | 格式、方向、特殊值策略 | 用于量化诊断与 gate 地板，不能用宿主 fp64 的相邻值代替 bf16/fp32 的相邻值 |
+| nextafter / ULP | 格式、方向、特殊值策略 | 用于量化诊断与 bias 单位，不能用宿主 fp64 的相邻值代替 bf16/fp32 的相邻值 |
 | backend intrinsic | 函数身份、输入/输出格式、实现与误差契约 | 用于快速除法、rcp/rsqrt、超越函数及机器相关指令 |
 
 有限输入下，标准加法的数值关系可写为：

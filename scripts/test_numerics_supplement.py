@@ -179,7 +179,7 @@ class ContractTests(unittest.TestCase):
                 entry = fixture_bundle(root)
                 if change == 'schema':
                     manifest = runner.read_json(root / 'manifest.json')
-                    manifest['bundle_version'] = 'scalar-supplement-3'
+                    manifest['bundle_version'] = 'scalar-supplement-4'
                     runner.write_json(root / 'manifest.json', manifest)
                 else:
                     np.savez_compressed(entry / 'observations.npz', **observations(buckets=3))
@@ -192,14 +192,14 @@ class ContractTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TORCH, "optional CPU numerical wiring checks require torch")
 class OracleTests(unittest.TestCase):
-    def test_supplement_pools_normalized_positions_without_changing_peak_errors(self):
+    def test_supplement_combines_ulp_bias_with_absolute_peak_errors(self):
         import torch
         reference = torch.tensor([[1., 2.], [4., 8.]])
         candidate = reference + reference * torch.tensor([[1., -1.], [2., -2.]]) * 2.**-23
         obs = supplement.observe(torch, reference, candidate, reference.double(), profile()['formats'][2])
         self.assertEqual(obs['delta'].tolist(), [0.])
         self.assertEqual(obs['reference_error'], 0.)
-        self.assertEqual(obs['candidate_error'], 2.)
+        self.assertEqual(obs['candidate_error'], 16 * 2.**-23)
 
     def test_runner_lifecycle_and_failure_records(self):
         import torch
@@ -270,9 +270,7 @@ class OracleTests(unittest.TestCase):
         for field, output in (("reference_error", q), ("candidate_error", worse)):
             exact_errors = [abs(Fraction(float(y)) - Fraction(float(x)) / Fraction(float(z)))
                             for y, x, z in zip(output.flatten(), a.flatten(), b.flatten())]
-            scales = runner.original.ulp(torch, a / b, "fp32").flatten().tolist()
-            local_errors = [float(error) / scale for error, scale in zip(exact_errors, scales)]
-            self.assertAlmostEqual(obs[field] / max(local_errors), 1., places=14)
+            self.assertAlmostEqual(obs[field] / float(max(exact_errors)), 1., places=14)
         # The rounded fp64 quotient equals the output, but the exact error is
         # nonzero. Subtracting that rounded oracle would wrongly report zero.
         y = 1. + 2.**-23
@@ -282,7 +280,7 @@ class OracleTests(unittest.TestCase):
         self.assertEqual((a / b).item(), y)
         errors = [cpu_fused_errors(q), cpu_fused_errors(q)]
         obs = supplement.observe(torch, q, q, a / b, profile()["formats"][-1], errors)
-        self.assertEqual(obs["reference_error"], 2.**-52 / b.item())
+        self.assertEqual(obs["reference_error"], 2.**-75 / b.item())
         with self.assertRaisesRegex(ValueError, "residual oracle"):
             supplement.observe(torch, q, q, a / b, profile()["formats"][-1])
 

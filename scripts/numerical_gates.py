@@ -1,4 +1,4 @@
-"""Local-ULP mean-bias budgets and error amplification with NumPy-only replay.
+"""Local-ULP mean bias and absolute-error ratios with NumPy-only replay.
 
 Adaptive sampling uses a PWM tail fit or an explicitly marked empirical fallback.
 The tail model and confidence estimates are not distribution-free guarantees.
@@ -8,7 +8,7 @@ from statistics import NormalDist
 
 import numpy as np
 
-VERSION = "local-ulp-replicate-mean"
+VERSION = "local-ulp-bias-absolute-error-ratio"
 OBSERVATIONS = {"delta", "reference_error", "candidate_error"}
 
 
@@ -60,16 +60,20 @@ def bias_gate(delta, config):
 
 
 def amplification(reference_error, candidate_error):
-    """Error amplification after a fixed one-local-ULP additive allowance."""
+    """Ratio of candidate/reference peak absolute oracle errors (FA metric).
+
+    Exact agreement on both sides gives zero; any positive candidate error
+    against an exact reference gives infinity. There is no additive allowance.
+    """
     ref, cand = (np.asarray(x, dtype=float) for x in (reference_error, candidate_error))
     if ref.ndim != 1 or ref.shape != cand.shape or not len(ref):
         raise ValueError("errors must be nonempty paired vectors")
     valid = np.isfinite(ref) & np.isfinite(cand) & (ref >= 0) & (cand >= 0)
     k = np.full_like(ref, np.inf)
-    k[valid & (cand <= 1)] = 0
-    active = valid & (cand > 1) & (ref > 0)
+    k[valid & (cand == 0)] = 0
+    active = valid & (ref > 0)
     with np.errstate(over="ignore", divide="ignore"):
-        k[active] = (cand[active] - 1) / ref[active]
+        k[active] = cand[active] / ref[active]
     return k
 
 

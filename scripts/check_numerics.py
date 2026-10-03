@@ -24,7 +24,7 @@ DEFAULT_PROFILE = ROOT / "experiments/floating_point/config.py"
 KERNELS = ROOT / "experiments/floating_point/kernels.py"
 SOURCES = [Path(__file__).resolve(), Path(gates.__file__), Path(registry.__file__), KERNELS, registry.CATALOG]
 ACCEPTED = {"ACCEPT", "ACCEPT_WITH_WARNING"}
-BUNDLE_VERSION = 5
+BUNDLE_VERSION = 6
 
 
 def sha(data):
@@ -183,8 +183,8 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
                               "acceptance": "abs(mean) + se_multiplier * std / sqrt(R) <= tau across replicate means; z is diagnostic",
                               "coverage": "engineering SE bands; no calibrated simultaneous or optional-stopping coverage"},
                      "vars": {**profile["gates"]["vars"], "replicates": profile["replicates"],
-                              "errors": "separate maxima of abs(output-golden)/local_golden_ulp for reference and candidate",
-                              "epsilon": "1 in local-ULP units",
+                              "errors": "separate maxima of absolute oracle errors for reference and candidate; no ULP normalization",
+                              "ratio": "K=Ec/Er; both zero gives 0; Er=0<Ec gives infinity; no additive allowance",
                               "tail": "PWM, xi clipped <= 0, seed-0 bootstrap, empirical-max fallback",
                               "replicates_max": profile["replicates_max"], "batch": profile["batch"],
                               "stopping": "full batches; min replicates then magnitude band stable or empirical fallback; nonfinite stops immediately"},
@@ -260,7 +260,7 @@ def ulp(torch, magnitude, dtype):
 
 
 def observe(torch, reference, candidate, exact, output_format, errors=None):
-    """Normalize each IID scalar instance, then keep one mean per replicate.
+    """Keep a local-ULP bias mean and absolute oracle-error peaks per replicate.
 
     Positions in these atomic probes share a distribution and expression. They
     are not distinct channels. Retain a singleton bucket dimension for the
@@ -279,8 +279,8 @@ def observe(torch, reference, candidate, exact, output_format, errors=None):
         raise ValueError("oracle errors must match the golden tensor shape")
     return {
         "delta": delta.mean().reshape(1).cpu().numpy(),
-        "reference_error": (errors[0] / scale).max().item(),
-        "candidate_error": (errors[1] / scale).max().item(),
+        "reference_error": errors[0].max().item(),
+        "candidate_error": errors[1].max().item(),
     }
 
 

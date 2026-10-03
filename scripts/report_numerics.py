@@ -21,10 +21,11 @@ COLUMNS = ("rule", "format", "replicates", "z", "B", "tau", "U", "bias", "vars",
            "accept", "decision", "state", "replayed", "reason")
 DEFINITIONS = {
     'checker_version': experiment.gates.VERSION,
-    'error_units': 'per-element output-format ULP at the rounded golden value; normalize before aggregation',
+    'bias_units': 'per-element output-format ULP at the rounded golden value; normalize before averaging',
+    'oracle_error_units': 'absolute output units; separate reference and candidate maxima without ULP normalization',
     'z_definition': 'absolute z across per-replicate means of all IID scalar instances in local ULPs',
     'b_definition': 'abs(mean) + se_multiplier * std / sqrt(R) across per-replicate means, in local ULPs; not calibrated simultaneous/sequential coverage',
-    'u_definition': 'upper estimate of amplification of peak local-ULP oracle errors with additive allowance 1; empirical_max is not a tail confidence bound',
+    'u_definition': 'upper estimate of K=Ec/Er for peak absolute oracle errors, with no additive allowance; both zero gives 0, exact reference with positive candidate error gives infinity; tail extrapolation is additional to the FA metric; empirical_max is not a tail confidence bound',
 }
 TERMINAL = {"Succeeded", "Failed", "Stopped", "Deleted"}
 
@@ -171,8 +172,10 @@ def publish(root, table):
              'B = abs(mean) + se_multiplier * SE; bias PASS requires B <= tau, in local ULPs.',
              'Bias FAIL means an interval lies outside tolerance; INCONCLUSIVE means a boundary is crossed.',
              'The SE bands are engineering criteria, not calibrated simultaneous or optional-stopping confidence guarantees.',
-             'Errors are normalized per element by the output-format ULP at the rounded golden value before aggregation.',
-             'The magnitude gate uses peak normalized oracle errors and an additive allowance of 1 local ULP.',
+             'Bias differences are normalized by each rounded golden value\'s output-format ULP before averaging.',
+             'The magnitude gate uses K=Ec/Er, the ratio of peak absolute oracle errors, without ULP normalization or an additive allowance.',
+             'Both errors zero gives K=0; a zero reference error with positive candidate error gives infinity.',
+             'K follows the FlashAttention maximum-error metric; tail extrapolation and the bias gate are additional criteria.',
              '`empirical_max` means an observed maximum, not a fitted tail confidence bound.',
              'Acceptance is statistical under the configured profile, not proof of strict floating-point equivalence.',
              'Accept is pending until CPU replay. Missing statistics are shown as —, never zero.', '',

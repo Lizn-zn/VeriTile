@@ -1,6 +1,6 @@
 # 浮点变换规则与接受结果表
 
-更新日期：2026-10-02。状态：**14 条原子候选关系的 42 个格式实例已有按元素 ULP 归一化的 GPU 报告。** 当前判决见[实测结果表](../experiments/floating_point/report/summary.md)；Lean 按用户确认信任该报告，导出其中的当前接受实例。六个标量反例已在具体软件浮点模型下经 Lean 内核检查，结果见第 3 节。反例只否定通用严格相等，不等于 two-gates 拒绝。
+更新日期：2026-10-03。状态：**14 条原子候选关系的 42 个格式实例已有局部 ULP bias 与最大绝对误差比的 GPU 报告。** 当前判决见[实测结果表](../experiments/floating_point/report/summary.md)；Lean 按用户确认信任该报告，导出其中的当前接受实例。六个标量反例已在具体软件浮点模型下经 Lean 内核检查，结果见第 3 节。反例只否定通用严格相等，不等于 two-gates 拒绝。
 
 这里的“等价性原语”对应可复用的变换规则，只包括固定规模的局部关系，例如结合律、分配律、FMA 与具体 cast 关系。归约重排和完整算法变换是待推导结论，不是准入原子。它与 [浮点执行原语](./FloatingPointPrimitives.md) 分开：执行原语定义程序怎样计算，本表记录参考计算如何变成候选计算，以及允许该变换的证据。
 
@@ -118,8 +118,8 @@ DIV-RCP、SQRT-RSQRT 等具有定义域前提的规则，需要明确从探针�
 | 规则与适用域 | rule ID、方向、数学前提、参考/候选图、证明引用 |
 | 执行实例 | shape/stride、各步 dtype、累加计划、函数实现、编译/启动/设备身份 |
 | 输入协议 | probe ID、每个角色的均值/尺度/联合关系、权重、量化/特殊值处理 |
-| Bias 结果 | replicate 数、每桶 local-ULP 均差/标准差/标准误、诊断 z、B、tau、失败或区间不确定的桶、门判决 |
-| Vars 结果 | 逐 replicate oracle 误差和 K、return level/U、拟合诊断、门判决 |
+| Bias 结果 | replicate 数、跨 replicate 均值的 local-ULP 均差/标准差/标准误、诊断 z、B、tau、失败或区间不确定的桶、门判决 |
+| Vars 结果 | 逐 replicate 最大绝对 oracle 误差和无量纲 K=Ec/Er、return level/U、拟合诊断、门判决 |
 | 审计证据 | checker/protocol 版本、原始结果位置、停止原因、时间与最终决定 |
 
 当前结果由 [report_numerics.py](../scripts/report_numerics.py) 写入运行目录的

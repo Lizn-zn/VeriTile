@@ -40,7 +40,7 @@ class FPEquationalTests(unittest.TestCase):
     def test_current_admissions_do_not_silently_supply_missing_algebra(self):
         self.assertEqual(self.lean((ROOT / "bench/tests/FPAdmissionCoverage.lean").read_text()), "")
 
-    def test_kernel_proof_is_independent_and_reports_unresolved_association(self):
+    def test_kernel_proof_is_independent_and_reports_both_admitted_atoms(self):
         source = (ROOT / "bench/examples/RowWiseSumFPEquiv.lean").read_text() + '''
 open Lean Elab Command in
 run_cmd do
@@ -50,9 +50,8 @@ run_cmd do
         output = self.lean(source)
         self.assertIn("FP assumptions used by rowwise_sum_equiv:\n", output)
         self.assertIn("\n  add_commute\n", output)
-        self.assertIn("unresolved FP proof:", output)
-        self.assertEqual(output.count("unresolved FP proof"), 1)
-        self.assertNotIn("\n  add_assoc\n", output)
+        self.assertNotIn("unresolved FP proof:", output)
+        self.assertIn("\n  add_assoc\n", output)
 
     def test_original_projection_and_symbolic_dimensions_including_zero(self):
         self.lean('''

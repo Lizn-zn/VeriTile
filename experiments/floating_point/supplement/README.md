@@ -1,6 +1,6 @@
 # 补充基础原子实验
 
-本目录验证补充的基础标量关系，与主实验共用按元素 ULP 归一化和 two-gates。
+本目录验证补充的基础标量关系，与主实验共用局部 ULP 偏差和最大绝对误差比两个 gate。
 这里没有 softmax、Welford、LayerNorm 或整个 reduction 的准入原子。
 主目录与本目录使用相同的平均偏差预算和 U gate。通过项分别导出到
 `ReportedAdmission` 和 `SupplementalAdmission`；总数从当前报告计算。
@@ -8,12 +8,12 @@
 ## 当前结果
 
 当前 bias 协议将同分布的标量实例汇总成每个 replicate 的一个均值。当前结果
-使用独立种子 20261003 在 H200（运行时显示 NVIDIA L20X）重新采样，并完成独立
+使用固定种子 20261003 在 H200（运行时显示 NVIDIA L20X）重新采样，并完成独立
 CPU 回放。已发布表绑定其记录的源代码哈希和聚合协议。
 
 配置固定 `tau=0.05 local ULP`、`se_multiplier=5`。EXP-SUB 的 exp 使用 FP32
 `libdevice.exp`，保留原有输入、减法、除法、中间 cast 和输出 cast。
-DLC 名称为 `traces_kernel_equivalence_testing`，任务 ID 为 `dlc1r4v11mbxhjwd`。
+DLC 名称为 `traces_kernel_equivalence_testing`，任务 ID 为 `dlc11ib5sa2bmnly`。
 
 [完整 z / B / tau / U / accept 表](./report/summary.md) 同时提供
 [全精度 CSV](./report/summary.csv) 和 [JSON](./report/summary.json)。
@@ -136,10 +136,13 @@ oracle 仍是受信数值计算，不是精确实数证明。
 取一个均值。保存的 delta 形状为 `[R, 1]`，跨 R 个 replicate 均值计算标准误
 和诊断 z，偏差区间须落在 ±tau 内。不将元素数计入 R；具有不同分布或语义的
 channel/head 不能直接沿用这种合并方式。
-两侧的 oracle 误差也先逐元素归一化，再分别取最大值 Er、Ec，计算
-`K = max(0, (Ec-1)/Er)` 并拟合 U。fp64-work 的残差误差同样先除以这个尺度。
-零值使用最小 subnormal 间距；输出 dtype 无法表示的 golden 尺度触发失败。
-不使用输出峰值或跨 replicate 的最大 ULP 作为容差。
+幅度 gate 分别取两侧最大绝对 oracle 误差 Er、Ec，计算 `K = Ec/Er` 并拟合 U。
+这里不除以 ULP，也没有加性容差；两侧误差都为零时 K=0，Er=0 且 Ec>0 时
+K 为无穷大。fp64-work 的残差误差同样保留绝对单位。
+K 对齐 FlashAttention 的最大误差比较；尾部外推和 bias gate 是额外的要求，
+不能把整个 two-gates 判定说成与 FA 的样本测试完全相同。
+bias 的零值尺度使用最小 subnormal 间距；输出 dtype 无法表示的 golden 尺度触发失败。
+不使用输出峰值或跨 replicate 的最大 ULP 作为 bias 容差。
 
 `/` 是普通 Triton division，**不是**原 `DIV-RCP` 的 `tl.div_rn`。
 EXP-SUB 使用 `libdevice.exp`；其他 exp 原子使用 `tl.exp`，log/max 使用

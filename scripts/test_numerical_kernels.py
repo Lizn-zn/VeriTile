@@ -52,11 +52,11 @@ class OracleTests(unittest.TestCase):
         obs = experiment.observe(torch, ref, cand, torch.ones(2).double(), "fp32")
         self.assertEqual(obs["delta"].tolist(), [0.])
         # Cancellation in the mean must not hide a large magnitude error.
-        self.assertEqual(obs["candidate_error"], 2.**21)
+        self.assertEqual(obs["candidate_error"], .25)
         ref = torch.ones((2, 3))
         cand = torch.full((2, 3), 2.)
         obs = experiment.observe(torch, ref, cand, ref.double(), "fp32")
-        self.assertEqual(obs["candidate_error"], 2.**23)
+        self.assertEqual(obs["candidate_error"], 1.)
         self.assertEqual(obs["delta"].tolist(), [2.**23])
 
     def test_large_exact_output_does_not_hide_small_output_error(self):
@@ -71,7 +71,7 @@ class OracleTests(unittest.TestCase):
                 cand = torch.tensor([[1. + 2 * step], [1024.]], dtype=dtype)
                 obs = experiment.observe(torch, ref, cand, ref.double(), fmt)
                 self.assertEqual(obs["delta"].tolist(), [1.])
-                self.assertEqual(obs["candidate_error"], 2.)
+                self.assertEqual(obs["candidate_error"], 2 * step)
                 self.assertEqual(gates.amplification([obs["reference_error"]],
                                                    [obs["candidate_error"]])[0], float("inf"))
 
@@ -92,7 +92,7 @@ class OracleTests(unittest.TestCase):
                 obs = experiment.observe(torch, reference, candidate, reference.double(), "fp32")
                 self.assertEqual(obs['delta'].tolist(), [0.5])
                 self.assertEqual(obs['reference_error'], 0.)
-                self.assertEqual(obs['candidate_error'], 3.)
+                self.assertEqual(obs['candidate_error'], 64 * 2.**-23)
 
     def test_mean_standard_error_counts_whole_input_replicates(self):
         import math
@@ -120,7 +120,7 @@ class OracleTests(unittest.TestCase):
                                              ref.double() * multiplier, fmt)
                     self.assertEqual(obs["delta"].tolist(), [0.])
                     self.assertEqual(obs["reference_error"], 0.)
-                    self.assertEqual(obs["candidate_error"], 1.)
+                    self.assertEqual(obs["candidate_error"], 1024 * step * multiplier)
 
     def test_zero_and_subnormal_golden_use_minimum_spacing(self):
         import torch
@@ -130,7 +130,7 @@ class OracleTests(unittest.TestCase):
             cand = torch.tensor([step, 2 * step], dtype=dtype)
             obs = experiment.observe(torch, ref, cand, ref.double(), fmt)
             self.assertEqual(obs["delta"].tolist(), [1.])
-            self.assertEqual(obs["candidate_error"], 1.)
+            self.assertEqual(obs["candidate_error"], step)
 
     def test_overflowed_golden_scale_cannot_hide_finite_output_errors(self):
         import torch
@@ -142,8 +142,24 @@ class OracleTests(unittest.TestCase):
             obs = experiment.observe(torch, reference, candidate, golden, fmt)
             self.assertEqual(gates.bias_gate([obs["delta"], obs["delta"]],
                                             profile()["gates"]["bias"])["status"], "FAIL")
-            self.assertEqual(gates.amplification([obs["reference_error"]],
-                                               [obs["candidate_error"]])[0], float("inf"))
+            # Absolute errors remain finite; the invalid bias scale still
+            # rejects the combined result instead of creating a false pass.
+            arrays = {key: [value, value] for key, value in obs.items()}
+            self.assertEqual(gates.evaluate(arrays, profile()["gates"], 1, 2)["decision"], "REJECT")
+
+    def test_fa_error_ratio_does_not_reweight_near_zero_outputs(self):
+        import torch
+        from scripts import numerical_gates as gates
+        golden = torch.tensor([1., 2.**-20], dtype=torch.float64)
+        reference = (golden + torch.tensor([2.**-23, 0.], dtype=torch.float64)).float()
+        candidate = (golden + 2.**-23).float()
+        obs = experiment.observe(torch, reference, candidate, golden, "fp32")
+        # Both peak absolute errors are one FP32 ULP at 1. The candidate's
+        # same error near zero is 2**20 local ULPs, which affects bias only.
+        self.assertEqual(obs["reference_error"], 2.**-23)
+        self.assertEqual(obs["candidate_error"], 2.**-23)
+        self.assertEqual(gates.amplification([obs["reference_error"]], [obs["candidate_error"]])[0], 1.)
+        self.assertEqual(obs["delta"].tolist(), [2.**19])
 
     def test_ulp_rounds_scale_and_handles_max_finite(self):
         import torch

@@ -46,21 +46,28 @@ class GateTests(unittest.TestCase):
         result = gates.bias_gate(np.array([[1e308], [-1e308]]), self.config["bias"])
         self.assertEqual(result["status"], "FAIL")
 
-    def test_additive_floor_and_zero_denominator(self):
-        actual = gates.amplification([0, 0, 2, 2], [0, 2, 5, 1])
-        np.testing.assert_array_equal(actual, [0, np.inf, 2, 0])
+    def test_absolute_error_ratio_and_zero_denominator(self):
+        actual = gates.amplification([0, 0, 2, 2, 2, 2], [0, 2.**-40, 5, 1, 2, 0])
+        np.testing.assert_array_equal(actual, [0, np.inf, 2.5, 0.5, 1, 0])
         result = gates.vars_gate([0, 1], [2, 1], self.config["vars"], 1)
         self.assertEqual(result["status"], "FAIL")
 
+    def test_error_ratio_is_scale_invariant_without_an_additive_allowance(self):
+        ref, cand = np.array([1., 2., 4.]), np.array([2., 6., 1.])
+        for scale in (2.**-100, 1., 2.**100):
+            np.testing.assert_array_equal(gates.amplification(ref * scale, cand * scale), [2., 3., .25])
+        for value in (np.nan, np.inf, -1.):
+            self.assertEqual(gates.amplification([value], [0.])[0], np.inf)
+
     def test_empirical_fallback_keeps_large_observed_errors(self):
         for k, expected in ((0, "PASS"), (1, "PASS"), (5, "WARN"), (31.75, "FAIL")):
-            result = gates.vars_gate(np.ones(4096), np.full(4096, k + 1), self.config["vars"])
+            result = gates.vars_gate(np.ones(4096), np.full(4096, k), self.config["vars"])
             self.assertEqual(result["status"], expected)
             self.assertTrue(result["empirical_fallback"])
             self.assertFalse(result["valid"])
             self.assertEqual(result["upper"], k)
 
-    def test_absolute_floor_is_in_local_ulp_units(self):
+    def test_bias_budget_remains_in_local_ulp_units(self):
         for mean, expected in ((0.05, "PASS"), (0.0501, "FAIL"), (-0.0501, "FAIL")):
             result = gates.bias_gate(np.full((8, 1), mean), self.config["bias"])
             self.assertEqual(result["status"], expected)
@@ -111,7 +118,7 @@ class GateTests(unittest.TestCase):
     def test_bootstrap_is_replayable(self):
         config = {**self.config["vars"], "bootstrap": 16, "min_exceedances": 16}
         ratios = np.random.default_rng(12).exponential(0.1, 4096)
-        args = (np.ones(4096), ratios + 1, config, 123)
+        args = (np.ones(4096), ratios, config, 123)
         first = gates.vars_gate(*args)
         self.assertEqual(first, gates.vars_gate(*args))
         self.assertEqual(first["branch"], "pot_pwm")
@@ -238,12 +245,12 @@ class ReplayTests(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "shape/dtype"):
                 experiment.replay(root)
 
-    def test_column_bucket_bundle_version_cannot_be_replayed(self):
+    def test_local_ulp_peak_bundle_version_cannot_be_replayed(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             fixture_bundle(root)
             manifest = experiment.read_json(root / 'manifest.json')
-            manifest['bundle_version'] = 4
+            manifest['bundle_version'] = 5
             experiment.write_json(root / 'manifest.json', manifest)
             with self.assertRaisesRegex(ValueError, 'unsupported bundle schema'):
                 experiment.replay(root)

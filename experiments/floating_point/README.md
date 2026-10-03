@@ -2,9 +2,10 @@
 
 For additional basic relations, use the
 [supplemental experiment instructions](./supplement/README.md).
-Both catalogues use the same per-element ULP normalization and two gates.
+Both catalogues use local-ULP mean bias and a ratio of peak absolute oracle errors.
 
-The current bias protocol pools IID scalar instances into one mean per replicate.
+The bias protocol pools IID scalar instances into one mean per replicate in local ULPs.
+The magnitude gate compares peak absolute oracle errors without ULP normalization.
 The published tables use fresh GPU samples from this protocol and independent CPU
 replay. Their recorded source hashes bind the sampling and aggregation semantics.
 
@@ -89,8 +90,8 @@ PTX digests, observation shapes and file hashes, and recomputes the statistics.
 Existing output files are never overwritten. Returned Python source is **not
 executed**, and NPZ is loaded with `allow_pickle=False`.
 
-Per-instance `observations.npz` stores one bias mean per replicate and peak oracle
-errors, all in local-ULP units. It supports CPU statistical replay, not raw-output replay;
+Per-instance `observations.npz` stores one bias mean in local ULPs per replicate
+and two peak oracle errors in absolute output units. It supports CPU statistical replay, not raw-output replay;
 frozen seeds and sources support a separate GPU rerun. The manifest includes
 profile, implementation hashes, device/capability, driver, software and launch
 settings. Keep bundles outside Git (`Logs/` and `results/` are ignored).
@@ -144,8 +145,7 @@ and error-amplification checks. Statistics and bundle replay use NumPy on CPU.
   value to that dtype before `nextafter`; use the inward spacing at maximum finite
   and minimum subnormal spacing at zero. Both sides share this golden-based scale;
   output outliers cannot enlarge another element's allowance.
-- Normalize **before** aggregation: `d = (candidate-reference)/s`,
-  `er = abs(reference-golden)/s`, `ec = abs(candidate-golden)/s`.
+- For bias, normalize **before** aggregation: `d = (candidate-reference)/s`.
   Each replicate averages `d` over all IID scalar instances, storing one mean
   (`delta` has shape `[R, 1]`). Array columns have no separate channel semantics.
   Mean and sample std (ddof=1) are computed across these R replicate means, not
@@ -156,10 +156,14 @@ and error-amplification checks. Statistics and bundle replay use NumPy on CPU.
   not calibrated simultaneous or optional-stopping confidence guarantees.
   Pooling is scoped to these identical scalar expressions and IID probes; distinct
   channels/heads or probe distributions require their own explicit grouping.
-- The magnitude gate uses `Er = max(er)`, `Ec = max(ec)` within each replicate,
-  followed by `K = max(0, (Ec-1)/Er)`. The additive allowance is one local ULP.
-  `Ec <= 1` yields zero; `Er == 0` with `Ec > 1` yields infinity.
-  These maxima measure normalized errors, not output magnitudes or ULP budgets.
+- The magnitude gate uses `Er = max(abs(reference-golden))` and
+  `Ec = max(abs(candidate-golden))` within each replicate, followed by `K = Ec/Er`.
+  There is no ULP normalization or additive allowance for this gate. Both errors
+  zero gives K=0; `Er == 0` with `Ec > 0` gives infinity. These are separate
+  absolute-error peaks, which may occur at different positions in the tensor.
+  This is the [FlashAttention maximum-error comparison](https://github.com/Dao-AILab/flash-attention/blob/main/tests/test_flash_attn.py):
+  `Ec <= 2*Er`. The local-ULP bias budget and tail extrapolation below are extra
+  criteria, so the full two-gate decision is not identical to FA's sample test.
   Nonfinite reference/candidate/golden observations produce K=+inf and FAIL.
 - POT targets max(40, round(10% of positive K)) tail samples, using an
   order-statistic threshold and strict exceedances. Fewer than 12 positive K or fewer
@@ -191,9 +195,9 @@ quantized ties and nonfinite errors, plus adaptive stopping and replay integrity
 The checked-in [current table](./report/summary.md) contains all 42 instances,
 with full-precision [CSV](./report/summary.csv) and [JSON](./report/summary.json).
 The current H200 run (reported as NVIDIA L20X) uses seed 20261003, tau=0.05
-local ULP and a five-SE bias band across replicate means. It uses independent
-samples after fixing the aggregation protocol. Current totals are in the table.
-The DLC task is named `traces_kernel_equivalence_testing` (`dlc1r4v11mbxhjwd`).
+local ULP and a five-SE bias band across replicate means. Replicates use independent input tuples at the fixed seed.
+Current totals are in the table.
+The DLC task is named `traces_kernel_equivalence_testing` (`dlc11ib5sa2bmnly`).
 
 [Experiment settings](./report/experiment.json) record the input distribution,
 precision profiles, gates, device/compiler details and checked source hashes.
@@ -257,9 +261,9 @@ The published report can now be frozen into Lean with
 trusts the report, checks its source hashes/configuration and exports only its
 accepted rows. It does not pretend to replay missing raw observations.
 
-The current report rejects fp32 ADD-ASSOC, so it is absent from the exported
-table. The row-wise-sum example retains a conditional derivation with an
-explicit unresolved association premise and is marked blocked on admission.
+The current report admits fp32 ADD-ASSOC. The row-wise-sum example binds it
+alongside fp32 ADD-COMMUTE, retaining explicit evidence premises for both atoms.
+The resulting derivation does not claim a whole-reduction IEEE or statistical guarantee.
 
 The [worked example](./EXAMPLE.md) has separate
 [real correctness](../../bench/examples/TritonBenchVectorAdditionCorrect.lean) and

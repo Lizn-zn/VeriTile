@@ -87,7 +87,7 @@ class ReportingTests(unittest.TestCase):
                 reporting.collect(root, profile())
 
     def test_old_protocol_cannot_be_displayed_as_new_provisional_statistics(self):
-        for field, value in [('bundle_version', 4), ('sources', {})]:
+        for field, value in [('bundle_version', 5), ('sources', {})]:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
                 root = Path(tmp)
                 bundle = root / 'first'

@@ -5,17 +5,17 @@ import VeriTile.Triton.Float.ReportedRules
 
 namespace VeriTile.Triton.FP.ReportedAdmission
 
-def snapshot : String := "b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df"
-def reportMetadata : Lean.Json := (Lean.Json.parse "{\"backend\":{\"compile_options\":{\"enable_fp_fusion\":false},\"compiler\":{\"cuda\":\"13.0\",\"numpy\":\"2.3.5\",\"torch\":\"2.13.0+cu130\",\"triton\":\"3.7.1\"},\"implementation_version\":\"f239cb37af1eab11170c912303a82fa4201c681caa1273db7acb0e0e746aa98e\",\"kind\":\"triton-cuda\",\"launch\":{\"block\":1024,\"num_warps\":4},\"target\":{\"capability\":[9,0],\"device\":\"NVIDIA L20X\",\"driver_versions\":[\"570.133.20\"]}},\"bundle_manifest_sha256\":\"333a55cce8260a69c88ab43024cba1384d1203edaee0b66fb2065d1360602fbd\",\"profile\":{\"batch\":512,\"distribution\":{\"family\":\"normal\",\"mean\":1.0,\"std\":1.0},\"formats\":[{\"accumulator\":\"fp32\",\"compute\":\"bf16\",\"input\":\"bf16\",\"name\":\"bf16\",\"output\":\"bf16\"},{\"accumulator\":\"fp32\",\"compute\":\"fp32\",\"input\":\"bf16\",\"name\":\"bf16_fp32\",\"output\":\"bf16\"},{\"accumulator\":\"fp32\",\"compute\":\"fp32\",\"input\":\"fp32\",\"name\":\"fp32\",\"output\":\"fp32\"}],\"gates\":{\"bias\":{\"se_multiplier\":5.0,\"tau\":0.05},\"vars\":{\"alpha\":0.00135,\"bootstrap\":1000,\"fail\":10.0,\"horizon\":625000,\"min_exceedances\":40,\"quantile\":0.9,\"warn\":2.0},\"warning_policy\":\"pass_only\"},\"launch\":{\"block\":1024,\"num_warps\":4},\"replicates\":4096,\"replicates_max\":50000,\"rules\":[\"ADD-COMMUTE\",\"MUL-COMMUTE\",\"ROUND-IDEM\",\"BF16-WIDEN-RETURN\",\"ADD-ASSOC\",\"MUL-ASSOC\",\"MUL-DISTRIB\",\"FMA-CONTRACT\",\"CANCEL\",\"DIV-RCP\",\"SQRT-RSQRT\",\"CAST-MOVE\",\"CAST-REMOVE\",\"ACC-WIDEN\"],\"seed\":20261003,\"shape\":[4096,4096]},\"report_sha256\":{\"experiment.json\":\"22c16af86501753b45ff7730407bdf34b3e71b8c3ab475b09aafdc01eb955c6e\",\"summary.json\":\"b9712b2060dd2c841bf69b3acdb6e255516e0119e4ba8546e6daba20224619a2\"},\"sources\":{\"experiments/floating_point/kernels.py\":\"f239cb37af1eab11170c912303a82fa4201c681caa1273db7acb0e0e746aa98e\",\"experiments/floating_point/rules.json\":\"bb43a240b2fa0a7599b527c320701b863329b344a14397aeedc1d1db45a7c2e7\",\"scripts/check_numerics.py\":\"d6effc8373baa020727f2faf7767f4914c27c541645e3c9f084c99c8e2a0ae2c\",\"scripts/numerical_gates.py\":\"d78adeb04c374491f560ea1254e030219e6851069ce0c04dc896afa465d90b2c\",\"scripts/numerical_registry.py\":\"ad746a9603067218b288aca2d1c1119f92ea7cdc0589e2c44b78742ab01d9e54\"},\"trust\":\"published report trusted by the user; no independent replay during export\"}").toOption.getD .null
+def snapshot : String := "06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51"
+def reportMetadata : Lean.Json := (Lean.Json.parse "{\"backend\":{\"compile_options\":{\"enable_fp_fusion\":false},\"compiler\":{\"cuda\":\"13.0\",\"numpy\":\"2.3.5\",\"torch\":\"2.13.0+cu130\",\"triton\":\"3.7.1\"},\"implementation_version\":\"f239cb37af1eab11170c912303a82fa4201c681caa1273db7acb0e0e746aa98e\",\"kind\":\"triton-cuda\",\"launch\":{\"block\":1024,\"num_warps\":4},\"target\":{\"capability\":[9,0],\"device\":\"NVIDIA L20X\",\"driver_versions\":[\"570.133.20\"]}},\"bundle_manifest_sha256\":\"d06340b9652ce2ddf1f24b49ac6e3ecb552cafad860ae7eecbfca7927dc95410\",\"profile\":{\"batch\":512,\"distribution\":{\"family\":\"normal\",\"mean\":1.0,\"std\":1.0},\"formats\":[{\"accumulator\":\"fp32\",\"compute\":\"bf16\",\"input\":\"bf16\",\"name\":\"bf16\",\"output\":\"bf16\"},{\"accumulator\":\"fp32\",\"compute\":\"fp32\",\"input\":\"bf16\",\"name\":\"bf16_fp32\",\"output\":\"bf16\"},{\"accumulator\":\"fp32\",\"compute\":\"fp32\",\"input\":\"fp32\",\"name\":\"fp32\",\"output\":\"fp32\"}],\"gates\":{\"bias\":{\"se_multiplier\":5.0,\"tau\":0.05},\"vars\":{\"alpha\":0.00135,\"bootstrap\":1000,\"fail\":10.0,\"horizon\":625000,\"min_exceedances\":40,\"quantile\":0.9,\"warn\":2.0},\"warning_policy\":\"pass_only\"},\"launch\":{\"block\":1024,\"num_warps\":4},\"replicates\":4096,\"replicates_max\":50000,\"rules\":[\"ADD-COMMUTE\",\"MUL-COMMUTE\",\"ROUND-IDEM\",\"BF16-WIDEN-RETURN\",\"ADD-ASSOC\",\"MUL-ASSOC\",\"MUL-DISTRIB\",\"FMA-CONTRACT\",\"CANCEL\",\"DIV-RCP\",\"SQRT-RSQRT\",\"CAST-MOVE\",\"CAST-REMOVE\",\"ACC-WIDEN\"],\"seed\":20261003,\"shape\":[4096,4096]},\"report_sha256\":{\"experiment.json\":\"57f062c037a4af32a3f02a227afcd15c925e0523bdc7163a61d5d9443ac184ea\",\"summary.json\":\"4b97be03b7ceab4cc94ff5c7bb9c77df4641ccea6907fd2b0a1596f7d0f02659\"},\"sources\":{\"experiments/floating_point/kernels.py\":\"f239cb37af1eab11170c912303a82fa4201c681caa1273db7acb0e0e746aa98e\",\"experiments/floating_point/rules.json\":\"bb43a240b2fa0a7599b527c320701b863329b344a14397aeedc1d1db45a7c2e7\",\"scripts/check_numerics.py\":\"c1bbcb41c869c5b80f98244feacd12e51cb702ac0288b55baaca22fde603fabe\",\"scripts/numerical_gates.py\":\"b280bb606d5b92510b1f8a3fbda01661cf74093d49dd35b4c4ba0a5c344bceb9\",\"scripts/numerical_registry.py\":\"ad746a9603067218b288aca2d1c1119f92ea7cdc0589e2c44b78742ab01d9e54\"},\"trust\":\"published report trusted by the user; no independent replay during export\"}").toOption.getD .null
 
 def bf16_add_commute : ReportedRule where
   ruleID := "ADD-COMMUTE"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:ADD-COMMUTE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:ADD-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#bf16/ADD-COMMUTE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -26,11 +26,11 @@ def bf16_add_commute : ReportedRule where
 def bf16_fp32_add_commute : ReportedRule where
   ruleID := "ADD-COMMUTE"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:ADD-COMMUTE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:ADD-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/ADD-COMMUTE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -41,11 +41,11 @@ def bf16_fp32_add_commute : ReportedRule where
 def fp32_add_commute : ReportedRule where
   ruleID := "ADD-COMMUTE"
   format := "fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:fp32:ADD-COMMUTE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:fp32:ADD-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#fp32/ADD-COMMUTE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "fp32"
@@ -56,11 +56,11 @@ def fp32_add_commute : ReportedRule where
 def bf16_mul_commute : ReportedRule where
   ruleID := "MUL-COMMUTE"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:MUL-COMMUTE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:MUL-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#bf16/MUL-COMMUTE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -71,11 +71,11 @@ def bf16_mul_commute : ReportedRule where
 def bf16_fp32_mul_commute : ReportedRule where
   ruleID := "MUL-COMMUTE"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:MUL-COMMUTE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:MUL-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/MUL-COMMUTE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -86,11 +86,11 @@ def bf16_fp32_mul_commute : ReportedRule where
 def fp32_mul_commute : ReportedRule where
   ruleID := "MUL-COMMUTE"
   format := "fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:fp32:MUL-COMMUTE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:fp32:MUL-COMMUTE"
   artifact := "experiments/floating_point/report/summary.json#fp32/MUL-COMMUTE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-COMMUTE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "fp32"
@@ -101,7 +101,7 @@ def fp32_mul_commute : ReportedRule where
 def bf16_round_idem : ReportedRule where
   ruleID := "ROUND-IDEM"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:ROUND-IDEM"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:ROUND-IDEM"
   artifact := "experiments/floating_point/report/summary.json#bf16/ROUND-IDEM"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
@@ -116,7 +116,7 @@ def bf16_round_idem : ReportedRule where
 def bf16_fp32_round_idem : ReportedRule where
   ruleID := "ROUND-IDEM"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:ROUND-IDEM"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:ROUND-IDEM"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/ROUND-IDEM"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
@@ -131,7 +131,7 @@ def bf16_fp32_round_idem : ReportedRule where
 def fp32_round_idem : ReportedRule where
   ruleID := "ROUND-IDEM"
   format := "fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:fp32:ROUND-IDEM"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:fp32:ROUND-IDEM"
   artifact := "experiments/floating_point/report/summary.json#fp32/ROUND-IDEM"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
@@ -146,7 +146,7 @@ def fp32_round_idem : ReportedRule where
 def bf16_bf16_widen_return : ReportedRule where
   ruleID := "BF16-WIDEN-RETURN"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:BF16-WIDEN-RETURN"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:BF16-WIDEN-RETURN"
   artifact := "experiments/floating_point/report/summary.json#bf16/BF16-WIDEN-RETURN"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
@@ -161,7 +161,7 @@ def bf16_bf16_widen_return : ReportedRule where
 def bf16_fp32_bf16_widen_return : ReportedRule where
   ruleID := "BF16-WIDEN-RETURN"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:BF16-WIDEN-RETURN"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:BF16-WIDEN-RETURN"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/BF16-WIDEN-RETURN"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
@@ -176,11 +176,11 @@ def bf16_fp32_bf16_widen_return : ReportedRule where
 def bf16_add_assoc : ReportedRule where
   ruleID := "ADD-ASSOC"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:ADD-ASSOC"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:ADD-ASSOC"
   artifact := "experiments/floating_point/report/summary.json#bf16/ADD-ASSOC"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":5.747947454240533e-05,\"U\":1.0328155374994394,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-ASSOC\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":0.5262653620802217}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":5.747947454240533e-05,\"U\":1.1569412478630592,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-ASSOC\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":0.5262653620802217}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -188,29 +188,14 @@ def bf16_add_assoc : ReportedRule where
   accumulator := "fp32"
   output := "bf16"
 
-def bf16_mul_assoc : ReportedRule where
-  ruleID := "MUL-ASSOC"
-  format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:MUL-ASSOC"
-  artifact := "experiments/floating_point/report/summary.json#bf16/MUL-ASSOC"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
-  configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":1.1478910120554823e-05,\"U\":0.29718599862731643,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-ASSOC\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.036299421749639585}").toOption.getD .null)]
-  shape := [4096, 4096]
-  block := 1024
-  input := "bf16"
-  compute := "bf16"
-  accumulator := "fp32"
-  output := "bf16"
-
-def bf16_fp32_mul_assoc : ReportedRule where
-  ruleID := "MUL-ASSOC"
+def bf16_fp32_add_assoc : ReportedRule where
+  ruleID := "ADD-ASSOC"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:MUL-ASSOC"
-  artifact := "experiments/floating_point/report/summary.json#bf16_fp32/MUL-ASSOC"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:ADD-ASSOC"
+  artifact := "experiments/floating_point/report/summary.json#bf16_fp32/ADD-ASSOC"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-ASSOC\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":2.142982973453033e-08,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-ASSOC\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.06535288177077261}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -218,14 +203,14 @@ def bf16_fp32_mul_assoc : ReportedRule where
   accumulator := "fp32"
   output := "bf16"
 
-def fp32_mul_assoc : ReportedRule where
-  ruleID := "MUL-ASSOC"
+def fp32_add_assoc : ReportedRule where
+  ruleID := "ADD-ASSOC"
   format := "fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:fp32:MUL-ASSOC"
-  artifact := "experiments/floating_point/report/summary.json#fp32/MUL-ASSOC"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:fp32:ADD-ASSOC"
+  artifact := "experiments/floating_point/report/summary.json#fp32/ADD-ASSOC"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":1.3129480836678073e-05,\"U\":0.34428123519625625,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-ASSOC\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":0.6556255504359448}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.015259949624885707,\"U\":1.1638748531721228,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ADD-ASSOC\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":0.9255955929898997}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "fp32"
@@ -233,14 +218,14 @@ def fp32_mul_assoc : ReportedRule where
   accumulator := "fp32"
   output := "fp32"
 
-def bf16_fp32_mul_distrib : ReportedRule where
-  ruleID := "MUL-DISTRIB"
+def bf16_fp32_mul_assoc : ReportedRule where
+  ruleID := "MUL-ASSOC"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:MUL-DISTRIB"
-  artifact := "experiments/floating_point/report/summary.json#bf16_fp32/MUL-DISTRIB"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:MUL-ASSOC"
+  artifact := "experiments/floating_point/report/summary.json#bf16_fp32/MUL-ASSOC"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":1.772631648179727e-10,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-DISTRIB\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.4471699180317905}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-ASSOC\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -248,14 +233,59 @@ def bf16_fp32_mul_distrib : ReportedRule where
   accumulator := "fp32"
   output := "bf16"
 
+def bf16_mul_distrib : ReportedRule where
+  ruleID := "MUL-DISTRIB"
+  format := "bf16"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:MUL-DISTRIB"
+  artifact := "experiments/floating_point/report/summary.json#bf16/MUL-DISTRIB"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
+  configuration := Lean.Json.mkObj [("report", reportMetadata),
+    ("row", (Lean.Json.parse "{\"B\":0.0012217858583692246,\"U\":1.968885464354254,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":6656,\"rule\":\"MUL-DISTRIB\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":155.22310575421594}").toOption.getD .null)]
+  shape := [4096, 4096]
+  block := 1024
+  input := "bf16"
+  compute := "bf16"
+  accumulator := "fp32"
+  output := "bf16"
+
+def bf16_fp32_mul_distrib : ReportedRule where
+  ruleID := "MUL-DISTRIB"
+  format := "bf16_fp32"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:MUL-DISTRIB"
+  artifact := "experiments/floating_point/report/summary.json#bf16_fp32/MUL-DISTRIB"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
+  configuration := Lean.Json.mkObj [("report", reportMetadata),
+    ("row", (Lean.Json.parse "{\"B\":1.772631648179727e-10,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"MUL-DISTRIB\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.4471699180317905}").toOption.getD .null)]
+  shape := [4096, 4096]
+  block := 1024
+  input := "bf16"
+  compute := "fp32"
+  accumulator := "fp32"
+  output := "bf16"
+
+def fp32_mul_distrib : ReportedRule where
+  ruleID := "MUL-DISTRIB"
+  format := "fp32"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:fp32:MUL-DISTRIB"
+  artifact := "experiments/floating_point/report/summary.json#fp32/MUL-DISTRIB"
+  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
+  configuration := Lean.Json.mkObj [("report", reportMetadata),
+    ("row", (Lean.Json.parse "{\"B\":0.010330009059862989,\"U\":1.9986439637958224,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":8192,\"rule\":\"MUL-DISTRIB\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":0.9078026178947632}").toOption.getD .null)]
+  shape := [4096, 4096]
+  block := 1024
+  input := "fp32"
+  compute := "fp32"
+  accumulator := "fp32"
+  output := "fp32"
+
 def bf16_fma_contract : ReportedRule where
   ruleID := "FMA-CONTRACT"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:FMA-CONTRACT"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:FMA-CONTRACT"
   artifact := "experiments/floating_point/report/summary.json#bf16/FMA-CONTRACT"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0004666169015704181,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"FMA-CONTRACT\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":23.85632997502604}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0004666169015704181,\"U\":0.7544842748762423,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"FMA-CONTRACT\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":23.85632997502604}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -266,11 +296,11 @@ def bf16_fma_contract : ReportedRule where
 def bf16_fp32_fma_contract : ReportedRule where
   ruleID := "FMA-CONTRACT"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:FMA-CONTRACT"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:FMA-CONTRACT"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/FMA-CONTRACT"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"FMA-CONTRACT\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"FMA-CONTRACT\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -281,11 +311,11 @@ def bf16_fp32_fma_contract : ReportedRule where
 def fp32_fma_contract : ReportedRule where
   ruleID := "FMA-CONTRACT"
   format := "fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:fp32:FMA-CONTRACT"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:fp32:FMA-CONTRACT"
   artifact := "experiments/floating_point/report/summary.json#fp32/FMA-CONTRACT"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.02679349682126988,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"FMA-CONTRACT\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":1.1140512838340102}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.02679349682126988,\"U\":0.8064916588786727,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"FMA-CONTRACT\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":1.1140512838340102}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "fp32"
@@ -296,7 +326,7 @@ def fp32_fma_contract : ReportedRule where
 def bf16_cancel : ReportedRule where
   ruleID := "CANCEL"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:CANCEL"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:CANCEL"
   artifact := "experiments/floating_point/report/summary.json#bf16/CANCEL"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
@@ -311,7 +341,7 @@ def bf16_cancel : ReportedRule where
 def bf16_fp32_cancel : ReportedRule where
   ruleID := "CANCEL"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:CANCEL"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:CANCEL"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/CANCEL"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
@@ -326,7 +356,7 @@ def bf16_fp32_cancel : ReportedRule where
 def fp32_cancel : ReportedRule where
   ruleID := "CANCEL"
   format := "fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:fp32:CANCEL"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:fp32:CANCEL"
   artifact := "experiments/floating_point/report/summary.json#fp32/CANCEL"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
@@ -338,59 +368,29 @@ def fp32_cancel : ReportedRule where
   accumulator := "fp32"
   output := "fp32"
 
-def bf16_div_rcp : ReportedRule where
-  ruleID := "DIV-RCP"
-  format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:DIV-RCP"
-  artifact := "experiments/floating_point/report/summary.json#bf16/DIV-RCP"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
-  configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.008101662356400603,\"U\":0.6904547010675047,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"DIV-RCP\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":4330.744802992846}").toOption.getD .null)]
-  shape := [4096, 4096]
-  block := 1024
-  input := "bf16"
-  compute := "bf16"
-  accumulator := "fp32"
-  output := "bf16"
-
 def bf16_fp32_div_rcp : ReportedRule where
   ruleID := "DIV-RCP"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:DIV-RCP"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:DIV-RCP"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/DIV-RCP"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"DIV-RCP\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"DIV-RCP\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
   compute := "fp32"
   accumulator := "fp32"
   output := "bf16"
-
-def fp32_div_rcp : ReportedRule where
-  ruleID := "DIV-RCP"
-  format := "fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:fp32:DIV-RCP"
-  artifact := "experiments/floating_point/report/summary.json#fp32/DIV-RCP"
-  description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
-  configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":5.6211479231329134e-05,\"U\":1.0163086485177346,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"DIV-RCP\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":23.69138006749256}").toOption.getD .null)]
-  shape := [4096, 4096]
-  block := 1024
-  input := "fp32"
-  compute := "fp32"
-  accumulator := "fp32"
-  output := "fp32"
 
 def bf16_cast_move : ReportedRule where
   ruleID := "CAST-MOVE"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:CAST-MOVE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:CAST-MOVE"
   artifact := "experiments/floating_point/report/summary.json#bf16/CAST-MOVE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-MOVE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-MOVE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -401,11 +401,11 @@ def bf16_cast_move : ReportedRule where
 def bf16_fp32_cast_move : ReportedRule where
   ruleID := "CAST-MOVE"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:CAST-MOVE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:CAST-MOVE"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/CAST-MOVE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-MOVE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-MOVE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -416,11 +416,11 @@ def bf16_fp32_cast_move : ReportedRule where
 def bf16_cast_remove : ReportedRule where
   ruleID := "CAST-REMOVE"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:CAST-REMOVE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:CAST-REMOVE"
   artifact := "experiments/floating_point/report/summary.json#bf16/CAST-REMOVE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0029549600733926565,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-REMOVE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":1618.833513362291}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0029549600733926565,\"U\":0.9288439225430439,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-REMOVE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":1618.833513362291}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -431,11 +431,11 @@ def bf16_cast_remove : ReportedRule where
 def bf16_fp32_cast_remove : ReportedRule where
   ruleID := "CAST-REMOVE"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:CAST-REMOVE"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:CAST-REMOVE"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/CAST-REMOVE"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0029570277541934274,\"U\":0.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-REMOVE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":1591.3019891451215}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0029570277541934274,\"U\":0.9447803250013432,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"CAST-REMOVE\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":1591.3019891451215}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -446,11 +446,11 @@ def bf16_fp32_cast_remove : ReportedRule where
 def bf16_acc_widen : ReportedRule where
   ruleID := "ACC-WIDEN"
   format := "bf16"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16:ACC-WIDEN"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16:ACC-WIDEN"
   artifact := "experiments/floating_point/report/summary.json#bf16/ACC-WIDEN"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/bf16/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0004120226815128908,\"U\":0.12858826029070414,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ACC-WIDEN\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":46.74694438206423}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0004120226815128908,\"U\":0.5824563952590297,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ACC-WIDEN\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":46.74694438206423}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -461,11 +461,11 @@ def bf16_acc_widen : ReportedRule where
 def bf16_fp32_acc_widen : ReportedRule where
   ruleID := "ACC-WIDEN"
   format := "bf16_fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:bf16_fp32:ACC-WIDEN"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:bf16_fp32:ACC-WIDEN"
   artifact := "experiments/floating_point/report/summary.json#bf16_fp32/ACC-WIDEN"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=bf16/fp32/fp32/bf16; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0004025738611609839,\"U\":0.29108450576689093,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ACC-WIDEN\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":44.90048501832305}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0004025738611609839,\"U\":0.5706933984560704,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"bf16_fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ACC-WIDEN\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":44.90048501832305}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "bf16"
@@ -476,11 +476,11 @@ def bf16_fp32_acc_widen : ReportedRule where
 def fp32_acc_widen : ReportedRule where
   ruleID := "ACC-WIDEN"
   format := "fp32"
-  key := "report:b8f5eeba0207db58d3c97e18152f8ad0bca65ae9c1e405c6326ee10def8782df:fp32:ACC-WIDEN"
+  key := "report:06ec834b37670f23fe543d85ec488d5f386edd613b64929a71d996bb51026d51:fp32:ACC-WIDEN"
   artifact := "experiments/floating_point/report/summary.json#fp32/ACC-WIDEN"
   description := "shape=[4096, 4096]; block=1024; input/compute/accumulator/output=fp32/fp32/fp32/fp32; independent Normal(mean=1.0, std=1.0)"
   configuration := Lean.Json.mkObj [("report", reportMetadata),
-    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":0.9999998844755817,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ACC-WIDEN\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
+    ("row", (Lean.Json.parse "{\"B\":0.0,\"U\":1.0,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"ACC-WIDEN\",\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"vars\":\"PASS\",\"z\":0.0}").toOption.getD .null)]
   shape := [4096, 4096]
   block := 1024
   input := "fp32"
@@ -501,19 +501,19 @@ def all : List ReportedRule := [
   bf16_bf16_widen_return,
   bf16_fp32_bf16_widen_return,
   bf16_add_assoc,
-  bf16_mul_assoc,
+  bf16_fp32_add_assoc,
+  fp32_add_assoc,
   bf16_fp32_mul_assoc,
-  fp32_mul_assoc,
+  bf16_mul_distrib,
   bf16_fp32_mul_distrib,
+  fp32_mul_distrib,
   bf16_fma_contract,
   bf16_fp32_fma_contract,
   fp32_fma_contract,
   bf16_cancel,
   bf16_fp32_cancel,
   fp32_cancel,
-  bf16_div_rcp,
   bf16_fp32_div_rcp,
-  fp32_div_rcp,
   bf16_cast_move,
   bf16_fp32_cast_move,
   bf16_cast_remove,

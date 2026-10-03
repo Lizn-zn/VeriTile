@@ -24,20 +24,22 @@ class SupplementalExportTests(unittest.TestCase):
 
     def test_exact_accepted_precision_instances_and_reproducible_export(self):
         _, _, rows, _, _ = exporter.load_report(exporter.REPORT)
-        self.assertEqual(len(rows), 37)
+        self.assertEqual(len(rows), 35)
         self.assertEqual(sum(r['format'] == 'fp64_fp64_fp32' for r in rows), 1)
         self.assertEqual({r['format'] for r in rows if r['rule'] == 'MUL-RCP-CANCEL'},
                          {'bf16_fp32', 'fp32'})
         text = exporter.render()
         self.assertEqual(text, exporter.OUTPUT.read_text())
-        for name in ('fp32_log_exp', 'fp32_log_mul', 'bf16_mul_rcp_cancel'):
+        for name in ('fp32_log_exp', 'fp32_log_mul', 'bf16_mul_rcp_cancel',
+                     'bf16_div_mul_rcp', 'fp32_exp_sub'):
             self.assertNotIn(f'def {name} :', text)
-        self.assertIn('def fp32_exp_sub :', text)
+        self.assertIn('def bf16_fp32_exp_sub :', text)
         self.assertIn('def fp32_mul_rcp_cancel :', text)
         self.assertNotIn('axiom ', text)
 
     def test_nonaccepted_results_cannot_be_promoted(self):
-        for key in [('LOG-EXP', 'fp32'), ('LOG-MUL', 'fp32'),
+        for key in [('LOG-EXP', 'fp32'), ('LOG-MUL', 'fp32'), ('EXP-SUB', 'fp32'),
+                    ('DIV-MUL-RCP', 'bf16'),
                     ('MUL-RCP-CANCEL', 'bf16'), ('ADD-ZERO', 'fp64_fp64_fp32')]:
             def promote(report):
                 row = next(r for r in report['rows'] if (r['rule'], r['format']) == key)

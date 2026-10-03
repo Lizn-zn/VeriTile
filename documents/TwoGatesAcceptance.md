@@ -1,10 +1,10 @@
 # 用 two-gates 定义浮点变换的可接受性
 
-更新日期：2026-10-02。
+更新日期：2026-10-03。
 
-状态：**已实现 specification、依赖报告、局部 Triton 原子关系、Python two-gates、GPU 实测与 CPU 重放，以及主目录和补充目录结果的 Lean 规则导出。** 两个目录使用相同的逐元素 golden ULP 归一化；当前结果见各目录的 `report/summary.md`。
+状态：**已实现 specification、依赖报告、局部 Triton 原子关系、Python two-gates、GPU 实测与 CPU 重放，以及主目录和补充目录结果的 Lean 规则导出。** 两个目录共用局部 golden ULP 的平均偏差预算和最大绝对误差比；当前结果见各目录的 `report/summary.md`。
 
-当前每个 replicate 汇总一个均值的 bias 协议已使用独立种子 20261003 在 H200 上完成实测，并经独立 CPU 回放。已发布报告绑定其源代码哈希和聚合协议；回放与导出拒绝哈希不匹配的报告。
+当前局部 ULP bias 与绝对误差比协议使用固定种子 20261003，在 H200 上对独立 replicate 采样，并经独立 CPU 回放。已发布报告绑定其源代码哈希和聚合协议；回放与导出拒绝哈希不匹配的报告。
 
 交付目标为完整浮点支持与接受流程，原语架构和统一完成条件见 [FloatingPointPrimitives.md](./FloatingPointPrimitives.md)。加法重排等小例子用于核对语义，不构成缩减后的交付版本。
 
@@ -123,26 +123,28 @@ L=\max(0,|\bar\Delta|-cSE).
 
 ## 4. Vars gate：相对 oracle 的误差放大与尾部
 
-使用与 bias gate 相同的逐元素尺度。对相同的 replicate 计算归一化峰值误差：
+对同一个 replicate，分别取参考与候选相对 oracle 的最大绝对误差：
 
 \[
-E^Q_r=\max_i\frac{|Q(x_r)_i-O(x_r)_i|}{u_{r,i}},\qquad
-E^P_r=\max_i\frac{|P(x_r)_i-O(x_r)_i|}{u_{r,i}} .
+E^Q_r=\max_i|Q(x_r)_i-O(x_r)_i|,\qquad
+E^P_r=\max_i|P(x_r)_i-O(x_r)_i| .
 \]
 
-由接受不等式 \(E^Q_r\le K E^P_r+\varepsilon_r\) 反解放大率：
+由接受不等式 \(E^Q_r\le K E^P_r\) 得到无量纲误差比：
 
 \[
 \hat K_r=
 \begin{cases}
-0,& E^Q_r\le\varepsilon_r,\\
-(E^Q_r-\varepsilon_r)/E^P_r,
-  & E^Q_r>\varepsilon_r,\ E^P_r>0,\\
-+\infty,& E^Q_r>\varepsilon_r,\ E^P_r=0.
+0,& E^Q_r=0,\\
+E^Q_r/E^P_r,& E^Q_r>0,\ E^P_r>0,\\
++\infty,& E^Q_r>0,\ E^P_r=0.
 \end{cases}
 \]
 
-\(\varepsilon_r=1\)，单位为 local ULP，位于原不等式右侧，不加进分母。先处理分支可避免 \(0/0\)；\(\hat K_r=0\) 只表示候选在 oracle 的地板误差内，不保证参考也在地板内。保留的是归一化误差的最大值，不用输出最大值决定其他元素的容差。
+这里不除以逐元素 ULP，也没有加性容差。两侧的峰值可以来自不同元素。
+该指标对齐 [FlashAttention 的最大绝对误差比较](https://github.com/Dao-AILab/flash-attention/blob/main/tests/test_flash_attn.py)：候选的峰值误差不超过基线的两倍。逐元素除以不同 ULP 后再取最大值会改变这个比较，因此只在 bias gate 使用局部 ULP。
+
+Bias 衡量平均多少 ULP 的有符号偏移；vars 衡量相对基线的峰值误差放大，两者无需使用相同单位。当前协议的 bias gate 和下面的尾部外推都是额外要求，不等同于 FA 对已测样本直接应用的两倍判据。
 
 报告用 POT/GPD 估计 \(\hat K\) 在视界 \(T_{\mathrm{tail}}\) 下的 return level，再构造上置信界估计 \(U\)。设阈值为 \(u\)、超阈概率为 \(\zeta\)、GPD 参数为 \((\xi,\sigma)\)，其尾部模型给出：
 
@@ -219,13 +221,13 @@ Q_d(a,b,c)=\operatorname{fl}_d(a+\operatorname{fl}_d(b+c)).
 3. **Return level 的含义。** 理想连续模型下，\(r_T\) 对应单次超越概率约 \(1/T\)，不是 \(T\) 次最大值的期望，也不是保证不被超越的最坏值。独立抽样时至少超越一次的概率为 \(1-(1-1/T)^T\)，随 \(T\) 增大趋于约 \(0.632\)。必须区分 return level 的估计置信度和未来运行的超越风险。[NIST 的 return value 定义](https://www.nist.gov/programs-projects/maps-non-hurricane-non-tornadic-extreme-wind-speeds-contiguous-united-states)。
 4. **尾部模型和参数截断。** POT/GPD 拟合有尾部近似及采样假设，不能直接宣称有限样本“分布无关”。报告把正 \(\hat\xi\) 截到零，需要额外依据；当参考误差很小时，误差比可能出现长尾。即使极限尾部有界，也不足以保证有限阈值下的指数拟合保守。截断前后的诊断与覆盖率需要验证。
 5. **从局部误差到训练危害。** \(T\mu\) 与 \(\sqrt T\sigma\) 的比较需要相关性和传播假设。一般训练扰动还经过随时间变化的 Jacobian；存在负曲率不能单独推出整个乘积具有正 Lyapunov 指数。forward 门的通过不能直接推出 backward、训练轨迹或训练质量保证。
-6. **计量与复现。** ULP 在 binade 边界具有方向差异，例如 bf16 在 1 上方的相邻间隔为 \(2^{-7}\)，下方为 \(2^{-8}\)。必须固定 nextafter 方向及聚合规则。改变逐元素尺度会改变所检验的均值与尾部，旧聚合观测不能直接充当新协议的结果。
+6. **计量与复现。** ULP 在 binade 边界具有方向差异，例如 bf16 在 1 上方的相邻间隔为 \(2^{-7}\)，下方为 \(2^{-8}\)。必须固定 nextafter 方向及聚合规则。改变 bias 的逐元素尺度或 vars 的误差单位会改变所检验的量；只保存局部 ULP 峰值的观测无法恢复绝对误差峰值，必须重新采样，不能直接充当当前协议的结果。
 
 ### 当前验收协议
 
 双门验收采用自适应停止规则：默认最少 4096 次、每批 512 次、预算上限 50000 次（完整末批可到 50176）；每批检查幅度置信带，达到最小预算后稳定或回退则停止。PWM 保留原始 shape 供诊断，计算 return level 时截断到非正；1000 次固定种子 bootstrap，alpha=1.35e-3。尾部不可拟合时按经验最大 K 判 PASS/WARN/FAIL，明确标记 `empirical_fallback`，不能把它称为尾部置信保证。
 
-Bias 对每个 replicate 的全部同分布标量实例取一个均值，一维和二维布局使用相同聚合。默认 tau=0.05 local ULP，SE 倍数为 5；z 只作诊断，接受要求跨 replicate 均值的偏差上界不超过 tau。每个元素单独计算 ULP：取 golden 的绝对值，转到输出 dtype，再取向正无穷的 nextafter 间距；最大有限值取朝零间距，零和 subnormal 使用最小间距。golden 转换溢出产生无效尺度并使检查失败。先用该尺度归一化，再计算 bias 的整次均值和 vars 的峰值误差；不跨元素或 replicate 取最大 ULP。CPU 回放检查 delta 的 `[R, 1]` 形状、实际采样数及所有自适应检查点。输入分布由 VeriTile 的 profile 指定，不引入新的正值或条件采样。具体参数与运行说明见实验目录，模型限制见第 7 节。
+Bias 对每个 replicate 的全部同分布标量实例取一个均值，一维和二维布局使用相同聚合。默认 tau=0.05 local ULP，SE 倍数为 5；z 只作诊断，接受要求跨 replicate 均值的偏差上界不超过 tau。每个元素单独计算 ULP：取 golden 的绝对值，转到输出 dtype，再取向正无穷的 nextafter 间距；最大有限值取朝零间距，零和 subnormal 使用最小间距。golden 转换溢出产生无效尺度并使检查失败。仅 bias 先用该尺度归一化，再计算整次均值；vars 保存绝对 oracle 误差的峰值并计算 Ec/Er，不使用 ULP 或加性容差。不跨元素或 replicate 取最大 ULP 作为 bias 预算。CPU 回放检查 delta 的 `[R, 1]` 形状、实际采样数及所有自适应检查点。输入分布由 VeriTile 的 profile 指定，不引入新的正值或条件采样。具体参数与运行说明见实验目录，模型限制见第 7 节。
 
 ## 8. 下一步
 

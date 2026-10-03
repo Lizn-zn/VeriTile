@@ -2,10 +2,10 @@
 
 The migration has 18 real correctness files and 13 FP equivalence files.
 The current main and supplemental reports select numerical assumptions using
-per-element golden ULPs, a mean-bias budget and an error-amplification gate.
+a local-ULP mean-bias budget and a peak absolute-error ratio gate.
 The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
-has a conditional derivation but is blocked on the rejected fp32 ADD-ASSOC
-instance. Five other algorithmic transformations still need derivations.
+binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
+instances. Five other algorithmic transformations still need derivations.
 
 ## Checked algebraic evidence
 
@@ -38,10 +38,10 @@ formats. It supplies no fp64 instance.
 
 | Case | Numerical prerequisites still to settle | Implementation work after admission |
 |---|---|---|
-| `RowWiseSum` | The fp32 ADD-ASSOC instance is rejected; its derivation remains an explicit unresolved premise. | Preserve the conditional theorem until an applicable association assumption is justified. |
-| `SoftmaxStable` | Bind the tested libdevice EXP-SUB implementation at the exact precision; its admission does not cover a tl.exp implementation. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
-| `StableLogSumExp` | EXP-SUB uses libdevice; select an actually accepted LOG-EXP precision. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
-| `OnlineSoftmax` | Scalar max identities and EXP-NEG-INF-SUB are admitted; EXP-SUB needs a compatible libdevice use-site binding. | Prove the loop invariant in the original recurrence scope. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
+| `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
+| `SoftmaxStable` | Settle fp32 EXP-SUB, currently WARN_NOT_ACCEPTED, and bind the tested libdevice implementation at the exact precision; accepted bf16-output instances do not cover a tl.exp or fp32-output implementation. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
+| `StableLogSumExp` | The fp32 libdevice EXP-SUB instance is WARN_NOT_ACCEPTED; select accepted EXP-SUB and LOG-EXP precision instances. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
+| `OnlineSoftmax` | Scalar max identities and EXP-NEG-INF-SUB are admitted; fp32 EXP-SUB remains WARN_NOT_ACCEPTED and needs both numerical admission and a compatible libdevice use-site binding. | Prove the loop invariant in the original recurrence scope. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
 | `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; integer-count conversion, precision and nonzero-count obligations remain. | Connect explicit reduction trees to the online loop and retain both output windows and memory framing. |
 | `FusedLayerNorm` | The Welford prerequisites at the actual arithmetic precision. | Derive the statistics replacement and preserve the common normalization, affine operations and bf16 output conversion. |
 
