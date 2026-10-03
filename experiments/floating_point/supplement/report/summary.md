@@ -20,7 +20,7 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 | ADD-ZERO | bf16 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | MUL-ONE | bf16 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | DIV-ONE | bf16 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| DIV-MUL-RCP | bf16 | 4096 | 4314.946 | 0.008102938 | 0.05 | 22.242 | pot_pwm | PASS | FAIL | no | COMPLETE |
+| DIV-MUL-RCP | bf16 | 4096 | 4314.946 | 0.008102938 | 0.05 | 22.242 | pot_pwm | PASS | WARN | no | COMPLETE |
 | MUL-RCP-CANCEL | bf16 | 4096 | 90572.22 | 0.05362001 | 0.05 | 0 | empirical_max | FAIL | PASS | no | COMPLETE |
 | EXP-SUB | bf16 | 4096 | 2207.84 | 0.006433089 | 0.05 | 1.35752 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | EXP-ZERO | bf16 | 4096 | 0 | 0 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |

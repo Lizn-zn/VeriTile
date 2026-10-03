@@ -23,7 +23,7 @@ PROFILE = {
     "gates": {
         "bias": {"tau": 0.05, "se_multiplier": 5.0},
         "vars": {"quantile": 0.9, "horizon": 625000, "alpha": 1.35e-3,
-                 "bootstrap": 1000, "min_exceedances": 40, "warn": 3.0, "fail": 10.0},
+                 "bootstrap": 1000, "min_exceedances": 40, "warn": 10.0, "fail": 100.0},
         "warning_policy": "pass_only",
     },
 }

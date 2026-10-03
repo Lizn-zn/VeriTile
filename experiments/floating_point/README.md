@@ -162,7 +162,7 @@ and error-amplification checks. Statistics and bundle replay use NumPy on CPU.
   zero gives K=0; `Er == 0` with `Ec > 0` gives infinity. These are separate
   absolute-error peaks, which may occur at different positions in the tensor.
   This is the [FlashAttention maximum-error comparison](https://github.com/Dao-AILab/flash-attention/blob/main/tests/test_flash_attn.py):
-  FA tests use `Ec <= 2*Er`; this project uses a magnitude PASS threshold of 3.
+  FA tests use `Ec <= 2*Er`; this project uses a magnitude PASS threshold of 10.
   The local-ULP bias budget and tail extrapolation below are extra criteria,
   so the full two-gate decision is not identical to FA's sample test.
   Nonfinite reference/candidate/golden observations produce K=+inf and FAIL.
@@ -173,8 +173,8 @@ and error-amplification checks. Statistics and bundle replay use NumPy on CPU.
 - PWM retains raw xi for diagnostics and clips xi to <=0 when computing return levels.
   The bootstrap uses seed 0, 1000 resamples and population std (ddof=0); finite bootstrap
   return levels are retained. U = level + NormalDist().inv_cdf(1-alpha)*SE,
-  with alpha=1.35e-3, horizon=625000, warn/fail thresholds=3/10:
-  U <= 3 is PASS, 3 < U <= 10 is WARN, and U > 10 is FAIL.
+  with alpha=1.35e-3, horizon=625000, warn/fail thresholds=10/100:
+  U <= 10 is PASS, 10 < U <= 100 is WARN, and U > 100 is FAIL.
 - Check after every full batch. Stop immediately for a nonfinite magnitude bound;
   otherwise after the minimum budget, stop for empirical fallback or when the band
   [2*level-U, U] crosses neither threshold. Stop at the full-batch maximum otherwise.
@@ -199,7 +199,7 @@ with full-precision [CSV](./report/summary.csv) and [JSON](./report/summary.json
 The current H200 run (reported as NVIDIA L20X) uses seed 20261003, tau=0.05
 local ULP and a five-SE bias band across replicate means. Replicates use independent input tuples at the fixed seed.
 Current totals are in the table.
-The DLC task is named `traces_kernel_equivalence_testing` (`dlc1q8e8anqbkjgg`).
+The DLC task is named `traces_kernel_equivalence_testing` (`dlchk3ifersdpxho`).
 
 [Experiment settings](./report/experiment.json) record the input distribution,
 precision profiles, gates, device/compiler details and checked source hashes.

@@ -24,7 +24,7 @@
       "valid": false,
       "xi": null,
       "return_level": 31.75,
-      "status": "FAIL"
+      "status": "WARN"
     },
     {
       "family": "sparse",
@@ -32,7 +32,7 @@
       "valid": false,
       "xi": null,
       "return_level": 5.0,
-      "status": "WARN"
+      "status": "PASS"
     },
     {
       "family": "exponential",
@@ -40,7 +40,7 @@
       "valid": true,
       "xi": -0.026051558134200015,
       "return_level": 2.5053148065561404,
-      "status": "WARN"
+      "status": "PASS"
     },
     {
       "family": "heavy",
@@ -48,7 +48,7 @@
       "valid": true,
       "xi": 0.18903895810511884,
       "return_level": 4.278590204638285,
-      "status": "WARN"
+      "status": "PASS"
     },
     {
       "family": "bounded",

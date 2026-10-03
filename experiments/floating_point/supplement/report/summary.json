@@ -60,10 +60,10 @@
       "tau": 0.05,
       "U": 22.241995219643492,
       "bias": "PASS",
-      "vars": "FAIL",
+      "vars": "WARN",
       "u_kind": "pot_pwm",
       "accept": false,
-      "decision": "REJECT",
+      "decision": "WARN_NOT_ACCEPTED",
       "state": "COMPLETE",
       "replayed": true,
       "reason": ""

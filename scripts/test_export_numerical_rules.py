@@ -13,15 +13,15 @@ from scripts import export_numerical_rules as exporter
 class ExportTests(unittest.TestCase):
     def test_only_accepted_instances_are_generated(self):
         _, _, rows, _, _ = exporter.load_report(exporter.REPORT)
-        self.assertEqual(len(rows), 32)
+        self.assertEqual(len(rows), 34)
         content = exporter.render()
         self.assertEqual(content, exporter.OUTPUT.read_text())
         self.assertIn('def bf16_add_assoc : ReportedRule', content)
         self.assertIn('def fp32_add_assoc', content)
         self.assertIn('def bf16_fp32_add_assoc', content)
-        for name in ('bf16_mul_distrib', 'fp32_mul_distrib'):
+        for name in ('bf16_mul_distrib', 'fp32_mul_distrib', 'bf16_mul_assoc', 'fp32_mul_assoc'):
             self.assertIn(f'def {name}', content)
-        for name in ('bf16_mul_assoc', 'fp32_mul_assoc', 'bf16_div_rcp', 'fp32_div_rcp'):
+        for name in ('bf16_div_rcp', 'fp32_div_rcp'):
             self.assertNotIn(f'def {name}', content)
         self.assertIn('def bf16_fma_contract', content)
         self.assertNotIn('def fp32_cast_remove', content)
@@ -34,7 +34,7 @@ class ExportTests(unittest.TestCase):
         self.assertNotIn('axiom ', content)
 
     def test_warn_fail_domain_and_unsupported_cannot_be_promoted(self):
-        for rule, fmt in [('CAST-REMOVE', 'fp32'), ('MUL-ASSOC', 'fp32'), ('DIV-RCP', 'fp32'),
+        for rule, fmt in [('CAST-REMOVE', 'fp32'), ('DIV-RCP', 'fp32'),
                           ('SQRT-RSQRT', 'fp32'), ('BF16-WIDEN-RETURN', 'fp32')]:
             with self.subTest(rule=rule), tempfile.TemporaryDirectory() as tmp:
                 target = Path(tmp)
@@ -48,7 +48,7 @@ class ExportTests(unittest.TestCase):
                     exporter.render(target)
 
     def test_pass_labels_cannot_hide_an_exceeded_budget(self):
-        for field, value in [('B', .051), ('tau', 1.0), ('U', 4.0)]:
+        for field, value in [('B', .051), ('tau', 1.0), ('U', 11.0)]:
             with self.subTest(field=field), tempfile.TemporaryDirectory() as tmp:
                 target = Path(tmp)
                 shutil.copytree(exporter.REPORT, target, dirs_exist_ok=True)

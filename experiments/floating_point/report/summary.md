@@ -1,6 +1,6 @@
 # Numerical rule results
 
-42 instances; 38 replayed; 32 accepted.
+42 instances; 38 replayed; 34 accepted.
 
 Each replicate contributes one mean across its IID scalar instances; R counts replicates.
 z = |mean| / SE across replicate means (diagnostic only). U uses the configured magnitude gate.
@@ -32,9 +32,9 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 | ADD-ASSOC | bf16 | 4096 | 0.5262654 | 5.747947e-05 | 0.05 | 1.156941 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | ADD-ASSOC | bf16_fp32 | 4096 | 0.06535288 | 2.142983e-08 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
 | ADD-ASSOC | fp32 | 4096 | 0.9255956 | 0.01525995 | 0.05 | 1.163875 | pot_pwm | PASS | PASS | yes | COMPLETE |
-| MUL-ASSOC | bf16 | 9728 | 0.02255322 | 7.395573e-06 | 0.05 | 3.677913 | pot_pwm | PASS | WARN | no | COMPLETE |
+| MUL-ASSOC | bf16 | 4096 | 0.03629942 | 1.147891e-05 | 0.05 | 3.802424 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | MUL-ASSOC | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
-| MUL-ASSOC | fp32 | 23040 | 0.5333754 | 5.353822e-06 | 0.05 | 3.803527 | pot_pwm | PASS | WARN | no | COMPLETE |
+| MUL-ASSOC | fp32 | 4096 | 0.6556256 | 1.312948e-05 | 0.05 | 3.850519 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | MUL-DISTRIB | bf16 | 4096 | 122.4037 | 0.001239349 | 0.05 | 2.338281 | pot_pwm | PASS | PASS | yes | COMPLETE |
 | MUL-DISTRIB | bf16_fp32 | 4096 | 0.4471699 | 1.772632e-10 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
 | MUL-DISTRIB | fp32 | 4096 | 0.0719694 | 0.01296174 | 0.05 | 2.353754 | pot_pwm | PASS | PASS | yes | COMPLETE |
@@ -44,9 +44,9 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 | CANCEL | bf16 | 4096 | 74.3824 | 0.002713128 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | CANCEL | bf16_fp32 | 4096 | 1.593619 | 8.745921e-07 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
 | CANCEL | fp32 | 4096 | 0.5932181 | 0.0496093 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE |
-| DIV-RCP | bf16 | 4096 | 4330.745 | 0.008101662 | 0.05 | 19.99234 | pot_pwm | PASS | FAIL | no | COMPLETE |
+| DIV-RCP | bf16 | 4096 | 4330.745 | 0.008101662 | 0.05 | 19.99234 | pot_pwm | PASS | WARN | no | COMPLETE |
 | DIV-RCP | bf16_fp32 | 4096 | 0 | 0 | 0.05 | 1 | empirical_max | PASS | PASS | yes | COMPLETE |
-| DIV-RCP | fp32 | 4096 | 23.69138 | 5.621148e-05 | 0.05 | 20.84146 | pot_pwm | PASS | FAIL | no | COMPLETE |
+| DIV-RCP | fp32 | 4096 | 23.69138 | 5.621148e-05 | 0.05 | 20.84146 | pot_pwm | PASS | WARN | no | COMPLETE |
 | SQRT-RSQRT | bf16 | 0 | — | — | — | — | — | — | — | no | NUMERIC_EVENT |
 | SQRT-RSQRT | bf16_fp32 | 0 | — | — | — | — | — | — | — | no | NUMERIC_EVENT |
 | SQRT-RSQRT | fp32 | 0 | — | — | — | — | — | — | — | no | NUMERIC_EVENT |

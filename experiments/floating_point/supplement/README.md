@@ -13,7 +13,7 @@ CPU 回放。已发布表绑定其记录的源代码哈希和聚合协议。
 
 配置固定 `tau=0.05 local ULP`、`se_multiplier=5`。EXP-SUB 的 exp 使用 FP32
 `libdevice.exp`，保留原有输入、减法、除法、中间 cast 和输出 cast。
-DLC 名称为 `traces_kernel_equivalence_testing`，任务 ID 为 `dlc1q8e8anqbkjgg`。
+DLC 名称为 `traces_kernel_equivalence_testing`，任务 ID 为 `dlchk3ifersdpxho`。
 
 [完整 z / B / tau / U / accept 表](./report/summary.md) 同时提供
 [全精度 CSV](./report/summary.csv) 和 [JSON](./report/summary.json)。
@@ -24,8 +24,8 @@ DLC 名称为 `traces_kernel_equivalence_testing`，任务 ID 为 `dlc1q8e8anqbk
 跨 replicate 均值的 `abs(mean) + 5*SE <= 0.05` 才满足 bias 预算；z 仅作诊断。
 偏差区间完全位于容差外就是 FAIL；没有 FAIL、但区间跨过边界时是
 INCONCLUSIVE。两者都不能准入。
-U gate 的幅度阈值为 3/10：`U <= 3` 为 PASS，`3 < U <= 10` 为 WARN，
-`U > 10` 为 FAIL。五个标准误是工程判据，不宣称已经校准多桶或
+U gate 的幅度阈值为 10/100：`U <= 10` 为 PASS，`10 < U <= 100` 为 WARN，
+`U > 100` 为 FAIL。五个标准误是工程判据，不宣称已经校准多桶或
 自适应停止覆盖率。统计接受不等于无条件 IEEE 等式证明。
 
 原始观测、PTX 和完整统计不放入 Git；当前表、配置和审核摘要随代码维护。

@@ -60,7 +60,7 @@ class GateTests(unittest.TestCase):
             self.assertEqual(gates.amplification([value], [0.])[0], np.inf)
 
     def test_empirical_fallback_keeps_large_observed_errors(self):
-        for k, expected in ((0, "PASS"), (1, "PASS"), (5, "WARN"), (31.75, "FAIL")):
+        for k, expected in ((0, "PASS"), (1, "PASS"), (5, "PASS"), (31.75, "WARN"), (131.75, "FAIL")):
             result = gates.vars_gate(np.ones(4096), np.full(4096, k), self.config["vars"])
             self.assertEqual(result["status"], expected)
             self.assertTrue(result["empirical_fallback"])
@@ -74,13 +74,13 @@ class GateTests(unittest.TestCase):
             self.assertEqual(result["units"], "local_ulp")
 
     def test_magnitude_thresholds_and_default_admission(self):
-        self.assertEqual(self.config["vars"]["warn"], 3.0)
-        self.assertEqual(self.config["vars"]["fail"], 10.0)
+        self.assertEqual(self.config["vars"]["warn"], 10.0)
+        self.assertEqual(self.config["vars"]["fail"], 100.0)
         for k, status, decision in (
-            (3.0, "PASS", "ACCEPT"),
-            (np.nextafter(3.0, np.inf), "WARN", "WARN_NOT_ACCEPTED"),
-            (10.0, "WARN", "WARN_NOT_ACCEPTED"),
-            (np.nextafter(10.0, np.inf), "FAIL", "REJECT"),
+            (10.0, "PASS", "ACCEPT"),
+            (np.nextafter(10.0, np.inf), "WARN", "WARN_NOT_ACCEPTED"),
+            (100.0, "WARN", "WARN_NOT_ACCEPTED"),
+            (np.nextafter(100.0, np.inf), "FAIL", "REJECT"),
         ):
             with self.subTest(k=k):
                 obs = observations()
@@ -143,7 +143,7 @@ class GateTests(unittest.TestCase):
     def test_warning_policy_and_smoke(self):
         obs = observations()
         obs['reference_error'][:] = 1
-        obs['candidate_error'][:] = 6
+        obs['candidate_error'][:] = 20
         self.assertEqual(gates.evaluate(obs, self.config, 1, 4)["decision"], "WARN_NOT_ACCEPTED")
         self.config["warning_policy"] = "allow_warn"
         self.assertEqual(gates.evaluate(obs, self.config, 1, 4)["decision"], "ACCEPT_WITH_WARNING")

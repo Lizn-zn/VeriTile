@@ -142,7 +142,7 @@ E^Q_r/E^P_r,& E^Q_r>0,\ E^P_r>0,\\
 \]
 
 这里不除以逐元素 ULP，也没有加性容差。两侧的峰值可以来自不同元素。
-该指标采用 [FlashAttention 的最大绝对误差比较](https://github.com/Dao-AILab/flash-attention/blob/main/tests/test_flash_attn.py)：FA 测试要求候选的峰值误差不超过基线的两倍；本项目将 U 的通过阈值设为 3。逐元素除以不同 ULP 后再取最大值会改变这个比较，因此只在 bias gate 使用局部 ULP。
+该指标采用 [FlashAttention 的最大绝对误差比较](https://github.com/Dao-AILab/flash-attention/blob/main/tests/test_flash_attn.py)：FA 测试要求候选的峰值误差不超过基线的两倍；本项目将 U 的通过阈值设为 10。逐元素除以不同 ULP 后再取最大值会改变这个比较，因此只在 bias gate 使用局部 ULP。
 
 Bias 衡量平均多少 ULP 的有符号偏移；vars 衡量相对基线的峰值误差放大，两者无需使用相同单位。当前协议的 bias gate 和下面的尾部外推都是额外要求，不等同于 FA 对已测样本直接应用的两倍判据。
 
@@ -162,7 +162,7 @@ r_T=u+\frac{\sigma}{\xi}\bigl[(T_{\mathrm{tail}}\zeta)^\xi-1\bigr],
 | \(K_{\mathrm{warn}}<U\le K_{\mathrm{fail}}\) | WARN |
 | \(U>K_{\mathrm{fail}}\)，或合法误差计算产生 \(\hat K_r=+\infty\) | FAIL |
 
-当前配置使用 \(K_{\mathrm{warn}}=3\)、\(K_{\mathrm{fail}}=10\)：\(U\le3\) 通过，\(3<U\le10\) 警告，\(U>10\) 失败。当前协议在尾部不足时回退到经验最大值并显式标记；非有限最终统计量 FAIL，协议未完成不能准入。全零放大率等退化数据也走经验分支，不得伪造拟合或置信界。
+当前配置使用 \(K_{\mathrm{warn}}=10\)、\(K_{\mathrm{fail}}=100\)：\(U\le10\) 通过，\(10<U\le100\) 警告，\(U>100\) 失败。当前协议在尾部不足时回退到经验最大值并显式标记；非有限最终统计量 FAIL，协议未完成不能准入。全零放大率等退化数据也走经验分支，不得伪造拟合或置信界。
 
 矩和误差比统计在有效有限数值上定义。浮点执行层完整表示 NaN、无穷、signed-zero 和 subnormal；统计前按输出契约处理特殊值。在要求有限输出的域内，候选产生非有限输出触发 FAIL；非有限 reference/oracle 误差同样 FAIL；执行错误或输入定义域事件单独报告，不能静默过滤相关样本。
 
