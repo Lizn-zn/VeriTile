@@ -88,4 +88,37 @@ instance : Spec.ProgramSyntax IO₃ where
   numerical := Equivalent₃
   sameContext := fun lhs rhs => lhs = rhs
 
+/-- One input row and one output, under an explicit reduction profile. -/
+structure IO₁ where
+  io : KernelIO₁
+  profile : Profile
+  domain : Schedules → GuardExpression.Condition
+
+def Equivalent₁ (R : Spec.Assumptions GuardedFragment) (lhs rhs : IO₁) : Prop :=
+  IO₁PrivateScratch lhs.io ∧ IO₁PrivateScratch rhs.io ∧
+  ∀ (α : Type) [Inhabited α] (M : Algebra α) (D : Domain α), Models R M D →
+    ∀ (plans : Schedules) (s : State α), (lhs.domain plans).Holds M D s →
+      ∃ a b, Structural.exec (lhs.profile.algebra M plans) lhs.io.kernel s = some a ∧
+        Structural.exec (rhs.profile.algebra M plans) rhs.io.kernel s = some b ∧
+        (∀ i : Fin lhs.io.Bout,
+          a.mem lhs.io.out (lhs.io.write (s.pids 0) + i.val) =
+            b.mem rhs.io.out (rhs.io.write (s.pids 0) + i.val)) ∧
+        IO₁Frame lhs.io s a ∧ IO₁Frame rhs.io s b
+
+theorem Equivalent₁.ofStructural (R : Spec.Assumptions GuardedFragment) {lhs rhs : IO₁}
+    (hp : lhs.profile = rhs.profile) (h : Structural.IO₁Equiv lhs.io rhs.io) :
+    Equivalent₁ R lhs rhs := by
+  refine ⟨h.1, h.2.1, ?_⟩
+  intro α _ M _ _ plans s _
+  simpa only [← hp] using h.2.2 α (lhs.profile.algebra M plans) s
+
+instance : Spec.ProgramSyntax IO₁ where
+  Statement := GuardedFragment
+  Signature := IO₁Signature × Profile × (Schedules → GuardExpression.Condition)
+  signature p := (io₁Signature p.io, p.profile, p.domain)
+  body p := [⟨[], p.io.kernel.surfaceBody⟩]
+  structural := some (fun _ _ => False)
+  numerical := Equivalent₁
+  sameContext := fun lhs rhs => lhs = rhs
+
 end VeriTile.Triton.FP.Scheduled

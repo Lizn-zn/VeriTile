@@ -39,7 +39,7 @@ formats. It supplies no fp64 instance.
 | Case | Numerical prerequisites still to settle | Implementation work after admission |
 |---|---|---|
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
-| `SoftmaxStable` | The fp32 EXP-SUB instance is admitted; bind the tested libdevice implementation at the exact precision. This admission does not cover a tl.exp implementation. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
+| `SoftmaxStable` | EXP-SUB is admitted for libdevice.exp; the original tl.exp primitive still needs matching admission. | The scalar-derived normalization, original executions and scheduled IO/domain contract are connected conditionally on that primitive. Max, exp and the bf16 stores are retained. |
 | `StableLogSumExp` | The fp32 libdevice EXP-SUB instance is admitted; select a compatible accepted LOG-EXP precision instance. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
 | `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Relate the now-proved opaque loop recurrence to the batch expression using scalar atoms. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
 | `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | Both original kernels are compared under arbitrary valid fp32 schedules; the public IO objects now bind the execution profile and syntactic iteration/rewrite domains. Count admission still blocks the completed specification. |
@@ -69,6 +69,29 @@ These are reusable prerequisites, not another completed example. The original
 `SoftmaxStable` kernels still use `tl.exp`; the accepted EXP-SUB experiment uses
 `libdevice.exp`. Selecting a libdevice variant or obtaining evidence for the
 original intrinsic remains necessary before the full FP equivalence is closed.
+
+### Original stable softmax connection
+
+`Float/SoftmaxShift` derives the shifted exponential row's common factor and
+then its normalized output using the scalar arithmetic theory and an explicit
+sum tree. `IntrinsicExpSub` is an explicit, still-unadmitted scalar obligation
+for the original `tl.exp` symbol. No softmax or reduction equality is a premise.
+The shift may be any opaque finite value: the derivation needs no law for max.
+
+`support/SoftmaxStableExecution` independently copies both original kernels.
+`SoftmaxStableContract.original_runs_under_exp` connects their successful runs,
+all bf16 output cells and memory frames to this conditional derivation. Row
+length remains symbolic and positive because the original max rejects an empty
+axis; input/output aliasing is allowed. The one-input scheduled IO signature
+retains precision, layout and the syntactic finite/nonzero domain, including
+intermediate sums and reciprocals. Domain syntax contains no equality premise.
+
+The regression checks source identity, independence from Correct, empty-row
+failure, in-place execution, contract satisfiability and the nonzero boundary.
+Its rational fixtures are logical checks, not experimental evidence. An opaque
+whole-kernel premise prints `unresolved FP proof`; it cannot be reported as
+having no atomic assumptions. This connection leaves the completed FP count at
+13 until matching intrinsic admission is available.
 
 ### Implemented loop execution
 
@@ -444,6 +467,7 @@ python3 scripts/export_supplemental_rules.py --trust-report --check
 python3 -m unittest scripts.test_export_supplemental_rules scripts.test_fp_supplemental
 python3 -m unittest scripts.test_fp_scalar_arithmetic
 python3 -m unittest scripts.test_fp_control scripts.test_fp_dual_output scripts.test_fp_layernorm
+python3 -m unittest scripts.test_fp_softmax_stable
 lake build TritonBenchSpecExamples
 ```
 

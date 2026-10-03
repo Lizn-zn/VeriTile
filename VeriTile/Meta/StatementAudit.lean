@@ -244,6 +244,7 @@ private def fpProofType (name : Name) : Bool :=
     `VeriTile.Triton.FP.Guarded.Equivalent₁ₓ₂,
     `VeriTile.Triton.FP.Scheduled.Equivalent₁ₓ₂,
     `VeriTile.Triton.FP.Scheduled.Equivalent₃,
+    `VeriTile.Triton.FP.Scheduled.Equivalent₁,
     `VeriTile.Triton.FP.Structural.CellRelated,
     `VeriTile.Triton.FP.Structural.ValueRelated].contains name
 
