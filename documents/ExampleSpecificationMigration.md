@@ -199,9 +199,9 @@ The checks cover:
   and positive block size. Countermodels keep max input permutations distinct
   and reject empty max reductions; the one-input interface also protects output
   windows, private scratch and successful-execution requirements.
-- Row-wise sum's original mathematical projection, its conditional FP proof at
-  arbitrary dimensions including empty rows, and output identifying add_commute
-  plus the unresolved association premise.
+- Row-wise sum's original mathematical projection, its FP proof under the
+  admitted scalar assumptions at arbitrary dimensions including empty rows,
+  and output identifying only add_commute and add_assoc.
   Reduction-tree countermodels reject removing a zero leaf, erasing precision
   or dropping repeated casts. Opaque sum interpretation does not permit input
   permutations; numerical IO steps still reject failed executions and dtype
