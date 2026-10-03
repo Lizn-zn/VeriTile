@@ -42,7 +42,7 @@ formats. It supplies no fp64 instance.
 | `SoftmaxStable` | The fp32 EXP-SUB instance is admitted; bind the tested libdevice implementation at the exact precision. This admission does not cover a tl.exp implementation. | Derive the reduction and division rewrites; exp/max operations cannot be erased. |
 | `StableLogSumExp` | The fp32 libdevice EXP-SUB instance is admitted; select a compatible accepted LOG-EXP precision instance. LOG-MUL has domain events under the configured distribution. | Derive the sum factorization and log transformation from these atoms. |
 | `OnlineSoftmax` | Scalar max identities, EXP-NEG-INF-SUB and fp32 EXP-SUB are admitted; EXP-SUB still needs a compatible libdevice use-site binding. | Relate the now-proved opaque loop recurrence to the batch expression using scalar atoms. The current online source has no output store, so it cannot be presented as a complete stored-output kernel equivalent to the batch kernel. |
-| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | The original online loop is related to its explicit prefix tree conditionally on those laws. Compare with the batch reduction schedule and expose the per-iteration domains in the final specification. |
+| `Welford` | Basic identity, selected inverse-cancellation laws and the fp32 CANCEL instance are admitted under the current profile; the two integer-count conversion laws remain unadmitted. | Both original kernels are compared conditionally under arbitrary valid fp32 reduction schedules. Bind that scheduled execution model and all iteration/rewrite domains in the final specification. |
 | `FusedLayerNorm` | The Welford prerequisites at the actual arithmetic precision. | Derive the statistics replacement and preserve the common normalization, affine operations and bf16 output conversion. |
 
 This table lists prerequisites, not newly available assumptions. It does not
@@ -203,8 +203,8 @@ and the online variance is `1`. Thus the initialization relation
 has been obtained. Neither conversion relation is currently admitted.
 
 The append step alone does not establish the full original-kernel equivalence.
-Initialization and loop induction are connected below; count conversion
-admission and comparison with the batch kernel's reduction schedule remain.
+Initialization, loop induction and batch-schedule comparison are connected
+below; count conversion admission and the final public contract remain.
 No original source kernel or experiment rule was changed for this derivation.
 
 ### Literal-zero initialization and singleton statistics
@@ -282,8 +282,51 @@ check, not a GPU result or an IEEE claim.
 
 This does not add a completed FP example. The conversion premises must still
 come from admitted atomic relations; no such admission is manufactured here.
-The prefix tree must also be related to the batch kernel's actual reduction
-schedule, and the final public domain must cover all iteration guards.
+The schedule comparison below connects the prefix tree to the batch kernel;
+the final public contract must still bind its execution model and all guards.
+
+### Scalar-derived comparison of arbitrary reduction schedules
+
+`Float/ReductionSchedule` generates a deterministic rewrite path from each
+tree to a common sorted lane order. Its constructors are only congruence,
+composition, reversal and the scalar addition laws. Padding is present in the
+original trees and removed only through explicit add-zero steps. The proof
+uses the admitted fp32 add-commute, add-assoc and add-zero instances; no
+reduction or statistics relation is added to the numerical registry.
+
+Each path computes a list of the exact scalar operands used by its rewrites.
+`ScheduleDomain` requires those values to be finite, including transformed
+intermediate trees. It does not quantify over every possible regrouping.
+`plans_value` compares arbitrary valid plans, including permutations and
+different padding counts. The validity proof prevents dropped or duplicated
+input lanes from entering the comparison.
+
+`Float/WelfordSchedule` applies this result separately to the input sum, count
+ones and squared deviations. It derives both statistics, binds the batch count
+to the original integer conversion from the two primitive count premises,
+and transfers the loop induction to the batch schedule.
+
+`bench/examples/support/WelfordComparison.original_runs` now compares both
+original kernels under an explicit fp32 execution model. The model resolves
+default precision and expands each sum using its supplied valid schedule;
+casts, integer conversions and all non-sum operations remain unchanged. The
+theorem proves successful runs, equality of both bf16 output windows and both
+memory frames. It accepts only primitive count obligations and value-domain
+predicates in addition to the admitted scalar theory, never a supplied
+reduction, statistics or whole-kernel equality.
+
+The schedule fixture checks that finite original trees do not by themselves
+discharge the selected path: a generated operand can leave the finite domain.
+It also checks padding dependence in an arbitrary algebra, rejects duplicate
+input lanes, and confirms that explicit fp64 reductions remain opaque. The
+ordinary rational fixture satisfies the schedule conditions for arbitrary
+valid plans, so these predicates are not vacuous.
+
+The comparison remains conditional rather than a completed public FP example.
+The count relations still need admission, and the final `≡[R]` interface must
+bind this scheduled execution model plus all loop and rewrite domains. The
+existing guarded IO relation runs an arbitrary opaque algebra directly and
+cannot silently identify its `reduceSum` field with an addition tree.
 
 ## Constraints on the supplemental atom set
 

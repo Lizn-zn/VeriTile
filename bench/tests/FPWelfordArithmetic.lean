@@ -7,6 +7,7 @@ import VeriTile.Triton.Float.WelfordReduction
 import VeriTile.Triton.Float.WelfordAppend
 import VeriTile.Triton.Float.WelfordInit
 import VeriTile.Triton.Float.WelfordInduction
+import VeriTile.Triton.Float.WelfordSchedule
 import VeriTile.Triton.Float.ScalarReduction
 import bench.examples.support.WelfordExecution
 import VeriTile.Meta.StatementAudit
@@ -274,6 +275,12 @@ theorem ordinary_iteration_domain :
       FP.WelfordInduction.tree, FP.WelfordAppend.appendTree, FP.WelfordAppend.liftTree,
       FP.ScalarReduction.value, FP.Welford.nextCount, zero, FP.ScalarArithmetic.one, add] at *
 
+-- Schedule domains are satisfiable in the same ordinary arithmetic model
+-- for any valid trees, including permutations and different padding counts.
+theorem ordinary_schedule_domain (xs : Fin N → ℚ) (a b : FP.Equational.ReductionPlan N) :
+    FP.WelfordSchedule.StatisticsDomain ordinaryCountModel domain xs a b := by
+  constructor <;> constructor <;> intro t _ <;> trivial
+
 -- The first sample may meet all initialization guards even though the next
 -- sample leaves the domain. The loop theorem must not inspect only its base.
 example : FP.WelfordInit.InitDomain ordinaryCountModel boundedDomain 1 ∧
@@ -337,5 +344,6 @@ example (N : Nat) :
 #axiomsClean WelfordFPExecution.fp32_online_statistics_run
 #axiomsClean intermediate_count_gap
 #axiomsClean ordinary_iteration_domain
+#axiomsClean ordinary_schedule_domain
 
 end FPWelfordArithmeticTests

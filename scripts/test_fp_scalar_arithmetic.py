@@ -12,7 +12,7 @@ class ScalarArithmeticTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ['lake', 'build', 'VeriTile.Triton.Float.ScalarReduction',
-             'VeriTile.Triton.Float.WelfordInduction', 'bench.examples.support.WelfordExecution'], cwd=ROOT,
+             'VeriTile.Triton.Float.WelfordInduction', 'bench.examples.support.WelfordComparison'], cwd=ROOT,
             text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -34,6 +34,11 @@ class ScalarArithmeticTests(unittest.TestCase):
 
     def test_welford_steps_centering_and_count_conversion_boundary(self):
         result = self.lean((ROOT / 'bench/tests/FPWelfordArithmetic.lean').read_text())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn('warning:', result.stdout)
+
+    def test_schedule_rewrite_domains_padding_and_original_kernel_comparison(self):
+        result = self.lean((ROOT / 'bench/tests/FPReductionSchedule.lean').read_text())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn('warning:', result.stdout)
 
