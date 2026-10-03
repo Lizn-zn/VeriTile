@@ -21,8 +21,9 @@ KERNELS = supplemental.KERNELS
 SOURCES = [*original.SOURCES, Path(__file__).resolve(), Path(supplemental.__file__),
            KERNELS, supplemental.CATALOG]
 ACCEPTED = original.ACCEPTED
-BUNDLE_VERSION = "scalar-supplement-5"
+BUNDLE_VERSION = "scalar-supplement-6"
 gates = original.gates
+domains = original.domains
 NumericEvent = original.NumericEvent
 sha, write_json, read_json = original.sha, original.write_json, original.read_json
 load_module, seed_for, shapes_for = original.load_module, original.seed_for, original.shapes_for
@@ -43,10 +44,12 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
         write_json(record_path, {**base, "state": "UNSUPPORTED", "decision": "UNSUPPORTED", "reason": reason})
         return "UNSUPPORTED"
     observations = {key: [] for key in gates.OBSERVATIONS}
+    valid_counts = []
     seed = seed_for(profile, fmt, rule)
     lowerings = None
     started = time.monotonic()
     try:
+        stop = None
         generator = torch.Generator(device="cuda").manual_seed(seed)
         dtype = {"bf16": torch.bfloat16, "fp32": torch.float32, "fp64": torch.float64}[fmt["input"]]
         limit = ((profile["replicates_max"] + profile["batch"] - 1) // profile["batch"]) * profile["batch"]
@@ -55,8 +58,10 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
             shapes = shapes_for(profile, rule)
             inputs = [(torch.randn(shapes[key], device="cuda", dtype=torch.float64, generator=generator)
                        * dist["std"] + dist["mean"]).to(dtype) for key in ("a", "b", "c")]
-            if any(not bool(torch.isfinite(x).all()) for x in inputs):
-                raise NumericEvent("INCONCLUSIVE", "input quantization produced nonfinite values")
+            valid = domains.mask(torch, rule, inputs)
+            valid_counts.append(int(valid.sum().item()))
+            if valid_counts[-1] == 0:
+                continue
             exact = oracle(torch, rule, inputs)
             (reference, candidate), compiled, errors = launch_pair(torch, triton, kernels, rule, inputs, profile, fmt)
             if lowerings is None:
@@ -72,22 +77,25 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
                 write_json(record_path, base)
             elif any([sha(p.encode()) for p in compiled[side]] != lowerings[side] for side in lowerings):
                 raise ValueError("compiled lowering changed within one instance")
-            sample = supplemental.observe(torch, reference, candidate, exact, fmt, errors)
+            sample = supplemental.observe(torch, reference, candidate, exact, fmt, errors, valid)
             for key in observations:
                 observations[key].append(sample[key])
             if replicate == 0 or (replicate + 1) % 32 == 0:
                 print(f"  {fmt['name']} {rule}: {replicate + 1}/{limit} ({time.monotonic() - started:.1f}s)", flush=True)
-            if (replicate + 1) % profile["batch"] == 0:
+            if len(observations["delta"]) % profile["batch"] == 0:
                 var, stop = gates.checkpoint(observations, profile["gates"]["vars"],
                                              profile["replicates"], profile["replicates_max"], profile["batch"])
                 print(f"  magnitude: {var['status']} U={var['upper']} stop={stop}", flush=True)
                 if stop:
                     break
+        if stop is None:
+            raise NumericEvent("INCONCLUSIVE", "insufficient nonempty replicates within the draw budget")
         arrays = {key: np.asarray(values, dtype=np.float64) for key, values in observations.items()}
         count = len(arrays["delta"])
         result = gates.evaluate(arrays, profile["gates"], seed, count, smoke)
         result.update(stopping_reason=stop, completed_replicates=count)
-        np.savez_compressed(directory / "observations.npz", **arrays)
+        np.savez_compressed(directory / "observations.npz", **arrays,
+                            valid_samples=np.asarray(valid_counts, dtype=np.int64))
         base.update(state="COMPLETE", result=result, decision=result["decision"],
                     observations_sha256=sha((directory / "observations.npz").read_bytes()),
                     seconds=time.monotonic() - started)
@@ -97,6 +105,7 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
     except Exception as error:
         base.update(state="ERROR", decision="NOT_EVALUATED", reason=f"{type(error).__name__}: {error}",
                     completed_replicates=len(observations["delta"]))
+    base["sampling"] = domains.summary(valid_counts, profile["shape"])
     write_json(record_path, base)
     return base["decision"]
 
@@ -204,6 +213,7 @@ def replay(bundle):
                 # Unfinished/error/domain-event labels are never imported as accepted rules.
                 rows.append({"rule_id": rule, "format": fmt["name"], "decision": "NOT_EVALUATED",
                              "state": record["state"], "reported_decision": record["decision"],
+                             "sampling": record.get("sampling", {}),
                              "reason": record.get("reason", "incomplete protocol")})
                 continue
             if supplemental.unsupported(rule, fmt):
@@ -226,6 +236,7 @@ def replay(bundle):
             count = record["result"].get("completed_replicates")
             if type(count) is not int or count < 2:
                 raise ValueError(f"invalid completed replicate count: {name}")
+            sampling = domains.unpack(arrays, record, profile, count)
             if (set(arrays) != gates.OBSERVATIONS or any(a.dtype != np.float64 for a in arrays.values())
                     or arrays["delta"].shape != (count, 1)
                     or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error"))):
@@ -238,7 +249,7 @@ def replay(bundle):
                 raise ValueError(f"stored decision/statistics disagree with replay: {name}")
             row = {"rule_id": rule, "format": fmt["name"], "instance_key": record["instance_key"],
                    "decision": result["decision"], "bias": result["bias"]["status"], "vars": result["vars"]["status"],
-                   "replicates": count, "stopping_reason": stop,
+                   "replicates": count, "stopping_reason": stop, "sampling": sampling,
                    "empirical_fallback": result["vars"]["empirical_fallback"],
                    "statistics": result, "relation": config["relation"]}
             rows.append(row)
@@ -277,6 +288,8 @@ def publish_report(bundle, report, output):
             "decision": r.get("reported_decision", r["decision"]),
             "state": r.get("state", "COMPLETE" if stats else "PENDING"), "replayed": stats is not None,
             "reason": r.get("reason", ""),
+            "valid_samples": r.get("sampling", {}).get("valid_samples"),
+            "skipped_samples": r.get("sampling", {}).get("skipped_samples"),
         })
     table = {"rows": rows, "total": len(rows), "states": dict(Counter(r["state"] for r in rows)),
              "accepted": len(report["accepted"]), "replayed": sum(r["replayed"] for r in rows),

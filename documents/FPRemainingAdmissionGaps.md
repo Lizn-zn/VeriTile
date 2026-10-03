@@ -29,8 +29,8 @@ current reports. This is a pending-run checklist, not an admission table.
   integer-count experiment.
 
 Keep the intrinsic exp-sub result distinct from the existing libdevice result.
-The two integer-conversion candidates still need experiment support. This
-checklist does not change the runner, sampling configuration or admitted rules.
+The two integer-conversion candidates still need experiment support. Listing
+these pending experiments does not admit new rules.
 
 ### Already attempted, but not admitted
 
@@ -38,18 +38,20 @@ checklist does not change the runner, sampling configuration or admitted rules.
   `log(a * b) = log(a) + log(b)` requires `a > 0` and `b > 0`. Independent
   Normal(1, 1) operands can be negative; for example, `a = -1, b = 2` makes
   both `log(a)` and `log(a * b)` invalid as finite real logarithms. The runner
-  detects any nonpositive operand and stops this instance before a completed
-  two-gates decision. It does not take absolute values, discard samples or
-  resample them. This is an input-domain mismatch, not a measured bias/vars
-  rejection. A future run needs an explicitly chosen positive-input sampling
-  policy; none has been selected here.
+  used to detect any nonpositive operand and stop this instance before a
+  completed two-gates decision. This was an input-domain mismatch, not a
+  measured bias/vars rejection. The user has now selected skipping out-of-domain
+  tuples: the runner retains Normal(1, 1) draws and the configured shape, and
+  computes both gates on the same positive-input subset without replacement
+  sampling. Valid/skipped counts are recorded. **Rerun LOG-MUL/fp32 under this
+  policy**; the old report is unchanged and still supplies no admission.
 - **LOG-EXP, fp32:** the run completed; the bias gate is `INCONCLUSIVE`
   (`B` approximately `0.06895381`, threshold `0.05`) and the vars gate passes.
   It remains unadmitted under `pass_only`. The accepted bf16-input/output row
   cannot supply the required uncast fp32 relation.
 
 See the [supplemental report](../experiments/floating_point/supplement/report/summary.md)
-and the [LOG-MUL domain check](../scripts/supplement_numerics.py).
+and the [input-domain masks](../scripts/numerical_domains.py).
 
 ## Checked algebraic evidence
 

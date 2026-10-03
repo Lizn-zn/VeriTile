@@ -18,7 +18,7 @@ else:
     import check_numerics as experiment
 
 COLUMNS = ("rule", "format", "replicates", "z", "B", "tau", "U", "bias", "vars", "u_kind",
-           "accept", "decision", "state", "replayed", "reason")
+           "accept", "decision", "state", "replayed", "reason", "valid_samples", "skipped_samples")
 DEFINITIONS = {
     'checker_version': experiment.gates.VERSION,
     'bias_units': 'per-element output-format ULP at the rounded golden value; normalize before averaging',
@@ -56,7 +56,8 @@ def collect(root, profile, cache=None, verify_all=False):
     expected = {(rule, fmt["name"]): {
         "rule": rule, "format": fmt["name"], "replicates": None, "z": None, "B": None, "tau": None, "U": None,
         "bias": None, "vars": None, "u_kind": None, "accept": None,
-        "decision": "NOT_EVALUATED", "state": "PENDING", "replayed": False, "reason": "",
+            "decision": "NOT_EVALUATED", "state": "PENDING", "replayed": False, "reason": "",
+            "valid_samples": None, "skipped_samples": None,
     } for rule in profile["rules"] for fmt in profile["formats"]}
     seen = set()
     for manifest_path in sorted(root.glob('*/manifest.json')):
@@ -110,6 +111,8 @@ def collect(root, profile, cache=None, verify_all=False):
                     raise ValueError(f"record identity mismatch: {identity}")
                 row.update(state=record['state'], decision=record['decision'],
                            replicates=record.get('completed_replicates'), reason=record.get('reason', ''))
+                row.update({key: record.get('sampling', {}).get(key)
+                            for key in ('valid_samples', 'skipped_samples')})
                 if record['state'] != 'COMPLETE':
                     if record['state'] in {'UNSUPPORTED', 'NUMERIC_EVENT', 'ERROR'}:
                         row['accept'] = False
@@ -167,7 +170,8 @@ def publish(root, table):
     write_current(root / 'summary.csv', output.getvalue())
     lines = ['# Numerical rule results', '',
              f"{table['total']} instances; {table['replayed']} replayed; {table['accepted']} accepted.", '',
-             'Each replicate contributes one mean across its IID scalar instances; R counts replicates.',
+             'Each nonempty replicate contributes one mean across its in-domain IID scalar instances; R counts these replicates.',
+             'Out-of-domain input tuples are skipped without resampling; valid/skipped counts describe scalar tuples, not R.',
              'z = |mean| / SE across replicate means (diagnostic only). U uses the configured magnitude gate.',
              'B = abs(mean) + se_multiplier * SE; bias PASS requires B <= tau, in local ULPs.',
              'Bias FAIL means an interval lies outside tolerance; INCONCLUSIVE means a boundary is crossed.',
@@ -179,14 +183,16 @@ def publish(root, table):
              '`empirical_max` means an observed maximum, not a fitted tail confidence bound.',
              'Acceptance is statistical under the configured profile, not proof of strict floating-point equivalence.',
              'Accept is pending until CPU replay. Missing statistics are shown as —, never zero.', '',
-             '| Rule | Format | R | z | B (ULP) | tau (ULP) | U | U type | Bias | Vars | Accept | State |',
-             '|---|---|---:|---:|---:|---:|---:|---|---|---|---|---|']
+             '| Rule | Format | R | z | B (ULP) | tau (ULP) | U | U type | Bias | Vars | Accept | State | Valid | Skipped |',
+             '|---|---|---:|---:|---:|---:|---:|---|---|---|---|---|---:|---:|']
     for r in table['rows']:
         accept = 'yes' if r['accept'] is True else 'no' if r['accept'] is False else 'pending'
         values = [r['rule'], r['format'], str(r['replicates']) if r['replicates'] is not None else '—',
                   display_number(r['z']), display_number(r['B']), display_number(r['tau']),
                   display_number(r['U']), r['u_kind'] or '—',
                   r['bias'] or '—', r['vars'] or '—', accept, r['state']]
+        values.extend(str(r[key]) if r.get(key) is not None else '—'
+                      for key in ('valid_samples', 'skipped_samples'))
         lines.append('| ' + ' | '.join(values) + ' |')
     notes = [r for r in table['rows'] if r['reason'] and r['reason'] != 'awaiting bundle replay']
     if notes:

@@ -27,13 +27,13 @@ class OracleTests(unittest.TestCase):
         expected = torch.tensor([2.0**-133, 2.0**-7, 2.0**-6, 2.0**-8, 2.0**-133], dtype=torch.float64)
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
 
-    def test_domain_is_not_silently_conditioned(self):
+    def test_domain_mask_skips_invalid_tuples(self):
         import torch
         inputs = [torch.tensor([-1.0, 1]), torch.tensor([0.0, 1]), torch.ones(2)]
         for rule in ("SQRT-RSQRT", "DIV-RCP"):
-            with self.assertRaises(experiment.NumericEvent) as error:
-                experiment.oracle(torch, rule, inputs)
-            self.assertEqual(error.exception.status, "INCONCLUSIVE")
+            valid = experiment.domains.mask(torch, rule, inputs)
+            self.assertEqual(valid.tolist(), [False, True])
+            self.assertTrue(bool(torch.isfinite(experiment.oracle(torch, rule, inputs)[valid]).all()))
 
     def test_nonfinite_candidate_reference_and_oracle_fail(self):
         import torch

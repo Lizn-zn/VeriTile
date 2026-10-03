@@ -48,8 +48,8 @@ python3 scripts/check_numerics_supplement.py report Logs/fp-supplement --output-
 ```
 
 先确认 smoke 没有 `ERROR` 再运行正式实验。Smoke 用 `32×33`、4 次整张量采样，
-即使 PASS 也只记为 `SMOKE_ONLY`，不准入。`LOG-MUL` 的域事件及 fp64 profile
-中不适用的关系是预期状态。正式实验不会自动缩小 shape。
+即使 PASS 也只记为 `SMOKE_ONLY`，不准入。`LOG-MUL` 跳过非正输入；fp64 profile
+中不适用的关系仍记为 `UNSUPPORTED`。正式实验不会自动缩小 shape。
 
 中断后，在相同代码、配置和 GPU/软件环境下继续：
 
@@ -134,7 +134,7 @@ oracle 仍是受信数值计算，不是精确实数证明。
 
 误差尺度固定为每个元素 golden 值在输出 dtype 下的 ULP。先对每个元素计算
 `(candidate-reference)/ULP(golden)`，再对本次 replicate 的全部同分布标量实例
-取一个均值。保存的 delta 形状为 `[R, 1]`，跨 R 个 replicate 均值计算标准误
+中的有效样本取一个均值。保存的 delta 形状为 `[R, 1]`，跨 R 个非空 replicate 均值计算标准误
 和诊断 z，偏差区间须落在 ±tau 内。不将元素数计入 R；具有不同分布或语义的
 channel/head 不能直接沿用这种合并方式。
 幅度 gate 分别取两侧最大绝对 oracle 误差 Er、Ec，计算 `K = Ec/Er` 并拟合 U。
@@ -157,10 +157,26 @@ python3 scripts/check_numerics_supplement.py run --rules ADD-ZERO,MUL-ONE,DIV-ON
 
 ## 定义域与后续证明
 
-只按指定分布采样，不添加非对称探针，不取绝对值、截断或重采样。
-**默认 Normal(1,1) 会让 log-mul 很容易在首个 replicate 遇到非正输入**，
-该实例将是 `INCONCLUSIVE`，不是通过；需要另一组分布时由用户显式修改配置并开新实验。
-采样到零分母也记录域事件。实际计算产生非有限输出/误差则由原 gates 拒绝。
+只按指定分布采样，在输入量化后跳过定义域外的标量元组：log-mul 要求
+`a > 0 && b > 0`，除法要求分母非零，参与运算的输入还须有限。
+两侧表达式与 oracle 使用同一份输入掩码统计。原始输入和 kernel 的完整 shape
+保持不变，不取绝对值，不补样或重采样。统计对象就是指定分布限制在该关系
+定义域内的样本；有效输入上产生的非有限输出/误差仍由 gates 拒绝。
+
+每个非空 replicate 只在有效样本上求均值和误差最大值，空 replicate 跳过，
+不能当作零误差。R 只计非空 replicate；向上取整到 batch 的 `replicates_max`
+同时限制抽样次数，预算内有效 replicate 不足则为 `INCONCLUSIVE`。
+NPZ 的 `valid_samples` 保存每次抽样的有效元组数，record 保存尝试次数、空批次、
+有效及跳过总数，报告的 Valid / Skipped 两列显示元组总数。
+
+新 bundle 版本为 `scalar-supplement-6`，须使用新的输出目录。已提交的 PR #11
+报告仍保留旧策略及其 `NUMERIC_EVENT` 结果，不能当作新策略已通过的证据。
+导出器保留对该历史报告准确源码标识的识别。下一轮可单独重跑：
+
+```bash
+python3 scripts/check_numerics_supplement.py run --rules LOG-MUL --formats fp32 --output Logs/fp-log-mul-domain
+python3 scripts/check_numerics_supplement.py report Logs/fp-log-mul-domain --output-dir Logs/fp-log-mul-domain-report
+```
 
 准入的是该实验对应的原子假设；带非零或正值要求的关系在 Lean 中必须保留这些要求。
 exp 中间值的有限性、log 输入的正性等适用条件仍需在使用处处理。
@@ -182,6 +198,7 @@ sub-zero 等可以从已选加法/CANCEL 和 add-zero 推导的关系，不重�
 
 ```bash
 python3 -m unittest scripts.test_numerics_supplement -v
+python3 -m unittest scripts.test_numerical_domains -v
 TRITON_INTERPRET=1 python3 -m unittest scripts.test_numerics_supplement -v
 python3 scripts/check_supplement_kernels.py
 python3 scripts/export_numerical_rules.py --trust-report --check

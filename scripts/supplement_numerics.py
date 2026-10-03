@@ -82,7 +82,7 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
         intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule == "EXP-SUB" else "tl.exp",
                     "log": "tl.log", "max": "tl.maximum",
                     "oracle": "torch fp64 mathematical reference on the same quantized operands"})
-    config["probe"]["special_values"] = "only explicit -inf literals in the relation; no conditioning or resampling"
+    config["probe"]["special_values"]["literals"] = "only explicit -inf literals in the relation"
     config["probe"]["active_operands"] = load_catalog()[rule]["operands"]
     if fmt["compute"] == "fp64":
         config["numerics"]["intrinsics"]["oracle"] = (
@@ -98,16 +98,10 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
 def oracle(torch, rule, inputs):
     a, b, c = (x.double() for x in inputs)
     if rule == "DIV-MUL-RCP":
-        if bool((b == 0).any()):
-            raise NumericEvent("INCONCLUSIVE", "sampled b == 0; distribution was not conditioned")
         return a / b
     if rule == "MUL-RCP-CANCEL":
-        if bool((a == 0).any()):
-            raise NumericEvent("INCONCLUSIVE", "sampled a == 0; inverse cancellation requires nonzero a")
         return torch.ones_like(a)
     if rule == "LOG-MUL":
-        if bool(((a <= 0) | (b <= 0)).any()):
-            raise NumericEvent("INCONCLUSIVE", "log requires a > 0 and b > 0; no abs, truncation or resampling")
         return torch.log(a * b)
     if rule == "EXP-SUB":
         return torch.exp(a - b)
@@ -123,11 +117,11 @@ def oracle(torch, rule, inputs):
     raise ValueError("unknown supplemental oracle")
 
 
-def observe(torch, reference, candidate, exact, fmt, errors=None):
+def observe(torch, reference, candidate, exact, fmt, errors=None, valid=None):
     if fmt["compute"] == "fp64":
         if errors is None or len(errors) != 2:
             raise ValueError("fp64-work instance requires the bound residual oracle")
-    return original.observe(torch, reference, candidate, exact, fmt["output"], errors)
+    return original.observe(torch, reference, candidate, exact, fmt["output"], errors, valid)
 
 
 def launch_pair(torch, triton, kernels, rule, inputs, profile, fmt):

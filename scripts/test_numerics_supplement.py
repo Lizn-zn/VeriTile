@@ -55,14 +55,16 @@ def fixture_bundle(root, smoke=False, fp64=False):
         "smoke": smoke, "backend": backend, "entries": [name]})
     config = runner.contract_for(p, fmt, rule, backend, sources, lowerings)
     arrays = observations()
-    np.savez_compressed(entry / "observations.npz", **arrays)
+    counts = np.full(4, 6, dtype=np.int64)
+    np.savez_compressed(entry / "observations.npz", **arrays, valid_samples=counts)
     result = runner.gates.evaluate(arrays, p["gates"], runner.seed_for(p, fmt, rule), 4, smoke)
     result.update(stopping_reason="empirical_fallback", completed_replicates=4)
     runner.write_json(entry / "record.json", {
         "rule_id": rule, "format": fmt["name"], "state": "COMPLETE", "config": config,
         "instance_key": supplement.instance_key(config), "lowerings": lowerings,
         "observations_sha256": runner.sha((entry / "observations.npz").read_bytes()),
-        "result": result, "decision": result["decision"]})
+        "result": result, "decision": result["decision"],
+        "sampling": runner.domains.summary(counts.tolist(), p["shape"])})
     return entry
 
 
@@ -75,7 +77,11 @@ class ContractTests(unittest.TestCase):
         self.assertEqual(p["formats"][:3], old["formats"])
         self.assertIs(runner.gates, runner.original.gates)
         frozen = runner.read_json(runner.ROOT / "experiments/floating_point/report/experiment.json")
-        self.assertEqual(runner.original.source_hashes(), frozen["sources"])
+        # The previous report retains its original sampling implementation.
+        self.assertNotEqual(runner.original.source_hashes(), frozen["sources"])
+        from scripts.export_numerical_rules import LEGACY_SOURCE_SNAPSHOT
+        self.assertEqual(runner.sha(runner.original.registry.canonical_json(frozen["sources"])),
+                         LEGACY_SOURCE_SNAPSHOT)
 
     def test_supported_matrix_and_invalid_precision(self):
         p = profile()
@@ -182,7 +188,8 @@ class ContractTests(unittest.TestCase):
                     manifest['bundle_version'] = 'scalar-supplement-4'
                     runner.write_json(root / 'manifest.json', manifest)
                 else:
-                    np.savez_compressed(entry / 'observations.npz', **observations(buckets=3))
+                    np.savez_compressed(entry / 'observations.npz', **observations(buckets=3),
+                                        valid_samples=np.full(4, 6, dtype=np.int64))
                     record = runner.read_json(entry / 'record.json')
                     record['observations_sha256'] = runner.sha((entry / 'observations.npz').read_bytes())
                     runner.write_json(entry / 'record.json', record)
@@ -240,14 +247,14 @@ class OracleTests(unittest.TestCase):
                 self.assertEqual(decision, "NOT_EVALUATED" if outcome == "compile_error" else "SMOKE_ONLY")
                 self.assertEqual(runner.replay(root)["accepted"], [])
 
-    def test_domain_events_leave_samples_unchanged(self):
+    def test_domain_masks_leave_samples_unchanged(self):
         import torch
         for rule, a, b in (("DIV-MUL-RCP", 1., 0.), ("MUL-RCP-CANCEL", 0., 1.),
                            ("LOG-MUL", -1., 1.), ("LOG-MUL", 1., 0.)):
             inputs = [torch.full((2, 3), x) for x in (a, b, 1.)]
             before = [x.clone() for x in inputs]
-            with self.subTest(rule=rule), self.assertRaises(supplement.NumericEvent):
-                supplement.oracle(torch, rule, inputs)
+            with self.subTest(rule=rule):
+                self.assertFalse(bool(runner.domains.mask(torch, rule, inputs).any()))
             for x, original in zip(inputs, before):
                 torch.testing.assert_close(x, original, rtol=0, atol=0)
 

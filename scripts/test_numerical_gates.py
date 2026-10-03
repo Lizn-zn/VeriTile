@@ -177,13 +177,15 @@ def fixture_bundle(directory, smoke=False):
     experiment.write_json(directory / "manifest.json", manifest)
     config = experiment.contract_for(p, fmt, rule, backend, sources, lowerings)
     obs = observations()
-    np.savez_compressed(entry / "observations.npz", **obs)
+    counts = np.full(4, np.prod(p["shape"]), dtype=np.int64)
+    np.savez_compressed(entry / "observations.npz", **obs, valid_samples=counts)
     result = gates.evaluate(obs, p["gates"], experiment.seed_for(p, fmt, rule), p["replicates"], smoke)
     result.update(stopping_reason="empirical_fallback", completed_replicates=4)
     record = {"rule_id": rule, "format": fmt["name"], "state": "COMPLETE", "config": config,
               "instance_key": experiment.registry.instance_key(config), "lowerings": lowerings,
               "observations_sha256": experiment.sha((entry / "observations.npz").read_bytes()),
               "result": result, "decision": result["decision"]}
+    record["sampling"] = experiment.domains.summary(counts.tolist(), p["shape"])
     experiment.write_json(entry / "record.json", record)
     return entry
 
@@ -255,7 +257,8 @@ class ReplayTests(unittest.TestCase):
             root = Path(tmp)
             entry = fixture_bundle(root)
             # The previous protocol kept one bucket for each of these 3 columns.
-            np.savez_compressed(entry / "observations.npz", **observations(buckets=3))
+            np.savez_compressed(entry / "observations.npz", **observations(buckets=3),
+                                valid_samples=np.full(4, 6, dtype=np.int64))
             data = experiment.read_json(entry / "record.json")
             data["observations_sha256"] = experiment.sha((entry / "observations.npz").read_bytes())
             experiment.write_json(entry / "record.json", data)

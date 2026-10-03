@@ -21,6 +21,9 @@ else:
 ROOT = Path(__file__).resolve().parents[1]
 REPORT = ROOT / 'experiments/floating_point/report'
 OUTPUT = ROOT / 'VeriTile/Triton/Float/ReportedAdmission.lean'
+# PR #11's user-trusted report predates domain filtering. Keep its exact
+# source identity without relabelling it as a run of the new sampler.
+LEGACY_SOURCE_SNAPSHOT = '1eb7897501c164b19973e3c114bf3e0522c58f23632e3317168b9bb6aea9f04b'
 
 
 def validate_accepted_bounds(row, profile):
@@ -40,7 +43,8 @@ def load_report(directory):
     settings = experiment.read_json(directory / 'experiment.json')
     summary = experiment.read_json(directory / 'summary.json')
     profile = experiment.validate_profile(deepcopy(settings['profile']))
-    if settings['sources'] != experiment.source_hashes():
+    if (settings['sources'] != experiment.source_hashes()
+            and digest(experiment.registry.canonical_json(settings['sources'])) != LEGACY_SOURCE_SNAPSHOT):
         raise ValueError('report source hashes differ from the numerical implementation')
     if profile['gates']['warning_policy'] != 'pass_only':
         raise ValueError('this exporter requires pass_only admission')

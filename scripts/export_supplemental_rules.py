@@ -21,6 +21,8 @@ else:
 ROOT = experiment.ROOT
 REPORT = ROOT / "experiments/floating_point/supplement/report"
 OUTPUT = ROOT / "VeriTile/Triton/Float/SupplementalAdmission.lean"
+# Exact source identity of the already trusted PR #11 report, before filtering.
+LEGACY_SOURCE_SNAPSHOT = "22154c3275d43497000aed762e953fd6a83d40f3810404d8cf470f5c4c881545"
 
 
 def domain(rule):
@@ -39,9 +41,12 @@ def load_report(directory):
     settings = experiment.read_json(directory / "experiment.json")
     summary = experiment.read_json(directory / "summary.json")
     profile = experiment.validate_profile(deepcopy(settings["profile"]))
-    if settings["sources"] != experiment.source_hashes():
+    legacy = (experiment.sha(experiment.original.registry.canonical_json(settings["sources"]))
+              == LEGACY_SOURCE_SNAPSHOT)
+    if settings["sources"] != experiment.source_hashes() and not legacy:
         raise ValueError("report source hashes differ from the numerical implementation")
-    if settings["bundle_version"] != experiment.BUNDLE_VERSION or settings["smoke"] is not False:
+    expected_version = "scalar-supplement-5" if legacy else experiment.BUNDLE_VERSION
+    if settings["bundle_version"] != expected_version or settings["smoke"] is not False:
         raise ValueError("only formal supplemental bundles can be imported")
     if profile["gates"]["warning_policy"] != "pass_only":
         raise ValueError("this exporter requires pass_only admission")

@@ -30,7 +30,7 @@ python3 scripts/check_numerics.py run --smoke --output Logs/fp-smoke
 
 The smoke run uses a masked `32×33` shape and four replicates, always marked
 `SMOKE_ONLY` and never admitted. Inspect ERROR records before the formal run.
-SQRT-RSQRT domain events and fp32 BF16-WIDEN-RETURN unsupported rows are expected.
+SQRT-RSQRT skips nonpositive inputs; fp32 BF16-WIDEN-RETURN remains unsupported.
 
 Start with associativity under all three precision profiles:
 
@@ -90,8 +90,10 @@ PTX digests, observation shapes and file hashes, and recomputes the statistics.
 Existing output files are never overwritten. Returned Python source is **not
 executed**, and NPZ is loaded with `allow_pickle=False`.
 
-Per-instance `observations.npz` stores one bias mean in local ULPs per replicate
-and two peak oracle errors in absolute output units. It supports CPU statistical replay, not raw-output replay;
+Per-instance `observations.npz` stores one bias mean in local ULPs per nonempty
+replicate and two peak oracle errors in absolute output units. It also stores
+an int64 `valid_samples` count for every attempted replicate, including empty
+ones. `record.json` and reports expose valid/skipped totals. It supports CPU statistical replay, not raw-output replay;
 frozen seeds and sources support a separate GPU rerun. The manifest includes
 profile, implementation hashes, device/capability, driver, software and launch
 settings. Keep bundles outside Git (`Logs/` and `results/` are ignored).
@@ -125,11 +127,26 @@ composite ID is rejected before GPU execution; importing such a row is rejected
 regardless of its PASS labels. Additional scalar identities, such as an explicit
 exponential relation, must be specified and checked separately when needed.
 
-Only the selected distribution is sampled. There are no extra asymmetric probes,
-absolute-value transforms, truncation or resampling. Unconditioned normal input
-commonly violates SQRT-RSQRT's positive domain: INCONCLUSIVE, not accepted.
-A sampled zero divisor is also inconclusive. Associativity's symmetric operands
-can cancel mean delta; this does not add a new rejection criterion.
+Only the selected distribution is sampled. After input quantization, skip scalar
+tuples outside the relation's declared domain: SQRT-RSQRT requires `a > 0`,
+DIV-RCP requires `b != 0`, and active operands must be finite. Both sides and
+the oracle use the same input-only mask for statistics. Kernels retain the full
+configured shape and original operands; there are no absolute-value transforms,
+replacement draws or extra probes. Thus statistics describe the selected
+distribution restricted to the declared domain. Nonfinite results on valid
+inputs still fail the gates; they are never filtered by output quality.
+
+Each nonempty replicate averages only its valid tuples and takes error maxima
+over those same tuples. Empty replicates are skipped, not recorded as zero
+error. R counts nonempty replicates; the rounded-up `replicates_max` also caps
+attempted draws. Insufficient nonempty replicates within that budget yield
+INCONCLUSIVE. Associativity's symmetric operands can cancel mean delta; this
+does not add a new rejection criterion.
+
+The new sampler uses bundle version 7. Start a fresh output directory; old
+bundles cannot be resumed or replayed by this revision. The already trusted
+PR #11 report and its Lean admission table retain their original source identity
+and results; the exporter recognizes that exact historical source snapshot.
 
 Triton operation contracts: [fma](https://triton-lang.org/main/python-api/generated/triton.language.fma.html),
 [div_rn](https://triton-lang.org/main/python-api/generated/triton.language.div_rn.html).
@@ -146,7 +163,7 @@ and error-amplification checks. Statistics and bundle replay use NumPy on CPU.
   and minimum subnormal spacing at zero. Both sides share this golden-based scale;
   output outliers cannot enlarge another element's allowance.
 - For bias, normalize **before** aggregation: `d = (candidate-reference)/s`.
-  Each replicate averages `d` over all IID scalar instances, storing one mean
+  Each nonempty replicate averages `d` over its in-domain IID scalar instances, storing one mean
   (`delta` has shape `[R, 1]`). Array columns have no separate channel semantics.
   Mean and sample std (ddof=1) are computed across these R replicate means, not
   across R times the number of elements. `z = sqrt(R)*abs(mean)/std` is dimensionless.

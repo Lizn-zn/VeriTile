@@ -14,17 +14,19 @@ import time
 import numpy as np
 
 if __package__:
-    from . import numerical_registry as registry, numerical_gates as gates
+    from . import numerical_registry as registry, numerical_gates as gates, numerical_domains as domains
 else:
     import numerical_registry as registry
     import numerical_gates as gates
+    import numerical_domains as domains
 
 ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_PROFILE = ROOT / "experiments/floating_point/config.py"
 KERNELS = ROOT / "experiments/floating_point/kernels.py"
-SOURCES = [Path(__file__).resolve(), Path(gates.__file__), Path(registry.__file__), KERNELS, registry.CATALOG]
+SOURCES = [Path(__file__).resolve(), Path(gates.__file__), Path(registry.__file__),
+           Path(domains.__file__), KERNELS, registry.CATALOG]
 ACCEPTED = {"ACCEPT", "ACCEPT_WITH_WARNING"}
-BUNDLE_VERSION = 6
+BUNDLE_VERSION = 7
 
 
 def sha(data):
@@ -174,12 +176,12 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
                   "joint_distribution": "independent roles and elements; fresh whole tuple per replicate",
                   "weights": None, "seed": seed_for(profile, fmt, rule),
                   "quantization": "torch fp64 normal -> input dtype (RNE); oracle widens those same values",
-                  "special_values": "no truncation/resampling; domain/nonfinite events recorded"},
+                  "special_values": domains.policy(rule)},
         "protocol": {"name": "two-gates", "version": gates.VERSION, "checker_version": sources["scripts/numerical_gates.py"],
                      "bias": {**profile["gates"]["bias"], "replicates": profile["replicates"],
-                              "buckets": "one mean per replicate across all IID scalar instances; no positional buckets",
+                              "buckets": "one mean per nonempty replicate across in-domain IID scalar instances; no positional buckets",
                               "ulp": "per-element output-format ULP at abs(golden) rounded to output dtype; inward at max finite; minimum subnormal spacing at zero",
-                              "delta": "mean over all elements of (candidate-reference)/local_golden_ulp; normalize before averaging",
+                              "delta": "mean over in-domain elements of (candidate-reference)/local_golden_ulp; normalize before averaging",
                               "acceptance": "abs(mean) + se_multiplier * std / sqrt(R) <= tau across replicate means; z is diagnostic",
                               "coverage": "engineering SE bands; no calibrated simultaneous or optional-stopping coverage"},
                      "vars": {**profile["gates"]["vars"], "replicates": profile["replicates"],
@@ -215,12 +217,8 @@ def oracle(torch, rule, inputs):
     if rule == "CAST-REMOVE":
         return (a + b) * c
     if rule == "DIV-RCP":
-        if bool((b == 0).any()):
-            raise NumericEvent("INCONCLUSIVE", "division domain violated by a sampled zero denominator")
         return a / b
     if rule == "SQRT-RSQRT":
-        if bool((a <= 0).any()):
-            raise NumericEvent("INCONCLUSIVE", "sqrt domain violated; the requested normal distribution was not conditioned")
         return torch.rsqrt(a)
     if rule in ("ROUND-IDEM", "BF16-WIDEN-RETURN", "CANCEL"):
         return a
@@ -259,7 +257,7 @@ def ulp(torch, magnitude, dtype):
                        scale.double() - lower.double(), upper.double() - scale.double())
 
 
-def observe(torch, reference, candidate, exact, output_format, errors=None):
+def observe(torch, reference, candidate, exact, output_format, errors=None, valid=None):
     """Keep a local-ULP bias mean and absolute oracle-error peaks per replicate.
 
     Positions in these atomic probes share a distribution and expression. They
@@ -269,7 +267,17 @@ def observe(torch, reference, candidate, exact, output_format, errors=None):
     Optional elementwise oracle errors preserve residual-based evaluations when
     subtracting a rounded golden value would lose the true rounding residual.
     """
-    # Keep invalid observations: both gates reject them, and replay sees them too.
+    # Filter only the declared INPUT domain. Invalid outputs on valid inputs
+    # must remain visible to both gates. Boolean indexing also avoids NaN * 0.
+    if valid is not None:
+        if valid.shape != exact.shape or valid.dtype != torch.bool:
+            raise ValueError("domain mask must be Boolean and match the golden tensor")
+        if not bool(valid.any()):
+            raise NumericEvent("INCONCLUSIVE", "no in-domain samples in this replicate")
+        reference, candidate, exact = reference[valid], candidate[valid], exact[valid]
+        if errors is not None:
+            errors = [error[valid] for error in errors]
+    # Keep nonfinite observations on valid inputs: both gates reject them.
     ref, cand = reference.double(), candidate.double()
     scale = ulp(torch, exact, output_format)
     delta = (cand - ref) / scale
@@ -293,20 +301,24 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
         write_json(record_path, {**base, "state": "UNSUPPORTED", "reason": "requires bf16 input and output"})
         return "UNSUPPORTED"
     observations = {key: [] for key in gates.OBSERVATIONS}
+    valid_counts = []
     seed = seed_for(profile, fmt, rule)
     generator = torch.Generator(device="cuda").manual_seed(seed)
     dtype = torch.bfloat16 if fmt["input"] == "bf16" else torch.float32
     lowerings = None
     started = time.monotonic()
     try:
+        stop = None
         limit = ((profile["replicates_max"] + profile["batch"] - 1) // profile["batch"]) * profile["batch"]
         for replicate in range(limit):
             dist = profile["distribution"]
             shapes = shapes_for(profile, rule)
             inputs = [(torch.randn(shapes[key], device="cuda", dtype=torch.float64, generator=generator)
                        * dist["std"] + dist["mean"]).to(dtype) for key in ("a", "b", "c")]
-            if any(not bool(torch.isfinite(x).all()) for x in inputs):
-                raise NumericEvent("INCONCLUSIVE", "input quantization produced nonfinite values")
+            valid = domains.mask(torch, rule, inputs)
+            valid_counts.append(int(valid.sum().item()))
+            if valid_counts[-1] == 0:
+                continue
             exact = oracle(torch, rule, inputs)
             (reference, candidate), compiled = launch_pair(torch, triton, kernels, rule, inputs, profile, fmt)
             if lowerings is None:
@@ -322,22 +334,25 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
                 write_json(record_path, base)
             elif any([sha(p.encode()) for p in compiled[side]] != lowerings[side] for side in lowerings):
                 raise ValueError("compiled lowering changed within one instance")
-            sample = observe(torch, reference, candidate, exact, fmt["output"])
+            sample = observe(torch, reference, candidate, exact, fmt["output"], valid=valid)
             for key in observations:
                 observations[key].append(sample[key])
             if replicate == 0 or (replicate + 1) % 32 == 0:
                 print(f"  {fmt['name']} {rule}: {replicate + 1}/{limit} ({time.monotonic() - started:.1f}s)", flush=True)
-            if (replicate + 1) % profile["batch"] == 0:
+            if len(observations["delta"]) % profile["batch"] == 0:
                 var, stop = gates.checkpoint(observations, profile["gates"]["vars"],
                                              profile["replicates"], profile["replicates_max"], profile["batch"])
                 print(f"  magnitude: {var['status']} U={var['upper']} stop={stop}", flush=True)
                 if stop:
                     break
+        if stop is None:
+            raise NumericEvent("INCONCLUSIVE", "insufficient nonempty replicates within the draw budget")
         arrays = {key: np.asarray(values, dtype=np.float64) for key, values in observations.items()}
         count = len(arrays["delta"])
         result = gates.evaluate(arrays, profile["gates"], seed, count, smoke)
         result.update(stopping_reason=stop, completed_replicates=count)
-        np.savez_compressed(directory / "observations.npz", **arrays)
+        np.savez_compressed(directory / "observations.npz", **arrays,
+                            valid_samples=np.asarray(valid_counts, dtype=np.int64))
         base.update(state="COMPLETE", result=result, decision=result["decision"],
                     observations_sha256=sha((directory / "observations.npz").read_bytes()),
                     seconds=time.monotonic() - started)
@@ -347,6 +362,7 @@ def run_instance(torch, triton, kernels, profile, fmt, rule, directory, backend,
     except Exception as error:
         base.update(state="ERROR", decision="NOT_EVALUATED", reason=f"{type(error).__name__}: {error}",
                     completed_replicates=len(observations["delta"]))
+    base["sampling"] = domains.summary(valid_counts, profile["shape"])
     write_json(record_path, base)
     return base["decision"]
 
@@ -452,6 +468,7 @@ def replay(bundle):
                 # Unfinished/error/domain-event labels are never imported as accepted rules.
                 rows.append({"rule_id": rule, "format": fmt["name"], "decision": "NOT_EVALUATED",
                              "state": record["state"], "reported_decision": record["decision"],
+                             "sampling": record.get("sampling", {}),
                              "reason": record.get("reason", "incomplete protocol")})
                 continue
             lowerings = record["lowerings"]
@@ -471,6 +488,7 @@ def replay(bundle):
             count = record["result"].get("completed_replicates")
             if type(count) is not int or count < 2:
                 raise ValueError(f"invalid completed replicate count: {name}")
+            sampling = domains.unpack(arrays, record, profile, count)
             if (set(arrays) != gates.OBSERVATIONS or any(a.dtype != np.float64 for a in arrays.values())
                     or arrays["delta"].shape != (count, 1)
                     or any(arrays[k].shape != (count,) for k in ("reference_error", "candidate_error"))):
@@ -483,7 +501,7 @@ def replay(bundle):
                 raise ValueError(f"stored decision/statistics disagree with replay: {name}")
             row = {"rule_id": rule, "format": fmt["name"], "instance_key": record["instance_key"],
                    "decision": result["decision"], "bias": result["bias"]["status"], "vars": result["vars"]["status"],
-                   "replicates": count, "stopping_reason": stop,
+                   "replicates": count, "stopping_reason": stop, "sampling": sampling,
                    "empirical_fallback": result["vars"]["empirical_fallback"]}
             rows.append(row)
             if result["decision"] in ACCEPTED:
