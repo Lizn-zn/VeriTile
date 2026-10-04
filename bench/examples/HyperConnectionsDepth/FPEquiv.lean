@@ -4,6 +4,7 @@ The final residual addition is commuted using the accepted fp32 atomic rule.
 The exp weighting and all memory accesses are unchanged. -/
 import VeriTile.Triton.DSL
 import VeriTile.Meta.StatementAudit
+import VeriTile.Meta.FPProve
 import VeriTile.Triton.Float.Equivalence
 import VeriTile.Triton.Float.ScalarArithmetic
 
@@ -14,9 +15,6 @@ open scoped VeriTile.Spec
 
 abbrev admitted := (FP.ScalarArithmetic.report .addCommute (by decide)).report
 
-
-abbrev body := Spec.ProgramSyntax.body (Program := ComputeKernel)
-
 def addFragment (lhs rhs : RegName) : List ComputeStmt :=
   [.assign .real [] "out"
     (.compute (.alg .fp32 (.add .real .nil
@@ -24,15 +22,6 @@ def addFragment (lhs rhs : RegName) : List ComputeStmt :=
 
 def originalAdd := addFragment "res_mix" "branch_mix"
 def optimizedAdd := addFragment "branch_mix" "res_mix"
-def beforeAdd (tau : ℝ) := (body (originalKernel tau)).take 5
-def afterAdd (tau : ℝ) := (body (originalKernel tau)).drop 6
-
-theorem original_decomposition (tau : ℝ) :
-    body (originalKernel tau) = beforeAdd tau ++ originalAdd ++ afterAdd tau := rfl
-
-theorem optimized_decomposition (tau : ℝ) :
-    body (optimizedKernel tau) = beforeAdd tau ++ optimizedAdd ++ afterAdd tau := rfl
-
 def addCommute : Spec.RuleEntry ComputeStmt := admitted.bind originalAdd optimizedAdd
 
 structure Rules where
@@ -49,10 +38,8 @@ instance : CoeOut Rules (Spec.Assumptions (Spec.ProgramSyntax.Statement ComputeK
 
 specification mhc_depth_equiv (tau : ℝ) (R : Rules) :
     originalKernel tau ≡[R] optimizedKernel tau := by
-  refine ⟨rfl, ?_⟩
-  change Spec.Derivation R.assumptions (body (originalKernel tau)) (body (optimizedKernel tau))
-  rw [original_decomposition, optimized_decomposition]
-  exact .frame (beforeAdd tau) (afterAdd tau) (admitted_add_commute R)
+  equiv_decompose
+  all_goals fp_prove
 
 #print_fp_assumptions mhc_depth_equiv
 #guard_msgs (drop info) in

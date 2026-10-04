@@ -19,6 +19,8 @@ globs = [
   # which pulls the heavy analysis chain the lite target deliberately skips.
   "VeriTile.Meta.Specification",
   "VeriTile.Meta.StatementAudit",
+  "VeriTile.Meta.EquivDecompose",
+  "VeriTile.Meta.FPProve",
   "VeriTile.Spec",
   # Worked-example KERNELS live in bench/examples/ (self-contained example
   # directories can separate kernels and their proofs). The library keeps shared

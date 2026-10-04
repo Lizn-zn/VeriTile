@@ -53,7 +53,11 @@ positive-block-size conditions. OnlineSoftmax retains the batch/recurrence
 observation scope described above.
 
 The seven scalar-rewrite examples at the top derive equivalence of typed
-program bodies. The other completed FP examples connect their transformations
+program bodies using `equiv_decompose` followed by `all_goals fp_prove`.
+The first exposes structural differences; the second composes the registered
+atomic lemmas. See [the tactic guide](../../documents/EquivalenceTactics.md)
+for inspecting intermediate goals, supplying hints and handling failed searches.
+The other completed FP examples connect their transformations
 to execution or observable outputs. A proof of one stated slice or observation
 does not certify a larger kernel or a different precision/intrinsic variant.
 

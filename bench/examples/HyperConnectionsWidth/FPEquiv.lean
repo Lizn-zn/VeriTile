@@ -4,6 +4,7 @@ Two scalar products commute independently; their exp operands and all memory
 accesses stay unchanged. This exercises composition of atomic rewrites. -/
 import VeriTile.Triton.DSL
 import VeriTile.Meta.StatementAudit
+import VeriTile.Meta.FPProve
 import VeriTile.Triton.Float.Equivalence
 import VeriTile.Triton.Float.ScalarArithmetic
 
@@ -13,9 +14,6 @@ open VeriTile Triton
 open scoped VeriTile.Spec
 
 abbrev admitted := (FP.ScalarArithmetic.report .mulCommute (by decide)).report
-
-
-abbrev body := Spec.ProgramSyntax.body (Program := ComputeKernel)
 
 /-- One multiplication, with the weight expression treated as an operand. -/
 def mulFragment (tau : ℝ) (out logit : RegName) (swapped : Bool) : List ComputeStmt :=
@@ -50,31 +48,10 @@ instance {tau : ℝ} : CoeOut (Rules tau) (Spec.Assumptions (Spec.ProgramSyntax.
   .atom (preCommute tau) (by simp [Rules.assumptions])
     (admitted.admit _ _ R.pre_mul_comm)
 
-theorem original_decomposition (tau : ℝ) :
-    body (originalKernel tau) = (body (originalKernel tau)).take 3 ++
-      mulFragment tau "res_mix" "h_res" Bool.false ++ (body (originalKernel tau)).drop 4 := rfl
-
-theorem middle_decomposition_res (tau : ℝ) :
-    body (middleKernel tau) = (body (originalKernel tau)).take 3 ++
-      mulFragment tau "res_mix" "h_res" Bool.true ++ (body (originalKernel tau)).drop 4 := rfl
-
-theorem middle_decomposition_pre (tau : ℝ) :
-    body (middleKernel tau) = (body (middleKernel tau)).take 5 ++
-      mulFragment tau "branch_in" "h_pre" Bool.false ++ (body (middleKernel tau)).drop 6 := rfl
-
-theorem optimized_decomposition (tau : ℝ) :
-    body (optimizedKernel tau) = (body (middleKernel tau)).take 5 ++
-      mulFragment tau "branch_in" "h_pre" Bool.true ++ (body (middleKernel tau)).drop 6 := rfl
-
 specification mhc_width_equiv (tau : ℝ) (R : Rules tau) :
     originalKernel tau ≡[R] optimizedKernel tau := by
-  refine ⟨rfl, ?_⟩
-  change Spec.Derivation R.assumptions (body (originalKernel tau)) (body (optimizedKernel tau))
-  apply Spec.Derivation.trans (middle := body (middleKernel tau))
-  · rw [original_decomposition, middle_decomposition_res]
-    exact .frame _ _ (admitted_res_commute R)
-  · rw [middle_decomposition_pre, optimized_decomposition]
-    exact .frame _ _ (admitted_pre_commute R)
+  equiv_decompose
+  all_goals fp_prove
 
 #print_fp_assumptions mhc_width_equiv
 #guard_msgs (drop info) in

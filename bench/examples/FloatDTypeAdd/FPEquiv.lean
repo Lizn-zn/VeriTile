@@ -10,6 +10,7 @@ the experiment's shape or launch configuration. No new global axiom.
 -/
 import VeriTile.Triton.DSL
 import VeriTile.Meta.StatementAudit
+import VeriTile.Meta.FPProve
 import VeriTile.Triton.Float.Equivalence
 import VeriTile.Triton.Float.ScalarArithmetic
 
@@ -20,9 +21,6 @@ open scoped VeriTile.Spec
 
 abbrev admitted := (FP.ScalarArithmetic.report .addCommute (by decide)).report
 
-
-abbrev body := Spec.ProgramSyntax.body (Program := ComputeKernel)
-
 /-- Parameterized local fp32 addition: register renaming is explicit. -/
 def addFragment (blockSize : Nat) (out x y : RegName) : List ComputeStmt :=
   [.assign .real [blockSize] out
@@ -31,18 +29,6 @@ def addFragment (blockSize : Nat) (out x y : RegName) : List ComputeStmt :=
 
 def originalAdd (blockSize : Nat) := addFragment blockSize "out" "x" "y"
 def optimizedAdd (blockSize : Nat) := addFragment blockSize "out" "y" "x"
-def beforeAdd (blockSize : Nat) : List ComputeStmt :=
-  (body (originalKernel blockSize)).take 4
-def afterAdd (blockSize : Nat) : List ComputeStmt :=
-  (body (originalKernel blockSize)).drop 5
-
-theorem original_decomposition (blockSize : Nat) :
-    body (originalKernel blockSize) =
-      beforeAdd blockSize ++ originalAdd blockSize ++ afterAdd blockSize := rfl
-
-theorem optimized_decomposition (blockSize : Nat) :
-    body (optimizedKernel blockSize) =
-      beforeAdd blockSize ++ optimizedAdd blockSize ++ afterAdd blockSize := rfl
 
 /-- The candidate catalog selects the accepted fp32 relation before it is instantiated. -/
 def addCommute (blockSize : Nat) : Spec.RuleEntry ComputeStmt :=
@@ -69,11 +55,8 @@ instance {blockSize : Nat} :
 /-- Public specification: a kernel equivalence derived from one accepted atom. -/
 specification float_add_equiv (blockSize : Nat) (R : Rules blockSize) :
     originalKernel blockSize ≡[R] optimizedKernel blockSize := by
-  refine ⟨rfl, ?_⟩
-  change Spec.Derivation R.assumptions
-    (body (originalKernel blockSize)) (body (optimizedKernel blockSize))
-  rw [original_decomposition, optimized_decomposition]
-  exact .frame (beforeAdd blockSize) (afterAdd blockSize) (admitted_add_commute R)
+  equiv_decompose
+  all_goals fp_prove
 
 #print_fp_assumptions float_add_equiv
 -- Keep the proof audit active without adding its success log to the example.

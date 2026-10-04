@@ -10,6 +10,7 @@ the experiment's shape or launch configuration. No new global axiom.
 -/
 import VeriTile.Triton.DSL
 import VeriTile.Meta.StatementAudit
+import VeriTile.Meta.FPProve
 import VeriTile.Triton.Float.Equivalence
 import VeriTile.Triton.Float.ScalarArithmetic
 
@@ -20,9 +21,6 @@ open scoped VeriTile.Spec
 
 abbrev admitted := (FP.ScalarArithmetic.report .addCommute (by decide)).report
 
-
-abbrev body := Spec.ProgramSyntax.body (Program := ComputeKernel)
-
 /-- Parameterized local fp32 addition: register renaming is explicit. -/
 def addFragment (blockSize : Nat) (out x y : RegName) : List ComputeStmt :=
   [.assign .real [blockSize] out
@@ -31,18 +29,6 @@ def addFragment (blockSize : Nat) (out x y : RegName) : List ComputeStmt :=
 
 def originalAdd (blockSize : Nat) := addFragment blockSize "output" "x" "y"
 def optimizedAdd (blockSize : Nat) := addFragment blockSize "output" "y" "x"
-def beforeAdd (nElements blockSize : Nat) : List ComputeStmt :=
-  (body (originalKernel nElements blockSize)).take 5
-def afterAdd (nElements blockSize : Nat) : List ComputeStmt :=
-  (body (originalKernel nElements blockSize)).drop 6
-
-theorem original_decomposition (nElements blockSize : Nat) :
-    body (originalKernel nElements blockSize) =
-      beforeAdd nElements blockSize ++ originalAdd blockSize ++ afterAdd nElements blockSize := rfl
-
-theorem optimized_decomposition (nElements blockSize : Nat) :
-    body (optimizedKernel nElements blockSize) =
-      beforeAdd nElements blockSize ++ optimizedAdd blockSize ++ afterAdd nElements blockSize := rfl
 
 /-- The candidate catalog selects the accepted fp32 relation before it is instantiated. -/
 def addCommute (blockSize : Nat) : Spec.RuleEntry ComputeStmt :=
@@ -69,11 +55,8 @@ instance {blockSize : Nat} :
 /-- Public specification: a kernel equivalence derived from one accepted atom. -/
 specification add_kernel_masked_equiv (nElements blockSize : Nat) (R : Rules blockSize) :
     originalKernel nElements blockSize ≡[R] optimizedKernel nElements blockSize := by
-  refine ⟨rfl, ?_⟩
-  change Spec.Derivation R.assumptions
-    (body (originalKernel nElements blockSize)) (body (optimizedKernel nElements blockSize))
-  rw [original_decomposition, optimized_decomposition]
-  exact .frame (beforeAdd nElements blockSize) (afterAdd nElements blockSize) (admitted_add_commute R)
+  equiv_decompose
+  all_goals fp_prove
 
 #print_fp_assumptions add_kernel_masked_equiv
 -- Keep the proof audit active without adding its success log to the example.
