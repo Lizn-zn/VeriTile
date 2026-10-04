@@ -6,7 +6,7 @@ Triton programs, then choose the specification you want to inspect:
 | File | Purpose |
 | --- | --- |
 | `Kernels.lean` | Original, optimized and intermediate source programs, including precision, casts, masks and stores. |
-| `Correct.lean` | Real mathematical correctness: the implementation computes the stated formula after numerical precision is erased. |
+| `Correct.lean` | Real mathematical correctness of both original and optimized implementations against the stated formula, using their real projections. |
 | `FPEquiv.lean` | FP equivalence under the selected atomic assumptions, with `#print_fp_assumptions` on completed specifications. |
 | `Execution.lean`, `Contract.lean`, `Comparison.lean`, `Batch.lean` | Example-specific execution and composition lemmas, when needed. |
 | `RealEquiv.lean` | Retained proofs using real intermediate arithmetic and their stated cast semantics. These are separate from the two-gates FP specifications. |
@@ -43,6 +43,14 @@ required input/intermediate domains remain part of the FP statements.
 | [FusedLayerNorm](FusedLayerNorm/) | Two-pass versus Welford-based LayerNorm, with the stated count bound and domains. |
 | [LogExp](LogExp/) | Eliminate the masked, piecewise libdevice log-exp expression using its admitted atom. |
 | [StableLogSumExp](StableLogSumExp/) | Both real correctness proofs complete. FP target pending `log_mul` and `log_exp_libdevice` admission; `FPEquiv.lean` records a goal, not a certificate. |
+
+Both versions now have real correctness specifications for vector addition,
+the Lion update, the fixed-rank mHC slices, reversed row sum and inlined row max.
+Each statement includes successful execution, its IO bounds and the memory
+frame. Empty tiles are covered by the optimized aligned/float/TritonBench adds,
+row sum and Lion update; masked FlatVectorAdd and row max retain their stated
+positive-block-size conditions. OnlineSoftmax retains the batch/recurrence
+observation scope described above.
 
 The seven scalar-rewrite examples at the top derive equivalence of typed
 program bodies. The other completed FP examples connect their transformations

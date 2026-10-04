@@ -45,6 +45,8 @@ class ExamplePairTests(unittest.TestCase):
         targets += [f"bench.examples.{name}.{suffix}"
                     for name in ("FusedSiLU", "FusedSwiglu", "Welford", "FusedLayerNorm")
                     for suffix in ("Correct", "RealEquiv")]
+        targets += [f"bench.examples.{family}.Correct"
+                    for family in ("TritonBenchVectorAddition", "RowWiseSum", "RowWiseMax")]
         build = subprocess.run(["lake", "build", *targets], cwd=ROOT,
                                text=True, capture_output=True, timeout=300)
         if build.returncode:
@@ -58,6 +60,10 @@ class ExamplePairTests(unittest.TestCase):
                                     text=True, capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         return result.stdout
+
+    def test_optimized_real_specs_bind_sources_formulas_and_full_scope(self):
+        self.assertEqual(self.lean(
+            (ROOT / "bench/tests/OptimizedRealExamples.lean").read_text()), "")
 
     def test_same_original_implementation_in_both_files(self):
         """A correct file for one implementation cannot certify a different FP input."""

@@ -98,6 +98,10 @@ Arithmetic is over `ℝ` (not bit-accurate IEEE float); `@triton.autotune` is no
 modeled; the grid is composed by `mergeFrames` rather than executed
 concurrently. These are the standard VeriTile conventions, shared with the
 FlashAttention examples.
+
+The optimized implementation in Kernels.lean has its own real specification
+below, with the same mathematical formula and IO contract. Its proof uses
+real arithmetic and execution semantics independently of FPEquiv.lean.
 -/
 
 namespace VeriTile.Bench.Examples.AdamUpdateGridLaunch
@@ -817,6 +821,59 @@ specification adam_update_correctness (lr wd beta1 beta2 : ℝ) (n B : Nat) :
       lr wd beta1 beta2 n B bounds s h1 h2 h3
   · intro s₀ xs ys zs hx hy hz
     exact update_fn_kernel_region_run lr wd beta1 beta2 n B s₀ xs ys zs hx hy hz
+
+/-! ## Optimized implementation: real correctness -/
+
+section Optimized
+set_option maxHeartbeats 5000000
+attribute [local simp] ComputeExpr.toAlgorithm? ComputeOp.toAlgorithm? ComputeDType.eraseDType
+
+private theorem optional_add_comm (a b : Option ℝ) :
+    Option.map₂ (fun x y => x + y) a b = Option.map₂ (fun x y => x + y) b a :=
+  Option.map₂_comm add_comm
+
+-- This equality is derived in the real interpreter; it uses no FP assumptions.
+private theorem optimized_exec (lr wd beta1 beta2 : ℝ) (n B : Nat) (s : BlockState) :
+    exec (optimizedKernel lr wd beta1 beta2 n B).toAlgKernel s =
+      exec (update_fn_kernel "p" "grad" "exp_avg" lr wd beta1 beta2 n B).toAlgKernel s := by
+  simp [optimizedKernel, update_fn_kernel, exec, stepStmts, stepStmt, evalOp.eq_def,
+    Tile.bop, Tile.cop, Tile.select, Tile.ptrAdd,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      ComparableDType.lt, ComparableDType.gt, ComparableDType.ne, add_comm, optional_add_comm]
+
+/-- The optimized source retains the original IO windows and memory contract. -/
+def optimizedIO (lr wd beta1 beta2 : ℝ) (n B : Nat) : MaskedKernelIO₃ₓ₂ :=
+  { adamIO lr wd beta1 beta2 n B with kernel := optimizedKernel lr wd beta1 beta2 n B, projection := by rfl }
+
+/-- The optimized implementation computes the same independent real formula. -/
+specification adam_update_optimized_correctness (lr wd beta1 beta2 : ℝ) (n B : Nat) :
+    Spec.Real (optimizedIO lr wd beta1 beta2 n B ⊨ fun p grad expAvg =>
+      (fun i => TiledOptimizer.lionParam (p i) (expAvg i) (grad i) lr wd beta1,
+       fun i => TiledOptimizer.lionMomentum (expAvg i) (grad i) beta2)) := by
+  refine MaskedKernelIO₃ₓ₂.Implements.intro _
+    (by simp [optimizedIO, adamIO]) (by simp [optimizedIO, adamIO]) ?_ ?_ ?_
+  · simp [optimizedIO, optimizedKernel, Kernel.FlattenOk,
+      StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  · intro bounds s h1 h2 h3 _ _
+    simpa [optimizedIO, adamIO, Kernel.TraceSafe, optimizedKernel, update_fn_kernel,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
+      MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+      Tile.bop, Tile.cop, Tile.select, Tile.ptrAdd,
+      NumericDType.add, NumericDType.mul, NumericDType.sub,
+      ComparableDType.lt, ComparableDType.gt, ComparableDType.ne, add_comm, optional_add_comm]
+      using update_fn_kernel_traceSafe "p" "grad" "exp_avg" lr wd beta1 beta2 n B bounds s h1 h2 h3
+  · intro s xs ys zs hx hy hz
+    change ∃ s1, exec (optimizedKernel lr wd beta1 beta2 n B).toAlgKernel s = some s1 ∧ _
+    rw [optimized_exec]
+    exact update_fn_kernel_region_run lr wd beta1 beta2 n B s xs ys zs hx hy hz
+
+#axiomsClean adam_update_optimized_correctness
+#stmtSurfaceSubset adam_update_optimized_correctness ⊆
+  [Spec.Real, optimizedIO, VeriTile.Triton.MaskedKernelIO₃ₓ₂.Implements,
+   TiledOptimizer.lionParam, TiledOptimizer.lionMomentum,
+   VeriTile.Triton.MaskedKernelIO₃ₓ₂.B]
+
+end Optimized
 
 /-! ## Trust gates -/
 

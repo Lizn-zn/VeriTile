@@ -16,7 +16,7 @@ KernelIO showcase `bench/examples/VectorAdd/Correct.lean`:
    walk (row-stride load in bounds when `pid * nCol + B ≤ bounds x`;
    single-cell store when `pid + 1 ≤ bounds y`; the reduction is
    memory-silent) and `FlattenOk`.
-4. **The spec** — the file's single `specification`:
+4. **The spec** — the original kernel's `specification`:
 
        rowWiseMax_correctness : rowWiseMaxIO nCol B ⊨ fun xs _ => tileMax hB xs
 
@@ -40,6 +40,10 @@ def row_wise_max(X, Y, n_cols: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     result = tl.max(values, axis=0)
     tl.store(Y + row, result)
 ```
+
+The optimized implementation in Kernels.lean has its own real specification
+below, with the same mathematical formula and IO contract. Its proof uses
+real arithmetic and execution semantics independently of FPEquiv.lean.
 -/
 
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
@@ -293,6 +297,64 @@ specification rowWiseMax_correctness (nCol B : Nat) (hB : 0 < B) :
     obtain ⟨s1, hexec, hval, hframe⟩ := rowWiseMax_region_run nCol B hB s₀ xs hx
     -- scratch is empty, so its frame side condition is vacuous
     exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
+
+/-! ## Optimized implementation: real correctness -/
+
+section Optimized
+set_option maxHeartbeats 1600000
+
+private theorem inlined_region_run (nCol B : Nat) (hB : 0 < B)
+    (s : BlockState) (xs : Fin B → ℝ)
+    (hx : ∀ i : Fin B, s.readMem "x" (s.pid * nCol + i.val) = xs i) :
+    ∃ t, exec (inlinedKernel "x" "y" nCol B).toAlgKernel s = some t ∧
+      (∀ i : Fin 1, t.readMem "y" (s.pid + i.val) = TiledReduction.tileMax hB xs) ∧
+      (∀ (r : RegionName) o, (r ≠ "y" ∨ ∀ i : Fin 1, o ≠ s.pid + i.val) →
+        t.mem r o = s.mem r o) := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
+  simp [inlinedKernel, exec, stepStmts, stepStmt, evalOp.eq_def,
+    Tile.bop, NumericDType.add, NumericDType.mul,
+    Tile.reduceMaxDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex]
+  refine ⟨?_, ?_⟩
+  · simpa [TiledReduction.tileMax, ← BlockState.pid_eq]
+      using congrArg (fun f : Fin (n+1) → ℝ => Finset.univ.sup' Finset.univ_nonempty f) (funext hx)
+  · intro r o hmiss
+    rw [BlockState.writeMem_mem]
+    apply if_neg
+    rintro ⟨hr, ho⟩
+    rcases hmiss with hr' | ho'
+    · exact hr' hr
+    · exact ho' ho
+
+def inlinedIO (nCol B : Nat) : KernelIO₁ :=
+  { rowWiseMaxIO nCol B with kernel := inlinedKernel "x" "y" nCol B, projection := by rfl }
+
+/-- The optimized source computes the same mathematical row reduction. -/
+specification rowWiseMax_inlined_correctness (nCol B : Nat) (hB : 0 < B) :
+    Spec.Real (inlinedIO nCol B ⊨ fun xs _ => Triton.TiledReduction.tileMax hB xs) := by
+  refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · simp [inlinedIO, inlinedKernel, Kernel.FlattenOk,
+      StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  · intro bounds s hx hy _
+    obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
+    simpa [inlinedIO, rowWiseMaxIO, Kernel.TraceSafe, inlinedKernel, rowWiseMaxKernel,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
+      MemAccess.SafeAt, MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, BlockState.setReg, stepStmt, evalOp.eq_def,
+      Tile.bop, NumericDType.add, NumericDType.mul, Tile.reduceMaxDrop,
+      TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex, and_comm]
+      using rowWiseMax_traceSafe "x" "y" nCol (n+1) bounds s hx hy
+  · intro s xs hx
+    obtain ⟨t, he, hv, hf⟩ := inlined_region_run nCol B hB s xs hx
+    exact ⟨t, he, hv, fun r o hmiss _ => hf r o hmiss⟩
+
+#axiomsClean rowWiseMax_inlined_correctness
+#stmtSurfaceSubset rowWiseMax_inlined_correctness ⊆
+  [Spec.Real, inlinedIO, VeriTile.Triton.KernelIO₁.Implements,
+   VeriTile.Triton.KernelIO₁.Bin, VeriTile.Triton.KernelIO₁.Bout,
+   VeriTile.Triton.TiledReduction.tileMax]
+
+end Optimized
 
 /-! ## Trust gates -/
 

@@ -27,7 +27,7 @@ Four parts, following the canonical KernelIO showcase
 3. **Flat-memory bridge side conditions** — the eight-statement `TraceSafe`
    walk (per-program residual cell at `pid`, the two **shared** scalar logit
    cells at `0`, two single-cell stores at `pid`) and `FlattenOk`.
-4. **The spec** — the file's single `specification`:
+4. **The spec** — the original kernel's `specification`:
 
        mhc_width_correctness : mhcWidthIO tau ⊨ fun res hRes hPre =>
          (fun _ => Real.exp (hRes 0 / tau) * res 0,
@@ -57,6 +57,10 @@ the feature dimension. `numIters` controls the fixed Sinkhorn-style
 log-domain normalization count. In the proven fixed-rank slice every tensor
 degenerates to one cell per program (the residual and both outputs live at
 address `b`, both logits are scalar cells at address `0`).
+
+The optimized implementation in Kernels.lean has its own real specification
+below, with the same mathematical formula and IO contract. Its proof uses
+real arithmetic and execution semantics independently of FPEquiv.lean.
 -/
 
 import VeriTile.Triton.Core
@@ -346,6 +350,52 @@ specification mhc_width_correctness (tau : ℝ) :
     exact mhcWidth_traceSafe tau bounds s h1 h2 h3 h4 h5
   · intro s₀ res hRes hPre h1 h2 h3
     exact mhcWidth_region_run tau s₀ res hRes hPre h1 h2 h3
+
+/-! ## Optimized implementation: real correctness -/
+
+section Optimized
+set_option maxHeartbeats 5000000
+attribute [local simp] ComputeExpr.toAlgorithm? ComputeOp.toAlgorithm? ComputeDType.eraseDType
+
+-- This equality is derived in the real interpreter; it uses no FP assumptions.
+private theorem optimized_exec (tau : ℝ) (s : BlockState) :
+    exec (optimizedKernel tau).toAlgKernel s =
+      exec (mhcWidthConnectionKernel "res" "h_res" "h_pre" "res_mix" "branch_in" 1 1 1 0 tau).toAlgKernel s := by
+  simp [optimizedKernel, mhcWidthConnectionKernel, exec, stepStmts, stepStmt, evalOp.eq_def,
+    Region.cast, Tile.bop, Tile.uop, NumericDType.mul, NumericDType.div, mul_comm]
+
+/-- The optimized source retains the original IO windows and memory contract. -/
+@[reducible] def optimizedIO (tau : ℝ) : KernelIO₃ₓ₂ :=
+  { mhcWidthIO tau with kernel := optimizedKernel tau, projection := by rfl }
+
+/-- The optimized implementation computes the same independent real formula. -/
+specification mhc_width_optimized_correctness (tau : ℝ) :
+    Spec.Real (optimizedIO tau ⊨ fun res hRes hPre =>
+      (fun _ => Real.exp (hRes 0 / tau) * res 0,
+       fun _ => Real.exp (hPre 0 / tau) * res 0)) := by
+  refine KernelIO₃ₓ₂.Implements.intro _
+    ?_ ?_ ?_
+  · simp [optimizedKernel, Kernel.FlattenOk,
+      StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  · intro bounds s h1 h2 h3 h4 h5
+    simpa [optimizedIO, mhcWidthIO, Kernel.TraceSafe, optimizedKernel, mhcWidthConnectionKernel,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
+      MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+      Region.cast, Tile.bop, Tile.uop, NumericDType.mul, NumericDType.div, mul_comm]
+      using mhcWidth_traceSafe tau bounds s h1 h2 h3 h4 h5
+  · intro s res hRes hPre h1 h2 h3
+    change ∃ s1, exec (optimizedKernel tau).toAlgKernel s = some s1 ∧ _
+    rw [optimized_exec]
+    exact mhcWidth_region_run tau s res hRes hPre h1 h2 h3
+
+#axiomsClean mhc_width_optimized_correctness
+#stmtSurfaceSubset mhc_width_optimized_correctness ⊆
+  [Spec.Real, optimizedIO, VeriTile.Triton.KernelIO₃ₓ₂.Implements,
+   VeriTile.Triton.KernelIO₃ₓ₂.B1, VeriTile.Triton.KernelIO₃ₓ₂.B2,
+   VeriTile.Triton.KernelIO₃ₓ₂.B3, VeriTile.Triton.KernelIO₃ₓ₂.Bout1,
+   VeriTile.Triton.KernelIO₃ₓ₂.Bout2]
+
+end Optimized
 
 /-! ## Trust gates -/
 

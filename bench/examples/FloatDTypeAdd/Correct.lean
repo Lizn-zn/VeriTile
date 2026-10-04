@@ -1,7 +1,11 @@
 import bench.examples.FloatDTypeAdd.Kernels
 /- Real correctness of the float-annotated addition kernel. Dtype erasure
 removes both working precision and the explicit output quantization before
-interpreting the implementation as a mathematical function. -/
+interpreting the implementation as a mathematical function.
+The optimized implementation in Kernels.lean has its own real specification
+below, with the same mathematical formula and IO contract. Its proof uses
+real arithmetic and execution semantics independently of FPEquiv.lean.
+-/
 import bench.examples.VectorAdd.Correct
 import VeriTile.Meta.StatementAudit
 
@@ -63,6 +67,42 @@ specification float_add_correctness (B : Nat) :
         TileShape.allIndices, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
         ComputeDType.eraseDType]
     · exact VectorAdd.addKernel_region_run B hB s xs ys hx hy
+
+/-! ## Optimized implementation: real correctness -/
+
+private theorem optimized_projection (B : Nat) :
+    (optimizedKernel B).eraseDType.toAlgorithm? =
+      Except.ok (VectorAdd.Kernels.optimizedKernel B).toAlgKernel := by
+  have hcast : (Op.castFloat .real .fp32 (Op.ref .real [B] "out")).eraseDType =
+      Op.ref .real [B] "out" := by
+    rw [Op.eraseDType_castFloat .real .fp32 (Op.ref .real [B] "out")]
+    change (Op.ref .real [B] "out").eraseDType = Op.ref .real [B] "out"
+    rw [Op.eraseDType_ref]
+    rfl
+  simp [optimizedKernel, VectorAdd.Kernels.optimizedKernel, ComputeKernel.eraseDType,
+    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
+    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
+    Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
+    Op.eraseDType, VeriTile.Triton.eraseDType, NumericDType.eraseDType,
+    MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def]
+  exact hcast
+
+/-- Keep the optimized fp32 source; erase quantization only for this real specification. -/
+def optimizedIO (B : Nat) : KernelIO₂ :=
+  { floatAddIO B with
+    kernel := (optimizedKernel B).eraseDType
+    projection := by simp [ComputeKernel.toAlgKernel, optimized_projection] }
+
+/-- Both loaded inputs are added, including when the tile is empty. -/
+specification float_add_optimized_correctness (B : Nat) :
+    Spec.Real (optimizedIO B ⊨ fun xs ys i => xs i + ys i) := by
+  simpa only [Spec.Real, KernelIO₂.Implements, optimizedIO, floatAddIO,
+    VectorAdd.optimizedIO, VectorAdd.addIO, ComputeKernel.toAlgKernel, optimized_projection]
+    using VectorAdd.add_kernel_optimized_correctness B
+
+#axiomsClean float_add_optimized_correctness
+#stmtSurfaceSubset float_add_optimized_correctness ⊆
+  [Spec.Real, optimizedIO, VeriTile.Triton.KernelIO₂.Implements, VeriTile.Triton.KernelIO₂.B]
 
 #guard_msgs (drop info) in
 #auditModuleAxioms

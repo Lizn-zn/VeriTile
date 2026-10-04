@@ -27,7 +27,7 @@ Four parts, following the canonical KernelIO showcase
 3. **Flat-memory bridge side conditions** — the seven-statement `TraceSafe`
    walk (per-program cells at `pid`, the **shared** scalar logit cell at
    `0`, one single-cell store at `pid`) and `FlattenOk`.
-4. **The spec** — the file's single `specification`:
+4. **The spec** — the original kernel's `specification`:
 
        mhc_depth_correctness : mhcDepthIO tau ⊨ fun resMix branchOut hPost _ =>
          resMix 0 + Real.exp (hPost 0 / tau) * branchOut 0
@@ -53,6 +53,10 @@ the feature dimension. `numIters` controls the fixed Sinkhorn-style
 log-domain normalization count. In the proven fixed-rank slice every tensor
 degenerates to one cell per program (the three per-program cells live at
 address `b`, the post logit is the scalar cell at address `0`).
+
+The optimized implementation in Kernels.lean has its own real specification
+below, with the same mathematical formula and IO contract. Its proof uses
+real arithmetic and execution semantics independently of FPEquiv.lean.
 -/
 
 import VeriTile.Triton.Core
@@ -324,6 +328,53 @@ specification mhc_depth_correctness (tau : ℝ) :
       mhcDepth_region_run tau s₀ resMix branchOut hPost h1 h2 h3
     -- scratch is empty, so its frame side condition is vacuous
     exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
+
+/-! ## Optimized implementation: real correctness -/
+
+section Optimized
+set_option maxHeartbeats 5000000
+attribute [local simp] ComputeExpr.toAlgorithm? ComputeOp.toAlgorithm? ComputeDType.eraseDType
+
+-- This equality is derived in the real interpreter; it uses no FP assumptions.
+private theorem optimized_exec (tau : ℝ) (s : BlockState) :
+    exec (optimizedKernel tau).toAlgKernel s =
+      exec (mhcDepthConnectionKernel "res_mix" "branch_out" "h_post" "out" 1 1 1 0 tau).toAlgKernel s := by
+  simp [optimizedKernel, mhcDepthConnectionKernel, exec, stepStmts, stepStmt, evalOp.eq_def,
+    Region.cast, Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
+      NumericDType.div, add_comm]
+
+/-- The optimized source retains the original IO windows and memory contract. -/
+@[reducible] def optimizedIO (tau : ℝ) : KernelIO₃ :=
+  { mhcDepthIO tau with kernel := optimizedKernel tau, projection := by rfl }
+
+/-- The optimized implementation computes the same independent real formula. -/
+specification mhc_depth_optimized_correctness (tau : ℝ) :
+    Spec.Real (optimizedIO tau ⊨ fun resMix branchOut hPost _ =>
+      resMix 0 + Real.exp (hPost 0 / tau) * branchOut 0) := by
+  refine KernelIO₃.Implements.intro _
+    ?_ ?_ ?_
+  · simp [optimizedKernel, Kernel.FlattenOk,
+      StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  · intro bounds s h1 h2 h3 h4 _
+    simpa [optimizedIO, mhcDepthIO, Kernel.TraceSafe, optimizedKernel, mhcDepthConnectionKernel,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
+      MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+      Region.cast, Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
+      NumericDType.div, add_comm]
+      using mhcDepth_traceSafe tau bounds s h1 h2 h3 h4
+  · intro s resMix branchOut hPost h1 h2 h3
+    change ∃ s1, exec (optimizedKernel tau).toAlgKernel s = some s1 ∧ _
+    rw [optimized_exec]
+    obtain ⟨s1, he, hv, hf⟩ := mhcDepth_region_run tau s resMix branchOut hPost h1 h2 h3
+    exact ⟨s1, he, hv, fun r o hmiss _ => hf r o hmiss⟩
+
+#axiomsClean mhc_depth_optimized_correctness
+#stmtSurfaceSubset mhc_depth_optimized_correctness ⊆
+  [Spec.Real, optimizedIO, VeriTile.Triton.KernelIO₃.Implements,
+   VeriTile.Triton.KernelIO₃.B1, VeriTile.Triton.KernelIO₃.B2,
+   VeriTile.Triton.KernelIO₃.B3, VeriTile.Triton.KernelIO₃.Bout]
+
+end Optimized
 
 /-! ## Trust gates -/
 

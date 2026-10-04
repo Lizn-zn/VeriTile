@@ -25,7 +25,7 @@ the per-execution `Kernel.TraceSafe` contract instead. Four parts:
    from the **lane-wise** bounds: every *active* lane's address is below
    the region bound) and `FlattenOk` (bridge fragment membership). They
    license the transport of Part 2 to real pointer arithmetic.
-4. **The spec** — the file's single `specification`:
+4. **The spec** — the original kernel's `specification`:
 
        add_kernel_masked_correctness :
          addMaskedIO B n ⊨ fun xs ys i => xs i + ys i
@@ -62,6 +62,10 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     output  = x + y
     tl.store(out_ptr + offsets, output, mask=mask)
 ```
+
+The optimized implementation in Kernels.lean has its own real specification
+below, with the same mathematical formula and IO contract. Its proof uses
+real arithmetic and execution semantics independently of FPEquiv.lean.
 -/
 
 import VeriTile.Triton
@@ -403,6 +407,55 @@ specification add_kernel_masked_correctness (B n : Nat) (hB : 0 < B) :
       addKernelMasked_region_run B n hB s₀ xs ys hx hy
     -- scratch is empty, so its frame side condition is vacuous
     exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
+
+/-! ## Optimized implementation: real correctness -/
+
+section Optimized
+set_option maxHeartbeats 5000000
+attribute [local simp] ComputeExpr.toAlgorithm? ComputeOp.toAlgorithm? ComputeDType.eraseDType
+
+private theorem optional_add_comm (a b : Option ℝ) :
+    Option.map₂ (fun x y => x + y) a b = Option.map₂ (fun x y => x + y) b a :=
+  Option.map₂_comm add_comm
+
+-- This equality is derived in the real interpreter; it uses no FP assumptions.
+private theorem optimized_exec (B n : Nat) (s : BlockState) :
+    exec (optimizedKernel n B).toAlgKernel s =
+      exec (addKernelMasked "x" "y" "out" B n).toAlgKernel s := by
+  simp [optimizedKernel, addKernelMasked, exec, stepStmts, stepStmt, evalOp.eq_def,
+    Region.cast, Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, add_comm, optional_add_comm]
+
+/-- The optimized source retains the original IO windows and memory contract. -/
+def optimizedIO (B n : Nat) : MaskedKernelIO₂ :=
+  { addMaskedIO B n with kernel := optimizedKernel n B, projection := by rfl }
+
+/-- The optimized implementation computes the same independent real formula. -/
+specification add_kernel_masked_optimized_correctness (B n : Nat) (hB : 0 < B) :
+    Spec.Real (optimizedIO B n ⊨ fun xs ys i => xs i + ys i) := by
+  refine MaskedKernelIO₂.Implements.intro _
+    ?_ ?_ ?_
+  · simp [optimizedIO, optimizedKernel, Kernel.FlattenOk,
+      StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  · intro bounds s h1 h2 h3 _
+    simpa [optimizedIO, addMaskedIO, Kernel.TraceSafe, optimizedKernel, addKernelMasked,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
+      MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+      Region.cast, Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
+      ComparableDType.lt, add_comm, optional_add_comm]
+      using addKernelMasked_traceSafe "x" "y" "out" B n bounds s h1 h2 h3
+  · intro s xs ys hx hy
+    change ∃ s1, exec (optimizedKernel n B).toAlgKernel s = some s1 ∧ _
+    rw [optimized_exec]
+    obtain ⟨s1, he, hv, hf⟩ := addKernelMasked_region_run B n hB s xs ys hx hy
+    exact ⟨s1, he, hv, fun r o hmiss _ => hf r o hmiss⟩
+
+#axiomsClean add_kernel_masked_optimized_correctness
+#stmtSurfaceSubset add_kernel_masked_optimized_correctness ⊆
+  [Spec.Real, optimizedIO, VeriTile.Triton.MaskedKernelIO₂.Implements,
+   VeriTile.Triton.MaskedKernelIO₂.B]
+
+end Optimized
 
 /-! ## Trust gates -/
 

@@ -16,7 +16,7 @@ showcase `bench/examples/VectorAdd/Correct.lean`:
    walk (row-stride load in bounds when `pid * nCol + B ≤ bounds x`;
    single-cell store when `pid + 1 ≤ bounds y`; the reduction is
    memory-silent) and `FlattenOk`.
-4. **The spec** — the file's single `specification`, hypothesis-free:
+4. **The spec** — the original kernel's `specification`, hypothesis-free:
 
        rowWiseSum_correctness : rowWiseSumIO nCol B ⊨ fun xs _ => ∑ k, xs k
 
@@ -38,9 +38,14 @@ def row_wise_sum(X, Y, n_cols: tl.constexpr, BLOCK_SIZE: tl.constexpr):
     result = tl.sum(values, axis=0)
     tl.store(Y + row, result)
 ```
+
+The optimized implementation in Kernels.lean has its own real specification
+below, with the same mathematical formula and IO contract. Its proof uses
+real arithmetic and execution semantics independently of FPEquiv.lean.
 -/
 
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+import Mathlib.Data.Fin.Rev
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
 import VeriTile.Triton.Float
@@ -290,6 +295,66 @@ specification rowWiseSum_correctness (nCol B : Nat) :
     obtain ⟨s1, hexec, hval, hframe⟩ := rowWiseSum_region_run nCol B s₀ xs hx
     -- scratch is empty, so its frame side condition is vacuous
     exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
+
+/-! ## Optimized implementation: real correctness -/
+
+section Optimized
+set_option maxHeartbeats 1600000
+
+private theorem reversed_region_run (nCol B : Nat) (s : BlockState) (xs : Fin B → ℝ)
+    (hx : ∀ i : Fin B, s.readMem "x" (s.pid * nCol + i.val) = xs i) :
+    ∃ t, exec (reversedKernel "x" "y" nCol B).toAlgKernel s = some t ∧
+      (∀ i : Fin 1, t.readMem "y" (s.pid + i.val) = ∑ k, xs k) ∧
+      (∀ (r : RegionName) o, (r ≠ "y" ∨ ∀ i : Fin 1, o ≠ s.pid + i.val) →
+        t.mem r o = s.mem r o) := by
+  have hrev (i : Fin B) : s.readMem "x" (s.pid * nCol + (B - 1 - i.val)) = xs i.rev := by
+    simpa only [Fin.val_rev, Nat.sub_sub, Nat.add_comm] using hx i.rev
+  simp [reversedKernel, exec, stepStmts, stepStmt, evalOp.eq_def,
+    Region.cast, Tile.bop, NumericDType.add, NumericDType.mul, NumericDType.sub,
+    Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis,
+    TileShape.insertAxisIndex]
+  refine ⟨?_, ?_⟩
+  · simpa [← BlockState.pid_eq, hrev] using Equiv.sum_comp Fin.revPerm xs
+  · intro r o hmiss
+    rw [BlockState.writeMem_mem]
+    apply if_neg
+    rintro ⟨hr, ho⟩
+    rcases hmiss with hr' | ho'
+    · exact hr' hr
+    · exact ho' ho
+
+def reversedIO (nCol B : Nat) : KernelIO₁ :=
+  { rowWiseSumIO nCol B with kernel := reversedKernel "x" "y" nCol B, projection := by rfl }
+
+/-- The optimized source computes the same mathematical row reduction. -/
+specification rowWiseSum_reversed_correctness (nCol B : Nat) :
+    Spec.Real (reversedIO nCol B ⊨ fun xs _ => ∑ k, xs k) := by
+  refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · simp [reversedIO, reversedKernel, Kernel.FlattenOk,
+      StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  · intro bounds s hx hy _
+    simp [reversedIO, Kernel.TraceSafe, reversedKernel,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
+      MemAccess.SafeAt, MemAccess.ActiveAddressSafe, memAccessActiveAddressSafe,
+      MaskOpt.Active, BlockState.setReg, stepStmt, evalOp.eq_def,
+      Region.cast, Tile.bop, NumericDType.add, NumericDType.mul, NumericDType.sub,
+      Tile.reduceSumDrop, TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex]
+    refine ⟨?_, ?_⟩
+    · intro i
+      have hi : B - 1 - i.val < B := by omega
+      exact lt_of_lt_of_le (Nat.add_lt_add_left hi _) hx
+    · exact Nat.lt_of_add_one_le hy
+  · intro s xs hx
+    obtain ⟨t, he, hv, hf⟩ := reversed_region_run nCol B s xs hx
+    exact ⟨t, he, hv, fun r o hmiss _ => hf r o hmiss⟩
+
+#axiomsClean rowWiseSum_reversed_correctness
+#stmtSurfaceSubset rowWiseSum_reversed_correctness ⊆
+  [Spec.Real, reversedIO, VeriTile.Triton.KernelIO₁.Implements,
+   VeriTile.Triton.KernelIO₁.Bin, VeriTile.Triton.KernelIO₁.Bout,
+   Finset.sum, Finset.univ]
+
+end Optimized
 
 /-! ## Trust gates -/
 

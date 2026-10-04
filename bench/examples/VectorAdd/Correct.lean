@@ -15,7 +15,7 @@ bench/examples/VectorAdd
    safety walk) and `FlattenOk` (bridge fragment membership), discharged
    for this kernel. They license the transport of Part 2 to real pointer
    arithmetic.
-4. **The spec** — the file's single `specification`:
+4. **The spec** — the original kernel's `specification`:
 
        add_kernel_correctness : Spec.Real (addIO B ⊨ fun xs ys i => xs i + ys i)
 
@@ -48,6 +48,10 @@ def add_kernel(x_ptr, y_ptr, out_ptr, n_elements, BLOCK_SIZE: tl.constexpr):
     output  = x + y
     tl.store(out_ptr + offsets, output)
 ```
+
+The optimized implementation in Kernels.lean has its own real specification
+below, with the same mathematical formula and IO contract. Its proof uses
+real arithmetic and execution semantics independently of FPEquiv.lean.
 -/
 
 import VeriTile.Triton
@@ -312,6 +316,50 @@ specification add_kernel_correctness (B : Nat) (hB : 0 < B) :
     exact addKernel_traceSafe ⟨"x"⟩ ⟨"y"⟩ ⟨"out"⟩ B bounds s h1 h2 h3
   · intro s₀ xs ys hx hy
     exact addKernel_region_run B hB s₀ xs ys hx hy
+
+/-! ## Optimized implementation: real correctness -/
+
+section Optimized
+set_option maxHeartbeats 5000000
+attribute [local simp] ComputeExpr.toAlgorithm? ComputeOp.toAlgorithm? ComputeDType.eraseDType
+
+-- This equality is derived in the real interpreter; it uses no FP assumptions.
+private theorem optimized_exec (B : Nat) (s : BlockState) :
+    exec (optimizedKernel B).toAlgKernel s =
+      exec (addKernel "x" "y" "out" B).toAlgKernel s := by
+  simp [optimizedKernel, addKernel, exec, stepStmts, stepStmt, evalOp.eq_def,
+    Region.cast, Tile.bop, NumericDType.add, NumericDType.mul, add_comm]
+
+/-- The optimized source retains the original IO windows and memory contract. -/
+def optimizedIO (B : Nat) : KernelIO₂ :=
+  { addIO B with kernel := optimizedKernel B, projection := by rfl }
+
+/-- The optimized implementation computes the same independent real formula. -/
+specification add_kernel_optimized_correctness (B : Nat) :
+    Spec.Real (optimizedIO B ⊨ fun xs ys i => xs i + ys i) := by
+  refine KernelIO₂.Implements.intro _
+    ?_ ?_ ?_
+  · simp [optimizedIO, optimizedKernel, Kernel.FlattenOk,
+      StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+  · intro bounds s h1 h2 h3
+    simpa [optimizedIO, addIO, Kernel.TraceSafe, optimizedKernel, addKernel,
+      Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
+      MemAccess.SafeAt, stepStmt, evalOp.eq_def,
+      Region.cast, Tile.bop, NumericDType.add, NumericDType.mul, add_comm]
+      using addKernel_traceSafe "x" "y" "out" B bounds s h1 h2 h3
+  · intro s xs ys hx hy
+    change ∃ s1, exec (optimizedKernel B).toAlgKernel s = some s1 ∧ _
+    rw [optimized_exec]
+    rcases Nat.eq_zero_or_pos B with rfl | hB
+    · simp [optimizedIO, addIO, addKernel, exec, stepStmts, stepStmt, evalOp.eq_def,
+        Tile.bop, NumericDType.add, NumericDType.mul, TileShape.allIndices]
+    · exact addKernel_region_run B hB s xs ys hx hy
+
+#axiomsClean add_kernel_optimized_correctness
+#stmtSurfaceSubset add_kernel_optimized_correctness ⊆
+  [Spec.Real, optimizedIO, VeriTile.Triton.KernelIO₂.Implements, VeriTile.Triton.KernelIO₂.B]
+
+end Optimized
 
 /-! ## Trust gates -/
 

@@ -24,16 +24,16 @@ FP equivalence. Pending entries must not be advertised as proved.
 
 | Original case | Correctness file | FP transformation and status |
 |---|---|---|
-| TritonBench vector addition | `TritonBenchVectorAddition/Correct.lean` — checked | `TritonBenchVectorAddition/FPEquiv.lean` — checked; add commutation |
-| Aligned vector addition | `VectorAdd/Correct.lean` — checked | `VectorAdd/FPEquiv.lean` — checked; add commutation |
-| Masked vector addition | `FlatVectorAdd/Correct.lean` — checked | `FlatVectorAdd/FPEquiv.lean` — checked; add commutation |
-| Float dtype addition | `FloatDTypeAdd/Correct.lean` — checked, including empty tiles | `FloatDTypeAdd/FPEquiv.lean` — checked; add commutation; output cast retained |
-| Row-wise sum | `RowWiseSum/Correct.lean` — checked | `RowWiseSum/FPEquiv.lean` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
-| Row-wise max | `RowWiseMax/Correct.lean` — checked | `RowWiseMax/FPEquiv.lean` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
+| TritonBench vector addition | `TritonBenchVectorAddition/Correct.lean` — checked for original and optimized sources | `TritonBenchVectorAddition/FPEquiv.lean` — checked; add commutation |
+| Aligned vector addition | `VectorAdd/Correct.lean` — checked for original and optimized sources | `VectorAdd/FPEquiv.lean` — checked; add commutation |
+| Masked vector addition | `FlatVectorAdd/Correct.lean` — checked for original and optimized sources | `FlatVectorAdd/FPEquiv.lean` — checked; add commutation |
+| Float dtype addition | `FloatDTypeAdd/Correct.lean` — checked for original and optimized sources, including empty tiles | `FloatDTypeAdd/FPEquiv.lean` — checked; add commutation; output cast retained |
+| Row-wise sum | `RowWiseSum/Correct.lean` — checked for original and optimized sources | `RowWiseSum/FPEquiv.lean` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
+| Row-wise max | `RowWiseMax/Correct.lean` — checked for original and optimized sources | `RowWiseMax/FPEquiv.lean` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
 | Online softmax | `OnlineSoftmax/Correct.lean` — checked, original batch-kernel/online-recurrence scope | `OnlineSoftmax/FPEquiv.lean` — checked in that same observation scope: stored batch values versus read-only normalization of the actual online m/l registers; libdevice EXP-SUB and scalar arithmetic, symbolic positive row length and separate memory frames |
-| mHC depth | `HyperConnectionsDepth/Correct.lean` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepth/FPEquiv.lean` — checked in the same scope; add commutation |
-| mHC width | `HyperConnectionsWidth/Correct.lean` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidth/FPEquiv.lean` — checked in the same scope; two multiplication commutations |
-| Adam-named Lion update | `AdamUpdateGridLaunch/Correct.lean` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunch/FPEquiv.lean` — checked per program; momentum addition commutation, masked in-place stores retained |
+| mHC depth | `HyperConnectionsDepth/Correct.lean` — checked for original and optimized sources, original rank-one/zero-iteration scope | `HyperConnectionsDepth/FPEquiv.lean` — checked in the same scope; add commutation |
+| mHC width | `HyperConnectionsWidth/Correct.lean` — checked for original and optimized sources, original rank-one/zero-iteration scope | `HyperConnectionsWidth/FPEquiv.lean` — checked in the same scope; two multiplication commutations |
+| Adam-named Lion update | `AdamUpdateGridLaunch/Correct.lean` — checked for both sources per program; original grid proofs retained | `AdamUpdateGridLaunch/FPEquiv.lean` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStable/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxStable/FPEquiv.lean` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
 | Piecewise log-exp | `LogExp/Correct.lean` — checked for the original and copy kernels against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted masked libdevice log-exp/expm1 atom |
 | Stable logsumexp | `StableLogSumExp/Correct.lean` — checked for both original kernels against logsumexp | Direct versus stable libdevice kernels: EXP-SUB connected; fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need admission |
@@ -48,6 +48,16 @@ There are 19 correctness modules, 18 completed FP equivalence modules, and
 one goal-only FP file for StableLogSumExp. The eight `RealEquiv.lean` modules
 retain proofs with real intermediate arithmetic and their stated cast semantics.
 Their presence does not complete a pending FP transformation.
+
+The nine scalar/reduction example pairs now each expose an optimized real
+specification in addition to the original one. The statements reference the
+optimized source directly and prove the same mathematical formula, with the
+IO bounds, active-lane masks and memory frames retained. They do not use the
+FP equivalence theorem or any experiment-selected atom. Reversed row sum uses
+a bijection on `Fin B`; inlined row max is proved by direct execution. The
+optimized aligned addition additionally covers empty tiles. The optimized
+Lion statement covers each program's two masked in-place outputs; the existing
+whole-grid launch theorems remain stated about the original implementation.
 
 The SiLU and SwiGLU materialized kernels retain the original `ComputeKernel.seq`
 scope: one concatenation of stage bodies. Both real and FP specifications explicitly
