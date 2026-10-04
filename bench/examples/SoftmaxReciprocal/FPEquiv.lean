@@ -64,7 +64,7 @@ theorem original_run {α : Type} [Inhabited α] (M : Algebra α)
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [originalKernel, FP.Structural.exec, run, step, evalExpr, evalComputeOp,
+  simp [originalKernel, stableSoftmaxKernel, FP.Structural.exec, run, step, evalExpr, evalComputeOp,
     evalOp_unfold, ComputeDType.eraseDType, numeric, bop, store,
     TileShape.axisDim, TileShape.eraseAxis, hB, toFloat, ofFloat]
   refine ⟨fun i => ?_, fun r o hmiss => ?_⟩
@@ -89,7 +89,7 @@ theorem reciprocal_run {α : Type} [Inhabited α] (M : Algebra α)
     rintro ⟨a, _⟩ ⟨b, _⟩ hab
     obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
     rfl
-  simp [reciprocalKernel, FP.Structural.exec, run, step, evalExpr, evalComputeOp,
+  simp [reciprocalKernel, softmaxRecipKernel, FP.Structural.exec, run, step, evalExpr, evalComputeOp,
     evalOp_unfold, ComputeDType.eraseDType, numeric, bop, store,
     TileShape.axisDim, TileShape.eraseAxis, hB, toFloat, ofFloat]
   refine ⟨fun i => ?_, fun r o hmiss => ?_⟩

@@ -11,12 +11,12 @@ Triton programs, then choose the specification you want to inspect:
 | `Execution.lean`, `Contract.lean`, `Comparison.lean`, `Batch.lean` | Example-specific execution and composition lemmas, when needed. |
 | `RealEquiv.lean` | Retained proofs using real intermediate arithmetic and their stated cast semantics. These are separate from the two-gates FP specifications. |
 
-`Correct.lean` and `FPEquiv.lean` share sources without importing one another.
-Several examples retain both a generic mathematical source and its explicitly
-typed FP specialization in `Kernels.lean`. The IO wrappers identify the exact
-variant used by each specification. In `FloatDTypeSoftmax`, FP execution also
-spells the load and cast as separate assignments; its source is distinct from
-the inline spelling used by the real proof.
+`Correct.lean` and `FPEquiv.lean` reference the same typed source definitions
+without importing one another. Names such as `originalKernel` only specialize
+region names or the documented scalar slice; they do not duplicate the source.
+Correctness uses the real projection of that source, erasing casts when required.
+In `FloatDTypeSoftmax`, both proofs retain the separate `x32` load and `x` cast
+assignments; only their numerical interpretation differs.
 
 Experiment shape and distribution select atomic assumptions. They do not fix
 the dimensions of the subsequent proofs. Precision, intrinsic choice and

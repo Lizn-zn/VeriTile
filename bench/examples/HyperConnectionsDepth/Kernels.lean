@@ -30,9 +30,9 @@ def mhcDepthConnectionKernel
   match S, T, D, numIters with
   | 1, 1, 1, 0 => triton {
   b := tl.program_id(0)
-  res_mix := tl.load($(resMixReg) + b)
-  branch_out := tl.load($(branchOutReg) + b)
-  h_post := tl.load($(hPostReg))
+  res_mix := tl.load($(resMixReg) + b, dtype=tl.float32)
+  branch_out := tl.load($(branchOutReg) + b, dtype=tl.float32)
+  h_post := tl.load($(hPostReg), dtype=tl.float32)
   branch_mix := tl.exp(h_post / $(tau)) * branch_out
   out := res_mix + branch_mix
   tl.store($(outReg) + b, out)
@@ -67,19 +67,7 @@ def mhcDepthConnectionKernel
 }
 
 def originalKernel (tau : ℝ) : ComputeKernel :=
-  let resMixReg : Region .fp32 := ⟨"res_mix"⟩
-  let branchOutReg : Region .fp32 := ⟨"branch_out"⟩
-  let hPostReg : Region .fp32 := ⟨"h_post"⟩
-  let outReg : Region .fp32 := ⟨"out"⟩
-  triton {
-  b := tl.program_id(0)
-  res_mix := tl.load(resMixReg + b)
-  branch_out := tl.load(branchOutReg + b)
-  h_post := tl.load(hPostReg)
-  branch_mix := tl.exp(h_post / $(tau)) * branch_out
-  out := res_mix + branch_mix
-  tl.store(outReg + b, out)
-}
+  mhcDepthConnectionKernel "res_mix" "branch_out" "h_post" "out" 1 1 1 0 tau
 
 def optimizedKernel (tau : ℝ) : ComputeKernel :=
   let resMixReg : Region .fp32 := ⟨"res_mix"⟩

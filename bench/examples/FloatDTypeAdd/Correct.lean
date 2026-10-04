@@ -60,7 +60,8 @@ specification float_add_correctness (B : Nat) :
     rcases Nat.eq_zero_or_pos B with rfl | hB
     · simp [floatAddIO, VectorAdd.Kernels.addKernel, exec, stepStmts, stepStmt,
         evalOp.eq_def, Tile.bop, NumericDType.add, NumericDType.mul,
-        TileShape.allIndices]
+        TileShape.allIndices, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
+        ComputeDType.eraseDType]
     · exact VectorAdd.addKernel_region_run B hB s xs ys hx hy
 
 #guard_msgs (drop info) in

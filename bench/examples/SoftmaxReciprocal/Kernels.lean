@@ -15,7 +15,7 @@ open VeriTile Triton
 def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := tl.load($(xReg) + offs)
+  x    := tl.load($(xReg) + offs, dtype=tl.float32)
   m    := tl.max(x, axis=0)
   e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
@@ -28,7 +28,7 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
 def softmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x      := tl.load($(xReg) + offs)
+  x      := tl.load($(xReg) + offs, dtype=tl.float32)
   m      := tl.max(x, axis=0)
   e      := libdevice.exp(x - m)
   s      := tl.sum(e, axis=0)
@@ -46,27 +46,10 @@ def commonPrefix (xReg : RegionName) (B : Nat) : ComputeKernel := triton {
   s    := tl.sum(e, axis=0)
 }
 
-def originalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(B) + tl.arange(0, $(B))
-  x    := tl.load($(xReg) + offs, dtype=tl.float32)
-  m    := tl.max(x, axis=0)
-  e    := libdevice.exp(x - m)
-  s    := tl.sum(e, axis=0)
-  y    := e / s
-  tl.store($(yReg) + offs, (y).to(tl.bfloat16))
-}
+def originalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel :=
+  stableSoftmaxKernel xReg yReg B
 
-def reciprocalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(B) + tl.arange(0, $(B))
-  x    := tl.load($(xReg) + offs, dtype=tl.float32)
-  m    := tl.max(x, axis=0)
-  e    := libdevice.exp(x - m)
-  s    := tl.sum(e, axis=0)
-  inv_s := 1 / s
-  y     := e * inv_s
-  tl.store($(yReg) + offs, (y).to(tl.bfloat16))
-}
+def reciprocalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel :=
+  softmaxRecipKernel xReg yReg B
 
 end VeriTile.Bench.Examples.SoftmaxReciprocal.Kernels

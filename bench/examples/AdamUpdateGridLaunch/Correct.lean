@@ -102,6 +102,10 @@ FlashAttention examples.
 
 namespace VeriTile.Bench.Examples.AdamUpdateGridLaunch
 open VeriTile.Bench.Examples.AdamUpdateGridLaunch.Kernels
+
+-- Correctness interprets the shared typed source through its real projection.
+attribute [local simp] VeriTile.Triton.ComputeExpr.toAlgorithm?
+  VeriTile.Triton.ComputeOp.toAlgorithm? VeriTile.Triton.ComputeDType.eraseDType
 open VeriTile.Examples
 open VeriTile.Triton
 

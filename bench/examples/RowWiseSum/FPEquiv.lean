@@ -23,10 +23,10 @@ def reducedValue {α : Type} (M : Algebra α) (B : Nat) (xs : Fin B → α) : α
 theorem original_run {α : Type} [Inhabited α] (M : Algebra α)
     (nCol B : Nat) (s : State α) (xs : Fin B → α)
     (hx : ∀ i : Fin B, (s.mem "x" (s.pids 0 * nCol + i.val)).read .real = xs i) :
-    ∃ t, FP.Structural.exec M (fpRowWiseSumKernel "x" "y" nCol B) s = some t ∧
+    ∃ t, FP.Structural.exec M (rowWiseSumKernel "x" "y" nCol B) s = some t ∧
       t.mem "y" (s.pids 0) = Cell.mk .real (reducedValue M B xs) ∧
       (∀ (r : RegionName) o, (r ≠ "y" ∨ o ≠ s.pids 0) → t.mem r o = s.mem r o) := by
-  simp [fpRowWiseSumKernel, FP.Structural.exec, run, step, evalExpr, evalComputeOp,
+  simp [rowWiseSumKernel, FP.Structural.exec, run, step, evalExpr, evalComputeOp,
     evalOp_unfold, numeric, FP.Structural.bop, store, TileShape.allIndices,
     TileShape.eraseAxis, Region.cast, ComputeDType.eraseDType, hx, reducedValue]
   intro r o hmiss
@@ -47,7 +47,7 @@ theorem reversed_run {α : Type} [Inhabited α] (M : Algebra α)
   exact (State.write_other _ "y" r (s.pids 0) o _ hmiss).trans rfl
 
 def originalIO (nCol B : Nat) : KernelIO₁ where
-  kernel := fpRowWiseSumKernel "x" "y" nCol B
+  kernel := rowWiseSumKernel "x" "y" nCol B
   inp := "x"
   out := "y"
   Bin := B

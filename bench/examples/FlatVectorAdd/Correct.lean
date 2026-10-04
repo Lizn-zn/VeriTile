@@ -71,6 +71,10 @@ import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.FlatVectorAdd
 open VeriTile.Bench.Examples.FlatVectorAdd.Kernels
+
+-- Correctness interprets the shared typed source through its real projection.
+attribute [local simp] VeriTile.Triton.ComputeExpr.toAlgorithm?
+  VeriTile.Triton.ComputeOp.toAlgorithm? VeriTile.Triton.ComputeDType.eraseDType
 open VeriTile.Triton
 open VeriTile.Triton.MaskedKernelIO₂ (Implements)
 open scoped VeriTile.Triton.MaskedKernelIO₂
@@ -319,14 +323,14 @@ theorem addKernelMasked_traceSafe (xReg yReg outReg : RegionName)
   -- statement 4: x := load(xReg + offsets, mask)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
   · refine ?_
-    simp only [Stmt.TraceSafe, Op.SafeAt]
+    simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨by simp, by simp,
       hAAS sm (fun _ _ _ _ => rfl) xReg hx⟩
   intro s4 hs4
   obtain ⟨v4, hv4, rfl⟩ := stepStmt_assign_inv hs4
   -- statement 5: y := load(yReg + offsets, mask)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     refine ⟨by simp, by simp,
       hAAS _ (fun dt sh nm hnm => ?_) yReg hy⟩
     rcases hnm with rfl | rfl <;> simp [BlockState.setReg]

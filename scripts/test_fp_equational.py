@@ -53,16 +53,16 @@ run_cmd do
         self.assertNotIn("unresolved FP proof:", output)
         self.assertIn("\n  add_assoc\n", output)
 
-    def test_original_projection_and_symbolic_dimensions_including_zero(self):
+    def test_same_original_source_and_symbolic_dimensions_including_zero(self):
         self.lean('''
 import bench.examples.RowWiseSum.Correct
 import bench.examples.RowWiseSum.FPEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 open scoped VeriTile.Spec
-example (x y : RegionName) (nCol B : Nat) :
-    (RowWiseSum.Kernels.fpRowWiseSumKernel x y nCol B).toAlgorithm? =
-      (RowWiseSum.Kernels.rowWiseSumKernel x y nCol B).toAlgorithm? := rfl
+example (nCol B : Nat) :
+    (RowWiseSum.rowWiseSumIO nCol B).kernel =
+      (RowWiseSumFPEquiv.originalIO nCol B).kernel := rfl
 example (nCol B : Nat) (R : RowWiseSumFPEquiv.Rules) :
     RowWiseSumFPEquiv.originalIO nCol B ≡[R] RowWiseSumFPEquiv.reversedIO nCol B :=
   RowWiseSumFPEquiv.rowwise_sum_equiv nCol B R

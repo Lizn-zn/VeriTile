@@ -34,10 +34,10 @@ def mhcWidthConnectionKernel
   match S, T, D, numIters with
   | 1, 1, 1, 0 => triton {
   b := tl.program_id(0)
-  residual := tl.load($(resReg) + b)
-  h_res := tl.load($(hResReg))
+  residual := tl.load($(resReg) + b, dtype=tl.float32)
+  h_res := tl.load($(hResReg), dtype=tl.float32)
   res_mix := tl.exp(h_res / $(tau)) * residual
-  h_pre := tl.load($(hPreReg))
+  h_pre := tl.load($(hPreReg), dtype=tl.float32)
   branch_in := tl.exp(h_pre / $(tau)) * residual
   tl.store($(resMixReg) + b, res_mix)
   tl.store($(branchInReg) + b, branch_in)
@@ -83,21 +83,7 @@ def mhcWidthConnectionKernel
 }
 
 def originalKernel (tau : ℝ) : ComputeKernel :=
-  let resReg : Region .fp32 := ⟨"res"⟩
-  let hResReg : Region .fp32 := ⟨"h_res"⟩
-  let hPreReg : Region .fp32 := ⟨"h_pre"⟩
-  let resMixReg : Region .fp32 := ⟨"res_mix"⟩
-  let branchInReg : Region .fp32 := ⟨"branch_in"⟩
-  triton {
-  b := tl.program_id(0)
-  residual := tl.load(resReg + b)
-  h_res := tl.load(hResReg)
-  res_mix := tl.exp(h_res / $(tau)) * residual
-  h_pre := tl.load(hPreReg)
-  branch_in := tl.exp(h_pre / $(tau)) * residual
-  tl.store(resMixReg + b, res_mix)
-  tl.store(branchInReg + b, branch_in)
-}
+  mhcWidthConnectionKernel "res" "h_res" "h_pre" "res_mix" "branch_in" 1 1 1 0 tau
 
 def middleKernel (tau : ℝ) : ComputeKernel :=
   let resReg : Region .fp32 := ⟨"res"⟩

@@ -15,7 +15,8 @@ open VeriTile Triton
 def floatStableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x    := (tl.load($(xReg) + offs, dtype=tl.float32)).to(tl.float64)
+  x32  := tl.load($(xReg) + offs, dtype=tl.float32)
+  x    := x32.to(tl.float64)
   m    := tl.max(x, axis=0)
   e    := libdevice.exp(x - m)
   s    := tl.sum(e, axis=0)
@@ -28,7 +29,8 @@ saving per-lane divisions versus `floatStableSoftmaxKernel`. Both implementation
 def floatSoftmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid    := tl.program_id(0)
   offs   := pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x      := (tl.load($(xReg) + offs, dtype=tl.float32)).to(tl.float64)
+  x32    := tl.load($(xReg) + offs, dtype=tl.float32)
+  x      := x32.to(tl.float64)
   m      := tl.max(x, axis=0)
   e      := libdevice.exp(x - m)
   s      := tl.sum(e, axis=0)
@@ -37,9 +39,8 @@ def floatSoftmaxRecipKernel (xReg yReg : RegionName) (blockSize : Nat) : Compute
   tl.store($(yReg) + offs, (y).to(tl.float32))
 }
 
-/-- FP execution spells the load and widening cast as separate assignments.
-The real specification above uses the inline load/cast spelling; the extra
-x32 register is private, but these are distinct source programs. -/
+/-- Shared execution prefix. Binding the fp32 load before the fp64 cast
+preserves both precision boundaries in the FP interpretation. -/
 def commonPrefix (xReg : RegionName) (B : Nat) : ComputeKernel := triton {
   pid  := tl.program_id(0)
   offs := pid * $(B) + tl.arange(0, $(B))
@@ -50,29 +51,10 @@ def commonPrefix (xReg : RegionName) (B : Nat) : ComputeKernel := triton {
   s    := tl.sum(e, axis=0)
 }
 
-def originalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(B) + tl.arange(0, $(B))
-  x32  := tl.load($(xReg) + offs, dtype=tl.float32)
-  x    := x32.to(tl.float64)
-  m    := tl.max(x, axis=0)
-  e    := libdevice.exp(x - m)
-  s    := tl.sum(e, axis=0)
-  y    := e / s
-  tl.store($(yReg) + offs, (y).to(tl.float32))
-}
+def originalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel :=
+  floatStableSoftmaxKernel xReg yReg B
 
-def reciprocalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel := triton {
-  pid  := tl.program_id(0)
-  offs := pid * $(B) + tl.arange(0, $(B))
-  x32  := tl.load($(xReg) + offs, dtype=tl.float32)
-  x    := x32.to(tl.float64)
-  m    := tl.max(x, axis=0)
-  e    := libdevice.exp(x - m)
-  s    := tl.sum(e, axis=0)
-  inv_s := 1 / s
-  y     := e * inv_s
-  tl.store($(yReg) + offs, (y).to(tl.float32))
-}
+def reciprocalKernel (xReg yReg : RegionName) (B : Nat) : ComputeKernel :=
+  floatSoftmaxRecipKernel xReg yReg B
 
 end VeriTile.Bench.Examples.FloatDTypeSoftmax.Kernels

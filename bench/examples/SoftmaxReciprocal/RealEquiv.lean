@@ -62,6 +62,9 @@ no raw-store twin kernels needed.
 
 namespace VeriTile.Bench.Examples.SoftmaxReciprocal
 open VeriTile.Bench.Examples.SoftmaxReciprocal.Kernels
+
+attribute [local simp] VeriTile.Triton.ComputeExpr.toAlgorithm?
+  VeriTile.Triton.ComputeOp.toAlgorithm? VeriTile.Triton.ComputeDType.eraseDType
 open VeriTile.Triton VeriTile.Triton.TiledSoftmax
 open scoped VeriTile.Triton.KernelIO₁
 

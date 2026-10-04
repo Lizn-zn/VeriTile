@@ -57,6 +57,10 @@ import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.VectorAdd
 open VeriTile.Bench.Examples.VectorAdd.Kernels
+
+-- Correctness interprets the shared typed source through its real projection.
+attribute [local simp] VeriTile.Triton.ComputeExpr.toAlgorithm?
+  VeriTile.Triton.ComputeOp.toAlgorithm? VeriTile.Triton.ComputeDType.eraseDType
 open VeriTile.Triton
 open VeriTile.Triton.KernelIO₂ (Implements)
 open scoped VeriTile.Triton.KernelIO₂
@@ -239,13 +243,13 @@ theorem addKernel_traceSafe (xReg yReg outReg : RegionName)
     exact lt_of_lt_of_le (Nat.add_lt_add_left i.1.isLt _) hreg
   -- statement 3: x := load(xReg + offs)   (unmasked: all lanes active)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨by simp, trivial, hAAS sm (fun _ _ _ _ => rfl) xReg hx⟩
   intro s4 hs4
   obtain ⟨v4, hv4, rfl⟩ := stepStmt_assign_inv hs4
   -- statement 4: y := load(yReg + offs)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     refine ⟨by simp, trivial, hAAS _ (fun dt sh nm hnm => ?_) yReg hy⟩
     subst hnm; simp [BlockState.setReg]
   intro s5 hs5

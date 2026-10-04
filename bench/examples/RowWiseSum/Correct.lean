@@ -53,6 +53,10 @@ import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.RowWiseSum
 open VeriTile.Bench.Examples.RowWiseSum.Kernels
+
+-- Correctness interprets the shared typed source through its real projection.
+attribute [local simp] VeriTile.Triton.ComputeExpr.toAlgorithm?
+  VeriTile.Triton.ComputeOp.toAlgorithm? VeriTile.Triton.ComputeDType.eraseDType
 open VeriTile.Triton
 open VeriTile.Triton.KernelIO₁ (Implements)
 open scoped VeriTile.Triton.KernelIO₁
@@ -229,7 +233,7 @@ theorem rowWiseSum_traceSafe (xReg yReg : RegionName)
   obtain rfl := Option.some_inj.mp hv2
   -- statement 3: values := load(xReg + row * nCol + cols)   (unmasked)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨by simp, trivial,
       rowCols_activeAddressSafe nCol B bounds (s.pids 0) _ _
         (by simp [BlockState.setReg]) (by simp [BlockState.setReg]) xReg hx⟩

@@ -40,6 +40,8 @@ class ExamplePairTests(unittest.TestCase):
                    for name, _, _, _ in PAIRS for suffix in ("Correct", "FPEquiv")]
         targets += [f"bench.examples.{family}.Correct"
                     for family, _, _, _ in REDUCTIONS]
+        targets += [f"bench.examples.{family}.FPEquiv"
+                    for family in ("SoftmaxReciprocal", "FloatDTypeSoftmax")]
         targets += [f"bench.examples.{name}.{suffix}"
                     for name in ("FusedSiLU", "FusedSwiglu", "Welford", "FusedLayerNorm")
                     for suffix in ("Correct", "RealEquiv")]
@@ -65,32 +67,51 @@ class ExamplePairTests(unittest.TestCase):
 open VeriTile.Bench.Examples
 
 example (B : Nat) :
-    (VectorAdd.Kernels.originalKernel B).toAlgorithm? =
-      (VectorAdd.Kernels.addKernel "x" "y" "out" B).toAlgorithm? := rfl
+    (VectorAdd.addIO B).kernel = VectorAdd.Kernels.originalKernel B := rfl
 
 example (n B : Nat) :
-    (FlatVectorAdd.Kernels.originalKernel n B).toAlgorithm? =
-      (FlatVectorAdd.Kernels.addKernelMasked "x" "y" "out" B n).toAlgorithm? := rfl
+    (FlatVectorAdd.addMaskedIO B n).kernel = FlatVectorAdd.Kernels.originalKernel n B := rfl
 
 example (B : Nat) :
-    (FloatDTypeAdd.Kernels.originalKernel B).toAlgorithm? =
-      (FloatDTypeAdd.Kernels.floatAddKernel "x" "y" "out" B).toAlgorithm? := rfl
+    (FloatDTypeAddCorrect.floatAddIO B).kernel =
+      (FloatDTypeAdd.Kernels.originalKernel B).eraseDType := rfl
 
 example (tau : Real) :
-    (HyperConnectionsDepth.Kernels.originalKernel tau).toAlgorithm? =
-      (HyperConnectionsDepth.Kernels.mhcDepthConnectionKernel
-        "res_mix" "branch_out" "h_post" "out" 1 1 1 0 tau).toAlgorithm? := rfl
+    (HyperConnectionsDepth.mhcDepthIO tau).kernel =
+      HyperConnectionsDepth.Kernels.originalKernel tau := rfl
 
 example (tau : Real) :
-    (HyperConnectionsWidth.Kernels.originalKernel tau).toAlgorithm? =
-      (HyperConnectionsWidth.Kernels.mhcWidthConnectionKernel
-        "res" "h_res" "h_pre" "res_mix" "branch_in" 1 1 1 0 tau).toAlgorithm? := rfl
+    (HyperConnectionsWidth.mhcWidthIO tau).kernel =
+      HyperConnectionsWidth.Kernels.originalKernel tau := rfl
 
 example (lr wd beta1 beta2 : Real) (n B : Nat) :
-    (AdamUpdateGridLaunch.Kernels.originalKernel lr wd beta1 beta2 n B).toAlgorithm? =
-      (AdamUpdateGridLaunch.Kernels.update_fn_kernel
-        "p" "grad" "exp_avg" lr wd beta1 beta2 n B).toAlgorithm? := rfl
+    (AdamUpdateGridLaunch.adamIO lr wd beta1 beta2 n B).kernel =
+      AdamUpdateGridLaunch.Kernels.originalKernel lr wd beta1 beta2 n B := rfl
 ''')
+
+    def test_reciprocal_specs_share_exact_sources_before_real_erasure(self):
+        """Keep the fp32 load/fp64 cast boundary in the source of both specifications."""
+        imports = "\n".join(f"import bench.examples.{family}.{suffix}"
+                            for family in ("SoftmaxReciprocal", "FloatDTypeSoftmax")
+                            for suffix in ("Correct", "FPEquiv"))
+        source = imports + "\nopen VeriTile.Bench.Examples\n"
+        for family in ("SoftmaxReciprocal", "FloatDTypeSoftmax"):
+            div_source, recip_source = (
+                ("stableSoftmaxKernel", "softmaxRecipKernel") if family == "SoftmaxReciprocal"
+                else ("floatStableSoftmaxKernel", "floatSoftmaxRecipKernel"))
+            source += f'''
+example (x y : VeriTile.Triton.RegionName) (B : Nat) :
+    {family}.Kernels.originalKernel x y B = {family}.Kernels.{div_source} x y B := rfl
+example (x y : VeriTile.Triton.RegionName) (B : Nat) :
+    {family}.Kernels.reciprocalKernel x y B = {family}.Kernels.{recip_source} x y B := rfl
+'''
+            for real_io, fp_io in (("divIO", "originalIO"), ("recipIO", "reciprocalIO")):
+                source += f'''
+example (B : Nat) :
+    ({family}Correct.{real_io} B).kernel =
+      ({family}FPEquiv.{fp_io} B).io.kernel.eraseDType := rfl
+'''
+        self.lean(source)
 
     def test_fp_files_are_independent_and_print_only_used_atoms(self):
         for name, headline, correct_io, atom in PAIRS:

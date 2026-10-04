@@ -20,19 +20,9 @@ def floatAddKernel (xReg yReg outReg : RegionName) (blockSize : Nat) : ComputeKe
   tl.store($(outReg) + offs, (out).round_to(tl.float32))
 }
 
-/-- Original FloatDTypeAdd addition, transcribed with fp32 regions. -/
+/-- The shared fp32 source with the example's input/output region names. -/
 def originalKernel (blockSize : Nat) : ComputeKernel :=
-  let x_ptr : Region .fp32 := ⟨"x"⟩
-  let y_ptr : Region .fp32 := ⟨"y"⟩
-  let out_ptr : Region .fp32 := ⟨"out"⟩
-  triton {
-  pid = tl.program_id(axis=0)
-  offs = pid * $(blockSize) + tl.arange(0, $(blockSize))
-  x = tl.load(x_ptr + offs)
-  y = tl.load(y_ptr + offs)
-  out = x + y
-  tl.store(out_ptr + offs, (out).round_to(tl.float32))
-}
+  floatAddKernel "x" "y" "out" blockSize
 
 /-- The sole rewrite is out = y + x. Addresses/masks are unchanged. -/
 def optimizedKernel (blockSize : Nat) : ComputeKernel :=

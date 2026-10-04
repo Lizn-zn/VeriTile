@@ -47,7 +47,7 @@ theorem recip_projection (xReg yReg : RegionName) (B : Nat) :
     rw [Op.eraseDType_ref]
     rfl
   simp [softmaxRecipKernel, recipMathKernel, ComputeKernel.eraseDType,
-    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?, ComputeExpr.toAlgorithm?,
+    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
     Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
     Op.eraseDType, VeriTile.Triton.eraseDType, NumericDType.eraseDType,
     MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def]

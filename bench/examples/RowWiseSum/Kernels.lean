@@ -18,18 +18,7 @@ def rowWiseSumKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : ComputeKe
   triton {
     row    := tl.program_id(0)
     cols   := tl.arange(0, $(blockSize))
-    values := tl.load($(xReg) + row * $(nCol) + cols)
-    result := tl.sum(values, axis=0)
-    tl.store($(yReg) + row, result)
-  }
-
-/-- Original row-wise sum, specialized to fp32 input and accumulation. -/
-def fpRowWiseSumKernel (xReg yReg : RegionName) (nCol blockSize : Nat) : ComputeKernel :=
-  let x_ptr : Region .fp32 := ⟨xReg.name⟩
-  triton {
-    row    := tl.program_id(0)
-    cols   := tl.arange(0, $(blockSize))
-    values := tl.load(x_ptr + row * $(nCol) + cols)
+    values := tl.load($(xReg) + row * $(nCol) + cols, dtype=tl.float32)
     result := tl.sum(values, axis=0)
     tl.store($(yReg) + row, result)
   }

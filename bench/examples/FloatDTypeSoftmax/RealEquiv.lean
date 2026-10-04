@@ -98,8 +98,8 @@ private theorem erased_projection (ck : ComputeKernel)
 section FloatDTypeEquiv.lemmas
 
 /-- The erased fp32 divide kernel's projected body, pinned to its literal
-statement list: the plain per-element-divide stable softmax — eight
-statements (`pid`, `offs`, `x`-load, running `max`, `exp`, `sum`, `y = e/s`,
+statement list: the plain per-element-divide stable softmax — nine
+statements (`pid`, `offs`, `x32`-load, `x`-copy, running `max`, `exp`, `sum`, `y = e/s`,
 raw store), with the `.to(tl.float64)`/`.to(tl.float32)` casts erased. Every
 obligation below rewrites the erased kernel's projection along this equation
 first, then runs the plain computational walk on the literal body. -/
@@ -112,10 +112,11 @@ private theorem floatStable_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
                (Op.mul NumericDType.nat Broadcast.nil
                  (Op.ref TileDType.nat [] "pid") (Op.constNat N))
                (Op.arange N)),
-           Stmt.assign TileDType.real [N] "x"
+           Stmt.assign TileDType.real [N] "x32"
              (Op.load TileDType.real
                (MemAccess.region xReg (Op.ref TileDType.nat [N] "offs"))
                MaskOpt.none),
+           Stmt.assign TileDType.real [N] "x" (Op.ref TileDType.real [N] "x32"),
            Stmt.assign TileDType.real [] "m"
              (Op.reduceMax (shape := [N]) (0 : Fin (0 + 1)) Bool.false
                (Op.ref TileDType.real [N] "x")),
@@ -144,7 +145,7 @@ private theorem floatStable_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
     try rfl
 
 /-- The erased fp32 reciprocal kernel's projected body, pinned to its literal
-statement list: the plain reciprocal-form stable softmax — nine statements
+statement list: the plain reciprocal-form stable softmax — ten statements
 (the same prefix, then `inv_s = 1/s`, `y = e·inv_s`, raw store), casts
 erased. -/
 private theorem floatRecip_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
@@ -156,10 +157,11 @@ private theorem floatRecip_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
                (Op.mul NumericDType.nat Broadcast.nil
                  (Op.ref TileDType.nat [] "pid") (Op.constNat N))
                (Op.arange N)),
-           Stmt.assign TileDType.real [N] "x"
+           Stmt.assign TileDType.real [N] "x32"
              (Op.load TileDType.real
                (MemAccess.region xReg (Op.ref TileDType.nat [N] "offs"))
                MaskOpt.none),
+           Stmt.assign TileDType.real [N] "x" (Op.ref TileDType.real [N] "x32"),
            Stmt.assign TileDType.real [] "m"
              (Op.reduceMax (shape := [N]) (0 : Fin (0 + 1)) Bool.false
                (Op.ref TileDType.real [N] "x")),

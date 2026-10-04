@@ -10,7 +10,7 @@ IO contracts for transformations with private scratch), with
 `#print_fp_assumptions` listing the numerical atoms used by its proof. Both proof files import the shared sources in `Kernels.lean`. FP execution
 and contract helpers live in the same directory and never import the
 correctness counterpart. See the [example index](../bench/examples/README.md)
-for the source variants and precise observation scopes.
+for the shared implementations and precise observation scopes.
 
 Experimental shape and distribution select assumptions. They are not extra
 shape conditions on the subsequent Lean derivation. Kernel dimensions remain

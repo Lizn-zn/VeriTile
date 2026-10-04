@@ -69,6 +69,10 @@ import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.HyperConnectionsWidth
 open VeriTile.Bench.Examples.HyperConnectionsWidth.Kernels
+
+-- Correctness interprets the shared typed source through its real projection.
+attribute [local simp] VeriTile.Triton.ComputeExpr.toAlgorithm?
+  VeriTile.Triton.ComputeOp.toAlgorithm? VeriTile.Triton.ComputeDType.eraseDType
 open VeriTile.Triton
 open VeriTile.Triton.KernelIO₃ₓ₂ (Implements)
 open scoped VeriTile.Triton.KernelIO₃ₓ₂
@@ -239,7 +243,7 @@ theorem mhcWidth_traceSafe (tau : ℝ) (bounds : RegionBounds) (s : BlockState)
   obtain rfl := Option.some_inj.mp hv1
   -- statement 2: residual := load(res + b)   (single cell, unmasked)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨trivial, trivial,
       scalarB_activeAddressSafe bounds (s.pids 0) _ _
         (by simp [BlockState.setReg]) _ hres⟩
@@ -247,7 +251,7 @@ theorem mhcWidth_traceSafe (tau : ℝ) (bounds : RegionBounds) (s : BlockState)
   obtain ⟨v2, hv2, rfl⟩ := stepStmt_assign_inv hs2
   -- statement 3: h_res := load(h_res)   (shared scalar cell 0)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨trivial, trivial, sharedScalar_activeAddressSafe bounds _ _ _ hhres⟩
   intro s3 hs3
   obtain ⟨v3, hv3, rfl⟩ := stepStmt_assign_inv hs3
@@ -258,7 +262,7 @@ theorem mhcWidth_traceSafe (tau : ℝ) (bounds : RegionBounds) (s : BlockState)
   obtain ⟨v4, hv4, rfl⟩ := stepStmt_assign_inv hs4
   -- statement 5: h_pre := load(h_pre)   (shared scalar cell 0)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨trivial, trivial, sharedScalar_activeAddressSafe bounds _ _ _ hhpre⟩
   intro s5 hs5
   obtain ⟨v5, hv5, rfl⟩ := stepStmt_assign_inv hs5

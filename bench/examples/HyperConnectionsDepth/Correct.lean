@@ -65,6 +65,10 @@ import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.HyperConnectionsDepth
 open VeriTile.Bench.Examples.HyperConnectionsDepth.Kernels
+
+-- Correctness interprets the shared typed source through its real projection.
+attribute [local simp] VeriTile.Triton.ComputeExpr.toAlgorithm?
+  VeriTile.Triton.ComputeOp.toAlgorithm? VeriTile.Triton.ComputeDType.eraseDType
 open VeriTile.Triton
 open VeriTile.Triton.KernelIO₃ (Implements)
 open scoped VeriTile.Triton.KernelIO₃
@@ -224,7 +228,7 @@ theorem mhcDepth_traceSafe (tau : ℝ) (bounds : RegionBounds) (s : BlockState)
   obtain rfl := Option.some_inj.mp hv1
   -- statement 2: res_mix := load(res_mix + b)   (single cell, unmasked)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨trivial, trivial,
       scalarB_activeAddressSafe bounds (s.pids 0) _ _
         (by simp [BlockState.setReg]) _ hmix⟩
@@ -232,7 +236,7 @@ theorem mhcDepth_traceSafe (tau : ℝ) (bounds : RegionBounds) (s : BlockState)
   obtain ⟨v2, hv2, rfl⟩ := stepStmt_assign_inv hs2
   -- statement 3: branch_out := load(branch_out + b)   (single cell, unmasked)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨trivial, trivial,
       scalarB_activeAddressSafe bounds (s.pids 0) _ _
         (by simp [BlockState.setReg]) _ hbout⟩
@@ -240,7 +244,7 @@ theorem mhcDepth_traceSafe (tau : ℝ) (bounds : RegionBounds) (s : BlockState)
   obtain ⟨v3, hv3, rfl⟩ := stepStmt_assign_inv hs3
   -- statement 4: h_post := load(h_post)   (shared scalar cell 0)
   refine Stmt.TraceSafeList.cons_intro ?_ ?_
-  · simp only [Stmt.TraceSafe, Op.SafeAt]
+  · simp only [ComputeDType.eraseDType, Stmt.TraceSafe, Op.SafeAt]
     exact ⟨trivial, trivial, sharedScalar_activeAddressSafe bounds _ _ _ hhpost⟩
   intro s4 hs4
   obtain ⟨v4, hv4, rfl⟩ := stepStmt_assign_inv hs4
