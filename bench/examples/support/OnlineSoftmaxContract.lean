@@ -4,7 +4,7 @@ does not claim that the online source stores an output array. -/
 import bench.examples.support.OnlineSoftmaxComparison
 import bench.examples.support.OnlineSoftmaxBatch
 import bench.examples.support.SoftmaxStableContract
-import VeriTile.Triton.Float.Exponential
+import VeriTile.Triton.Float.ExponentialLaws
 import VeriTile.Triton.Float.ObservedRow
 
 namespace VeriTile.Bench.Examples.OnlineSoftmaxFPContract

@@ -43,11 +43,11 @@ theorem exponential_report_matches :
     SupplementalAdmission.fp32_exp_sub.guards = Exponential.guards := by decide
 
 open CountConversion in
-theorem count_report_matches (a : Atom) :
-    (report a).ruleID = (match a with | .zero => "COUNT-ZERO" | .successor => "COUNT-SUCCESSOR") ∧
-    (report a).input = "int32" ∧ (report a).compute = "fp32" ∧
-    (report a).accumulator = "fp32" ∧ (report a).output = "fp32" ∧
+theorem count_report_matches (a : Atom) (h : a.Available) :
+    (report a h).ruleID = (match a with | .zero => "COUNT-ZERO" | .successor => "COUNT-SUCCESSOR") ∧
+    (report a h).input = "int32" ∧ (report a h).compute = "fp32" ∧
+    (report a h).accumulator = "fp32" ∧ (report a h).output = "fp32" ∧
     0 < limit ∧ limit ≤ 2^24 ∧ limit < 2^31 := by
-  cases a <;> decide
+  cases a <;> exact ⟨rfl, rfl, rfl, rfl, rfl, by decide, by decide, by decide⟩
 
 end FPAdmissionMetadataTests

@@ -2,7 +2,7 @@
 Both implementations use libdevice.exp: the measured tl.exp exp-sub relation
 failed the configured bias gate (0.1608954387 ULP > 0.05). -/
 import bench.examples.support.SoftmaxStableContract
-import VeriTile.Triton.Float.Exponential
+import VeriTile.Triton.Float.ExponentialLaws
 import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.SoftmaxStableFPEquiv

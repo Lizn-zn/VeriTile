@@ -8,7 +8,7 @@ existing real-correctness theorem remains valid in its stated semantics. -/
 import bench.examples.support.StableLogSumExpExecution
 import bench.examples.support.SoftmaxStableContract
 import VeriTile.Triton.Float.LogSumExpShift
-import VeriTile.Triton.Float.Exponential
+import VeriTile.Triton.Float.ExponentialLaws
 
 namespace VeriTile.Bench.Examples.StableLogSumExpFPContract
 open VeriTile Triton FP.Structural FP.Guarded FP.ScalarArithmetic

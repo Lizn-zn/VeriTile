@@ -16,13 +16,13 @@ example : ComputeDType.fp64.width ≠ ComputeDType.fp32.width := by decide
 example : ComputeOp.bitcastPayload .fp64 .fp32 ⟨BitVec.ofNat 64 0x3ff0000000000000⟩ = none := rfl
 
 -- The measured casted binary64 atom cannot be used as an uncast binary64 law.
-example : (entry .fp64_fp32).rule.lhs = [lhs .fp64_fp32] := rfl
-example : (entry .fp64_fp32).rule.rhs = [rhs .fp64_fp32] := rfl
-example : (entry .fp64_fp32).rule.lhs ≠ [lhs .fp32] := by
+example : (entry .fp64_fp32 (by decide)).rule.lhs = [lhs .fp64_fp32] := rfl
+example : (entry .fp64_fp32 (by decide)).rule.rhs = [rhs .fp64_fp32] := rfl
+example : (entry .fp64_fp32 (by decide)).rule.lhs ≠ [lhs .fp32] := by
   intro h
   have hn := congrArg (fun xs => xs.map (fun x => x.code.length)) h
-  norm_num [entry, report, FP.ReportedScalarRule.bind, FP.ReportedRule.bind,
-    lhs, FP.SupplementalAdmission.fp64_fp64_fp32_div_mul_rcp] at hn
+  change [2] = [1] at hn
+  simp at hn
 
 private def M : Algebra Nat where
   literal := fun _ _ _ => 1

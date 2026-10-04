@@ -45,7 +45,7 @@ theorem out_of_range_fragments_agree (s : State Nat) :
       run model (rhsCode .successor) (s.setReg "i" .nat [] (fun _ => limit + 1)) := by
   simp [lhsCode, rhsCode, FP.ScalarArithmetic.fragment, bounded, index, FP.ScalarArithmetic.plus,
     run, step, evalExpr, evalComputeOp, evalOp_unfold, numeric, natLt, bop, model,
-    value, limit, FP.CountAdmission.upperExclusive]
+    value, limit]
   rfl
 
 -- Correct counterparts must not be imported to establish the FP claims.

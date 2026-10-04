@@ -3,7 +3,7 @@ suffix retains its sqrt, epsilon, gamma/beta and bf16 cast. Only the admitted
 scalar arithmetic and bounded count atoms are used. Empty output rows remain
 covered because both sources preserve every memory cell at N = 0. -/
 import bench.examples.support.LayerNormContract
-import VeriTile.Triton.Float.CountConversion
+import VeriTile.Triton.Float.CountConversionLaws
 import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.FusedLayerNormFPEquiv

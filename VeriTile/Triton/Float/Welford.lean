@@ -1,7 +1,7 @@
 /- Local Welford identities derived from the admitted fp32 scalar atoms.
 The floating count is explicit. Identifying it with an integer conversion is
 a separate obligation, not an assumption hidden in this algebraic proof. -/
-import VeriTile.Triton.Float.ScalarArithmetic
+import VeriTile.Triton.Float.ScalarArithmeticLaws
 import VeriTile.Triton.Float.ScalarReduction
 
 namespace VeriTile.Triton.FP.Welford

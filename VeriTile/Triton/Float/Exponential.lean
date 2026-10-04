@@ -1,30 +1,97 @@
-/- Bind the admitted fp32 libdevice EXP-SUB relation to its exact scalar
-syntax. The measured tl.exp EXP-SUB-INTRINSIC relation fails the configured bias gate
-(B = 0.1608954387 ULP > 0.05); no assumption for that symbol is supplied. -/
-import VeriTile.Triton.Float.SoftmaxShift
+import VeriTile.Triton.Float.ScalarArithmetic
 
+/-! Exponential candidates retain the exact intrinsic used by the experiment.
+The measured tl.exp EXP-SUB-INTRINSIC relation fails the configured bias gate
+(B = 0.1608954387 ULP > 0.05). It remains a candidate but cannot supply the
+libdevice.exp assumption used by the stable-softmax derivation. -/
 namespace VeriTile.Triton.FP.Exponential
 open Structural Guarded ScalarArithmetic
+open scoped VeriTile.Spec
+
+inductive Atom where
+  | exp_sub | exp_sub_intrinsic | exp_zero | exp_neg_inf_sub
+  deriving DecidableEq, Repr
+
+/-- All operations compute in fp32. These are proposed rewrites, not facts. -/
+def Atom.ruleID : Atom → String
+  -- libdevice.exp(a - b) → libdevice.exp(a) / libdevice.exp(b); finite a,b.
+  | .exp_sub => "EXP-SUB"
+  -- tl.exp(a - b) → tl.exp(a) / tl.exp(b); finite a,b.
+  | .exp_sub_intrinsic => "EXP-SUB-INTRINSIC"
+  -- tl.exp(0) → 1; no variable operands.
+  | .exp_zero => "EXP-ZERO"
+  -- tl.exp(-inf - a) → 0; finite a. -inf is a literal, not a sampled input.
+  | .exp_neg_inf_sub => "EXP-NEG-INF-SUB"
+
+def candidates : List Atom := [.exp_sub, .exp_sub_intrinsic, .exp_zero, .exp_neg_inf_sub]
 
 def guards : List OperandGuard := [⟨"a", .finite⟩, ⟨"b", .finite⟩]
-def lhsCode : List ComputeStmt := fragment (.libdeviceExp (minus (ref "a") (ref "b")))
-def rhsCode : List ComputeStmt := fragment (divide (.libdeviceExp (ref "a")) (.libdeviceExp (ref "b")))
-def lhs : GuardedFragment := ⟨guards, lhsCode⟩
-def rhs : GuardedFragment := ⟨guards, rhsCode⟩
-def entry := SupplementalAdmission.fp32_exp_sub.bind lhsCode rhsCode
+def Atom.guards : Atom → List OperandGuard
+  | .exp_sub | .exp_sub_intrinsic => VeriTile.Triton.FP.Exponential.guards
+  | .exp_zero => []
+  | .exp_neg_inf_sub => [⟨"a", .finite⟩]
 
+def Atom.lhs : Atom → GuardedFragment
+  | a => ⟨a.guards, fragment (match a with
+    | .exp_sub => .libdeviceExp (minus (ref "a") (ref "b"))
+    | .exp_sub_intrinsic => .exp (minus (ref "a") (ref "b"))
+    | .exp_zero => .exp (.const 0)
+    | .exp_neg_inf_sub => .exp (minus .negInf (ref "a")))⟩
+
+def Atom.rhs : Atom → GuardedFragment
+  | a => ⟨a.guards, fragment (match a with
+    | .exp_sub => divide (.libdeviceExp (ref "a")) (.libdeviceExp (ref "b"))
+    | .exp_sub_intrinsic => divide (.exp (ref "a")) (.exp (ref "b"))
+    | .exp_zero => .const 1
+    | .exp_neg_inf_sub => .const 0)⟩
+
+/-- Match the exact relation, precision and operand domain before selecting a row. -/
+def Atom.matches (a : Atom) (row : ReportedScalarRule) : Bool :=
+  decide (row.report.ruleID = a.ruleID ∧ row.report.input = "fp32" ∧
+    row.report.compute = "fp32" ∧ row.report.accumulator = "fp32" ∧
+    row.report.output = "fp32" ∧ row.guards = a.guards)
+
+/-- Only accepted rows in the generated table can activate a candidate. -/
+def Atom.report? (a : Atom) : Option ReportedScalarRule :=
+  SupplementalAdmission.all.find? a.matches
+
+abbrev Atom.Available (a : Atom) : Prop := a.report?.isSome = true
+
+def report (a : Atom) (h : a.Available) : ReportedScalarRule := a.report?.get h
+
+def entry (a : Atom) (h : a.Available) : Spec.RuleEntry GuardedFragment :=
+  (report a h).report.bind [Atom.lhs a] [Atom.rhs a]
+
+def Atom.entry? (a : Atom) : Option (Spec.RuleEntry GuardedFragment) :=
+  a.report?.map fun row => row.report.bind [Atom.lhs a] [Atom.rhs a]
+
+/-- External validation is required only for candidates selected by the report. -/
 structure Rules where
   arithmetic : ScalarArithmetic.Rules
-  exp_sub : Spec.EvidenceValidated entry.rule entry.evidence
+  validated : ∀ (a : Atom) (h : a.Available),
+    Spec.EvidenceValidated (entry a h).rule (entry a h).evidence
 
 def Rules.assumptions (R : Rules) : Spec.Assumptions GuardedFragment :=
-  R.arithmetic.assumptions ++ [entry]
+  R.arithmetic.assumptions ++ candidates.filterMap Atom.entry?
 
 instance : CoeOut Rules (Spec.Assumptions GuardedFragment) := ⟨Rules.assumptions⟩
 
-theorem admitted (R : Rules) : Spec.Derivation R.assumptions [lhs] [rhs] :=
-  .atom entry (by simp [Rules.assumptions])
-    (SupplementalAdmission.fp32_exp_sub.admit _ _ R.exp_sub)
+/-- Admission enables this one candidate; it asserts no other numerical law. -/
+theorem admitted (R : Rules) (a : Atom) (h : a.Available) :
+    Spec.Derivation R.assumptions [Atom.lhs a] [Atom.rhs a] := by
+  apply Spec.Derivation.atom (entry a h)
+  · apply List.mem_append_right
+    apply List.mem_filterMap.mpr
+    refine ⟨a, ?_, ?_⟩
+    · cases a <;> simp [candidates]
+    · have available : a.report?.isSome = true := h
+      cases hr : a.report? with
+      | none => simp [hr] at available
+      | some row => simp [Atom.entry?, entry, report, hr]
+  · exact (report a h).report.admit _ _ (R.validated a h)
+
+theorem rewrite (R : Rules) (a : Atom) (h : a.Available) : [Atom.lhs a] ≡[R] [Atom.rhs a] :=
+  Spec.FloatingPoint.ofDerivation rfl trivial (admitted R a h)
 
 theorem arithmetic_derivation (R : Rules) {lhs rhs : List GuardedFragment}
     (h : Spec.Derivation R.arithmetic.assumptions lhs rhs) :
@@ -41,24 +108,7 @@ theorem arithmetic_models {α : Type} [Inhabited α] (R : Rules)
     Models R.arithmetic.assumptions M D :=
   fun lhs rhs h => hM lhs rhs (arithmetic_derivation R h)
 
-set_option maxHeartbeats 1600000 in
-theorem exp_sub {α : Type} [Inhabited α] (R : Rules)
-    (M : Algebra α) (D : Domain α) (hM : Models R.assumptions M D)
-    (s : State α) : SoftmaxShift.LibdeviceExpSub M D := by
-  constructor
-  intro a b ha hb
-  let t := (s.setReg "a" .real [] (fun _ => a)).setReg "b" .real [] (fun _ => b)
-  have hg : ScalarDomain D guards t := by
-    intro g hg
-    simp [guards] at hg
-    rcases hg with rfl | rfl
-    · exact ⟨fun _ => a, by simp [t], ha⟩
-    · exact ⟨fun _ => b, by simp [t], hb⟩
-  have h := hM lhs rhs (admitted R) t hg hg
-  simp only [lhs, rhs, lhsCode, rhsCode, fragment, run, step, evalExpr,
-    evalComputeOp, evalOp_unfold, ref, minus, divide, ComputeDType.eraseDType,
-    numeric, State.setReg_same, t] at h
-  simp [State.setReg, SoftmaxShift.exp, sub, div] at h ⊢
-  exact congrFun h PUnit.unit
+def lhs : GuardedFragment := Atom.lhs .exp_sub
+def rhs : GuardedFragment := Atom.rhs .exp_sub
 
 end VeriTile.Triton.FP.Exponential

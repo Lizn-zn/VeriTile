@@ -62,6 +62,27 @@ example (R : Rules) :
 这里 `by decide` 只检查当前表是否选中了该候选；数值关系仍是 `R` 中的外部准入假设。
 刷新实验结果后，已定义候选的可用性随准入表更新，无须重写候选表达式。
 
+其他原语库采用同样的结构：文件开头列出 `Atom`、`ruleID` 和每条关系的公式、
+intrinsic、精度与定义域，然后定义左右片段，最后按准入表选择可用规则。
+
+| 候选库 | 预定义的关系 |
+|---|---|
+| [ScalarArithmetic](../VeriTile/Triton/Float/ScalarArithmetic.lean) | fp32 加乘交换、结合、分配、消去，以及零、一和倒数相关的 11 条关系 |
+| [Reciprocal](../VeriTile/Triton/Float/Reciprocal.lean) | 普通 Triton 除法改写为乘倒数；分别保留 fp32 和 fp64 计算后转 fp32 的片段 |
+| [Exponential](../VeriTile/Triton/Float/Exponential.lean) | libdevice 与 intrinsic 的两种 exp-sub，以及 exp-zero、exp-neg-inf-sub |
+| [Maximum](../VeriTile/Triton/Float/Maximum.lean) | fp32 maximum 的交换、结合、幂等和负无穷单位元 |
+| [CountConversion](../VeriTile/Triton/Float/CountConversion.lean) | int32 到 fp32 的零转换，以及 `0 ≤ i < 2^24` 上的后继转换 |
+
+`EXP-SUB-INTRINSIC` 仍是未准入候选，不能用已通过的 libdevice 结果启用它。
+计数后继规则的整数上界属于关系定义域；报告采用不同范围时，不能启用这里的固定范围候选。
+它与实验 shape 无关。库不会把 bf16 输出或 fp64 计算的条目当成裸 fp32 关系。
+
+`ScalarArithmeticLaws.lean`、`ExponentialLaws.lean` 和 `CountConversionLaws.lean`
+保存基于当前已选原子的组合推导。它们在实际引用处检查可用性：移除一条被使用的原子后，
+对应推导不再通过，但原始候选库仍能独立编译。`#print_fp_assumptions` 继续只打印
+证明实际用到的原子，不会把目录中其他已准入候选一并列出。
+
+
 ### 2.1 可研究严格证明的规则
 
 这些条目的 two-gates 准入状态按实测格式实例记录；这不等于已有具体 IEEE 模型下的无条件严格证明。

@@ -165,7 +165,7 @@ specification softmax_reciprocal_equiv (R : Rules) (B : Nat) (hB : 0 < B) :
     refine ⟨a, b, ha, hb, ?_, ?_, ?_⟩
     · intro i
       change a.mem "y" (s.pids 0 * B + i.val) = b.mem "y" (s.pids 0 * B + i.val)
-      rw [hva i, hvb i, FP.Reciprocal.apply_rule R M D hM s _ _ (hf i) hd hn]
+      rw [hva i, hvb i, FP.Reciprocal.apply_rule R (by decide) M D hM s _ _ (hf i) hd hn]
     · intro r o ho _
       exact hfa r o ho
     · intro r o ho _

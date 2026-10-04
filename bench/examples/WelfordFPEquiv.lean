@@ -2,7 +2,7 @@
 The count bound is the integer conversion rule's domain, not the GPU probe's
 shape. Empty Welford rows divide by zero and are outside this FP contract. -/
 import bench.examples.support.WelfordContract
-import VeriTile.Triton.Float.CountConversion
+import VeriTile.Triton.Float.CountConversionLaws
 import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.WelfordFPEquiv

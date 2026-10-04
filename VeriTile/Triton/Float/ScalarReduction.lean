@@ -1,7 +1,7 @@
 /- Factor a common fp32 scale through an explicit addition tree.
 This is a derivation from scalar atoms, not a numerical reduction assumption.
 The tree and its padding remain visible, and all arithmetic domains are kept. -/
-import VeriTile.Triton.Float.ScalarArithmetic
+import VeriTile.Triton.Float.ScalarArithmeticLaws
 import VeriTile.Triton.Float.TermModel
 
 namespace VeriTile.Triton.FP.ScalarReduction

@@ -49,16 +49,19 @@ class ScalarArithmeticTests(unittest.TestCase):
         checks = checks.replace('import VeriTile.Triton.Float.ScalarArithmetic\n', '', 1)
         baseline = self.lean(source + '\n' + checks)
         self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
-        for old, new in (
-            ('ReportedAdmission.fp32_mul_distrib', 'ReportedAdmission.bf16_fp32_mul_distrib'),
-            ('ReportedAdmission.fp32_add_assoc', 'ReportedAdmission.fp32_mul_assoc'),
-            ('SupplementalAdmission.fp32_mul_rcp_cancel',
-             'SupplementalAdmission.bf16_fp32_mul_rcp_cancel'),
+        for main, supplement, atom in (
+            ('[ReportedAdmission.bf16_fp32_mul_distrib]', '[]', 'mulDistribute'),
+            ('[ReportedAdmission.fp32_mul_assoc]', '[]', 'addAssociate'),
+            ('[]', '[SupplementalAdmission.bf16_fp32_mul_rcp_cancel]', 'mulRcpCancel'),
         ):
-            with self.subTest(replacement=new):
-                result = self.lean(source.replace(old, new) + '\n' + checks)
+            with self.subTest(atom=atom):
+                modified = source.replace('ReportedAdmission.all', main).replace(
+                    'SupplementalAdmission.all', supplement)
+                result = self.lean(modified + f"\nopen VeriTile.Triton.FP.ScalarArithmetic\n"
+                                   f"example : Atom.{atom}.Available := by decide\n")
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('decide', result.stdout)
+
 
 
 if __name__ == '__main__':

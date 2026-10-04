@@ -5,10 +5,25 @@ import VeriTile.Triton.Float.SupplementalAdmission
 
 namespace VeriTile.Triton.FP.Reciprocal
 open Structural Guarded
+open scoped VeriTile.Spec
 
+/-- Ordinary division and a separately rounded reciprocal are different
+computations until this candidate has been admitted. -/
+inductive Atom where
+  | div_mul_rcp
+  deriving DecidableEq, Repr
+
+def Atom.ruleID : Atom → String
+  -- a / b → a * (1 / b); finite a,b and b ≠ 0. This is Triton `/`, not tl.div_rn.
+  | .div_mul_rcp => "DIV-MUL-RCP"
+
+def candidates : List Atom := [.div_mul_rcp]
+
+/-- fp32 computes and returns fp32. fp64_fp32 computes in fp64 and casts
+both results to fp32; it supplies no uncast fp64 equality. -/
 inductive Format where
   | fp32 | fp64_fp32
-  deriving DecidableEq
+  deriving DecidableEq, Repr
 
 def guards : List OperandGuard := [⟨"a", .finite⟩, ⟨"b", .finite⟩, ⟨"b", .nonzero⟩]
 
@@ -33,25 +48,46 @@ def rhs : Format → GuardedFragment
       .assign .real [] "value" (.compute (.alg .fp64 mul)),
       .assign .real [] "out" (.compute (.alg .fp32 (.castFloat .real .real (ref "value"))))]⟩
 
-def report : Format → ReportedScalarRule
-  | .fp32 => SupplementalAdmission.fp32_div_mul_rcp
-  | .fp64_fp32 => SupplementalAdmission.fp64_fp64_fp32_div_mul_rcp
+def Format.matches (f : Format) (row : ReportedScalarRule) : Bool :=
+  let compute := match f with | .fp32 => "fp32" | .fp64_fp32 => "fp64"
+  decide (row.report.ruleID = Atom.div_mul_rcp.ruleID ∧ row.report.input = compute ∧
+    row.report.compute = compute ∧ row.report.accumulator = compute ∧
+    row.report.output = "fp32" ∧ row.guards = guards)
 
-def entry (f : Format) := (report f).bind (lhs f).code (rhs f).code
+def Format.report? (f : Format) : Option ReportedScalarRule :=
+  SupplementalAdmission.all.find? f.matches
+
+abbrev Format.Available (f : Format) : Prop := f.report?.isSome = true
+
+def report (f : Format) (h : f.Available) : ReportedScalarRule := f.report?.get h
+
+def entry (f : Format) (h : f.Available) : Spec.RuleEntry GuardedFragment :=
+  (report f h).report.bind [lhs f] [rhs f]
+
+def Format.entry? (f : Format) : Option (Spec.RuleEntry GuardedFragment) :=
+  f.report?.map fun row => row.report.bind [lhs f] [rhs f]
 
 structure Rules (f : Format) where
-  div_mul_rcp : Spec.EvidenceValidated (entry f).rule (entry f).evidence
+  validated : ∀ (h : f.Available),
+    Spec.EvidenceValidated (entry f h).rule (entry f h).evidence
 
-def Rules.assumptions {f : Format} (_ : Rules f) : Spec.Assumptions GuardedFragment := [entry f]
+def Rules.assumptions {f : Format} (_ : Rules f) : Spec.Assumptions GuardedFragment :=
+  f.entry?.toList
 
 instance {f : Format} : CoeOut (Rules f) (Spec.Assumptions GuardedFragment) :=
   ⟨Rules.assumptions⟩
 
-theorem admitted {f : Format} (R : Rules f) :
+theorem admitted {f : Format} (R : Rules f) (h : f.Available) :
     Spec.Derivation R.assumptions [lhs f] [rhs f] := by
-  have h := Spec.Derivation.atom (assumptions := R.assumptions) (entry f) (by simp [Rules.assumptions])
-    ((report f).admit _ _ R.div_mul_rcp)
-  cases f <;> exact h
+  apply Spec.Derivation.atom (entry f h)
+  · have available : f.report?.isSome = true := h
+    cases hr : f.report? with
+    | none => simp [hr] at available
+    | some row => simp [Rules.assumptions, Format.entry?, entry, report, hr]
+  · exact (report f h).report.admit _ _ (R.validated h)
+
+theorem rewrite {f : Format} (R : Rules f) (h : f.Available) : [lhs f] ≡[R] [rhs f] :=
+  Spec.FloatingPoint.ofDerivation rfl trivial (admitted R h)
 
 def precision : Format → ComputeDType
   | .fp32 => .fp32
@@ -70,7 +106,7 @@ def reciprocal {α : Type} (f : Format) (M : Algebra α) (a b : α) : α :=
     (M.binary (some (precision f)) .real .div (M.literal (some (precision f)) .real 1) b))
 
 set_option maxHeartbeats 1200000 in
-theorem apply_rule {α : Type} [Inhabited α] {f : Format} (R : Rules f)
+theorem apply_rule {α : Type} [Inhabited α] {f : Format} (R : Rules f) (selected : f.Available)
     (M : Algebra α) (D : Domain α) (hM : Models R.assumptions M D)
     (s : State α) (a b : α) (ha : D .finite a) (hb : D .finite b) (hn : D .nonzero b) :
     quotient f M a b = reciprocal f M a b := by
@@ -82,7 +118,7 @@ theorem apply_rule {α : Type} [Inhabited α] {f : Format} (R : Rules f)
     · exact ⟨fun _ => a, by simp [t], ha⟩
     · exact ⟨fun _ => b, by simp [t], hb⟩
     · exact ⟨fun _ => b, by simp [t], hn⟩
-  have h := hM (lhs f) (rhs f) (admitted R) t
+  have h := hM (lhs f) (rhs f) (admitted R selected) t
   cases f <;> simp only [lhs, rhs] at h
   all_goals
     specialize h hg hg
