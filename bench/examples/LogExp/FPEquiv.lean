@@ -145,7 +145,7 @@ specification log_exp_expm1_equiv (R : Rules) (xReg yReg : RegionName) (blockSiz
     refine ⟨a, b, ha, hb, ?_, ?_, ?_⟩
     · intro i
       change a.mem yReg (s.pids 0 * blockSize + i.val) = b.mem yReg (s.pids 0 * blockSize + i.val)
-      rw [hva i, hvb i, apply_rule R M D hM s lt le hlt hle _ (hf i)]
+      rw [hva i, hvb i, apply_rule R (by decide) M D hM s lt le hlt hle _ (hf i)]
     · intro r o ho _
       exact hfa r o ho
     · intro r o ho _

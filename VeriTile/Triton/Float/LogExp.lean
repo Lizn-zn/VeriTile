@@ -3,11 +3,15 @@ import VeriTile.Triton.Float.GuardedIO
 import VeriTile.Meta.StatementAudit
 
 /-!
-The admitted scalar LOG-EXP-EXPM1 relation replaces the masked piecewise
-log1p/expm1 and log/exp expression with its finite fp32 input.
-The selected report supplies this atom; plain LOG-EXP failed admission and
-LOG-MUL remains inconclusive. Kernel implementations and their separate real
-and FP specifications are in bench/examples/LogExp/.
+The fp32 log/exp candidates below exist independently of experiment outcomes.
+Each candidate specifies its exact intrinsics, operand domain and two scalar
+fragments. Defining a candidate supplies no numerical equality.
+
+The generated LogAdmission table selects which candidates can be used as
+assumptions. The current log report selects only the masked LOG-EXP-EXPM1
+relation; the other candidates remain defined without being enabled. Refreshing
+the report changes availability, not the candidate definitions. Kernel
+implementations and their separate specifications are in bench/examples/LogExp/.
 -/
 
 noncomputable section
@@ -49,27 +53,119 @@ def piecewiseLogExp : GuardedFragment := ⟨guards, assignOutput (expression inp
 /-- The replacement `out = a`, with the same input condition and precision. -/
 def identity : GuardedFragment := ⟨guards, assignOutput input⟩
 
-/-- Bind the accepted LOG-EXP-EXPM1 row to the two fragments written above. The
-imported admission table supplies report data, not a hidden theorem. -/
-def entry := LogAdmission.fp32_log_exp_expm1.bind piecewiseLogExp.code identity.code
+/-- Candidate names describe exact implementations, including rejected or
+inconclusive relations. All fragments in this catalog compute in fp32. -/
+inductive Atom where
+  | log_mul | log_mul_libdevice
+  | log_exp | log_exp_libdevice | log_exp_full_libdevice | log_exp_expm1
+  deriving DecidableEq, Repr
 
-/-- The one experiment-selected assumption used in this example. Its validity
-is the premise supplied by the two-gates workflow, not proved by Lean here. -/
+def candidates : List Atom := [.log_mul, .log_mul_libdevice, .log_exp,
+  .log_exp_libdevice, .log_exp_full_libdevice, .log_exp_expm1]
+
+def Atom.ruleID : Atom → String
+  | .log_mul => "LOG-MUL"
+  | .log_mul_libdevice => "LOG-MUL-LIBDEVICE"
+  | .log_exp => "LOG-EXP"
+  | .log_exp_libdevice => "LOG-EXP-LIBDEVICE"
+  | .log_exp_full_libdevice => "LOG-EXP-FULL-LIBDEVICE"
+  | .log_exp_expm1 => "LOG-EXP-EXPM1"
+
+/-- A log-product rewrite requires positive finite operands on both sides. -/
+def productGuards : List OperandGuard :=
+  [⟨"a", .finite⟩, ⟨"b", .finite⟩, ⟨"a", .positive⟩, ⟨"b", .positive⟩]
+
+def Atom.guards : Atom → List OperandGuard
+  | .log_mul | .log_mul_libdevice => productGuards
+  | .log_exp | .log_exp_libdevice | .log_exp_full_libdevice | .log_exp_expm1 =>
+      VeriTile.Triton.FP.LogExp.guards
+
+def secondInput : Op .real [] := .ref .real [] "b"
+
+/-- Left-hand scalar expressions, before any experimental admission:
+* log_mul: tl.log(a * b)
+* log_mul_libdevice: libdevice.log(a * b)
+* log_exp: tl.log(tl.exp(a))
+* log_exp_libdevice: tl.log(libdevice.exp(a))
+* log_exp_full_libdevice: libdevice.log(libdevice.exp(a))
+* log_exp_expm1: the masked piecewise expression defined above.
+The tl.exp variant remains a candidate; its identity cannot be substituted
+for libdevice.exp when selecting a report. -/
+def Atom.lhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a with
+  | .log_mul => .log (.mul .real .nil input secondInput)
+  | .log_mul_libdevice => .libdeviceLog (.mul .real .nil input secondInput)
+  | .log_exp => .log (.exp input)
+  | .log_exp_libdevice => .log (.libdeviceExp input)
+  | .log_exp_full_libdevice => .libdeviceLog (.libdeviceExp input)
+  | .log_exp_expm1 => expression input)⟩
+
+/-- Product rules propose the sum of the corresponding logs; cancellation
+rules propose the original input. Operand guards are retained on both sides. -/
+def Atom.rhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a with
+  | .log_mul => .add .real .nil (.log input) (.log secondInput)
+  | .log_mul_libdevice => .add .real .nil (.libdeviceLog input) (.libdeviceLog secondInput)
+  | .log_exp | .log_exp_libdevice | .log_exp_full_libdevice | .log_exp_expm1 => input)⟩
+
+/-- Match an accepted report to the candidate's exact fp32 profile and domain.
+Experimental shape and input distribution select the row; they do not become
+extra parameters of the subsequent scalar derivation. -/
+def Atom.matches (a : Atom) (row : ReportedScalarRule) : Bool :=
+  decide (row.report.ruleID = a.ruleID ∧ row.report.input = "fp32" ∧
+    row.report.compute = "fp32" ∧ row.report.accumulator = "fp32" ∧
+    row.report.output = "fp32" ∧ row.guards = a.guards)
+
+/-- Only the generated accepted table can activate a candidate. -/
+def Atom.report? (a : Atom) : Option ReportedScalarRule :=
+  LogAdmission.all.find? a.matches
+
+/-- Availability is a report-selection condition, not the proposed equality. -/
+abbrev Atom.Available (a : Atom) : Prop := a.report?.isSome = true
+
+/-- Bind the selected report to the already-defined candidate fragments. -/
+def Atom.entry (a : Atom) (h : a.Available) : Spec.RuleEntry GuardedFragment :=
+  (a.report?.get h).report.bind [a.lhs] [a.rhs]
+
+def Atom.entry? (a : Atom) : Option (Spec.RuleEntry GuardedFragment) :=
+  a.report?.map fun row => row.report.bind [a.lhs] [a.rhs]
+
+/-- External validation is required only for candidates selected by the report. -/
 structure Rules where
-  log_exp_expm1 : Spec.EvidenceValidated entry.rule entry.evidence
+  validated : ∀ (a : Atom) (h : a.Available),
+    Spec.EvidenceValidated (a.entry h).rule (a.entry h).evidence
 
-def Rules.assumptions (_ : Rules) : Spec.Assumptions GuardedFragment := [entry]
+def Rules.assumptions (_ : Rules) : Spec.Assumptions GuardedFragment :=
+  candidates.filterMap Atom.entry?
 
 instance : CoeOut Rules (Spec.Assumptions GuardedFragment) := ⟨Rules.assumptions⟩
 
-/-- One application of the admitted atom rewrites the original into `out = a`. -/
-theorem admitted (R : Rules) : Spec.Derivation R.assumptions [piecewiseLogExp] [identity] :=
-  .atom entry (by simp [Rules.assumptions])
-    (LogAdmission.fp32_log_exp_expm1.admit _ _ R.log_exp_expm1)
+/-- Every candidate has the same reusable derivation; a report must select it
+before this lemma can be applied. No candidate is asserted unconditionally. -/
+theorem derive (R : Rules) (a : Atom) (h : a.Available) :
+    Spec.Derivation R.assumptions [a.lhs] [a.rhs] := by
+  apply Spec.Derivation.atom (a.entry h)
+  · apply List.mem_filterMap.mpr
+    refine ⟨a, ?_, ?_⟩
+    · cases a <;> simp [candidates]
+    · have available : a.report?.isSome = true := h
+      cases hr : a.report? with
+      | none => simp [hr] at available
+      | some row => simp [Atom.entry?, Atom.entry, hr]
+  · exact (a.report?.get h).report.admit _ _ (R.validated a h)
 
-/-- Scalar rewrite available to kernels using this admitted relation. -/
-theorem scalar_equiv (R : Rules) : [piecewiseLogExp] ≡[R] [identity] :=
-  Spec.FloatingPoint.ofDerivation rfl trivial (admitted R)
+/-- Use any admitted candidate with the ordinary FP-equivalence notation. -/
+theorem rewrite (R : Rules) (a : Atom) (h : a.Available) : [a.lhs] ≡[R] [a.rhs] :=
+  Spec.FloatingPoint.ofDerivation rfl trivial (derive R a h)
+
+/-- The piecewise kernel example uses this one selected candidate. -/
+def entry (h : Atom.log_exp_expm1.Available) := Atom.entry .log_exp_expm1 h
+
+theorem admitted (R : Rules) (h : Atom.log_exp_expm1.Available) :
+    Spec.Derivation R.assumptions [piecewiseLogExp] [identity] :=
+  derive R .log_exp_expm1 h
+
+theorem scalar_equiv (R : Rules) (h : Atom.log_exp_expm1.Available) :
+    [piecewiseLogExp] ≡[R] [identity] :=
+  rewrite R .log_exp_expm1 h
 
 /- Scalar execution used to instantiate the admitted relation. -/
 
@@ -89,6 +185,7 @@ set_option maxHeartbeats 1600000 in
 /-- Instantiate the admitted scalar rule only after executing its comparisons
 and both masked branches. Unsupported comparisons cannot discharge this law. -/
 theorem apply_rule {α : Type} [Inhabited α] (R : Rules)
+    (selected : Atom.log_exp_expm1.Available)
     (M : Algebra α) (D : Domain α) (hM : Models R.assumptions M D)
     (s : State α) (lt le : α → α → Bool)
     (hlt : M.compareLt (some .fp32) .real = some lt)
@@ -100,7 +197,7 @@ theorem apply_rule {α : Type} [Inhabited α] (R : Rules)
     simp only [guards, List.mem_singleton] at hg
     subst g
     exact ⟨fun _ => a, by simp [t], ha⟩
-  have h := hM piecewiseLogExp identity (admitted R) t hg hg
+  have h := hM piecewiseLogExp identity (admitted R selected) t hg hg
   simp only [piecewiseLogExp, identity, assignOutput, run, step, evalExpr,
     evalComputeOp, evalOp_unfold, expression, nearZero, input,
     ComputeDType.eraseDType, numeric, numericLt, numericLe, hlt, hle,
