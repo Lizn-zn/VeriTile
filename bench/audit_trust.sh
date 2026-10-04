@@ -8,7 +8,7 @@
 # importable:
 #
 #   * bench/tritonbench_g/*/*.lean   (the 173 TritonBench-G ports)
-#   * bench/examples/*.lean          (the kernel showcases)
+#   * bench/examples/**/*.lean       (the kernel showcases, including subdirectories)
 #   * bench/tests/*.lean             (infra smoke tests / regression gates)
 #
 # For each file the shared comparator driver emits a snapshot copy that adds
@@ -46,7 +46,7 @@ TESTS_ROOT="bench/tests"
 select_targets() {
   if [ "$#" -eq 0 ]; then
     find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -type f -name '*.lean' | sort
-    find "${EXAMPLES_ROOT}" -maxdepth 1 -type f -name '*.lean' | sort
+    find "${EXAMPLES_ROOT}" -type f -name '*.lean' | sort
     find "${TESTS_ROOT}" -maxdepth 1 -type f -name '*.lean' | sort
   else
     for name in "$@"; do

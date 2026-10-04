@@ -20,8 +20,8 @@ globs = [
   "VeriTile.Meta.Specification",
   "VeriTile.Meta.StatementAudit",
   "VeriTile.Spec",
-  # Worked-example KERNELS live in bench/examples/ (one self-contained .lean
-  # per kernel correctness/refinement story). The library keeps only shared
+  # Worked-example KERNELS live in bench/examples/ (self-contained example
+  # directories can separate kernels and their proofs). The library keeps shared
   # vocabulary (Common), pure-math spec files (AttentionForwardClosedForm,
   # FlashAttention2), and the multi-file FlashAttention1 stack (relocation
   # pending).

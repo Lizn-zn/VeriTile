@@ -2,7 +2,7 @@
 """Emit an audited temp copy of a standalone bench Lean file.
 
 Given a path to a bench Lean file (a `bench/tritonbench_g/*/*.lean` port, a
-`bench/examples/*.lean` showcase, or a `bench/tests/*.lean` smoke), print to
+`bench/examples/**/*.lean` showcase, or a `bench/tests/*.lean` smoke), print to
 stdout a copy that:
 
   1. adds `import VeriTile.Meta.StatementAudit` to the import block, and

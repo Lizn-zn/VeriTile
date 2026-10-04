@@ -103,6 +103,9 @@ class AuditShardTests(unittest.TestCase):
             shutil.copyfile(ROOT / 'bench' / name, self.root / 'bench' / name)
         self.targets = [f'bench/tritonbench_g/{name}/Port.lean' for name in ['alpha', 'beta', 'gamma']]
         self.targets += ['bench/examples/One.lean', 'bench/examples/Two.lean',
+                         'bench/examples/LogExp/Kernels.lean',
+                         'bench/examples/LogExp/Correct.lean',
+                         'bench/examples/LogExp/FPEquiv.lean',
                          'bench/tests/One.lean', 'bench/tests/Two.lean']
         for target in self.targets:
             path = self.root / target
@@ -161,7 +164,7 @@ raise SystemExit(1 if a.file == os.environ.get('FAIL_TARGET') else 0)
         self.assertEqual(sum(code != 0 for code in outcomes), 1)
 
     def test_invalid_shards_never_launch_proofs(self):
-        for count, index in [('0', '0'), ('4', '-1'), ('4', '4'), ('8', '0'),
+        for count, index in [('0', '0'), ('4', '-1'), ('4', '4'), (str(len(self.targets) + 1), '0'),
                              ('', '0'), ('4', ''), (None, '0'), ('4', None),
                              ('invalid', '0'), ('4', '1.0'), ('4', '00'),
                              ('9' * 100, '0')]:

@@ -1,7 +1,7 @@
 /- Piecewise log-exp implementation, branching and exact-counterexample checks.
 The rational interpreter below is a test fixture, not numerical evidence. -/
 import VeriTile.Triton.DSL
-import VeriTile.Triton.Float.LogExp
+import bench.examples.LogExp.FPEquiv
 import VeriTile.Triton.Float.LogExpCounterexample
 import VeriTile.Triton.Float.ExecutionProfile
 import VeriTile.Meta.StatementAudit
@@ -9,7 +9,7 @@ import Mathlib.Tactic.NormNum
 
 noncomputable section
 namespace FPLogExpTests
-open VeriTile Triton FP.Structural
+open VeriTile Triton FP.Structural Bench.Examples
 
 def shortNames : ComputeKernel := triton {
   a := tl.load($(("x" : RegionName)) + 0, dtype=tl.float32)
@@ -98,26 +98,26 @@ private def withInput (a : ℚ) : State ℚ :=
 -- branch; successful comparison evaluation does not restrict inputs to |a| ≤ 0.5.
 set_option maxHeartbeats 1600000 in
 theorem finite_input_domain (a : ℚ) (B : Nat) :
-    (FP.LogExp.domain "x" B).Holds (FP.LogExp.engine model)
+    (LogExp.FPEquiv.domain "x" B).Holds (LogExp.FPEquiv.engine model)
       (fun _ _ => True) (withInput a) := by
-  simp [FP.Guarded.Precondition.Holds, FP.LogExp.domain, FP.LogExp.originalKernel,
+  simp [FP.Guarded.Precondition.Holds, LogExp.FPEquiv.domain, LogExp.originalKernel,
     ComputeKernel.surfaceBody, run, step, evalExpr, evalComputeOp, evalOp_unfold,
-    ComputeDType.eraseDType, FP.LogExp.engine, Algebra.withDefaultPrecision,
+    ComputeDType.eraseDType, LogExp.FPEquiv.engine, Algebra.withDefaultPrecision,
     resolvePrecision, numericLt, numericLe, numeric, bop, model]
 
 -- The actual source executes the negative fallback branch and supports in-place
 -- writes. Memory outside this tile is preserved, even when input and output alias.
 theorem negative_in_place_kernel :
-    ∃ t, exec (FP.LogExp.engine model) (FP.LogExp.originalKernel "x" "x" 4)
+    ∃ t, exec (LogExp.FPEquiv.engine model) (LogExp.originalKernel "x" "x" 4)
         (withInput (-1)) = some t ∧
       (∀ i : Fin 4, t.mem "x" i.val = .mk .real 10999) ∧
       t.mem "x" 4 = .mk .real (-1) := by
-  obtain ⟨t, ht, hv, hf⟩ := FP.LogExp.original_run model
+  obtain ⟨t, ht, hv, hf⟩ := LogExp.FPEquiv.original_run model
     (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
     (by simp [model]) (by simp [model]) "x" "x" 4
     (withInput (-1)) (fun _ => -1) (fun _ => rfl)
   refine ⟨t, ht, ?_, ?_⟩
-  · norm_num [withInput, initial, FP.LogExp.output, FP.LogExp.loaded,
+  · norm_num [withInput, initial, LogExp.FPEquiv.output, LogExp.FPEquiv.loaded,
       FP.LogExp.value, model] at hv
     exact hv
   · have hmiss : ∀ i : Fin 4, 4 ≠ (withInput (-1)).pids 0 * 4 + i.val := by
@@ -128,10 +128,10 @@ theorem negative_in_place_kernel :
 
 -- A real fp32 output conversion cannot disappear from the optimized copy.
 theorem copy_retains_output_cast (a : ℚ) :
-    ∃ t, exec (FP.LogExp.engine { model with cast := fun _ _ _ x => x + 7 })
-        (FP.LogExp.optimizedKernel "x" "y" 1) (withInput a) = some t ∧
+    ∃ t, exec (LogExp.FPEquiv.engine { model with cast := fun _ _ _ x => x + 7 })
+        (LogExp.optimizedKernel "x" "y" 1) (withInput a) = some t ∧
       t.mem "y" 0 = .mk .real (a + 7) := by
-  obtain ⟨t, ht, hv, _⟩ := FP.LogExp.optimized_run
+  obtain ⟨t, ht, hv, _⟩ := LogExp.FPEquiv.optimized_run
     { model with cast := fun _ _ _ x => x + 7 }
     "x" "y" 1 (withInput a) (fun _ => a) (fun _ => rfl)
   exact ⟨t, ht, hv ⟨0, by decide⟩⟩
@@ -139,19 +139,19 @@ theorem copy_retains_output_cast (a : ℚ) :
 -- The public proof is about both source kernels, with symbolic dimensions.
 open scoped VeriTile.Spec in
 theorem source_kernel_spec (R : FP.LogExp.Rules) (x y : RegionName) (B : Nat) :
-    FP.LogExp.originalIO x y B ≡[R] FP.LogExp.optimizedIO x y B :=
-  FP.LogExp.log_exp_expm1_equiv R x y B
+    LogExp.FPEquiv.originalIO x y B ≡[R] LogExp.FPEquiv.optimizedIO x y B :=
+  LogExp.FPEquiv.log_exp_expm1_equiv R x y B
 
 -- Changing the default precision changes the contract, even for identical code.
 theorem precision_is_in_signature (B : Nat) :
-    Spec.ProgramSyntax.signature (FP.LogExp.originalIO "x" "y" B) ≠
+    Spec.ProgramSyntax.signature (LogExp.FPEquiv.originalIO "x" "y" B) ≠
       Spec.ProgramSyntax.signature
-        { FP.LogExp.originalIO "x" "y" B with defaultPrecision := some .fp64 } := by
+        { LogExp.FPEquiv.originalIO "x" "y" B with defaultPrecision := some .fp64 } := by
   intro h
   have hp := congrArg (fun s => s.2.2) h
   cases hp
 
-#axiomsClean FP.LogExp.log_exp_expm1_equiv
+#axiomsClean LogExp.FPEquiv.log_exp_expm1_equiv
 #axiomsClean FP.LogExp.apply_rule
 #axiomsClean FP.LogExpCounterexample.plain_log_exp_not_identity
 #axiomsClean FP.LogExpCounterexample.singleton_lse_not_exact

@@ -13,7 +13,8 @@ class LogSumExpFPTests(unittest.TestCase):
         result = subprocess.run(
             ['lake', 'build', 'bench.examples.support.StableLogSumExpContract',
              'bench.examples.StableLogSumExpCorrect', 'VeriTile.Meta.StatementAudit',
-             'VeriTile.Triton.Float.LogExp', 'VeriTile.Triton.Float.LogExpCounterexample'],
+             'bench.examples.LogExp.Correct', 'bench.examples.LogExp.FPEquiv',
+             'VeriTile.Triton.Float.LogExpCounterexample'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -64,16 +65,48 @@ run_cmd do
                      'FP assumptions used by exp_sub_holds:\n  none\n')
         self.assertEqual(output[output.index('FP assumptions used by'):], expected)
 
-    def test_pr13_branching_precision_and_exact_counterexamples(self):
+    def test_piecewise_branching_precision_and_exact_counterexamples(self):
         self.check_lean((ROOT / 'bench/tests/FPLogExp.lean').read_text())
 
-    def test_pr13_prints_only_the_new_expression_atom(self):
+    def test_piecewise_prints_only_the_used_expression_atom(self):
         output = self.check_lean('''
-import VeriTile.Triton.Float.LogExp
-#print_fp_assumptions VeriTile.Triton.FP.LogExp.log_exp_expm1_equiv
+import bench.examples.LogExp.FPEquiv
+#print_fp_assumptions VeriTile.Bench.Examples.LogExp.FPEquiv.log_exp_expm1_equiv
 ''')
         self.assertEqual(output, 'FP assumptions used by log_exp_expm1_equiv:\n'
                                  '  log_exp_expm1\n')
+
+    def test_log_exp_shared_sources_and_independent_proofs(self):
+        self.check_lean('''
+import bench.examples.LogExp.Correct
+import bench.examples.LogExp.FPEquiv
+open VeriTile Triton Bench.Examples.LogExp
+example (x y : RegionName) (B : Nat) :
+    (Correct.originalIO x y B).kernel = (FPEquiv.originalIO x y B).io.kernel := rfl
+example (x y : RegionName) (B : Nat) :
+    (Correct.optimizedIO x y B).kernel = (FPEquiv.optimizedIO x y B).io.kernel := rfl
+#axiomsClean Correct.original_correct
+#axiomsClean Correct.optimized_correct
+#axiomsClean FPEquiv.log_exp_expm1_equiv
+''')
+        for module, forbidden in [
+            ('Kernels', ['Correct.originalIO', 'FPEquiv.originalIO']),
+            ('Correct', ['FPEquiv.originalIO']),
+            ('FPEquiv', ['Correct.originalIO']),
+        ]:
+            with self.subTest(module=module):
+                names = ', '.join(f'`VeriTile.Bench.Examples.LogExp.{n}' for n in forbidden)
+                if module != 'FPEquiv':
+                    names += ', `VeriTile.Triton.FP.LogExp.Rules'
+                self.check_lean(f'''
+import bench.examples.LogExp.{module}
+import Lean
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  for name in [{names}] do
+    if env.contains name then throwError "Unexpected proof dependency: {{name}}"
+''')
 
 
 if __name__ == '__main__':
