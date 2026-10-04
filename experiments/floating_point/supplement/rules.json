@@ -3,6 +3,30 @@
   "semantics": "Q rounds each node to compute precision; both entire expressions are finally cast to output precision; / is ordinary Triton division, never tl.div_rn",
   "rules": [
     {
+      "id": "LOG-EXP-EXPM1",
+      "reference": "if abs(a) <= 0.5 then fp32(libdevice.log1p(fp32(libdevice.expm1(a)))) else fp32(libdevice.log(fp32(libdevice.exp(a))))",
+      "candidate": "a",
+      "domain": "finite fp32 a; branch threshold is an implementation choice, not an input filter",
+      "operands": ["a"],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "LOG-MUL-LIBDEVICE",
+      "reference": "Q(libdevice.log(Q(a * b)))",
+      "candidate": "Q(Q(libdevice.log(a)) + Q(libdevice.log(b)))",
+      "domain": "finite a,b; a > 0 and b > 0",
+      "operands": ["a", "b"],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "LOG-EXP-FULL-LIBDEVICE",
+      "reference": "Q(libdevice.log(Q(libdevice.exp(a))))",
+      "candidate": "a",
+      "domain": "finite a",
+      "operands": ["a"],
+      "category": "two_gates_candidate"
+    },
+    {
       "id": "EXP-SUB-INTRINSIC",
       "reference": "tl.exp(a - b)",
       "candidate": "tl.exp(a) / tl.exp(b)",

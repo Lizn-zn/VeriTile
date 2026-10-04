@@ -21,12 +21,12 @@ KERNELS = supplemental.KERNELS
 SOURCES = [*original.SOURCES, Path(__file__).resolve(), Path(supplemental.__file__),
            KERNELS, supplemental.CATALOG]
 ACCEPTED = original.ACCEPTED
-BUNDLE_VERSION = "scalar-supplement-8"
+BUNDLE_VERSION = "scalar-supplement-10"
 gates = original.gates
 domains = original.domains
 NumericEvent = original.NumericEvent
 sha, write_json, read_json = original.sha, original.write_json, original.read_json
-load_module, seed_for, shapes_for = original.load_module, original.seed_for, original.shapes_for
+load_module, seed_for, shapes_for = original.load_module, supplemental.seed_for, original.shapes_for
 validate_profile, contract_for = supplemental.validate_profile, supplemental.contract_for
 oracle, launch_pair = supplemental.oracle, supplemental.launch_pair
 

@@ -44,25 +44,55 @@ return the same zero. Extracting the actual conversion equality requires
 so they cannot be accidentally imported without this integer-range-aware binding. See the [current report](../experiments/floating_point/primitives/report/summary.md)
 and [reproduction instructions](../experiments/floating_point/primitives/README.md).
 
-### Already attempted, but not admitted
+### Current log experiment results: piecewise expm1/log1p passes
 
-- **LOG-MUL, fp32:** the run reported `NUMERIC_EVENT`. The relation
-  `log(a * b) = log(a) + log(b)` requires `a > 0` and `b > 0`. Independent
-  Normal(1, 1) operands can be negative; for example, `a = -1, b = 2` makes
-  both `log(a)` and `log(a * b)` invalid as finite real logarithms. The runner
-  used to detect any nonpositive operand and stop this instance before a
-  completed two-gates decision. This was an input-domain mismatch, not a
-  measured bias/vars rejection. The user has now selected skipping out-of-domain
-  tuples: the runner retains Normal(1, 1) draws and the configured shape, and
-  computes both gates on the same positive-input subset without replacement
-  sampling. Valid/skipped counts are recorded. **Rerun LOG-MUL/fp32 under this
-  policy**; the old report is unchanged and still supplies no admission.
-- **LOG-EXP, fp32:** the run completed; the bias gate is `INCONCLUSIVE`
-  (`B` approximately `0.06895381`, threshold `0.05`) and the vars gate passes.
-  It remains unadmitted under `pass_only`. The accepted bf16-input/output row
-  cannot supply the required uncast fp32 relation.
+Five paired fp32 cases completed on H200 in DLC job `dlcyu7h8qlz4yfn1`, using
+`log_accuracy_config.py`: 4096 replicates of shape `[4096, 4096]`, Normal(1,1),
+tau=0.05 local ULP and U thresholds 10/100. Independent CPU replay exactly
+matches the GPU-environment reports.
 
-See the [supplemental report](../experiments/floating_point/supplement/report/summary.md)
+| Primitive | z | B (local ULP) | U | Decision |
+|---|---:|---:|---:|---|
+| LOG-MUL: `tl.log(a*b)` vs `tl.log(a)+tl.log(b)` | 2.924915168 | 0.1679352504 | 6.685560237 | INCONCLUSIVE: bias |
+| LOG-MUL-LIBDEVICE: both sides use `libdevice.log` | 2.924915168 | 0.1679352504 | 6.685560237 | INCONCLUSIVE: bias |
+| LOG-EXP-LIBDEVICE: `tl.log(libdevice.exp(a))` vs `a` | 68.59740095 | 0.7300322166 | 0 | REJECT: bias |
+| LOG-EXP-FULL-LIBDEVICE: `libdevice.log(libdevice.exp(a))` vs `a` | 68.59740095 | 0.7300322166 | 0 | REJECT: bias |
+| LOG-EXP-EXPM1: `log1p(expm1(a))` for `abs(a)<=0.5`, otherwise `log(exp(a))`, vs `a` | 25775.46400 | 0.0494428110 | 0 | ACCEPT: new piecewise expression |
+
+The libdevice.log variants reuse their controls' input seeds. Under this run's
+Triton 3.7.1 / CUDA 13.0, sm_90 and compiler settings, both log interfaces
+lower to the same `__nv_logf` implementation. Removing only `.file` / `.loc`
+debug directives makes the paired reference and candidate PTX identical.
+All per-replicate observations are also exactly equal; changing the API
+therefore supplies no improvement here. This is specific to the recorded
+compiler and configuration. See the
+[paired comparison](../experiments/floating_point/supplement/log_report/comparison.json).
+
+LOG-MUL keeps only positive input pairs without resampling: 48,643,849,868
+valid tuples and 20,075,626,868 skipped tuples. It completes the numerical
+protocol; its signed bias interval `[-0.04397270, 0.16793525]` crosses the
+allowed `[-0.05, 0.05]` interval, so it is inconclusive rather than a bias FAIL.
+
+LOG-EXP-LIBDEVICE keeps all finite inputs, including negatives. Its mean bias
+is -0.6804358853 local ULP, with interval `[-0.73003222, -0.63083955]`, wholly
+outside tolerance. U=0 because the candidate `a` exactly matches the oracle;
+that does not make the two expressions equal. The magnitude gate passes for
+the four unmodified expressions, but none is admitted under `pass_only`.
+
+LOG-EXP-EXPM1 uses only fp32 libdevice functions. The branch threshold 0.5 was
+fixed before sampling; all finite inputs remain in the domain and the random
+input seed matches LOG-EXP-LIBDEVICE. Its mean is -0.04943322176 local ULP,
+SE=0.000001917840228 and B=0.04944281096, just inside the 0.05 budget.
+The larger diagnostic z reflects lower variability, not a bias-budget failure.
+U=0 still comes from the exact candidate `a`. Fifteen GPU boundary fixtures
+check tiny values, branch neighbors, fallback behavior and retained overflow;
+PTX contains no fp64 operations. See the
+[boundary evidence](../experiments/floating_point/supplement/log_report/boundaries.json).
+Acceptance applies only to this new piecewise expression. It is not a binding
+for the original log-exp operation, and no Lean assumption was replaced.
+
+StableLogSumExp therefore remains incomplete. See the
+[current log report](../experiments/floating_point/supplement/log_report/summary.md)
 and the [input-domain masks](../scripts/numerical_domains.py).
 
 ## Checked algebraic evidence
@@ -98,7 +128,7 @@ formats. It supplies no fp64 instance.
 |---|---|---|
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
 | `SoftmaxStable` | fp32 libdevice EXP-SUB is admitted and bound together with the scalar arithmetic rules. | `SoftmaxStableFPEquiv.softmax_stable_equiv` completes the guarded, scheduled equivalence; max, bf16 stores, output frames and symbolic positive row length are retained. |
-| `StableLogSumExp` | libdevice EXP-SUB is bound; uncast fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need matching admission. The existing LOG-EXP report used tl.exp. | Both libdevice source variants are connected under the two remaining log obligations. Rerun LOG-MUL with domain filtering and test the new log/libdevice-exp pair. |
+| `StableLogSumExp` | libdevice EXP-SUB is bound. LOG-MUL/fp32 is bias-INCONCLUSIVE; LOG-EXP-LIBDEVICE/fp32 is bias-REJECT. Neither is admitted. | Both libdevice source variants remain conditional on the two log obligations; the completed GPU experiments do not close the specification. |
 | `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | `OnlineSoftmaxFPEquiv.online_softmax_equiv` completes the original Correct observation scope: batch stored values versus read-only normalization using actual final online m/l registers. Both original executions and separate memory frames are retained; no output store is added. |
 | `Welford` | Both count atoms are admitted and bound for integer `0 <= i < 2^24`. | `WelfordFPEquiv.welford_equiv` closes the original comparison for `0 < N <= 2^24`, retaining both bf16 outputs and frames. |
 | `FusedLayerNorm` | The same two count atoms are admitted and bound. | `FusedLayerNormFPEquiv.layernorm_equiv` closes the original comparison for `N <= 2^24`; empty output rows remain covered. |
@@ -175,8 +205,11 @@ The latter evaluates `tl.log(libdevice.exp(a))` with a separate rule ID and
 implementation contract; the old LOG-EXP results cannot authorize it. Both use
 the existing shape, Normal(1,1) distribution and gates. Invalid inputs are skipped
 without resampling, and nonfinite outputs on valid inputs remain failures.
-See the supplemental README for the GPU commands. No new admission is claimed
-until those results are returned.
+The current H200 report is complete: LOG-MUL is bias-INCONCLUSIVE and
+LOG-EXP-LIBDEVICE is bias-REJECT. Neither supplies the required admission.
+The paired `log_accuracy_config.py` additionally accepts LOG-EXP-EXPM1, but its
+piecewise log1p/expm1 expression differs from the operation used in this proof.
+See the supplemental README for the reproduction commands and report.
 
 The regression shows that EXP-SUB and LOG-MUL can hold with the domain while
 the original stored outputs still differ without LOG-EXP. It also checks why

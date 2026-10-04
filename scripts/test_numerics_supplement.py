@@ -85,8 +85,8 @@ class ContractTests(unittest.TestCase):
 
     def test_supported_matrix_and_invalid_precision(self):
         p = profile()
-        self.assertEqual(len(p["rules"]), 18)
-        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 47)
+        self.assertEqual(len(p["rules"]), 21)
+        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 54)
         for field in ("input", "output", "accumulator"):
             bad = deepcopy(p)
             bad["formats"][-1][field] = "bf16"
@@ -98,7 +98,8 @@ class ContractTests(unittest.TestCase):
         fmt = p['formats'][2]
         lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
         for rule, intrinsic in [('EXP-SUB', 'libdevice.exp'), ('EXP-SUB-INTRINSIC', 'tl.exp'),
-                                ('LOG-EXP', 'tl.exp'), ('LOG-EXP-LIBDEVICE', 'libdevice.exp')]:
+                                ('LOG-EXP', 'tl.exp'), ('LOG-EXP-LIBDEVICE', 'libdevice.exp'),
+                                ('LOG-EXP-FULL-LIBDEVICE', 'libdevice.exp')]:
             config = supplement.contract_for(p, fmt, rule, {}, runner.source_hashes(), lowerings)
             self.assertEqual(config['numerics']['intrinsics']['exp'], intrinsic)
 
@@ -118,6 +119,46 @@ class ContractTests(unittest.TestCase):
         self.assertNotEqual(*[supplement.instance_key(c) for c in configs])
         self.assertEqual(runner.domains.policy('LOG-MUL')['positive'], ['a', 'b'])
         self.assertEqual(runner.domains.policy('LOG-EXP-LIBDEVICE')['positive'], [])
+
+    def test_libdevice_log_comparison_binds_pairing_intrinsics_and_domains(self):
+        p = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'libdevice_log_config.py').PROFILE))
+        baseline = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'log_config.py').PROFILE))
+        self.assertEqual({k: v for k, v in p.items() if k != 'rules'},
+                         {k: v for k, v in baseline.items() if k != 'rules'})
+        lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
+        from scripts.export_supplemental_rules import domain
+        for variant, base in supplement.PAIRED_INPUTS.items():
+            seed = runner.seed_for(p, p['formats'][0], variant)
+            self.assertEqual(seed, runner.seed_for(p, p['formats'][0], base))
+            configs = [supplement.contract_for(p, p['formats'][0], rule, {}, runner.source_hashes(), lowerings)
+                       for rule in (variant, base)]
+            self.assertEqual(configs[0]['probe']['seed'], seed)
+            self.assertEqual(configs[0]['probe']['paired_input_rule'], base)
+            self.assertEqual(configs[0]['numerics']['intrinsics']['log'], 'libdevice.log')
+            self.assertEqual(configs[1]['numerics']['intrinsics']['log'], 'tl.log')
+            self.assertNotEqual(*[supplement.instance_key(c) for c in configs])
+            self.assertEqual(domain(variant), domain(base))
+            self.assertEqual(runner.domains.policy(variant), runner.domains.policy(base))
+
+    def test_expm1_probe_keeps_profile_and_records_its_own_expression(self):
+        p = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'log_accuracy_config.py').PROFILE))
+        baseline = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'libdevice_log_config.py').PROFILE))
+        self.assertEqual({k: v for k, v in p.items() if k != 'rules'},
+                         {k: v for k, v in baseline.items() if k != 'rules'})
+        self.assertEqual(p['rules'], baseline['rules'] + ['LOG-EXP-EXPM1'])
+        lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
+        c = supplement.contract_for(p, p['formats'][0], 'LOG-EXP-EXPM1', {},
+                                    runner.source_hashes(), lowerings)
+        self.assertEqual(c['relation']['branch']['threshold'], 0.5)
+        self.assertEqual(c['numerics']['intrinsics']['expm1'], 'libdevice.expm1')
+        self.assertEqual(c['numerics']['intrinsics']['log1p'], 'libdevice.log1p')
+        for fmt in profile()['formats']:
+            self.assertEqual(supplement.unsupported('LOG-EXP-EXPM1', fmt) is None,
+                             fmt['name'] == 'fp32')
 
     def test_composite_rejected_before_creating_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -217,6 +258,31 @@ class ContractTests(unittest.TestCase):
 
 @unittest.skipUnless(HAS_TORCH, "optional CPU numerical wiring checks require torch")
 class OracleTests(unittest.TestCase):
+    def test_paired_log_probes_generate_identical_inputs_and_oracles(self):
+        import torch
+
+        class CPUFixtureTorch:
+            def __getattr__(self, key):
+                return getattr(torch, key)
+
+            def randn(self, shape, **kwargs):
+                return torch.randn(shape, **{**kwargs, 'device': 'cpu'})
+
+        p = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'libdevice_log_config.py').PROFILE))
+        p['shape'] = [3, 17]
+        fmt = p['formats'][0]
+        for variant, base in supplement.PAIRED_INPUTS.items():
+            inputs = [supplement.sample_inputs(CPUFixtureTorch(), p, fmt, rule,
+                       torch.Generator().manual_seed(runner.seed_for(p, fmt, rule))) for rule in (variant, base)]
+            for a, b in zip(*inputs):
+                torch.testing.assert_close(a, b, rtol=0, atol=0)
+            masks = [runner.domains.mask(torch, rule, x) for rule, x in zip((variant, base), inputs)]
+            self.assertTrue(torch.equal(*masks))
+            oracles = [supplement.oracle(torch, rule, x)[mask]
+                       for rule, x, mask in zip((variant, base), inputs, masks)]
+            torch.testing.assert_close(*oracles, rtol=0, atol=0)
+
     def test_libdevice_log_inverse_keeps_negative_inputs_and_nonfinite_failures(self):
         import torch
         a = torch.tensor([-2., 0., 1., 1000., float('inf')])
@@ -355,11 +421,11 @@ class InterpreterTests(unittest.TestCase):
                 if supplement.unsupported(rule, fmt):
                     continue
                 with self.subTest(rule=rule, fmt=fmt["name"]):
-                    if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE"}:
+                    if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-MUL-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-EXPM1"}:
                         # CUDA extern_elementwise has no CPU interpreter
                         # implementation. Do not substitute tl.exp: offline
                         # compilation and the GPU run check these exact calls.
-                        self.skipTest('libdevice.exp requires CUDA; validate with check_supplement_kernels.py and GPU')
+                        self.skipTest('libdevice exp/log require CUDA; validate with check_supplement_kernels.py and GPU')
                     # Positive *test fixture* for LOG-MUL; production still samples
                     # the configured unconditioned normal distribution.
                     dtype = {"bf16": torch.bfloat16, "fp32": torch.float32, "fp64": torch.float64}[fmt["input"]]

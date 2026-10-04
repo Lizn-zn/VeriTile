@@ -13,6 +13,8 @@ SUPPORTED = {
     "EXP-SUB", "EXP-ZERO", "LOG-MUL", "LOG-EXP", "MAX-COMMUTE",
     "MAX-ASSOC", "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB",
     "EXP-SUB-INTRINSIC", "COUNT-ZERO", "COUNT-SUCCESSOR", "LOG-EXP-LIBDEVICE",
+    "LOG-MUL-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE",
+    "LOG-EXP-EXPM1",
 }
 
 
@@ -98,6 +100,11 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = rnd(tl.log(rnd(a * b, PRECISION)), PRECISION)
         else:
             out = rnd(rnd(tl.log(a), PRECISION) + rnd(tl.log(b), PRECISION), PRECISION)
+    elif RULE == "LOG-MUL-LIBDEVICE":
+        if SIDE == 0:
+            out = rnd(libdevice.log(rnd(a * b, PRECISION)), PRECISION)
+        else:
+            out = rnd(rnd(libdevice.log(a), PRECISION) + rnd(libdevice.log(b), PRECISION), PRECISION)
     elif RULE == "LOG-EXP":
         if SIDE == 0:
             out = rnd(tl.log(rnd(tl.exp(a), PRECISION)), PRECISION)
@@ -109,6 +116,24 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
         # libdevice.exp, whose log-inverse relation needs its own experiment.
         if SIDE == 0:
             out = rnd(tl.log(rnd(libdevice.exp(a), PRECISION)), PRECISION)
+        else:
+            out = a
+    elif RULE == "LOG-EXP-FULL-LIBDEVICE":
+        if SIDE == 0:
+            out = rnd(libdevice.log(rnd(libdevice.exp(a), PRECISION)), PRECISION)
+        else:
+            out = a
+    elif RULE == "LOG-EXP-EXPM1":
+        tl.static_assert(PRECISION == "fp32", "expm1/log1p probe requires fp32")
+        if SIDE == 0:
+            near_zero = tl.abs(a) <= 0.5
+            # tl.where evaluates both arms. Safe unused arguments keep expm1
+            # from saturating to -1 on large negative fallback inputs.
+            small_a = tl.where(near_zero, a, 0.0)
+            other_a = tl.where(near_zero, 0.0, a)
+            small = libdevice.log1p(libdevice.expm1(small_a))
+            other = libdevice.log(libdevice.exp(other_a))
+            out = tl.where(near_zero, small, other)
         else:
             out = a
     elif RULE == "MAX-COMMUTE":

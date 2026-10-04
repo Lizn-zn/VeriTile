@@ -97,8 +97,15 @@ loads, which these examples do not use. This is not a complete IEEE evaluator.
 
 [The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
 main-table algebraic countermodels from the supplemental rule set. Stable
-logsumexp remains pending; its two missing scalar probes are in
-`experiments/floating_point/supplement/log_config.py`.
+logsumexp remains pending. Its two scalar probes and paired libdevice.log
+variants in `experiments/floating_point/supplement/log_accuracy_config.py`
+completed on H200: LOG-MUL is bias-INCONCLUSIVE and LOG-EXP-LIBDEVICE is
+bias-REJECT. Both variants have identical observations and PTX after removing
+source-location directives under the recorded Triton 3.7.1 configuration.
+None supplies the missing admission. The same profile also tests a new fp32
+piecewise expression: log1p(expm1(a)) for abs(a)<=0.5, otherwise log(exp(a)).
+It passes with B=0.0494428110 and U=0, but changes the operation and cannot
+justify the original log-exp premise. See the [current log report](../experiments/floating_point/supplement/log_report/summary.md).
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently
@@ -209,9 +216,14 @@ The checks cover:
   and independent comparator checking of 43 theorem targets across its view,
   execution contract, public specification and boundary fixture. Regressions
   check its eleven printed scalar atoms, source independence, missing-register
-  failure, aliased readback and both memory frames. The log rerun profile's
-  four fp32 kernel specializations compile for sm_90; no new GPU results or
-  admissions are claimed. CPU tests retain negative log-exp inputs and reject
+  failure, aliased readback and both memory frames. The paired log profile's
+  ten fp32 kernel specializations compile for sm_90. All five cases completed
+  4096 H200 replicates with identical independent CPU replay; LOG-MUL and its
+  libdevice.log variant remain bias-INCONCLUSIVE, while LOG-EXP-LIBDEVICE and
+  its libdevice.log variant are bias-REJECT. The added piecewise expm1/log1p
+  expression passes, but does not admit the original operation. Fifteen GPU
+  boundary inputs check small values, branch neighbors, fallback and overflow.
+  CPU tests retain negative log-exp inputs and reject
   nonfinite outputs on valid inputs, and existing admission tables remain
   byte-for-byte reproducible from their frozen reports.
 - The bounded-count update passes `lake build VeriTile TritonBenchSpecExamples`

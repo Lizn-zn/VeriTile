@@ -18,6 +18,13 @@ DEFAULT_PROFILE = DIRECTORY / "config.py"
 KERNELS = DIRECTORY / "kernels.py"
 NumericEvent = original.NumericEvent
 COUNT_RULES = {"COUNT-ZERO", "COUNT-SUCCESSOR"}
+PAIRED_INPUTS = {"LOG-MUL-LIBDEVICE": "LOG-MUL", "LOG-EXP-FULL-LIBDEVICE": "LOG-EXP-LIBDEVICE",
+                 "LOG-EXP-EXPM1": "LOG-EXP-LIBDEVICE"}
+
+
+def seed_for(profile, fmt, rule):
+    """Library comparisons share input draws while retaining distinct contracts."""
+    return original.seed_for(profile, fmt, PAIRED_INPUTS.get(rule, rule))
 
 
 def load_catalog():
@@ -82,8 +89,8 @@ def unsupported(rule, fmt):
         return None
     if fmt["input"] == "int32":
         return "int32 inputs apply only to count conversion"
-    if rule == "EXP-SUB-INTRINSIC" and (fmt["input"], fmt["compute"], fmt["output"]) != ("fp32", "fp32", "fp32"):
-        return "intrinsic exp-sub experiment covers the original fp32 primitive"
+    if rule in {"EXP-SUB-INTRINSIC", "LOG-EXP-EXPM1"} and (fmt["input"], fmt["compute"], fmt["output"]) != ("fp32", "fp32", "fp32"):
+        return "this experiment covers only fp32 inputs, arithmetic and outputs"
     if fmt["compute"] == "fp64" and rule != "DIV-MUL-RCP":
         return "fp64-work supplement covers only ordinary division with fp32 output"
     return None
@@ -104,11 +111,21 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
         node_formats={"arithmetic": fmt["compute"], "transcendental": fmt["compute"],
                       "details": "bf16 nodes execute in fp32 then explicitly round bf16; see bound source"},
         accumulator_formats={},  # Every expression is scalar; no reduction accumulator.
-        intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE"} else "tl.exp",
-                    "log": "tl.log", "max": "tl.maximum",
+        intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-EXPM1"} else "tl.exp",
+                    "log": "libdevice.log" if rule in PAIRED_INPUTS else "tl.log", "max": "tl.maximum",
                     "oracle": "torch fp64 mathematical reference on the same quantized operands"})
     config["probe"]["special_values"]["literals"] = "only explicit -inf literals in the relation"
     config["probe"]["active_operands"] = load_catalog()[rule]["operands"]
+    if rule in PAIRED_INPUTS:
+        config["probe"].update(seed=seed_for(profile, fmt, rule), paired_input_rule=PAIRED_INPUTS[rule])
+    if rule == "LOG-EXP-EXPM1":
+        config["numerics"]["intrinsics"].update(expm1="libdevice.expm1", log1p="libdevice.log1p")
+        config["relation"]["branch"] = {
+            "condition": "abs(a) <= 0.5", "threshold": 0.5,
+            "inside": "fp32 log1p(fp32 expm1(a))",
+            "outside": "fp32 log(fp32 exp(a))",
+            "inactive_arguments": "zero before evaluating unused tl.where arms",
+        }
     if fmt["compute"] == "fp64":
         config["numerics"]["intrinsics"]["oracle"] = (
             "quotient error |fma(-output,b,a)/b|; explicit fp64 tl.fma followed by fp64 division; "
@@ -156,7 +173,7 @@ def oracle(torch, rule, inputs):
         return a / b
     if rule == "MUL-RCP-CANCEL":
         return torch.ones_like(a)
-    if rule == "LOG-MUL":
+    if rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE"}:
         return torch.log(a * b)
     if rule in {"EXP-SUB", "EXP-SUB-INTRINSIC"}:
         return torch.exp(a - b)
@@ -171,7 +188,7 @@ def oracle(torch, rule, inputs):
     if rule in {"MAX-COMMUTE", "MAX-ASSOC"}:
         ab = torch.maximum(a, b)
         return torch.maximum(ab, c) if rule == "MAX-ASSOC" else ab
-    if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "LOG-EXP-LIBDEVICE", "MAX-IDEM", "MAX-NEG-INF"}:
+    if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-EXPM1", "MAX-IDEM", "MAX-NEG-INF"}:
         return a
     raise ValueError("unknown supplemental oracle")
 

@@ -7,12 +7,12 @@ OPERANDS = {
     **dict.fromkeys(("ADD-ASSOC", "MUL-ASSOC", "MUL-DISTRIB", "FMA-CONTRACT",
                      "CAST-REMOVE", "ACC-WIDEN"), "abc"),
     **dict.fromkeys(("ROUND-IDEM", "BF16-WIDEN-RETURN", "SQRT-RSQRT", "ADD-ZERO",
-                     "MUL-ONE", "DIV-ONE", "MUL-RCP-CANCEL", "LOG-EXP", "LOG-EXP-LIBDEVICE",
-                     "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB"), "a"),
-    **dict.fromkeys(("DIV-MUL-RCP", "EXP-SUB", "EXP-SUB-INTRINSIC", "LOG-MUL", "MAX-COMMUTE"), "ab"),
+                     "MUL-ONE", "DIV-ONE", "MUL-RCP-CANCEL", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE",
+                     "LOG-EXP-EXPM1", "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB"), "a"),
+    **dict.fromkeys(("DIV-MUL-RCP", "EXP-SUB", "EXP-SUB-INTRINSIC", "LOG-MUL", "LOG-MUL-LIBDEVICE", "MAX-COMMUTE"), "ab"),
     "MAX-ASSOC": "abc", "EXP-ZERO": "", "COUNT-ZERO": "", "COUNT-SUCCESSOR": "a",
 }
-POSITIVE = {"SQRT-RSQRT": "a", "LOG-MUL": "ab"}
+POSITIVE = {"SQRT-RSQRT": "a", "LOG-MUL": "ab", "LOG-MUL-LIBDEVICE": "ab"}
 NONZERO = {"DIV-RCP": "b", "DIV-MUL-RCP": "b", "MUL-RCP-CANCEL": "a"}
 
 
