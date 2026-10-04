@@ -88,11 +88,6 @@ instance {beta2 : ℝ} {B : Nat} :
     CoeOut (Rules beta2 B) (Spec.Assumptions (Spec.ProgramSyntax.Statement ComputeKernel)) :=
   ⟨Rules.assumptions⟩
 
-theorem admitted_operation_matches :
-    admitted.ruleID = "ADD-COMMUTE" ∧ admitted.input = "fp32" ∧
-    admitted.compute = "fp32" ∧ admitted.accumulator = "fp32" ∧
-    admitted.output = "fp32" := by decide
-
 @[spec_rule] theorem admitted_add_commute {beta2 : ℝ} {B : Nat} (R : Rules beta2 B) :
     Spec.Derivation R.assumptions
       (addFragment beta2 B Bool.false) (addFragment beta2 B Bool.true) :=

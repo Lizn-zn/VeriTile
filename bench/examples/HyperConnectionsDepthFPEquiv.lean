@@ -61,11 +61,6 @@ theorem original_decomposition (tau : ℝ) :
 theorem optimized_decomposition (tau : ℝ) :
     body (optimizedKernel tau) = beforeAdd tau ++ optimizedAdd ++ afterAdd tau := rfl
 
-theorem admitted_operation_matches :
-    admitted.ruleID = "ADD-COMMUTE" ∧ admitted.input = "fp32" ∧
-    admitted.compute = "fp32" ∧ admitted.accumulator = "fp32" ∧
-    admitted.output = "fp32" := by decide
-
 def addCommute : Spec.RuleEntry ComputeStmt := admitted.bind originalAdd optimizedAdd
 
 structure Rules where

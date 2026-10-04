@@ -74,13 +74,6 @@ theorem optimized_decomposition (nElements blockSize : Nat) :
     body (optimizedKernel nElements blockSize) =
       beforeAdd nElements blockSize ++ optimizedAdd blockSize ++ afterAdd nElements blockSize := rfl
 
-/-- Admission selects the fp32 operation. Experimental shape and launch are
-provenance for that selection, not restrictions on the subsequent derivation. -/
-theorem admitted_operation_matches :
-    admitted.ruleID = "ADD-COMMUTE" ∧ admitted.input = "fp32" ∧
-    admitted.compute = "fp32" ∧ admitted.accumulator = "fp32" ∧
-    admitted.output = "fp32" := by decide
-
 /-- Only this frozen accepted row is bound, never a user-supplied PASS label. -/
 def addCommute (blockSize : Nat) : Spec.RuleEntry ComputeStmt :=
   admitted.bind (originalAdd blockSize) (optimizedAdd blockSize)

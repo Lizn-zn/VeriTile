@@ -48,15 +48,6 @@ def Atom.ruleID : Atom → String
   | .divMulRcp => "DIV-MUL-RCP"
   | .mulRcpCancel => "MUL-RCP-CANCEL"
 
-/-- Report refreshes must preserve the selected relation, precision and domain.
-In particular an accepted bf16 output cast cannot supply a bare fp32 law. -/
-theorem report_matches (a : Atom) :
-    (report a).report.ruleID = a.ruleID ∧
-    (report a).report.input = "fp32" ∧ (report a).report.compute = "fp32" ∧
-    (report a).report.accumulator = "fp32" ∧ (report a).report.output = "fp32" ∧
-    (report a).guards = guards a := by
-  cases a <;> decide
-
 def ref (name : String) : Op .real [] := .ref .real [] name
 def plus (a b : Op .real []) : Op .real [] := .add .real .nil a b
 def minus (a b : Op .real []) : Op .real [] := .sub .real .nil a b

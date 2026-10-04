@@ -39,13 +39,6 @@ def lhs (a : Atom) : GuardedFragment := ⟨[], lhsCode a⟩
 def rhs (a : Atom) : GuardedFragment := ⟨[], rhsCode a⟩
 def entry (a : Atom) : Spec.RuleEntry GuardedFragment := (report a).bind [lhs a] [rhs a]
 
-theorem report_matches (a : Atom) :
-    (report a).ruleID = (match a with | .zero => "COUNT-ZERO" | .successor => "COUNT-SUCCESSOR") ∧
-    (report a).input = "int32" ∧ (report a).compute = "fp32" ∧
-    (report a).accumulator = "fp32" ∧ (report a).output = "fp32" ∧
-    0 < limit ∧ limit ≤ 2^24 ∧ limit < 2^31 := by
-  cases a <;> decide
-
 structure Rules where
   arithmetic : ScalarArithmetic.Rules
   zero : Spec.EvidenceValidated (entry .zero).rule (entry .zero).evidence

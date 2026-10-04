@@ -78,11 +78,6 @@ def resCommute (tau : ℝ) := admitted.bind
 def preCommute (tau : ℝ) := admitted.bind
   (mulFragment tau "branch_in" "h_pre" Bool.false) (mulFragment tau "branch_in" "h_pre" Bool.true)
 
-theorem admitted_operation_matches :
-    admitted.ruleID = "MUL-COMMUTE" ∧ admitted.input = "fp32" ∧
-    admitted.compute = "fp32" ∧ admitted.accumulator = "fp32" ∧
-    admitted.output = "fp32" := by decide
-
 structure Rules (tau : ℝ) where
   res_mul_comm : Spec.EvidenceValidated (resCommute tau).rule (resCommute tau).evidence
   pre_mul_comm : Spec.EvidenceValidated (preCommute tau).rule (preCommute tau).evidence

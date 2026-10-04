@@ -44,6 +44,11 @@ class ScalarArithmeticTests(unittest.TestCase):
 
     def test_wrong_relation_or_precision_cannot_replace_the_selected_row(self):
         source = (ROOT / 'VeriTile/Triton/Float/ScalarArithmetic.lean').read_text()
+        checks = (ROOT / 'bench/tests/FPScalarAdmission.lean').read_text()
+        # Check the replacement module directly, without importing the original.
+        checks = checks.replace('import VeriTile.Triton.Float.ScalarArithmetic\n', '', 1)
+        baseline = self.lean(source + '\n' + checks)
+        self.assertEqual(baseline.returncode, 0, baseline.stdout + baseline.stderr)
         for old, new in (
             ('ReportedAdmission.fp32_mul_distrib', 'ReportedAdmission.bf16_fp32_mul_distrib'),
             ('ReportedAdmission.fp32_add_assoc', 'ReportedAdmission.fp32_mul_assoc'),
@@ -51,7 +56,7 @@ class ScalarArithmeticTests(unittest.TestCase):
              'SupplementalAdmission.bf16_fp32_mul_rcp_cancel'),
         ):
             with self.subTest(replacement=new):
-                result = self.lean(source.replace(old, new))
+                result = self.lean(source.replace(old, new) + '\n' + checks)
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('decide', result.stdout)
 

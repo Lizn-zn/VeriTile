@@ -13,14 +13,6 @@ def lhs : GuardedFragment := ⟨guards, lhsCode⟩
 def rhs : GuardedFragment := ⟨guards, rhsCode⟩
 def entry := SupplementalAdmission.fp32_exp_sub.bind lhsCode rhsCode
 
-theorem report_matches :
-    SupplementalAdmission.fp32_exp_sub.report.ruleID = "EXP-SUB" ∧
-    SupplementalAdmission.fp32_exp_sub.report.input = "fp32" ∧
-    SupplementalAdmission.fp32_exp_sub.report.compute = "fp32" ∧
-    SupplementalAdmission.fp32_exp_sub.report.accumulator = "fp32" ∧
-    SupplementalAdmission.fp32_exp_sub.report.output = "fp32" ∧
-    SupplementalAdmission.fp32_exp_sub.guards = guards := by decide
-
 structure Rules where
   arithmetic : ScalarArithmetic.Rules
   exp_sub : Spec.EvidenceValidated entry.rule entry.evidence

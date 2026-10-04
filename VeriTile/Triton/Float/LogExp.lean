@@ -53,15 +53,6 @@ def identity : GuardedFragment := ⟨guards, assignOutput input⟩
 imported admission table supplies report data, not a hidden theorem. -/
 def entry := LogAdmission.fp32_log_exp_expm1.bind piecewiseLogExp.code identity.code
 
-/-- Check that the selected row is exactly this fp32 rule and input domain. -/
-theorem report_matches :
-    LogAdmission.fp32_log_exp_expm1.report.ruleID = "LOG-EXP-EXPM1" ∧
-    LogAdmission.fp32_log_exp_expm1.report.input = "fp32" ∧
-    LogAdmission.fp32_log_exp_expm1.report.compute = "fp32" ∧
-    LogAdmission.fp32_log_exp_expm1.report.accumulator = "fp32" ∧
-    LogAdmission.fp32_log_exp_expm1.report.output = "fp32" ∧
-    LogAdmission.fp32_log_exp_expm1.guards = guards := by decide
-
 /-- The one experiment-selected assumption used in this example. Its validity
 is the premise supplied by the two-gates workflow, not proved by Lean here. -/
 structure Rules where

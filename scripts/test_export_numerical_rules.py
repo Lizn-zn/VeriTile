@@ -183,18 +183,27 @@ run_cmd do
 
     def test_atom_selection_preserves_operation_precision(self):
         source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean').read_text()
-        # Check only the definitions and binding assertion; no proof/report noise.
+        # Check selection against test-side precision and relation requirements.
         source = source.split('/-- Only this frozen accepted row')[0]
-        for old, new in [('ReportedAdmission.fp32_add_commute', 'ReportedAdmission.bf16_add_commute'),
-                         ('ReportedAdmission.fp32_add_commute', 'ReportedAdmission.fp32_mul_commute')]:
+        checks = '''
+example :
+    admitted.ruleID = "ADD-COMMUTE" ∧ admitted.input = "fp32" ∧
+    admitted.compute = "fp32" ∧ admitted.accumulator = "fp32" ∧
+    admitted.output = "fp32" := by decide
+end VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv
+'''
+        old = 'ReportedAdmission.fp32_add_commute'
+        for new in (old, 'ReportedAdmission.bf16_add_commute', 'ReportedAdmission.fp32_mul_commute'):
             with self.subTest(change=new), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'WrongProfile.lean'
-                path.write_text(source.replace(old, new) +
-                                '\nend VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv\n')
+                path.write_text(source.replace(old, new) + checks)
                 result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=exporter.ROOT,
                                         text=True, capture_output=True, timeout=180)
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('decide', result.stdout)
+                if new == old:
+                    self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+                else:
+                    self.assertNotEqual(result.returncode, 0)
+                    self.assertIn('decide', result.stdout)
 
 
 if __name__ == '__main__':
