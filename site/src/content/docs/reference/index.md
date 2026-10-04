@@ -18,7 +18,7 @@ the Lean version pinned by this checkout's `lean-toolchain` file.
 git clone https://github.com/Lizn-zn/VeriTile.git
 cd VeriTile
 lake build
-lake env lean bench/examples/VectorAdd.lean
+lake env lean bench/examples/VectorAdd/Correct.lean
 ```
 
 The first build needs network access to fetch the toolchain and dependencies.
@@ -35,7 +35,7 @@ and statement-surface checks pass. Existing linter warnings may still appear.
   [`lean-toolchain`](https://github.com/Lizn-zn/VeriTile/blob/main/lean-toolchain).
 - **Routine build**: `lake build` from the repo root (the default `VeriTile` target).
 - **Full build**: `lake build VeriTile VeriTileFull`, including the GeLU analysis and library trust report.
-- **Standalone example**: `lake env lean bench/examples/VectorAdd.lean` after the library build.
+- **Standalone example**: `lake env lean bench/examples/VectorAdd/Correct.lean` after the library build.
 - **Manifest + sorry check**: `scripts/check-artifact.sh`.
 - **Bench port check**: `bench/check_ports.sh`.
 - **Trust checks**: see the [trust audit guide](/VeriTile/proofs/trust-audit/).

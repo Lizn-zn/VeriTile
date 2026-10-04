@@ -1,4 +1,4 @@
-"""Cross-check the independently written real and FP example kernels."""
+"""Check shared example sources, mathematical specifications and independent FP proofs."""
 from pathlib import Path
 import subprocess
 import tempfile
@@ -15,19 +15,19 @@ PAIRS = (
     ("AdamUpdateGridLaunch", "adam_update_equiv", "VeriTile.Bench.Examples.AdamUpdateGridLaunch.adamIO", "add_commute"),
 )
 
-# The old files remain until the original FP transformation is derived. Check
-# that the new real proofs still describe exactly those source kernels.
+# Each real IO wrapper must interpret the corresponding shared source and
+# expose the mathematical formula independently of its FP equivalence proof.
 REDUCTIONS = (
-    ("SoftmaxStableCorrect", "SoftmaxStableEquiv", "Softmax",
+    ("SoftmaxStable", "SoftmaxStableCorrect", "Softmax",
      (("naiveSoftmaxKernel", "naiveIO", "naive_softmax_correct"),
       ("stableSoftmaxKernel", "stableIO", "stable_softmax_correct"))),
-    ("StableLogSumExpCorrect", "StableLogSumExpEquiv", "LogSumExp",
+    ("StableLogSumExp", "StableLogSumExpCorrect", "LogSumExp",
      (("directLSEKernel", "directIO", "direct_logsumexp_correct"),
       ("stableLSEKernel", "stableIO", "stable_logsumexp_correct"))),
-    ("SoftmaxReciprocalCorrect", "SoftmaxReciprocalEquiv", "SoftmaxReciprocal",
+    ("SoftmaxReciprocal", "SoftmaxReciprocalCorrect", "SoftmaxReciprocal",
      (("stableSoftmaxKernel", "divIO", "softmax_div_correct"),
       ("softmaxRecipKernel", "recipIO", "softmax_reciprocal_correct"))),
-    ("FloatDTypeSoftmaxCorrect", "FloatDTypeEquiv", "FloatDTypeEquiv",
+    ("FloatDTypeSoftmax", "FloatDTypeSoftmaxCorrect", "FloatDTypeEquiv",
      (("floatStableSoftmaxKernel", "divIO", "float_softmax_div_correct"),
       ("floatSoftmaxRecipKernel", "recipIO", "float_softmax_recip_correct"))),
 )
@@ -36,13 +36,13 @@ REDUCTIONS = (
 class ExamplePairTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        targets = [f"bench.examples.{name}{suffix}"
+        targets = [f"bench.examples.{name}.{suffix}"
                    for name, _, _, _ in PAIRS for suffix in ("Correct", "FPEquiv")]
-        targets += [f"bench.examples.{module}"
-                    for new, old, _, _ in REDUCTIONS for module in (new, old)]
-        targets += [f"bench.examples.{name}{suffix}"
+        targets += [f"bench.examples.{family}.Correct"
+                    for family, _, _, _ in REDUCTIONS]
+        targets += [f"bench.examples.{name}.{suffix}"
                     for name in ("FusedSiLU", "FusedSwiglu", "Welford", "FusedLayerNorm")
-                    for suffix in ("Correct", "Equiv")]
+                    for suffix in ("Correct", "RealEquiv")]
         build = subprocess.run(["lake", "build", *targets], cwd=ROOT,
                                text=True, capture_output=True, timeout=300)
         if build.returncode:
@@ -59,43 +59,43 @@ class ExamplePairTests(unittest.TestCase):
 
     def test_same_original_implementation_in_both_files(self):
         """A correct file for one implementation cannot certify a different FP input."""
-        imports = "\n".join(f"import bench.examples.{n}{s}"
+        imports = "\n".join(f"import bench.examples.{n}.{s}"
                             for n, _, _, _ in PAIRS for s in ("Correct", "FPEquiv"))
         self.lean(imports + '''
 open VeriTile.Bench.Examples
 
 example (B : Nat) :
-    (VectorAddFPEquiv.originalKernel B).toAlgorithm? =
-      (VectorAdd.addKernel "x" "y" "out" B).toAlgorithm? := rfl
+    (VectorAdd.Kernels.originalKernel B).toAlgorithm? =
+      (VectorAdd.Kernels.addKernel "x" "y" "out" B).toAlgorithm? := rfl
 
 example (n B : Nat) :
-    (FlatVectorAddFPEquiv.originalKernel n B).toAlgorithm? =
-      (FlatVectorAdd.addKernelMasked "x" "y" "out" B n).toAlgorithm? := rfl
+    (FlatVectorAdd.Kernels.originalKernel n B).toAlgorithm? =
+      (FlatVectorAdd.Kernels.addKernelMasked "x" "y" "out" B n).toAlgorithm? := rfl
 
 example (B : Nat) :
-    (FloatDTypeAddFPEquiv.originalKernel B).toAlgorithm? =
-      (FloatDTypeAddCorrect.floatAddKernel "x" "y" "out" B).toAlgorithm? := rfl
+    (FloatDTypeAdd.Kernels.originalKernel B).toAlgorithm? =
+      (FloatDTypeAdd.Kernels.floatAddKernel "x" "y" "out" B).toAlgorithm? := rfl
 
 example (tau : Real) :
-    (HyperConnectionsDepthFPEquiv.originalKernel tau).toAlgorithm? =
-      (HyperConnectionsDepth.mhcDepthConnectionKernel
+    (HyperConnectionsDepth.Kernels.originalKernel tau).toAlgorithm? =
+      (HyperConnectionsDepth.Kernels.mhcDepthConnectionKernel
         "res_mix" "branch_out" "h_post" "out" 1 1 1 0 tau).toAlgorithm? := rfl
 
 example (tau : Real) :
-    (HyperConnectionsWidthFPEquiv.originalKernel tau).toAlgorithm? =
-      (HyperConnectionsWidth.mhcWidthConnectionKernel
+    (HyperConnectionsWidth.Kernels.originalKernel tau).toAlgorithm? =
+      (HyperConnectionsWidth.Kernels.mhcWidthConnectionKernel
         "res" "h_res" "h_pre" "res_mix" "branch_in" 1 1 1 0 tau).toAlgorithm? := rfl
 
 example (lr wd beta1 beta2 : Real) (n B : Nat) :
-    (AdamUpdateGridLaunchFPEquiv.originalKernel lr wd beta1 beta2 n B).toAlgorithm? =
-      (AdamUpdateGridLaunch.update_fn_kernel
+    (AdamUpdateGridLaunch.Kernels.originalKernel lr wd beta1 beta2 n B).toAlgorithm? =
+      (AdamUpdateGridLaunch.Kernels.update_fn_kernel
         "p" "grad" "exp_avg" lr wd beta1 beta2 n B).toAlgorithm? := rfl
 ''')
 
     def test_fp_files_are_independent_and_print_only_used_atoms(self):
         for name, headline, correct_io, atom in PAIRS:
             with self.subTest(case=name):
-                source = (ROOT / f"bench/examples/{name}FPEquiv.lean").read_text()
+                source = (ROOT / f"bench/examples/{name}/FPEquiv.lean").read_text()
                 source += f'''
 open Lean Elab Command in
 run_cmd do
@@ -106,19 +106,19 @@ run_cmd do
                                  f"FP assumptions used by {headline}:\n  {atom}\n")
 
     def test_reduction_correctness_preserves_sources_and_states_the_formula(self):
-        imports = "\n".join(f"import bench.examples.{module}"
-                            for new, old, _, _ in REDUCTIONS for module in (new, old))
+        imports = "\n".join(f"import bench.examples.{family}.Correct"
+                            for family, _, _, _ in REDUCTIONS)
         source = imports + '''
 open VeriTile.Bench.Examples
 open scoped VeriTile.Triton.KernelIO₁
 '''
-        for new, _, old_ns, kernels in REDUCTIONS:
+        for family, new, _, kernels in REDUCTIONS:
             for kernel, io, theorem in kernels:
                 formula = ("Real.log (∑ j, Real.exp (xs j))" if new == "StableLogSumExpCorrect"
                            else "Real.exp (xs i) / ∑ j, Real.exp (xs j)")
                 source += f'''
-example (x y : VeriTile.Triton.RegionName) (B : Nat) :
-    {new}.{kernel} x y B = {old_ns}.{kernel} x y B := rfl
+example (B : Nat) :
+    ({new}.{io} B).kernel = ({family}.Kernels.{kernel} "x" "y" B).eraseDType := rfl
 
 example (B : Nat) (hB : 0 < B) :
     VeriTile.Spec.Real ({new}.{io} B ⊨ fun xs i => {formula}) :=
@@ -128,25 +128,25 @@ example (B : Nat) (hB : 0 < B) :
 
     def test_statistics_correctness_preserves_sources_and_formulas(self):
         self.lean('''
-import bench.examples.WelfordCorrect
-import bench.examples.WelfordEquiv
-import bench.examples.FusedLayerNormCorrect
-import bench.examples.FusedLayerNormEquiv
+import bench.examples.Welford.Correct
+import bench.examples.Welford.RealEquiv
+import bench.examples.FusedLayerNorm.Correct
+import bench.examples.FusedLayerNorm.RealEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 
-example (x m v : RegionName) (N stride : Nat) :
-    WelfordCorrect.twopassWelfordKernel x m v N stride =
-      Welford.twopassWelfordKernel x m v N stride := rfl
-example (x m v : RegionName) (N stride : Nat) :
-    WelfordCorrect.onlineWelfordKernel x m v N stride =
-      Welford.onlineWelfordKernel x m v N stride := rfl
-example (x g b y : RegionName) (N stride : Nat) (ε : ℝ) :
-    FusedLayerNormCorrect.twoPassLayerNormKernel x g b y N stride ε =
-      LayerNorm.twoPassLayerNormKernel x g b y N stride ε := rfl
-example (x g b y : RegionName) (N stride : Nat) (ε : ℝ) :
-    FusedLayerNormCorrect.fusedLayerNormKernel x g b y N stride ε =
-      LayerNorm.fusedLayerNormKernel x g b y N stride ε := rfl
+example (N stride : Nat) :
+    (WelfordCorrect.twopassIO N stride).kernel =
+      (Welford.Kernels.twopassWelfordKernel "x" "mean" "var" N stride).eraseDType := rfl
+example (N stride : Nat) :
+    (WelfordCorrect.onlineIO N stride).kernel =
+      (Welford.Kernels.onlineWelfordKernel "x" "mean" "var" N stride).eraseDType := rfl
+example (N stride : Nat) (ε : ℝ) :
+    (FusedLayerNormCorrect.twoPassIO N stride ε).kernel =
+      (FusedLayerNorm.Kernels.twoPassLayerNormKernel "x" "gamma" "beta" "y" N stride ε).eraseDType := rfl
+example (N stride : Nat) (ε : ℝ) :
+    (FusedLayerNormCorrect.fusedIO N stride ε).kernel =
+      (FusedLayerNorm.Kernels.fusedLayerNormKernel "x" "gamma" "beta" "y" N stride ε).eraseDType := rfl
 
 section
 open scoped VeriTile.Triton.KernelIO₁ₓ₂
@@ -181,8 +181,9 @@ end
 
     def test_two_output_correctness_reaches_flat_memory_and_frames_each_window(self):
         self.lean('''
-import bench.examples.WelfordCorrect
+import bench.examples.Welford.Correct
 open VeriTile Triton
+open VeriTile.Bench.Examples.Welford.Kernels
 open VeriTile.Bench.Examples.WelfordCorrect
 open scoped VeriTile.Triton.KernelIO₁ₓ₂
 
@@ -231,7 +232,8 @@ example : ∃ t,
 
     def test_real_float_add_includes_empty_tiles(self):
         self.lean('''
-import bench.examples.FloatDTypeAddCorrect
+import bench.examples.FloatDTypeAdd.Correct
+open VeriTile.Bench.Examples.FloatDTypeAdd.Kernels
 open VeriTile.Bench.Examples.FloatDTypeAddCorrect
 open scoped VeriTile.Triton.KernelIO₂
 
@@ -241,25 +243,25 @@ example : VeriTile.Spec.Real (floatAddIO 0 ⊨ fun xs ys i => xs i + ys i) :=
 
     def test_fusion_correctness_preserves_both_sources_and_full_shape_scope(self):
         self.lean('''
-import bench.examples.FusedSiLUCorrect
-import bench.examples.FusedSiLUEquiv
-import bench.examples.FusedSwigluCorrect
-import bench.examples.FusedSwigluEquiv
+import bench.examples.FusedSiLU.Correct
+import bench.examples.FusedSiLU.RealEquiv
+import bench.examples.FusedSwiglu.Correct
+import bench.examples.FusedSwiglu.RealEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 
-example (x g r o : RegionName) (B : Nat) :
-    FusedSiLUCorrect.fusedSiLUKernel x g r o B =
-      FusedSiLUEquiv.fusedSiLUKernel x g r o B := rfl
-example (x g r z s o : RegionName) (B : Nat) :
-    FusedSiLUCorrect.unfusedSiLUKernel x g r z s o B =
-      FusedSiLUEquiv.unfusedSiLUKernel x g r z s o B := rfl
-example (x y o : RegionName) (n B : Nat) :
-    FusedSwigluCorrect.swiglu_fused x y o n B =
-      FusedSwigluEquiv.swiglu_fused x y o n B := rfl
-example (x y s o : RegionName) (n B : Nat) :
-    FusedSwigluCorrect.swiglu_unfused x y s o n B =
-      FusedSwigluEquiv.swiglu_unfused x y s o n B := rfl
+example (B : Nat) :
+    (FusedSiLUCorrect.fusedIO B).kernel =
+      (FusedSiLU.Kernels.fusedSiLUKernel "x" "gate" "residual" "out" B).eraseDType := rfl
+example (B : Nat) :
+    (FusedSiLUCorrect.unfusedIO B).kernel =
+      (FusedSiLU.Kernels.unfusedSiLUKernel "x" "gate" "residual" "z" "silu" "out" B).eraseDType := rfl
+example (n B : Nat) :
+    (FusedSwigluCorrect.fusedIO n B).kernel =
+      (FusedSwiglu.Kernels.swiglu_fused "x" "y" "out" n B).eraseDType := rfl
+example (n B : Nat) :
+    (FusedSwigluCorrect.unfusedIO n B).kernel =
+      (FusedSwiglu.Kernels.swiglu_unfused "x" "y" "s" "out" n B).eraseDType := rfl
 
 section
 open scoped VeriTile.Triton.KernelIO₃

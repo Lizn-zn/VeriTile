@@ -100,7 +100,7 @@ class ExportTests(unittest.TestCase):
 class LeanExampleTests(unittest.TestCase):
     def test_frozen_example_and_printed_assumption(self):
         result = subprocess.run(['lake', 'env', 'lean',
-                                 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean'],
+                                 'bench/examples/TritonBenchVectorAddition/FPEquiv.lean'],
                                 cwd=exporter.ROOT, text=True, capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertEqual(result.stdout,
@@ -108,7 +108,7 @@ class LeanExampleTests(unittest.TestCase):
                          '  add_commute\n')
 
     def test_full_example_keeps_the_audit_details(self):
-        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean').read_text()
+        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAddition/FPEquiv.lean').read_text()
         source = source.replace('#print_fp_assumptions vector_addition_equiv',
                                 '#print_spec vector_addition_equiv full')
         with tempfile.TemporaryDirectory() as tmp:
@@ -124,8 +124,9 @@ class LeanExampleTests(unittest.TestCase):
             self.assertIn(text, result.stdout)
 
     def test_proof_is_parameterized_independently_of_experiment_dimensions(self):
-        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean').read_text()
+        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAddition/FPEquiv.lean').read_text()
         source += '''
+open VeriTile.Bench.Examples.TritonBenchVectorAddition.Kernels
 open VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv
 open scoped VeriTile.Spec
 
@@ -141,7 +142,7 @@ example (R : Rules 256) : originalKernel 8192 256 ≡[R] optimizedKernel 8192 25
 
 open Lean Elab Command in
 run_cmd do
-  if (← getEnv).contains `VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.originalKernel then
+  if (← getEnv).contains `VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect.vector_addition_correct then
     throwError "FP equivalence must not import the correctness example"
 '''
         with tempfile.TemporaryDirectory() as tmp:
@@ -152,8 +153,9 @@ run_cmd do
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_real_correctness_spec_is_independent_of_fp_assumptions(self):
-        source = '''import bench.examples.TritonBenchVectorAdditionCorrect
+        source = '''import bench.examples.TritonBenchVectorAddition.Correct
 open VeriTile
+open VeriTile.Bench.Examples.TritonBenchVectorAddition.Kernels
 open VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect
 open scoped VeriTile.Triton.MaskedKernelIO₂
 
@@ -182,9 +184,9 @@ run_cmd do
         self.assertIn('axiom footprint ⊆ standard base', result.stdout)
 
     def test_atom_selection_preserves_operation_precision(self):
-        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAdditionFPEquiv.lean').read_text()
+        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAddition/FPEquiv.lean').read_text()
         # Check selection against test-side precision and relation requirements.
-        source = source.split('/-- Only this frozen accepted row')[0]
+        source = source.split('abbrev body :=')[0]
         checks = '''
 example :
     admitted.ruleID = "ADD-COMMUTE" ∧ admitted.input = "fp32" ∧
@@ -192,8 +194,9 @@ example :
     admitted.output = "fp32" := by decide
 end VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv
 '''
-        old = 'ReportedAdmission.fp32_add_commute'
-        for new in (old, 'ReportedAdmission.bf16_add_commute', 'ReportedAdmission.fp32_mul_commute'):
+        old = '(FP.ScalarArithmetic.report .addCommute (by decide)).report'
+        for new in (old, 'FP.ReportedAdmission.bf16_add_commute',
+                    '(FP.ScalarArithmetic.report .mulCommute (by decide)).report'):
             with self.subTest(change=new), tempfile.TemporaryDirectory() as tmp:
                 path = Path(tmp) / 'WrongProfile.lean'
                 path.write_text(source.replace(old, new) + checks)

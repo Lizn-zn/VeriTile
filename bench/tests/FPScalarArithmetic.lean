@@ -77,8 +77,8 @@ example : scheduled.cast (some .fp32) .real .bf16 3 = 4 := rfl
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
-  for n in [`VeriTile.Bench.Examples.SoftmaxStableCorrect.naiveSoftmaxKernel,
-            `VeriTile.Bench.Examples.WelfordCorrect.twopassWelfordKernel] do
+  for n in [`VeriTile.Bench.Examples.SoftmaxStableCorrect.naive_softmax_correct,
+            `VeriTile.Bench.Examples.WelfordCorrect.twopass_welford_correct] do
     if env.contains n then throwError "Scalar FP proofs imported a real-correctness example"
 
 #axiomsClean FP.ScalarArithmetic.apply_atom

@@ -185,6 +185,43 @@ class AuditGateTests(unittest.TestCase):
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('specifications but no ComputeKernel', result.stdout)
 
+    def test_split_example_audit_checks_imported_sources_and_local_kernels(self):
+        prep = load('split_example_audit_prep', 'bench/audit_trust_prep.py')
+        prefix = ('import bench.examples.VectorAdd.Kernels\n'
+                  'import VeriTile.Meta.StatementAudit\n'
+                  'open VeriTile.Triton\n'
+                  'open VeriTile.Bench.Examples.VectorAdd.Kernels\n'
+                  'def localKernel : ComputeKernel := .mk [] [] []\n')
+        cases = [
+            ('def expectedSpec : Nat := 42\n', True, 'localKernel'),
+            ('def sourceAliasForAudit := addKernel "x" "y" "out" 1\n'
+             'def expectedSpec := sourceAliasForAudit.toAlgKernel.inputs.length\n', False,
+             'SELF-REFERENTIAL'),
+            ('def expectedSpec := localKernel.toAlgKernel.inputs.length\n', False,
+             'SELF-REFERENTIAL'),
+        ]
+        for declaration, accepted, marker in cases:
+            with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as temp:
+                path = Path(temp) / 'SplitAudit.lean'
+                path.write_text(prep.prepare_source(
+                    prefix + declaration, 'bench/examples/VectorAdd/Correct.lean',
+                    manifest=Path(temp) / 'absent.tsv'))
+                result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=ROOT,
+                                        text=True, capture_output=True, timeout=90)
+                self.assertEqual(result.returncode == 0, accepted, result.stdout + result.stderr)
+                self.assertIn(marker, result.stdout)
+                if accepted or 'sourceAliasForAudit' in declaration:
+                    self.assertIn('VectorAdd.Kernels.addKernel', result.stdout)
+
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'UnknownSource.lean'
+            path.write_text('import VeriTile.Meta.StatementAudit\n'
+                            '#auditModuleSpecs from [bench.examples.Missing.Kernels]\n')
+            result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=ROOT,
+                                    text=True, capture_output=True, timeout=90)
+            self.assertNotEqual(result.returncode, 0)
+            self.assertIn('kernel module is not imported', result.stdout)
+
     def test_spec_sheet_collisions_are_port_qualified_and_preflighted(self):
         paths = ['rms_norm_triton/RmsNormTriton.lean', 'rmsnorm_triton/RmsnormTriton.lean']
         sheets.check_output_names(paths)

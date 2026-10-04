@@ -1,13 +1,21 @@
 import VeriTile.Triton.Float.LogExp
 import VeriTile.Triton.Float.Exponential
 import VeriTile.Triton.Float.CountConversion
-import bench.examples.FloatDTypeAddFPEquiv
-import bench.examples.HyperConnectionsDepthFPEquiv
-import bench.examples.TritonBenchVectorAdditionFPEquiv
-import bench.examples.AdamUpdateGridLaunchFPEquiv
-import bench.examples.HyperConnectionsWidthFPEquiv
-import bench.examples.VectorAddFPEquiv
-import bench.examples.FlatVectorAddFPEquiv
+import bench.examples.FloatDTypeAdd.FPEquiv
+import bench.examples.HyperConnectionsDepth.FPEquiv
+import bench.examples.TritonBenchVectorAddition.FPEquiv
+import bench.examples.AdamUpdateGridLaunch.FPEquiv
+import bench.examples.HyperConnectionsWidth.FPEquiv
+import bench.examples.VectorAdd.FPEquiv
+import bench.examples.FlatVectorAdd.FPEquiv
+
+open VeriTile.Bench.Examples.AdamUpdateGridLaunch.Kernels
+open VeriTile.Bench.Examples.FlatVectorAdd.Kernels
+open VeriTile.Bench.Examples.FloatDTypeAdd.Kernels
+open VeriTile.Bench.Examples.HyperConnectionsDepth.Kernels
+open VeriTile.Bench.Examples.HyperConnectionsWidth.Kernels
+open VeriTile.Bench.Examples.TritonBenchVectorAddition.Kernels
+open VeriTile.Bench.Examples.VectorAdd.Kernels
 
 /- These checks detect changes in selected report metadata. They do not prove
 numerical relations or supply evidence to the kernel equivalence proofs. -/

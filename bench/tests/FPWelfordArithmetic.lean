@@ -9,11 +9,13 @@ import VeriTile.Triton.Float.WelfordInit
 import VeriTile.Triton.Float.WelfordInduction
 import VeriTile.Triton.Float.WelfordSchedule
 import VeriTile.Triton.Float.ScalarReduction
-import bench.examples.support.WelfordExecution
-import bench.examples.support.WelfordContract
+import bench.examples.Welford.Execution
+import bench.examples.Welford.Contract
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
 import Mathlib.Tactic.Ring
+
+open VeriTile.Bench.Examples.Welford.Kernels
 
 namespace FPWelfordArithmeticTests
 open VeriTile Triton FP.Structural FP.Guarded

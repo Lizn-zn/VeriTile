@@ -66,6 +66,11 @@ mathematical correctness target. The per-file inventory reports kernel, spec,
 and denotation counts; zero independent specs means no independence check was
 performed for that file. Discovered specs without any kernel are an error.
 
+For a split example, the external audit uses
+`#auditModuleSpecs from [bench.examples.ExampleName.Kernels]` to include kernels
+from the explicitly imported source module. It still checks only the current
+file's specifications, against both local and shared kernels.
+
 ## Audit one theorem yourself
 
 `import VeriTile.Meta.StatementAudit`, then:
@@ -89,7 +94,7 @@ The commands:
 ## Add a self-audit to a file
 
 Put the checks at the end of the file (see the SwiGLU pilot,
-[`bench/examples/FusedSwigluEquiv.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FusedSwigluEquiv.lean),
+[`bench/examples/FusedSwiglu/RealEquiv.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FusedSwiglu/RealEquiv.lean),
 for the full pattern). They run at compile time, so the file stops compiling if
 any gate is violated:
 

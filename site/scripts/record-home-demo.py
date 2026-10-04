@@ -14,13 +14,15 @@ import subprocess
 import tempfile
 
 ROOT = Path(__file__).resolve().parents[2]
-SOURCE = ROOT / 'bench/examples/VectorAdd.lean'
+SOURCE = ROOT / 'bench/examples/VectorAdd/Correct.lean'
+KERNELS = ROOT / 'bench/examples/VectorAdd/Kernels.lean'
 OUTPUT = ROOT / 'site/src/lib/vector-add-record.json'
 
 
 def fingerprint():
     paths = [ROOT / p for p in ('lean-toolchain', 'lakefile.toml', 'lake-manifest.json',
-                               'site/scripts/record-home-demo.py', 'bench/examples/VectorAdd.lean')]
+                               'site/scripts/record-home-demo.py', 'bench/examples/VectorAdd/Correct.lean',
+                               'bench/examples/VectorAdd/Kernels.lean')]
     paths += list((ROOT / 'VeriTile').rglob('*.lean'))
     digest = hashlib.sha256()
     for path in sorted(paths, key=lambda path: path.relative_to(ROOT).as_posix()):
@@ -42,7 +44,12 @@ def main():
 
     lake = os.environ.get('VERITILE_LAKE', 'lake')
     lean = os.environ.get('VERITILE_LEAN', 'lean')
-    text = SOURCE.read_text()
+    # Inline the shared declaration into a temporary proof copy so changing
+    # its operator checks the actual general proof, without editing imports.
+    declaration = re.search(r'(def addKernel [^\n]* := triton \{[\s\S]*?\n\})',
+                            KERNELS.read_text())[1]
+    text = SOURCE.read_text().replace('open VeriTile.Examples\n',
+                                     'open VeriTile.Examples\n\n' + declaration + '\n', 1)
     original_line = '  out  := x + y'
     assert text.count(original_line) == 1
     kernel = re.search(r'def addKernel [^\n]* := (triton \{[\s\S]*?\n\})', text)[1]
@@ -102,7 +109,7 @@ end VeriTile.Bench.Examples.VectorAdd
 
     version = subprocess.check_output([lake, 'env', lean, '--version'], cwd=ROOT, text=True).strip()
     OUTPUT.write_text(json.dumps({'fingerprint': stamp, 'leanVersion': version,
-                                 'source': 'bench/examples/VectorAdd.lean',
+                                 'source': 'bench/examples/VectorAdd/Correct.lean',
                                  'x': x, 'y': y, 'expected': [a + b for a, b in zip(x, y)],
                                  'variants': records}, indent=2, ensure_ascii=False) + '\n')
     print(f'Recorded both proof checks and both sample-value proofs in {OUTPUT.relative_to(ROOT)}.')

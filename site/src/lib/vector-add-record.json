@@ -1,7 +1,7 @@
 {
-  "fingerprint": "0e20de054f070914ebc7475f0124fa29df178f9dca7a6a725cf61b971711b2a0",
+  "fingerprint": "3cd6f3951bbcac26a1e350c2cb846f12140830a7db2b264ac1c1faeba8a66e83",
   "leanVersion": "Lean (version 4.29.0, x86_64-unknown-linux-gnu, commit 98dc76e3c0a9b856c9b98726b713fb04fab16740, Release)",
-  "source": "bench/examples/VectorAdd.lean",
+  "source": "bench/examples/VectorAdd/Correct.lean",
   "x": [
     1,
     2,
@@ -32,7 +32,7 @@
       ],
       "exitCode": 0,
       "kernel": "triton {\n  pid  := tl.program_id(0)\n  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))\n  x    := tl.load($(xReg) + offs)\n  y    := tl.load($(yReg) + offs)\n  out  := x + y\n  tl.store($(outReg) + offs, out)\n}",
-      "diagnostics": "VectorAdd-add.lean:139:4: warning: This simp argument is unused:\n  evalOp\n\nHint: Omit it from the simp argument list.\n  simp [exec, addKernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,\n  ̵  ̵ ̵ ̵e̵v̵a̵l̵O̵p̵,̵ ̵Tile.bop, NumericDType.add,\n  ̲  ̲ ̲ ̲NumericDType.mul] at hExec\n\nNote: This linter can be disabled with `set_option linter.unusedSimpArgs false`\nVeriTile.Bench.Examples.VectorAdd.add_kernel_correctness: axiom footprint ⊆ standard base ✓  ([propext,\n Quot.sound,\n Classical.choice])\nVeriTile.Bench.Examples.VectorAdd.add_kernel_correctness: statement's project surface ⊆ allowlist ✓",
+      "diagnostics": "VectorAdd-add.lean:135:4: warning: This simp argument is unused:\n  evalOp\n\nHint: Omit it from the simp argument list.\n  simp [exec, addKernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,\n  ̵  ̵ ̵ ̵e̵v̵a̵l̵O̵p̵,̵ ̵Tile.bop, NumericDType.add,\n  ̲  ̲ ̲ ̲NumericDType.mul] at hExec\n\nNote: This linter can be disabled with `set_option linter.unusedSimpArgs false`\nVeriTile.Bench.Examples.VectorAdd.add_kernel_correctness: axiom footprint ⊆ standard base ✓  ([propext,\n Quot.sound,\n Classical.choice])\nVeriTile.Bench.Examples.VectorAdd.add_kernel_correctness: statement's project surface ⊆ allowlist ✓",
       "sampleDiagnostics": "VeriTile.Bench.Examples.VectorAdd.displayed_values: axiom footprint ⊆ standard base ✓  ([propext,\n Quot.sound,\n Classical.choice])"
     },
     {
@@ -46,7 +46,7 @@
       ],
       "exitCode": 1,
       "kernel": "triton {\n  pid  := tl.program_id(0)\n  offs := pid * $(blockSize) + tl.arange(0, $(blockSize))\n  x    := tl.load($(xReg) + offs)\n  y    := tl.load($(yReg) + offs)\n  out  := x - y\n  tl.store($(outReg) + offs, out)\n}",
-      "diagnostics": "VectorAdd-subtract.lean:99:32: error: unsolved goals\nxReg yReg outReg : RegionName\nblockSize : ℕ\n_hBlockSize : 0 < blockSize\ns : BlockState\nxs ys : Fin blockSize → ℝ\n_h_x : ∀ (i : Fin blockSize), s.readMem xReg (s.pid * blockSize + ↑i) = xs i\n_h_y : ∀ (i : Fin blockSize), s.readMem yReg (s.pid * blockSize + ↑i) = ys i\ni : Fin blockSize\nh_inj : Function.Injective fun idx => s.pid * blockSize + ↑idx.1\n⊢ WithBot.unbotD 0 (NumericDType.real.sub (some (xs i)) (some (ys i))) = xs i + ys i\nVectorAdd-subtract.lean:139:4: warning: This simp argument is unused:\n  evalOp\n\nHint: Omit it from the simp argument list.\n  simp [exec, addKernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,\n  ̵  ̵ ̵ ̵e̵v̵a̵l̵O̵p̵,̵ ̵Tile.bop, NumericDType.add,\n  ̲  ̲ ̲ ̲NumericDType.mul] at hExec\n\nNote: This linter can be disabled with `set_option linter.unusedSimpArgs false`\nVectorAdd-subtract.lean:328:0: error: VeriTile.Bench.Examples.VectorAdd.add_kernel_correctness: DISALLOWED axioms [sorryAx] (sorryAx ⇒ fake proof)\nVeriTile.Bench.Examples.VectorAdd.add_kernel_correctness: statement's project surface ⊆ allowlist ✓",
+      "diagnostics": "VectorAdd-subtract.lean:95:32: error: unsolved goals\nxReg yReg outReg : RegionName\nblockSize : ℕ\n_hBlockSize : 0 < blockSize\ns : BlockState\nxs ys : Fin blockSize → ℝ\n_h_x : ∀ (i : Fin blockSize), s.readMem xReg (s.pid * blockSize + ↑i) = xs i\n_h_y : ∀ (i : Fin blockSize), s.readMem yReg (s.pid * blockSize + ↑i) = ys i\ni : Fin blockSize\nh_inj : Function.Injective fun idx => s.pid * blockSize + ↑idx.1\n⊢ WithBot.unbotD 0 (NumericDType.real.sub (some (xs i)) (some (ys i))) = xs i + ys i\nVectorAdd-subtract.lean:135:4: warning: This simp argument is unused:\n  evalOp\n\nHint: Omit it from the simp argument list.\n  simp [exec, addKernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,\n  ̵  ̵ ̵ ̵e̵v̵a̵l̵O̵p̵,̵ ̵Tile.bop, NumericDType.add,\n  ̲  ̲ ̲ ̲NumericDType.mul] at hExec\n\nNote: This linter can be disabled with `set_option linter.unusedSimpArgs false`\nVectorAdd-subtract.lean:324:0: error: VeriTile.Bench.Examples.VectorAdd.add_kernel_correctness: DISALLOWED axioms [sorryAx] (sorryAx ⇒ fake proof)\nVeriTile.Bench.Examples.VectorAdd.add_kernel_correctness: statement's project surface ⊆ allowlist ✓",
       "sampleDiagnostics": "VeriTile.Bench.Examples.VectorAdd.displayed_values: axiom footprint ⊆ standard base ✓  ([propext,\n Quot.sound,\n Classical.choice])"
     }
   ]

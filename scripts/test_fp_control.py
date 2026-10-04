@@ -12,9 +12,9 @@ class FPControlTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ['lake', 'build', 'VeriTile.Triton.Float.Control',
-             'bench.examples.support.WelfordExecution',
-             'bench.examples.support.OnlineSoftmaxExecution',
-             'bench.examples.WelfordCorrect', 'bench.examples.OnlineSoftmaxCorrect'],
+             'bench.examples.Welford.Execution',
+             'bench.examples.OnlineSoftmax.Execution',
+             'bench.examples.Welford.Correct', 'bench.examples.OnlineSoftmax.Correct'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -36,20 +36,22 @@ class FPControlTests(unittest.TestCase):
 
     def test_exact_original_kernels_including_both_stores_and_no_softmax_store(self):
         self.lean('''
-import bench.examples.support.WelfordExecution
-import bench.examples.support.OnlineSoftmaxExecution
-import bench.examples.WelfordCorrect
-import bench.examples.OnlineSoftmaxCorrect
+import bench.examples.Welford.Execution
+import bench.examples.OnlineSoftmax.Execution
+import bench.examples.Welford.Correct
+import bench.examples.OnlineSoftmax.Correct
 open VeriTile Triton VeriTile.Bench.Examples
-example (x m v : RegionName) (N stride : Nat) :
-    WelfordFPExecution.onlineWelfordKernel x m v N stride =
-      WelfordCorrect.onlineWelfordKernel x m v N stride := rfl
-example (x m v : RegionName) (N stride : Nat) :
-    WelfordFPExecution.twopassWelfordKernel x m v N stride =
-      WelfordCorrect.twopassWelfordKernel x m v N stride := rfl
+example (N stride : Nat) :
+    (WelfordCorrect.onlineIO N stride).kernel =
+      (WelfordFPExecution.onlineIO "x" "mean" "var" N stride).kernel.eraseDType := rfl
+example (N stride : Nat) :
+    (WelfordCorrect.twopassIO N stride).kernel =
+      (WelfordFPExecution.twopassIO "x" "mean" "var" N stride).kernel.eraseDType := rfl
 example (x y : RegionName) (N : Nat) :
-    OnlineSoftmaxFPExecution.onlineSoftmaxKernel x y N =
-      OnlineSoftmax.onlineSoftmaxKernel x y N := rfl
+    (OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N).surfaceBody =
+      OnlineSoftmaxFPExecution.initialCode ++
+        [.forLoop "i" N (OnlineSoftmaxFPExecution.body x N)] :=
+  OnlineSoftmaxFPExecution.kernel_body x y N
 ''')
 
 

@@ -11,8 +11,8 @@ class FPEquationalTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ["lake", "build", "bench.examples.RowWiseSumFPEquiv",
-             "bench.examples.RowWiseSumCorrect"], cwd=ROOT,
+            ["lake", "build", "bench.examples.RowWiseSum.FPEquiv",
+             "bench.examples.RowWiseSum.Correct"], cwd=ROOT,
             text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -41,7 +41,7 @@ class FPEquationalTests(unittest.TestCase):
         self.assertEqual(self.lean((ROOT / "bench/tests/FPAdmissionCoverage.lean").read_text()), "")
 
     def test_kernel_proof_is_independent_and_reports_both_admitted_atoms(self):
-        source = (ROOT / "bench/examples/RowWiseSumFPEquiv.lean").read_text() + '''
+        source = (ROOT / "bench/examples/RowWiseSum/FPEquiv.lean").read_text() + '''
 open Lean Elab Command in
 run_cmd do
   if (← getEnv).contains `VeriTile.Bench.Examples.RowWiseSum.rowWiseSumIO then
@@ -55,14 +55,14 @@ run_cmd do
 
     def test_original_projection_and_symbolic_dimensions_including_zero(self):
         self.lean('''
-import bench.examples.RowWiseSumCorrect
-import bench.examples.RowWiseSumFPEquiv
+import bench.examples.RowWiseSum.Correct
+import bench.examples.RowWiseSum.FPEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 open scoped VeriTile.Spec
 example (x y : RegionName) (nCol B : Nat) :
-    (RowWiseSumFPEquiv.rowWiseSumKernel x y nCol B).toAlgorithm? =
-      (RowWiseSum.rowWiseSumKernel x y nCol B).toAlgorithm? := rfl
+    (RowWiseSum.Kernels.fpRowWiseSumKernel x y nCol B).toAlgorithm? =
+      (RowWiseSum.Kernels.rowWiseSumKernel x y nCol B).toAlgorithm? := rfl
 example (nCol B : Nat) (R : RowWiseSumFPEquiv.Rules) :
     RowWiseSumFPEquiv.originalIO nCol B ≡[R] RowWiseSumFPEquiv.reversedIO nCol B :=
   RowWiseSumFPEquiv.rowwise_sum_equiv nCol B R

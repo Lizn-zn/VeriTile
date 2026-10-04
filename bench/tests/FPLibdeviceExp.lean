@@ -1,7 +1,9 @@
 /- Implementation identity and admitted libdevice exp-sub binding.
 These rational fixtures are logical checks, not additional GPU evidence. -/
-import bench.examples.SoftmaxStableFPEquiv
+import bench.examples.SoftmaxStable.FPEquiv
 import Mathlib.Tactic.NormNum
+
+open VeriTile.Bench.Examples.SoftmaxStable.Kernels
 
 namespace FPLibdeviceExpTests
 open VeriTile Triton FP.Structural

@@ -1,7 +1,10 @@
 /- Range boundaries are logical regressions, not new numerical evidence. -/
-import bench.examples.WelfordFPEquiv
-import bench.examples.FusedLayerNormFPEquiv
+import bench.examples.Welford.FPEquiv
+import bench.examples.FusedLayerNorm.FPEquiv
 import Mathlib.Tactic.NormNum
+
+open VeriTile.Bench.Examples.FusedLayerNorm.Kernels
+open VeriTile.Bench.Examples.Welford.Kernels
 
 namespace FPCountConversionTests
 open VeriTile Triton FP.Structural FP.CountConversion
@@ -53,8 +56,8 @@ open Lean Elab Command in
 run_cmd do
   let env ← getEnv
   for name in [
-      `VeriTile.Bench.Examples.WelfordCorrect.twopassWelfordKernel,
-      `VeriTile.Bench.Examples.FusedLayerNormCorrect.twoPassLayerNormKernel] do
+      `VeriTile.Bench.Examples.WelfordCorrect.twopass_welford_correct,
+      `VeriTile.Bench.Examples.FusedLayerNormCorrect.two_pass_layernorm_correct] do
     if env.contains name then throwError "FP proof imported Correct: {name}"
 
 #axiomsClean FP.CountConversion.conversion

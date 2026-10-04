@@ -11,8 +11,8 @@ class SoftmaxStableFPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ['lake', 'build', 'bench.examples.support.SoftmaxStableContract',
-             'bench.examples.SoftmaxStableCorrect', 'VeriTile.Meta.StatementAudit'],
+            ['lake', 'build', 'bench.examples.SoftmaxStable.Contract',
+             'bench.examples.SoftmaxStable.Correct', 'VeriTile.Meta.StatementAudit'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -29,23 +29,27 @@ class SoftmaxStableFPTests(unittest.TestCase):
 
     def test_original_sources_and_real_spec_independence(self):
         output = self.check_lean('''
-import bench.examples.support.SoftmaxStableContract
-import bench.examples.SoftmaxStableCorrect
+import bench.examples.SoftmaxStable.Contract
+import bench.examples.SoftmaxStable.Correct
 open VeriTile Triton VeriTile.Bench.Examples
+example (B : Nat) :
+    (SoftmaxStableCorrect.naiveIO B).kernel =
+      (SoftmaxStableFPExecution.naiveIO "x" "y" B).kernel.eraseDType := rfl
 example (x y : RegionName) (B : Nat) :
-    SoftmaxStableFPExecution.naiveSoftmaxKernel x y B =
-      SoftmaxStableCorrect.naiveSoftmaxKernel x y B := rfl
+    (SoftmaxStableFPExecution.naiveIO x y B).kernel = SoftmaxStable.Kernels.naiveSoftmaxKernel x y B := rfl
+example (B : Nat) :
+    (SoftmaxStableCorrect.stableIO B).kernel =
+      (SoftmaxStableFPExecution.stableIO "x" "y" B).kernel.eraseDType := rfl
 example (x y : RegionName) (B : Nat) :
-    SoftmaxStableFPExecution.stableSoftmaxKernel x y B =
-      SoftmaxStableCorrect.stableSoftmaxKernel x y B := rfl
+    (SoftmaxStableFPExecution.stableIO x y B).kernel = SoftmaxStable.Kernels.stableSoftmaxKernel x y B := rfl
 ''')
         self.assertEqual(output, '')
         self.check_lean('''
-import bench.examples.support.SoftmaxStableContract
+import bench.examples.SoftmaxStable.Contract
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
-  if env.contains `VeriTile.Bench.Examples.SoftmaxStableCorrect.naiveSoftmaxKernel then
+  if env.contains `VeriTile.Bench.Examples.SoftmaxStableCorrect.naive_softmax_correct then
     throwError "FP proof imported its correctness counterpart"
 ''')
 

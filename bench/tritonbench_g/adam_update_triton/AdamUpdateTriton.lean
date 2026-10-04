@@ -17,7 +17,7 @@ user wrote (`@triton.jit def update_fn_kernel`); the launch `kernel[grid](...)`,
 the grid size `triton.cdiv(...)`, and how the runtime composes per-program
 memories into one buffer are the *trusted boundary*, not proof obligations here.
 (A whole-grid / launch-composition treatment lives separately as the worked
-example `bench/examples/AdamUpdateGridLaunchCorrect.lean`.)
+example `bench/examples/AdamUpdateGridLaunch/Correct.lean`.)
 
 The headline is stated on the masked KernelIO `⊨` surface
 (`MaskedKernelIO₃ₓ₂.Implements`): a full masked Hoare triple over **flat

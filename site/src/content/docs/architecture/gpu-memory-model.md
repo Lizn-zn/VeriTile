@@ -143,7 +143,7 @@ hypotheses transport region-model proofs into flat pointer memory.
 `Kernel.TraceSafe` / `TraceSafeR` provide per-execution safety obligations,
 including register-indirect addressing. The `⊨` / `⊨[R]` surfaces in
 `Memory/KernelSpec.lean` assemble the bridge conditions, termination, outputs,
-and frame. See the [vector-add example](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd.lean).
+and frame. See the [vector-add example](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd/Correct.lean).
 
 Flat memory still uses typed, element-sized cells. Byte addressing,
 mixed-dtype overlapping allocations, and full hardware alias behavior need

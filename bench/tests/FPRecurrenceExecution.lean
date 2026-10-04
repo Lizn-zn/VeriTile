@@ -1,8 +1,11 @@
 /- These checks concern execution, not the pending batch/online numerical
 equivalences. Neither source imports a Real correctness proof. -/
-import bench.examples.support.WelfordExecution
-import bench.examples.support.OnlineSoftmaxExecution
+import bench.examples.Welford.Execution
+import bench.examples.OnlineSoftmax.Execution
 import VeriTile.Meta.StatementAudit
+
+open VeriTile.Bench.Examples.OnlineSoftmax.Kernels
+open VeriTile.Bench.Examples.Welford.Kernels
 
 namespace FPRecurrenceExecutionTests
 open VeriTile Triton FP.Structural
@@ -12,7 +15,7 @@ open VeriTile.Bench.Examples
 example {α : Type} [Inhabited α] (M : Algebra α) (N stride : Nat)
     (xs : Fin N → α) (s : State α)
     (hx : ∀ i : Fin N, (s.mem "x" (s.pids 0 * stride + i.val)).read .real = xs i) :
-    ∃ t, FP.Structural.exec M (WelfordFPExecution.onlineWelfordKernel "x" "m" "v" N stride) s = some t ∧
+    ∃ t, FP.Structural.exec M (Welford.Kernels.onlineWelfordKernel "x" "m" "v" N stride) s = some t ∧
       t.mem "m" 0 = .mk .bf16 (WelfordFPExecution.meanValue M xs) ∧
       t.mem "v" 0 = .mk .bf16 (WelfordFPExecution.varianceValue M xs) ∧
       (∀ (r : RegionName) o, (r ≠ "m" ∨ o ≠ 0) → (r ≠ "v" ∨ o ≠ 0) → t.mem r o = s.mem r o) :=
@@ -21,7 +24,7 @@ example {α : Type} [Inhabited α] (M : Algebra α) (N stride : Nat)
 -- The original empty-row source still reaches its two stores. There is no
 -- fabricated nonzero count, nor a cancellation of the final opaque division.
 example {α : Type} [Inhabited α] (M : Algebra α) (stride : Nat) (s : State α) :
-    ∃ t, FP.Structural.exec M (WelfordFPExecution.onlineWelfordKernel "x" "m" "v" 0 stride) s = some t ∧
+    ∃ t, FP.Structural.exec M (Welford.Kernels.onlineWelfordKernel "x" "m" "v" 0 stride) s = some t ∧
       t.mem "m" 0 = .mk .bf16 (M.cast none .real .bf16 (M.literal none .real 0)) ∧
       t.mem "v" 0 = .mk .bf16 (M.cast none .real .bf16
         (M.binary none .real .div (M.literal none .real 0) (M.fromNat none 0))) ∧
@@ -58,7 +61,7 @@ example (x mean variance : RegionName) (N stride : Nat) :
 
 -- -inf is opaque and survives the empty online-softmax loop unchanged.
 example {α : Type} [Inhabited α] (M : Algebra α) (s : State α) :
-    ∃ t, FP.Structural.exec M (OnlineSoftmaxFPExecution.onlineSoftmaxKernel "x" "y" 0) s = some t ∧
+    ∃ t, FP.Structural.exec M (OnlineSoftmax.Kernels.onlineSoftmaxKernel "x" "y" 0) s = some t ∧
       t.regs .real [] "m" = some (fun _ => M.negInf) ∧
       t.regs .real [] "l" = some (fun _ => M.literal none .real 0) ∧
       t.mem = s.mem ∧ t.pids = s.pids :=
@@ -85,8 +88,8 @@ example : countModel.fromNat none 2 ≠ countModel.binary none .real .add
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
-  for n in [`VeriTile.Bench.Examples.WelfordCorrect.onlineWelfordKernel,
-            `VeriTile.Bench.Examples.OnlineSoftmax.onlineSoftmaxKernel] do
+  for n in [`VeriTile.Bench.Examples.WelfordCorrect.twopass_welford_correct,
+            `VeriTile.Bench.Examples.OnlineSoftmax.online_softmax_correctness] do
     if env.contains n then throwError "FP execution imported its Real correctness implementation"
 
 #axiomsClean WelfordFPExecution.online_run

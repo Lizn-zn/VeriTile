@@ -11,8 +11,8 @@ class OnlineSoftmaxFPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ['lake', 'build', 'bench.examples.OnlineSoftmaxFPEquiv',
-             'bench.examples.OnlineSoftmaxCorrect', 'VeriTile.Meta.StatementAudit'],
+            ['lake', 'build', 'bench.examples.OnlineSoftmax.FPEquiv',
+             'bench.examples.OnlineSoftmax.Correct', 'VeriTile.Meta.StatementAudit'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -29,23 +29,25 @@ class OnlineSoftmaxFPTests(unittest.TestCase):
 
     def test_original_source_and_real_spec_independence(self):
         output = self.check_lean('''
-import bench.examples.support.OnlineSoftmaxContract
-import bench.examples.OnlineSoftmaxCorrect
+import bench.examples.OnlineSoftmax.Contract
+import bench.examples.OnlineSoftmax.Correct
 open VeriTile Triton VeriTile.Bench.Examples
 example (x y : RegionName) (N : Nat) :
-    OnlineSoftmaxFPExecution.onlineSoftmaxKernel x y N =
-      OnlineSoftmax.onlineSoftmaxKernel x y N := rfl
-example (x y : RegionName) (N : Nat) :
-    OnlineSoftmaxFPBatch.stableSoftmaxKernel x y N =
-      OnlineSoftmax.stableSoftmaxKernel x y N := rfl
+    (OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N).surfaceBody =
+      OnlineSoftmaxFPExecution.initialCode ++
+        [.forLoop "i" N (OnlineSoftmaxFPExecution.body x N)] :=
+  OnlineSoftmaxFPExecution.kernel_body x y N
+example (N : Nat) :
+    (OnlineSoftmax.batchSoftmaxIO N).kernel =
+      OnlineSoftmax.Kernels.batchSoftmaxKernel "x" "y" N := rfl
 ''')
         self.assertEqual(output, '')
         self.check_lean('''
-import bench.examples.support.OnlineSoftmaxContract
+import bench.examples.OnlineSoftmax.Contract
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
-  if env.contains `VeriTile.Bench.Examples.OnlineSoftmax.onlineSoftmaxKernel then
+  if env.contains `VeriTile.Bench.Examples.OnlineSoftmax.online_softmax_correctness then
     throwError "FP recurrence proof imported its correctness counterpart"
 ''')
 
@@ -54,12 +56,12 @@ run_cmd do
 
     def test_public_observation_spec_uses_only_admitted_scalar_atoms(self):
         output = self.check_lean('''
-import bench.examples.OnlineSoftmaxFPEquiv
+import bench.examples.OnlineSoftmax.FPEquiv
 #print_fp_assumptions VeriTile.Bench.Examples.OnlineSoftmaxFPEquiv.online_softmax_equiv
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
-  if env.contains `VeriTile.Bench.Examples.OnlineSoftmax.onlineSoftmaxKernel then
+  if env.contains `VeriTile.Bench.Examples.OnlineSoftmax.online_softmax_correctness then
     throwError "FP specification imported its correctness counterpart"
 ''')
         self.assertEqual(set(output.splitlines()[1:]), {

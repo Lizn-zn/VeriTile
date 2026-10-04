@@ -1,5 +1,7 @@
 /- Readbacks do not add stores or equate failed observations. -/
-import bench.examples.OnlineSoftmaxFPEquiv
+import bench.examples.OnlineSoftmax.FPEquiv
+
+open VeriTile.Bench.Examples.OnlineSoftmax.Kernels
 
 namespace FPObservedRowTests
 open VeriTile Triton FP.Structural

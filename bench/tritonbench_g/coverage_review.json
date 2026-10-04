@@ -6,7 +6,7 @@
     {
       "file": "bench/tritonbench_g/adam_update_triton/AdamUpdateTriton.lean",
       "python_file": "bench/tritonbench_g/adam_update_triton/adam_update_triton.py",
-      "lean_sha256": "dda996a24b3db0a375d45ccc74a9086853193939986c572910a7bc37b31657e3",
+      "lean_sha256": "c8766e4c9b8fa8571bb095249bd527af3d26ae4e617d17e97d9992dde7752af1",
       "python_sha256": "27d4f15342638339b2daea53f43752e30a28114a39d1b8dcdaf5e29b89072f45",
       "declarations": [
         {
@@ -3606,7 +3606,7 @@
     {
       "file": "bench/tritonbench_g/matmul_tma/MatmulTma.lean",
       "python_file": "bench/tritonbench_g/matmul_tma/matmul_tma.py",
-      "lean_sha256": "4d5f1e4e08aa002097b9d5a4d532484d2a40bd29b694d6cd43515fbc33b58158",
+      "lean_sha256": "0d2c130c7fc954b4c274bffb956fdc24a25e9c8f8c1438d2dc758d0cf77d782c",
       "python_sha256": "6984cd3bad2b1d6b03d6d3f30b7cd2925430dc31d1c3f3a29168fd6aca1f5ae5",
       "declarations": [
         {

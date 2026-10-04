@@ -11,8 +11,8 @@ class LogSumExpFPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ['lake', 'build', 'bench.examples.support.StableLogSumExpContract',
-             'bench.examples.StableLogSumExpCorrect', 'VeriTile.Meta.StatementAudit',
+            ['lake', 'build', 'bench.examples.StableLogSumExp.Contract',
+             'bench.examples.StableLogSumExp.Correct', 'VeriTile.Meta.StatementAudit',
              'bench.examples.LogExp.Correct', 'bench.examples.LogExp.FPEquiv',
              'VeriTile.Triton.Float.LogExpCounterexample'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
@@ -31,25 +31,29 @@ class LogSumExpFPTests(unittest.TestCase):
 
     def test_original_sources_and_real_spec_independence(self):
         output = self.check_lean('''
-import bench.examples.support.StableLogSumExpContract
-import bench.examples.StableLogSumExpCorrect
+import bench.examples.StableLogSumExp.Contract
+import bench.examples.StableLogSumExp.Correct
 open VeriTile Triton VeriTile.Bench.Examples
+example (B : Nat) :
+    (StableLogSumExpCorrect.directIO B).kernel =
+      (StableLogSumExpFPExecution.directIO "x" "y" B).kernel.eraseDType := rfl
 example (x y : RegionName) (B : Nat) :
-    StableLogSumExpFPExecution.directLSEKernel x y B =
-      StableLogSumExpCorrect.directLSEKernel x y B := rfl
+    (StableLogSumExpFPExecution.directIO x y B).kernel = StableLogSumExp.Kernels.directLSEKernel x y B := rfl
+example (B : Nat) :
+    (StableLogSumExpCorrect.stableIO B).kernel =
+      (StableLogSumExpFPExecution.stableIO "x" "y" B).kernel.eraseDType := rfl
 example (x y : RegionName) (B : Nat) :
-    StableLogSumExpFPExecution.stableLSEKernel x y B =
-      StableLogSumExpCorrect.stableLSEKernel x y B := rfl
+    (StableLogSumExpFPExecution.stableIO x y B).kernel = StableLogSumExp.Kernels.stableLSEKernel x y B := rfl
 ''')
         self.assertEqual(output, '')
         self.check_lean('''
-import bench.examples.support.StableLogSumExpContract
+import bench.examples.StableLogSumExp.Contract
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
   for name in [
-      `VeriTile.Bench.Examples.StableLogSumExpCorrect.directLSEKernel,
-      `VeriTile.Bench.Examples.SoftmaxStableCorrect.naiveSoftmaxKernel] do
+      `VeriTile.Bench.Examples.StableLogSumExpCorrect.direct_logsumexp_correct,
+      `VeriTile.Bench.Examples.SoftmaxStableCorrect.naive_softmax_correct] do
     if env.contains name then throwError "FP proof imported a correctness counterpart: {name}"
 ''')
 

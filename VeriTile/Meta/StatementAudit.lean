@@ -144,20 +144,28 @@ elab "#specNonCircular " spec:ident " avoiding " "[" ks:ident,* "]" : command =>
 multiline declarations. Specs use the existing `*Spec` convention or `kernel_spec`;
 execution denotations must instead be registered with `kernel_denotation`.
 Every discovered pair is checked, and the actual inventory is printed. -/
-elab "#auditModuleSpecs" : command => do
+def auditModuleSpecs (kernelModules : Array Name := #[]) : CommandElabM Unit := do
   let env ← getEnv
+  for source in kernelModules do
+    unless env.header.modules.any (·.module == source) do
+      throwError "Spec audit kernel module is not imported: {source}"
   let mut kernels : Array Name := #[]
   let mut specs : Array Name := #[]
   let mut denotations : Array Name := #[]
   for (name, info) in env.constants.toList do
     let userName := ((privateToUserName? name).getD name).eraseMacroScopes
-    if (env.getModuleIdxFor? name).isSome then
-      continue
+    let origin := env.getModuleIdxFor? name
+    if let some idx := origin then
+      unless kernelModules.contains env.header.modules[idx.toNat]!.module do
+        continue
     unless info.isDefinition do continue
     let isKernel ← liftTermElabM do
       Meta.forallTelescopeReducing info.type fun _ result => do
         return result.isConstOf `VeriTile.Triton.ComputeKernel
     if isKernel then kernels := kernels.push name
+    -- Imported source modules contribute kernels only. The specifications
+    -- being audited must still belong to the current proof module.
+    if origin.isSome then continue
     let isDenotation := kernelDenotationAttr.hasTag env name
     if isDenotation then denotations := denotations.push name
     if independentSpecAttr.hasTag env name ||
@@ -176,6 +184,14 @@ elab "#auditModuleSpecs" : command => do
   let display := fun (names : Array Name) =>
     (names.map fun name => (privateToUserName? name).getD name).qsort (·.toString < ·.toString)
   logInfo m!"Spec audit: kernels={kernels.size}, independentSpecs={specs.size}, denotations={denotations.size}\nkernels: {display kernels}\nindependent specs: {display specs}\ndenotations: {display denotations}"
+
+elab "#auditModuleSpecs" : command => auditModuleSpecs
+
+/-- Include explicitly named source modules when kernels and proofs live in
+separate files. Local kernels remain included, and no imported spec is trusted
+as a replacement for checking the current module's specifications. -/
+elab "#auditModuleSpecs" " from " "[" sources:ident,* "]" : command =>
+  auditModuleSpecs (sources.getElems.map (·.getId))
 
 /-! ## Public specification reports
 

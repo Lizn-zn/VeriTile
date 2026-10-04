@@ -141,7 +141,7 @@ the selected shard together.
 
 ```bash
 python3 scripts/check_comparator.py --library
-python3 scripts/check_comparator.py --file bench/examples/VectorAddCorrect.lean --trust
+python3 scripts/check_comparator.py --file bench/examples/VectorAdd/Correct.lean --trust
 python3 scripts/test_check_comparator.py
 ```
 

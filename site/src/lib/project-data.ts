@@ -25,7 +25,8 @@ export const corpus = {
   totalDirectories: ports.length,
 };
 
-const vectorAddSource = readFileSync(resolve(repositoryRoot, 'bench/examples/VectorAdd.lean'), 'utf8');
+const vectorAddSource = readFileSync(resolve(repositoryRoot, 'bench/examples/VectorAdd/Correct.lean'), 'utf8')
+  + '\n' + readFileSync(resolve(repositoryRoot, 'bench/examples/VectorAdd/Kernels.lean'), 'utf8');
 const kernelMatch = vectorAddSource.match(/def addKernel [^\n]* := (triton \{[\s\S]*?\n\})/);
 const contractMatch = vectorAddSource.match(/specification add_kernel_correctness[^\n]*\n\s*(.+) := by/);
 const proofMatch = vectorAddSource.match(/(specification add_kernel_correctness[^\n]*\n[\s\S]*?)(?=\n\n\/\-! ## Trust gates)/);
@@ -77,7 +78,8 @@ function leanFiles(directory: string): string[] {
 }
 const recordInputs = [
   'lean-toolchain', 'lakefile.toml', 'lake-manifest.json',
-  'site/scripts/record-home-demo.py', 'bench/examples/VectorAdd.lean',
+  'site/scripts/record-home-demo.py', 'bench/examples/VectorAdd/Correct.lean',
+  'bench/examples/VectorAdd/Kernels.lean',
   ...leanFiles('VeriTile'),
 ].sort();
 const fingerprint = createHash('sha256');
@@ -94,4 +96,4 @@ export const leanToolchain = readFileSync(resolve(repositoryRoot, 'lean-toolchai
 export const quickStart = `git clone https://github.com/Lizn-zn/VeriTile.git
 cd VeriTile
 lake build
-lake env lean bench/examples/VectorAdd.lean`;
+lake env lean bench/examples/VectorAdd/Correct.lean`;

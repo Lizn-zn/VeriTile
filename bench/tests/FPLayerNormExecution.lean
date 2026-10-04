@@ -1,8 +1,10 @@
 /- Boundaries of the original LayerNorm execution and scheduled contract.
 These fixtures do not supply experimental evidence or admit count relations. -/
-import bench.examples.support.LayerNormContract
+import bench.examples.FusedLayerNorm.Contract
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
+
+open VeriTile.Bench.Examples.FusedLayerNorm.Kernels
 
 namespace FPLayerNormExecutionTests
 open VeriTile Triton FP.Structural

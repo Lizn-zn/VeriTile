@@ -45,8 +45,8 @@ name = "TritonBenchSpecExamples"
 globs = ["bench.examples.+", "bench.tritonbench_g.vector_addition.VectorAddition"]
 roots = [
   "bench.tritonbench_g.vector_addition.VectorAddition",
-  "bench.examples.TritonBenchVectorAdditionCorrect",
-  "bench.examples.TritonBenchVectorAdditionFPEquiv",
+  "bench.examples.TritonBenchVectorAddition.Correct",
+  "bench.examples.TritonBenchVectorAddition.FPEquiv",
 ]
 
 # Full target: Lite + Math + ApproxGeLU. Build this when working on the

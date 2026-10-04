@@ -6,9 +6,10 @@
 
 ## 用户看到的 specification
 
-两个 Lean 文件分别展示正确性和浮点等价性，各自直接写出原始 Triton kernel。
+`Kernels.lean` 集中定义原始与优化 Triton kernel；`Correct.lean` 和
+`FPEquiv.lean` 分别给出实数正确性与浮点等价性证明，互不导入。
 
-[TritonBenchVectorAdditionCorrect.lean](../../bench/examples/TritonBenchVectorAdditionCorrect.lean)
+[TritonBenchVectorAdditionCorrect.lean](../../bench/examples/TritonBenchVectorAddition/Correct.lean)
 包含 kernel、IO 接口、`real_projection` 和实数正确性规格，不引入数值原子假设：
 
 ```lean
@@ -19,7 +20,7 @@ specification vector_addition_correct (nElements blockSize : Nat) :
 `⊨` 保留原 TritonBench 的完整内存规格：在有效 lane 上输出数学和，保证终止，
 并保持其他内存不变。该证明复用原来的 TritonBench 实数正确性定理。
 
-[TritonBenchVectorAdditionFPEquiv.lean](../../bench/examples/TritonBenchVectorAdditionFPEquiv.lean)
+[TritonBenchVectorAdditionFPEquiv.lean](../../bench/examples/TritonBenchVectorAddition/FPEquiv.lean)
 直接定义原始 kernel 和交换加法操作数后的版本，并证明浮点等价性；不导入 correct 文件。
 `nElements` 和 `blockSize` 是任意符号参数，不与实验的尺寸或启动配置核对。
 两个 kernel 唯一的差异是 `output = x + y` 与 `output = y + x`：
@@ -34,7 +35,7 @@ specification vector_addition_equiv (nElements blockSize : Nat) (R : Rules block
   exact .frame (beforeAdd nElements blockSize) (afterAdd nElements blockSize) (admitted_add_commute R)
 ```
 
-`R` 固定引用导出的 `fp32_add_commute`；用户不再提供任意 contract/evidence，也不手填 PASS。
+`R` 使用 `ScalarArithmetic` 候选目录选出的 fp32 `addCommute` 报告；用户不再提供任意 contract/evidence，也不手填 PASS。
 它只包含一条数值模型假设：使用实验选出的 fp32 ADD-COMMUTE 原子关系。
 这个前提保留为 `Rules.add_comm`，它正是“实验通过后 assume 该原子关系”的逻辑表达。
 `Rules blockSize` 中的参数只用于实例化带形状的语法，不要求 `blockSize` 等于实验值。
@@ -51,8 +52,8 @@ Lean 随后只在该 assumption 下证明，不重新检查实验 shape 或输�
 ```bash
 python3 scripts/export_numerical_rules.py --trust-report
 lake build VeriTile.Meta.StatementAudit VeriTile.Triton.Float.Equivalence VeriTile.Triton.Float.ReportedAdmission TritonBenchSpecExamples
-lake env lean bench/examples/TritonBenchVectorAdditionCorrect.lean
-lake env lean bench/examples/TritonBenchVectorAdditionFPEquiv.lean
+lake env lean bench/examples/TritonBenchVectorAddition/Correct.lean
+lake env lean bench/examples/TritonBenchVectorAddition/FPEquiv.lean
 ```
 
 最后一条命令完成 Lean 检查。查看浮点证明引用的原子假设使用：
@@ -83,8 +84,8 @@ FP assumptions used by vector_addition_equiv:
 ```bash
 python3 scripts/export_numerical_rules.py --trust-report --check
 python3 -m unittest scripts.test_export_numerical_rules scripts.test_specification_surface scripts.test_fp_assumptions -v
-python3 scripts/check_comparator.py --file bench/examples/TritonBenchVectorAdditionCorrect.lean --trust
-python3 scripts/check_comparator.py --file bench/examples/TritonBenchVectorAdditionFPEquiv.lean --trust
+python3 scripts/check_comparator.py --file bench/examples/TritonBenchVectorAddition/Correct.lean --trust
+python3 scripts/check_comparator.py --file bench/examples/TritonBenchVectorAddition/FPEquiv.lean --trust
 ```
 
 comparator 使用独立输入快照；报告生成和原子绑定必须在证明任务开始之前完成。

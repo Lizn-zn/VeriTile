@@ -914,7 +914,7 @@ cast-plus-typed-store pair collapsed by `round_idem`: `matmul_kernel`,
 `matmul_leakyrelu`, `matmul_leakyrelu_fp8`, `matmul_triton_autotune`,
 `iv_dependent_matmul`, `rmsnorm_fused_llama`, `attention_kernel`,
 `attention_kernel_aligned`. The addition showcase now lives in
-`bench/examples/FloatDTypeAddCorrect.lean`: its public contract is real
+`bench/examples/FloatDTypeAdd/Correct.lean`: its public contract is real
 correctness after erasing the explicit `.round_to(...)` quantization.
 
 What this face *does* is close a real gap and extend the surface:

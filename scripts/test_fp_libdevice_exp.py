@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parents[1]
 class LibdeviceExpTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        result = subprocess.run(['lake', 'build', 'bench.examples.SoftmaxStableFPEquiv'],
+        result = subprocess.run(['lake', 'build', 'bench.examples.SoftmaxStable.FPEquiv'],
                                 cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -30,12 +30,12 @@ class LibdeviceExpTests(unittest.TestCase):
 
     def test_public_spec_uses_only_admitted_atoms(self):
         output = self.check('''
-import bench.examples.SoftmaxStableFPEquiv
+import bench.examples.SoftmaxStable.FPEquiv
 #print_fp_assumptions VeriTile.Bench.Examples.SoftmaxStableFPEquiv.softmax_stable_equiv
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
-  if env.contains `VeriTile.Bench.Examples.SoftmaxStableCorrect.naiveSoftmaxKernel then
+  if env.contains `VeriTile.Bench.Examples.SoftmaxStableCorrect.naive_softmax_correct then
     throwError "FP specification imported its correctness counterpart"
 ''')
         self.assertEqual(set(output.splitlines()[1:]), {

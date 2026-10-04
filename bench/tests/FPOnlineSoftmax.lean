@@ -1,8 +1,10 @@
 /- Online softmax's scalar invariant, initialization and per-iteration domains.
 Logical rational fixtures below are not GPU results or rule admissions. -/
-import bench.examples.support.OnlineSoftmaxContract
+import bench.examples.OnlineSoftmax.Contract
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
+
+open VeriTile.Bench.Examples.OnlineSoftmax.Kernels
 
 namespace FPOnlineSoftmaxTests
 open VeriTile Triton FP.Structural
@@ -146,13 +148,13 @@ example {α : Type} (M : Algebra α) (xs : Nat → α) (N i : Nat) (hi : i ≤ N
 -- The original source has no output port or store. Its y argument cannot
 -- become an observable output merely through the numerical invariant.
 example (x y z : RegionName) (N : Nat) :
-    OnlineSoftmaxFPExecution.onlineSoftmaxKernel x y N =
-      OnlineSoftmaxFPExecution.onlineSoftmaxKernel x z N := rfl
+    OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N =
+      OnlineSoftmax.Kernels.onlineSoftmaxKernel x z N := rfl
 
 example {α : Type} [Inhabited α] (M : Algebra α) (N : Nat) (xs : Fin N → α) (s : State α)
     (hx : ∀ i : Fin N, (s.mem "x" (s.pids 0 * N + i.val)).read .real = xs i) :
     ∃ t, FP.Structural.exec (OnlineSoftmaxFPComparison.engine M)
-        (OnlineSoftmaxFPExecution.onlineSoftmaxKernel "x" "x" N) s = some t ∧
+        (OnlineSoftmax.Kernels.onlineSoftmaxKernel "x" "x" N) s = some t ∧
       t.mem = s.mem := by
   obtain ⟨t, ht, _, _, hm, _⟩ :=
     OnlineSoftmaxFPExecution.online_run (OnlineSoftmaxFPComparison.engine M) "x" "x" xs s hx
@@ -163,7 +165,7 @@ example {α : Type} [Inhabited α] (M : Algebra α) (N : Nat) (xs : Fin N → α
 example {α : Type} [Inhabited α] (M : Algebra α) (N : Nat) (hN : 0 < N)
     (xs : Fin N → α) (s : State α)
     (hx : ∀ i : Fin N, (s.mem "x" (s.pids 0 * N + i.val)).read .real = xs i) :
-    ∃ t, FP.Structural.exec M (OnlineSoftmaxFPBatch.stableSoftmaxKernel "x" "x" N) s = some t ∧
+    ∃ t, FP.Structural.exec M (OnlineSoftmax.Kernels.stableSoftmaxKernel "x" "x" N) s = some t ∧
       (∀ i : Fin N, t.mem "x" (s.pids 0 * N + i.val) = .mk .real (OnlineSoftmaxFPBatch.outputValue M xs i)) ∧
       (∀ (r : RegionName) o, (r ≠ "x" ∨ ∀ i : Fin N, o ≠ s.pids 0 * N + i.val) → t.mem r o = s.mem r o) :=
   OnlineSoftmaxFPBatch.batch_run M "x" "x" N hN xs s hx

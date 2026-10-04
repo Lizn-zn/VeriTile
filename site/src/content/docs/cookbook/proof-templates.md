@@ -9,7 +9,7 @@ handful of templates. This page maps each pattern to the helpers in
 `VeriTile/Triton/KernelLemmas/LoopInvariant.lean`, and gives a skeleton you can copy.
 
 These blocks are proof skeletons: supply the kernel, state, hypotheses, and
-placeholders before compiling. See [VectorAdd.lean](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd.lean)
+placeholders before compiling. See [VectorAdd.lean](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd/Correct.lean)
 for a complete example. Loop helpers live in `KernelLemmas/LoopInvariant.lean`;
 offset-injectivity helpers live in `Semantics/Offset.lean`.
 

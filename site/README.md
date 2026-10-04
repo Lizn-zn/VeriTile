@@ -77,13 +77,13 @@ Copyable build commands close the page.
 `src/lib/home-story.ts` contains this narrative; `home-copy.ts`
 contains the interactive example and shared actions.
 
-The Python and DSL excerpts come from `bench/examples/VectorAdd.lean`.
+The Python and DSL excerpts come from `bench/examples/VectorAdd/Correct.lean`.
 The language comparison shows only the kernel bodies, with corresponding names
 matched for readability and the aligned, unmasked scope stated in the caption.
 The interactive demo retains the exact verified kernel text.
 The View proof links open the full Lean contracts and proofs in
 `bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean` and
-`bench/examples/StableLogSumExpEquiv.lean`.
+`bench/examples/StableLogSumExp/RealEquiv.lean`.
 Both cards use log-sum-exp. The correctness formula is explicitly the unscaled,
 per-block active-lane case. The equivalence example compares direct and
 maximum-shifted LSE, with real intermediate arithmetic and a shared rounded bf16
@@ -242,7 +242,7 @@ runs. Building the coverage table does not replay proofs.
 
 `/cookbook/vector-add-walkthrough/` walks from the Python kernel through the
 checked DSL/IO contract, full proof, trust checks, and rejected mutation. Its
-code excerpts are extracted from the executable `bench/examples/VectorAdd.lean`
+code excerpts are extracted from the executable `bench/examples/VectorAdd/Correct.lean`
 by `src/lib/vector-add-tutorial.ts`; missing anchors fail the site build.
 
 Typography separates reading paragraphs (`--vt-text-body`), expanded-example

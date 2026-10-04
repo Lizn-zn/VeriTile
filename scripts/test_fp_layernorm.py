@@ -11,8 +11,8 @@ class LayerNormFPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ['lake', 'build', 'bench.examples.support.LayerNormContract',
-             'bench.examples.FusedLayerNormCorrect', 'VeriTile.Meta.StatementAudit'],
+            ['lake', 'build', 'bench.examples.FusedLayerNorm.Contract',
+             'bench.examples.FusedLayerNorm.Correct', 'VeriTile.Meta.StatementAudit'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -29,25 +29,28 @@ class LayerNormFPTests(unittest.TestCase):
 
     def test_original_sources_and_real_spec_independence(self):
         output = self.check_lean('''
-import bench.examples.support.LayerNormContract
-import bench.examples.FusedLayerNormCorrect
+import bench.examples.FusedLayerNorm.Contract
+import bench.examples.FusedLayerNorm.Correct
 open VeriTile Triton VeriTile.Bench.Examples
+example (N stride : Nat) (ε : ℝ) :
+    (FusedLayerNormCorrect.fusedIO N stride ε).kernel =
+      (FusedLayerNorm.Kernels.fusedLayerNormKernel "x" "gamma" "beta" "y" N stride ε).eraseDType := rfl
 example (x g b y : RegionName) (N stride : Nat) (ε : ℝ) :
-    LayerNormFPExecution.fusedLayerNormKernel x g b y N stride ε =
-      FusedLayerNormCorrect.fusedLayerNormKernel x g b y N stride ε := rfl
+    (LayerNormFPExecution.fusedIO x g b y N stride ε).kernel.surfaceBody =
+      (FusedLayerNorm.Kernels.fusedLayerNormKernel x g b y N stride ε).surfaceBody := rfl
 example (x g b y : RegionName) (N stride : Nat) (ε : ℝ) :
-    LayerNormFPExecution.twoPassLayerNormKernel x g b y N stride ε =
-      FusedLayerNormCorrect.twoPassLayerNormKernel x g b y N stride ε := rfl
+    (LayerNormFPExecution.twopassIO x g b y N stride ε).kernel.surfaceBody =
+      (FusedLayerNorm.Kernels.twoPassLayerNormKernel x g b y N stride ε).surfaceBody := rfl
 ''')
         self.assertEqual(output, '')
         self.check_lean('''
-import bench.examples.support.LayerNormContract
+import bench.examples.FusedLayerNorm.Contract
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv
   for name in [
-      `VeriTile.Bench.Examples.FusedLayerNormCorrect.twoPassLayerNormKernel,
-      `VeriTile.Bench.Examples.WelfordCorrect.onlineWelfordKernel] do
+      `VeriTile.Bench.Examples.FusedLayerNormCorrect.two_pass_layernorm_correct,
+      `VeriTile.Bench.Examples.WelfordCorrect.twopass_welford_correct] do
     if env.contains name then throwError "FP proof imported a correctness counterpart: {name}"
 ''')
 

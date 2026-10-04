@@ -1,15 +1,16 @@
 # Example specification migration
 
-The reference is `TritonBenchVectorAdditionCorrect.lean` and
-`TritonBenchVectorAdditionFPEquiv.lean`.
+The reference is `TritonBenchVectorAddition/Correct.lean` and
+`TritonBenchVectorAddition/FPEquiv.lean`.
 
 Each completed case has a real correctness file and an independent FP equivalence file.
 The correctness statement is `Spec.Real (io ⊨ mathematical_formula)`.
 The FP statement is `originalKernel … ≡[R] optimizedKernel …` (or the corresponding
 IO contracts for transformations with private scratch), with
-`#print_fp_assumptions` listing the numerical atoms used by its proof. FP files
-define their own kernels, sometimes in independent FP support modules, and
-never import their correctness counterpart.
+`#print_fp_assumptions` listing the numerical atoms used by its proof. Both proof files import the shared sources in `Kernels.lean`. FP execution
+and contract helpers live in the same directory and never import the
+correctness counterpart. See the [example index](../bench/examples/README.md)
+for the source variants and precise observation scopes.
 
 Experimental shape and distribution select assumptions. They are not extra
 shape conditions on the subsequent Lean derivation. Kernel dimensions remain
@@ -23,29 +24,30 @@ FP equivalence. Pending entries must not be advertised as proved.
 
 | Original case | Correctness file | FP transformation and status |
 |---|---|---|
-| TritonBench vector addition | `TritonBenchVectorAdditionCorrect` — checked | `TritonBenchVectorAdditionFPEquiv` — checked; add commutation |
-| Aligned vector addition | `VectorAddCorrect` — checked | `VectorAddFPEquiv` — checked; add commutation |
-| Masked vector addition | `FlatVectorAddCorrect` — checked | `FlatVectorAddFPEquiv` — checked; add commutation |
-| Float dtype addition | `FloatDTypeAddCorrect` — checked, including empty tiles | `FloatDTypeAddFPEquiv` — checked; add commutation; output cast retained |
-| Row-wise sum | `RowWiseSumCorrect` — checked | `RowWiseSumFPEquiv` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
-| Row-wise max | `RowWiseMaxCorrect` — checked | `RowWiseMaxFPEquiv` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
-| Online softmax | `OnlineSoftmaxCorrect` — checked, original batch-kernel/online-recurrence scope | `OnlineSoftmaxFPEquiv` — checked in that same observation scope: stored batch values versus read-only normalization of the actual online m/l registers; libdevice EXP-SUB and scalar arithmetic, symbolic positive row length and separate memory frames |
-| mHC depth | `HyperConnectionsDepthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepthFPEquiv` — checked in the same scope; add commutation |
-| mHC width | `HyperConnectionsWidthCorrect` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidthFPEquiv` — checked in the same scope; two multiplication commutations |
-| Adam-named Lion update | `AdamUpdateGridLaunchCorrect` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunchFPEquiv` — checked per program; momentum addition commutation, masked in-place stores retained |
-| Stable softmax | `SoftmaxStableCorrect` — checked for both original kernels against the softmax formula | `SoftmaxStableFPEquiv` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
-| Stable logsumexp | `StableLogSumExpCorrect` — checked for both original kernels against logsumexp | Direct versus stable libdevice kernels: EXP-SUB connected; fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need admission |
-| Softmax reciprocal | `SoftmaxReciprocalCorrect` — checked for both original kernels against the softmax formula | `SoftmaxReciprocalFPEquiv` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
-| Float dtype softmax | `FloatDTypeSoftmaxCorrect` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmaxFPEquiv` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
-| Fused SiLU | `FusedSiLUCorrect` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLUFPEquiv` — checked; original fused versus materialized pipeline, with no numerical assumptions |
-| Fused SwiGLU | `FusedSwigluCorrect` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwigluFPEquiv` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
-| Welford | `WelfordCorrect` — checked for both original kernels against population mean and variance; both output windows and memory framing | `WelfordFPEquiv` — checked under scalar arithmetic and the two bounded count atoms, for `0 < N <= 2^24`; both original bf16 outputs and memory frames retained |
-| Fused layernorm | `FusedLayerNormCorrect` — checked for both original kernels against population-variance normalization and affine transformation | `FusedLayerNormFPEquiv` — checked for `N <= 2^24`, including empty output rows; original statistics, affine suffix, bf16 stores and frames retained |
+| TritonBench vector addition | `TritonBenchVectorAddition/Correct.lean` — checked | `TritonBenchVectorAddition/FPEquiv.lean` — checked; add commutation |
+| Aligned vector addition | `VectorAdd/Correct.lean` — checked | `VectorAdd/FPEquiv.lean` — checked; add commutation |
+| Masked vector addition | `FlatVectorAdd/Correct.lean` — checked | `FlatVectorAdd/FPEquiv.lean` — checked; add commutation |
+| Float dtype addition | `FloatDTypeAdd/Correct.lean` — checked, including empty tiles | `FloatDTypeAdd/FPEquiv.lean` — checked; add commutation; output cast retained |
+| Row-wise sum | `RowWiseSum/Correct.lean` — checked | `RowWiseSum/FPEquiv.lean` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
+| Row-wise max | `RowWiseMax/Correct.lean` — checked | `RowWiseMax/FPEquiv.lean` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
+| Online softmax | `OnlineSoftmax/Correct.lean` — checked, original batch-kernel/online-recurrence scope | `OnlineSoftmax/FPEquiv.lean` — checked in that same observation scope: stored batch values versus read-only normalization of the actual online m/l registers; libdevice EXP-SUB and scalar arithmetic, symbolic positive row length and separate memory frames |
+| mHC depth | `HyperConnectionsDepth/Correct.lean` — checked, original rank-one/zero-iteration scope | `HyperConnectionsDepth/FPEquiv.lean` — checked in the same scope; add commutation |
+| mHC width | `HyperConnectionsWidth/Correct.lean` — checked, original rank-one/zero-iteration scope | `HyperConnectionsWidth/FPEquiv.lean` — checked in the same scope; two multiplication commutations |
+| Adam-named Lion update | `AdamUpdateGridLaunch/Correct.lean` — checked, per-program and grid proofs retained | `AdamUpdateGridLaunch/FPEquiv.lean` — checked per program; momentum addition commutation, masked in-place stores retained |
+| Stable softmax | `SoftmaxStable/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxStable/FPEquiv.lean` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
+| Piecewise log-exp | `LogExp/Correct.lean` — checked for the original and copy kernels against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted masked libdevice log-exp/expm1 atom |
+| Stable logsumexp | `StableLogSumExp/Correct.lean` — checked for both original kernels against logsumexp | Direct versus stable libdevice kernels: EXP-SUB connected; fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need admission |
+| Softmax reciprocal | `SoftmaxReciprocal/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxReciprocal/FPEquiv.lean` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
+| Float dtype softmax | `FloatDTypeSoftmax/Correct.lean` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmax/FPEquiv.lean` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
+| Fused SiLU | `FusedSiLU/Correct.lean` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLU/FPEquiv.lean` — checked; original fused versus materialized pipeline, with no numerical assumptions |
+| Fused SwiGLU | `FusedSwiglu/Correct.lean` — checked for both original kernels against silu(x) · y, including empty blocks, tail masks and scratch framing | `FusedSwiglu/FPEquiv.lean` — checked; original fused versus materialized pipeline, with bf16 casts, tail masks and no numerical assumptions |
+| Welford | `Welford/Correct.lean` — checked for both original kernels against population mean and variance; both output windows and memory framing | `Welford/FPEquiv.lean` — checked under scalar arithmetic and the two bounded count atoms, for `0 < N <= 2^24`; both original bf16 outputs and memory frames retained |
+| Fused layernorm | `FusedLayerNorm/Correct.lean` — checked for both original kernels against population-variance normalization and affine transformation | `FusedLayerNorm/FPEquiv.lean` — checked for `N <= 2^24`, including empty output rows; original statistics, affine suffix, bf16 stores and frames retained |
 
-There are currently 18 correctness modules and 17 FP equivalence modules. The
-eight legacy equivalence modules remain as source references; one of their
-original transformations still awaits FP migration. Their presence does not
-complete the pending FP entries above.
+There are 19 correctness modules, 18 completed FP equivalence modules, and
+one goal-only FP file for StableLogSumExp. The eight `RealEquiv.lean` modules
+retain proofs with real intermediate arithmetic and their stated cast semantics.
+Their presence does not complete a pending FP transformation.
 
 The SiLU and SwiGLU materialized kernels retain the original `ComputeKernel.seq`
 scope: one concatenation of stage bodies. Both real and FP specifications explicitly
@@ -73,7 +75,7 @@ contains a whole softmax, logsumexp, normalization, reduction or recurrence atom
 The supplemental EXP-SUB implementation uses libdevice.exp. Its bf16,
 bf16-input/fp32-work/bf16-output and fp32 instances are admitted with the
 configured magnitude PASS threshold of 10. Its identity is
-part of the report contract. PR #12 tested the tl.exp version and rejected it
+part of the report contract. The configured tl.exp experiment rejected that intrinsic version
 (B=0.1608954387 ULP > 0.05). The stable/online softmax and logsumexp examples
 therefore explicitly use libdevice.exp in both their Correct and FP sources,
 with separate AST and opaque FP symbols for the two implementations. LOG-MUL domain events and unsupported fp64 combinations
@@ -148,7 +150,7 @@ and memory framing on each side.
 The row-wise sum proof specializes the original mathematical kernel to fp32
 input and accumulation and reverses the lane addresses before `tl.sum`. The
 DSL preserves the input's fp32 compute annotation on the reduction and its
-result. The mathematical projection still equals `RowWiseSumCorrect`'s kernel.
+result. The mathematical projection still equals `RowWiseSum/Correct.lean`'s kernel.
 
 `Float/Equational` supplies expression congruence and substitution of the exact
 scalar ADD-COMMUTE and ADD-ASSOC templates. Its reduction-tree theorem derives
@@ -242,7 +244,7 @@ The checks cover:
   intrinsic EXP-SUB does not. The printer tests cover derivation-table
   extension without hiding external symbolic atoms or opaque premises.
   Independent comparator replay accepts all 63 theorem targets across
-  `StatementAudit`, `Float/Exponential`, `SoftmaxStableFPEquiv`, the online
+  `StatementAudit`, `Float/Exponential`, `SoftmaxStable/FPEquiv.lean`, the online
   and logsumexp contracts, and `FPLibdeviceExp`.
 - `lake build TritonBenchSpecExamples` (all currently present example modules).
 - The admission, assumption-printer and specification-surface tests. Repeated
@@ -256,7 +258,7 @@ The checks cover:
 - Exact source equality for both SiLU and SwiGLU pairs, and applications of all
   four real correctness headlines at arbitrary dimensions, without positivity
   or whole-tile restrictions.
-- Exact source equality for both kernels in `FusedSiLUFPEquiv`, its public FP
+- Exact source equality for both kernels in `FusedSiLU/FPEquiv.lean`, its public FP
   theorem at symbolic block size (including zero), independence from Correct,
   and its empty numerical-assumption output. Structural countermodels prevent
   accidental commutation, reassociation, cast idempotence or precision erasure;
@@ -284,19 +286,19 @@ The checks cover:
   of all four public real formulas without positivity restrictions. A flat
   memory consumer checks Welford's two numerical outputs and preservation of
   unwritten cells within both output regions.
-- Official comparator replay with trust audits for `VectorAddFPEquiv`,
-  `FlatVectorAddFPEquiv`, `FloatDTypeAddFPEquiv`, `FloatDTypeAddCorrect`,
-  `SoftmaxStableCorrect`, `StableLogSumExpCorrect`, `SoftmaxReciprocalCorrect`,
-  `FloatDTypeSoftmaxCorrect`, `HyperConnectionsDepthFPEquiv`,
-  `HyperConnectionsWidthFPEquiv`, `AdamUpdateGridLaunchFPEquiv`,
-  `FusedSiLUCorrect`, `FusedSwigluCorrect`, `WelfordCorrect`,
-  `FusedLayerNormCorrect` and the updated `KernelSpec/Basic` interface. The
+- Official comparator replay with trust audits for `VectorAdd/FPEquiv.lean`,
+  `FlatVectorAdd/FPEquiv.lean`, `FloatDTypeAdd/FPEquiv.lean`, `FloatDTypeAdd/Correct.lean`,
+  `SoftmaxStable/Correct.lean`, `StableLogSumExp/Correct.lean`, `SoftmaxReciprocal/Correct.lean`,
+  `FloatDTypeSoftmax/Correct.lean`, `HyperConnectionsDepth/FPEquiv.lean`,
+  `HyperConnectionsWidth/FPEquiv.lean`, `AdamUpdateGridLaunch/FPEquiv.lean`,
+  `FusedSiLU/Correct.lean`, `FusedSwiglu/Correct.lean`, `Welford/Correct.lean`,
+  `FusedLayerNorm/Correct.lean` and the updated `KernelSpec/Basic` interface. The
   structural FP extension also replays `Spec`, `Float/Structural`,
-  `Float/StructuralIO`, `FusedSiLUFPEquiv`, `FusedSwigluFPEquiv`,
-  `RowWiseMaxFPEquiv` and the boundary fixture, including its named reduction
+  `Float/StructuralIO`, `FusedSiLU/FPEquiv.lean`, `FusedSwiglu/FPEquiv.lean`,
+  `RowWiseMax/FPEquiv.lean` and the boundary fixture, including its named reduction
   and IO-interface counterexamples.
   The sum extension replays `Float/Equational`, `Float/TermModel`,
-  `RowWiseSumFPEquiv` and their updated interfaces and boundary fixtures;
+  `RowWiseSum/FPEquiv.lean` and their updated interfaces and boundary fixtures;
   all 510 theorem targets in that batch were accepted.
 
 The regression suite includes 7 example-pair/contract tests, 7 structural FP

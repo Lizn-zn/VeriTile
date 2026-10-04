@@ -1,6 +1,9 @@
 /- Boundary checks for conditional admission and precision-preserving rewrites. -/
-import bench.examples.SoftmaxReciprocalFPEquiv
-import bench.examples.FloatDTypeSoftmaxFPEquiv
+import bench.examples.SoftmaxReciprocal.FPEquiv
+import bench.examples.FloatDTypeSoftmax.FPEquiv
+
+open VeriTile.Bench.Examples.FloatDTypeSoftmax.Kernels
+open VeriTile.Bench.Examples.SoftmaxReciprocal.Kernels
 
 namespace FPSupplementalAdmissionTests
 open VeriTile Triton
@@ -91,11 +94,11 @@ private def precisionOf : ComputeStmt → Option ComputeDType
   | _ => none
 
 example (B : Nat) :
-    ((FloatDTypeSoftmaxFPEquiv.originalKernel "x" "y" B).surfaceBody.map precisionOf) =
+    ((FloatDTypeSoftmax.Kernels.originalKernel "x" "y" B).surfaceBody.map precisionOf) =
       [none, none, some .fp32, some .fp64, some .fp64, some .fp64,
        some .fp64, some .fp64, some .fp32] := rfl
 example (B : Nat) :
-    ((FloatDTypeSoftmaxFPEquiv.reciprocalKernel "x" "y" B).surfaceBody.map precisionOf) =
+    ((FloatDTypeSoftmax.Kernels.reciprocalKernel "x" "y" B).surfaceBody.map precisionOf) =
       [none, none, some .fp32, some .fp64, some .fp64, some .fp64,
        some .fp64, some .fp64, some .fp64, some .fp32] := rfl
 

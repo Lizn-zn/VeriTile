@@ -30,8 +30,8 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   `R` bundles the rule table and admissions; experiment bookkeeping stays there.
   `#print_fp_assumptions name` lists only the atomic assumption names referenced
   by an FP proof, such as `add_commute`. The GPU runner and trusted-report
-  example are available, with separate [correctness](./bench/examples/TritonBenchVectorAdditionCorrect.lean)
-  and [FP equivalence](./bench/examples/TritonBenchVectorAdditionFPEquiv.lean) specifications.
+  example are available, with separate [correctness](./bench/examples/TritonBenchVectorAddition/Correct.lean)
+  and [FP equivalence](./bench/examples/TritonBenchVectorAddition/FPEquiv.lean) specifications.
   See [specification meanings](./documents/CorrectnessSurfaces.md#two-public-specification-meanings).
 - **Narrow-float / rounding-model layer** (#1): an abstract `RoundingModel`
   (`round : FloatDType → ℝ → ℝ`, fields `round_real` (real-channel identity) and `round_idem` (idempotence)) threads a
@@ -43,7 +43,7 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   bridge `Realizes.toRealizes_without_Rounding` degenerates out to (as
   `ComputeCorrect.Realizes_without_Rounding`) at the trivial model. See the
   fused-vs-unfused SwiGLU showcase
-  [`bench/examples/FusedSwigluEquiv.lean`](./bench/examples/FusedSwigluEquiv.lean).
+  [`bench/examples/FusedSwiglu/RealEquiv.lean`](./bench/examples/FusedSwiglu/RealEquiv.lean).
 - **Examples**: 173 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   see the [per-theorem coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)
@@ -76,7 +76,7 @@ git clone https://github.com/Lizn-zn/VeriTile.git
 cd VeriTile
 lake exe cache get
 lake build
-lake env lean bench/examples/VectorAddCorrect.lean
+lake env lean bench/examples/VectorAdd/Correct.lean
 ```
 
 The repository pins the Lean and Mathlib versions. The cache command downloads
@@ -158,16 +158,18 @@ so `scripts/check-artifact.sh` recognizes the theorem in CI. Schema and
 naming conventions: [KernelManifest.md](./documents/KernelManifest.md),
 [TheoremSurfaces.md](./documents/TheoremSurfaces.md).
 
+See the [worked-example index](./bench/examples/README.md) for the shared-source directory layout and proof scopes.
+
 ## Minimal Example
 
 Elementwise vector add against the `addSpec xs ys i = xs i + ys i` math
-spec — see [`bench/examples/VectorAddCorrect.lean`](./bench/examples/VectorAddCorrect.lean).
+spec — see [`bench/examples/VectorAdd/Correct.lean`](./bench/examples/VectorAdd/Correct.lean).
 
 ## Floating-Point Equivalence Example
 
 Vector addition with swapped operands — see
-[`VectorAddFPEquiv.lean`](./bench/examples/VectorAddFPEquiv.lean), alongside
-[`VectorAddCorrect.lean`](./bench/examples/VectorAddCorrect.lean). The FP proof
+[`VectorAdd/FPEquiv.lean`](./bench/examples/VectorAdd/FPEquiv.lean), alongside
+[`VectorAdd/Correct.lean`](./bench/examples/VectorAdd/Correct.lean). The FP proof
 uses the experiment-selected `add_commute` atom; the real proof states the
 pointwise mathematical formula. `#print_fp_assumptions add_kernel_equiv`
 prints the atom used by the FP proof.
@@ -231,7 +233,7 @@ verso/                     Slide deck / overview
   benchmarks/showcases and the GeLU/trust-report target are separate
 - `lake build VeriTile VeriTileFull` — also build the full analysis and library trust report
 - `lake build TritonBenchSpecExamples` — build all worked examples, including the independent real/FP pairs
-- `lake env lean bench/examples/VectorAddCorrect.lean` — quick example smoke check after building
+- `lake env lean bench/examples/VectorAdd/Correct.lean` — quick example smoke check after building
 - `scripts/check-artifact.sh` — `lake build` ∧ `no sorry` ∧ axiom
   whitelist ∧ kernel-manifest schema ∧ README/doc-term drift
 - `bench/check_ports.sh` — per-port elaboration and official comparator replay

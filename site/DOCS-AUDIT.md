@@ -28,7 +28,7 @@ used as the authority for interfaces and modeled guarantees.
 - Built internal links, anchor targets, and linked repository files resolve.
 - Public API names extracted from English design notes, cookbook pages, and
   README are resolved by the pinned Lean toolchain.
-- `bench/examples/VectorAdd.lean` elaborates, including its axiom and statement
+- `bench/examples/VectorAdd/Correct.lean` elaborates, including its axiom and statement
   audits. `bench/tests/TritonSmoke.lean` and `bench/tests/LoopInvariant.lean`
   elaborate too. These runs emit existing unused-simp-argument warnings.
 - Site CI now checks source synchronization and links. The existing artifact

@@ -12,7 +12,7 @@ class ScalarArithmeticTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ['lake', 'build', 'VeriTile.Triton.Float.ScalarReduction',
-             'VeriTile.Triton.Float.WelfordInduction', 'bench.examples.support.WelfordContract'], cwd=ROOT,
+             'VeriTile.Triton.Float.WelfordInduction', 'bench.examples.Welford.Contract'], cwd=ROOT,
             text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)

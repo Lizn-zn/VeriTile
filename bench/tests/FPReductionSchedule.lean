@@ -2,8 +2,10 @@
 boundaries. These integer countermodels are not IEEE or GPU observations. -/
 import VeriTile.Triton.Float.ReductionSchedule
 import VeriTile.Triton.Float.WelfordConditions
-import bench.examples.support.WelfordComparison
+import bench.examples.Welford.Comparison
 import VeriTile.Meta.StatementAudit
+
+open VeriTile.Bench.Examples.Welford.Kernels
 
 namespace FPReductionScheduleTests
 open VeriTile Triton FP.Structural FP.Guarded FP.ScalarArithmetic FP.ScalarReduction
@@ -116,7 +118,7 @@ example (plans : FP.Equational.Schedules) :
 
 open Lean Elab Command in
 run_cmd do
-  if (← getEnv).contains `VeriTile.Bench.Examples.WelfordCorrect.onlineWelfordKernel then
+  if (← getEnv).contains `VeriTile.Bench.Examples.WelfordCorrect.twopass_welford_correct then
     throwError "FP comparison imported its real correctness counterpart"
 
 #axiomsClean FP.ReductionSchedule.Rewrite.sound

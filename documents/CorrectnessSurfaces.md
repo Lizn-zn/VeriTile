@@ -12,7 +12,7 @@ floating-point atom assumptions.** Both retain the `specification` keyword.
 
 The existing TritonBench [vector addition correctness theorem](../bench/tritonbench_g/vector_addition/VectorAddition.lean)
 uses the real `addIO … ⊨ fun xs ys i => xs i + ys i` surface. The separate
-[correctness example](../bench/examples/TritonBenchVectorAdditionCorrect.lean)
+[correctness example](../bench/examples/TritonBenchVectorAddition/Correct.lean)
 defines its fp32 kernel and real-valued IO specification:
 
 ```lean
@@ -23,7 +23,7 @@ specification vector_addition_correct (nElements blockSize : Nat) :
 It reuses the existing TritonBench proof through the kernel's mathematical
 projection. `real_projection` lives in this file; no numerical assumptions are needed.
 
-The [floating-point companion](../bench/examples/TritonBenchVectorAdditionFPEquiv.lean)
+The [floating-point companion](../bench/examples/TritonBenchVectorAddition/FPEquiv.lean)
 compares that actual kernel with a variant changing only `output = x + y` to
 `output = y + x`, with fp32 operations and symbolic element count and block size.
 Its headline is:
@@ -399,7 +399,7 @@ or the `zReg`/`siluReg` temporaries in `FusedSiLU`). Pass `[]` when the two
 kernels must agree on all of memory. This is the surface every
 `*_refinement_view` theorem in `bench/examples/` lands on; the exact-ℝ variant
 `ComputeRefine.Refines_without_Rounding` (no `R`, running under `exec`) is the
-idealization used by `bench/examples/FusedSiLUEquiv.lean`.
+idealization used by `bench/examples/FusedSiLU/RealEquiv.lean`.
 
 ### Pointwise: `ComputeRefine.RefinesAt`
 
@@ -445,7 +445,7 @@ ordinary `ComputeCorrect.Realizes_without_Rounding` for `expected .triv`.
 Degeneration lemmas `refines_triv_iff` / `refinesAt_triv_iff` recover
 `Refines_without_Rounding` / `RefinesAt_without_Rounding` the same way. The
 gold-standard walkthrough for the ∀R compositional pattern is
-[`bench/examples/FusedSwigluEquiv.lean`](../bench/examples/FusedSwigluEquiv.lean); the
+[`bench/examples/FusedSwiglu/RealEquiv.lean`](../bench/examples/FusedSwiglu/RealEquiv.lean); the
 boundary-rounding showcases (LogSumExp, softmax, Welford, LayerNorm, FusedSiLU)
 land on `Refines R` for a fixed `R`.
 

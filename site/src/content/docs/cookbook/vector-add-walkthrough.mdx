@@ -9,7 +9,7 @@ import { Code } from 'astro:components';
 import { tutorial } from '../../../lib/vector-add-tutorial';
 
 This walkthrough uses the complete, executable
-[VectorAdd showcase](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd.lean).
+[VectorAdd showcase](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd/Correct.lean).
 Every Lean excerpt below comes from that file at website build time. The
 source includes all helper proofs, imports, and audit commands; use the full
 file when running it. The displayed fragments explain its construction.
@@ -23,7 +23,7 @@ size `B` and require each program's whole input and output window to be in
 bounds. Unlike a typical Python vector-add wrapper, it does not mask a partial
 last tile. The Python decorator and host launch are outside the Lean theorem.
 For a masked tail, use the separate
-[FlatVectorAdd example](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FlatVectorAdd.lean).
+[FlatVectorAdd example](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FlatVectorAdd/Correct.lean).
 
 Floating values in this example are mathematical real numbers. The result
 does not establish concrete IEEE-754 addition, GPU compilation, or the
@@ -84,7 +84,7 @@ then run from the repository root:
 
 ```bash
 lake build
-lake env lean bench/examples/VectorAdd.lean
+lake env lean bench/examples/VectorAdd/Correct.lean
 ```
 
 The file includes these gates:
@@ -102,7 +102,7 @@ With `comparator`, `lean4export`, and `landrun` on `PATH` and the systemd user
 service available, run:
 
 ```bash
-python3 scripts/check_comparator.py --file bench/examples/VectorAdd.lean --trust
+python3 scripts/check_comparator.py --file bench/examples/VectorAdd/Correct.lean --trust
 ```
 
 Success prints the accepted theorem count and a log directory. Missing tools,

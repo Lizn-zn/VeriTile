@@ -73,7 +73,13 @@ def prepare_source(text, rel, manifest=MANIFEST):
     if rel in NEGATIVE_SPEC_FIXTURES:
         footer.append('#eval IO.println "Spec audit: negative-test fixture; guarded checks executed in source"')
     else:
-        footer.append("#auditModuleSpecs")
+        path = Path(rel)
+        source_module = '.'.join((*path.parent.parts, 'Kernels'))
+        if (path.parts[:2] == ('bench', 'examples') and len(path.parts) == 4
+                and f'import {source_module}' in lines):
+            footer.append(f"#auditModuleSpecs from [{source_module}]")
+        else:
+            footer.append("#auditModuleSpecs")
 
     return "\n".join(new_lines + footer) + "\n"
 

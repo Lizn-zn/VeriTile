@@ -10,12 +10,12 @@ Lean can check and readers can inspect in the repository.
 ## Two questions a proof can answer
 
 - **Correctness:** does this kernel implement its mathematical contract?
-  The [vector addition example](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd.lean)
+  The [vector addition example](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd/Correct.lean)
   proves a pointwise sum, termination, and preservation of memory outside
   the output window under its stated preconditions.
 - **Equivalence:** do two implementations agree on observable outputs?
-  [Stable softmax](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/SoftmaxStableEquiv.lean)
-  and [fused SwiGLU](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FusedSwigluEquiv.lean)
+  [Stable softmax](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/SoftmaxStable/RealEquiv.lean)
+  and [fused SwiGLU](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FusedSwiglu/RealEquiv.lean)
   demonstrate this under their explicit rounding models and memory contracts.
 
 The showcase contracts use `KernelIO` notation: `io ⊨ spec` for an
@@ -62,7 +62,7 @@ assumptions before interpreting a result.
 
 ## Start exploring
 
-- [Read a complete vector-add proof](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd.lean).
+- [Read a complete vector-add proof](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/VectorAdd/Correct.lean).
 - [Inspect corpus counts and audit evidence](/VeriTile/status/).
 - [Follow the repository quick start](https://github.com/Lizn-zn/VeriTile#quick-start).
 - [Browse the source and build instructions](https://github.com/Lizn-zn/VeriTile).

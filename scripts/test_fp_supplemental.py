@@ -12,7 +12,7 @@ class FPSupplementalTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(['lake', 'build'] +
-                                [f'bench.examples.{n}FPEquiv' for n in EXAMPLES],
+                                [f'bench.examples.{n}.FPEquiv' for n in EXAMPLES],
                                 cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -32,7 +32,7 @@ class FPSupplementalTests(unittest.TestCase):
     def test_both_proofs_print_only_the_used_scalar_atom(self):
         for name in EXAMPLES:
             with self.subTest(name=name):
-                result = self.lean((ROOT / f'bench/examples/{name}FPEquiv.lean').read_text())
+                result = self.lean((ROOT / f'bench/examples/{name}/FPEquiv.lean').read_text())
                 self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
                 self.assertEqual(result.stdout,
                                  'FP assumptions used by softmax_reciprocal_equiv:\n'
@@ -40,8 +40,9 @@ class FPSupplementalTests(unittest.TestCase):
 
     def test_an_opaque_guarded_equivalence_is_not_an_atomic_certificate(self):
         result = self.lean('''
-import bench.examples.SoftmaxReciprocalFPEquiv
+import bench.examples.SoftmaxReciprocal.FPEquiv
 open VeriTile Triton
+open VeriTile.Bench.Examples.SoftmaxReciprocal.Kernels
 open VeriTile.Bench.Examples.SoftmaxReciprocalFPEquiv
 open scoped VeriTile.Spec
 specification opaque_equiv (B : Nat) (R : Rules)

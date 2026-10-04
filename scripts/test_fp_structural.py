@@ -12,9 +12,9 @@ class FPStructuralTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ["lake", "build", "VeriTile.Triton.Float.StructuralIO",
-             "bench.examples.FusedSiLUFPEquiv", "bench.examples.FusedSiLUEquiv",
-             "bench.examples.FusedSwigluFPEquiv", "bench.examples.FusedSwigluEquiv",
-             "bench.examples.RowWiseMaxFPEquiv", "bench.examples.RowWiseMaxCorrect"], cwd=ROOT,
+             "bench.examples.FusedSiLU.FPEquiv", "bench.examples.FusedSiLU.RealEquiv",
+             "bench.examples.FusedSwiglu.FPEquiv", "bench.examples.FusedSwiglu.RealEquiv",
+             "bench.examples.RowWiseMax.FPEquiv", "bench.examples.RowWiseMax.Correct"], cwd=ROOT,
             text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -26,7 +26,7 @@ class FPStructuralTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_silu_proof_has_no_numerical_assumptions(self):
-        source = (ROOT / "bench/examples/FusedSiLUFPEquiv.lean").read_text() + '''
+        source = (ROOT / "bench/examples/FusedSiLU/FPEquiv.lean").read_text() + '''
 open Lean Elab Command in
 run_cmd do
   if (← getEnv).contains `VeriTile.Bench.Examples.FusedSiLUCorrect.fusedIO then
@@ -45,17 +45,17 @@ run_cmd do
 
     def test_silu_preserves_both_original_kernels_and_symbolic_shape(self):
         result = self.lean('''
-import bench.examples.FusedSiLUEquiv
-import bench.examples.FusedSiLUFPEquiv
+import bench.examples.FusedSiLU.RealEquiv
+import bench.examples.FusedSiLU.FPEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 open scoped VeriTile.Spec
-example (x g r o : RegionName) (B : Nat) :
-    FusedSiLUFPEquiv.fusedSiLUKernel x g r o B =
-      FusedSiLUEquiv.fusedSiLUKernel x g r o B := rfl
-example (x g r z s o : RegionName) (B : Nat) :
-    FusedSiLUFPEquiv.unfusedSiLUKernel x g r z s o B =
-      FusedSiLUEquiv.unfusedSiLUKernel x g r z s o B := rfl
+example (B : Nat) :
+    (FusedSiLUFPEquiv.fusedIO B).kernel =
+      FusedSiLU.Kernels.fusedSiLUKernel "x" "gate" "residual" "out" B := rfl
+example (B : Nat) :
+    (FusedSiLUFPEquiv.unfusedIO B).kernel =
+      FusedSiLU.Kernels.unfusedSiLUKernel "x" "gate" "residual" "z" "silu" "out" B := rfl
 example (B : Nat) :
     FusedSiLUFPEquiv.fusedIO B ≡[FusedSiLUFPEquiv.R] FusedSiLUFPEquiv.unfusedIO B :=
   FusedSiLUFPEquiv.silu_equiv B
@@ -63,7 +63,7 @@ example (B : Nat) :
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_swiglu_proof_has_no_numerical_assumptions(self):
-        source = (ROOT / "bench/examples/FusedSwigluFPEquiv.lean").read_text() + '''
+        source = (ROOT / "bench/examples/FusedSwiglu/FPEquiv.lean").read_text() + '''
 open Lean Elab Command in
 run_cmd do
   if (← getEnv).contains `VeriTile.Bench.Examples.FusedSwigluCorrect.fusedIO then
@@ -75,17 +75,17 @@ run_cmd do
 
     def test_swiglu_preserves_original_kernels_casts_masks_and_symbolic_shape(self):
         result = self.lean('''
-import bench.examples.FusedSwigluEquiv
-import bench.examples.FusedSwigluFPEquiv
+import bench.examples.FusedSwiglu.RealEquiv
+import bench.examples.FusedSwiglu.FPEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 open scoped VeriTile.Spec
-example (x y o : RegionName) (n B : Nat) :
-    FusedSwigluFPEquiv.swiglu_fused x y o n B =
-      FusedSwigluEquiv.swiglu_fused x y o n B := rfl
-example (x y s o : RegionName) (n B : Nat) :
-    FusedSwigluFPEquiv.swiglu_unfused x y s o n B =
-      FusedSwigluEquiv.swiglu_unfused x y s o n B := rfl
+example (n B : Nat) :
+    (FusedSwigluFPEquiv.fusedIO n B).kernel =
+      FusedSwiglu.Kernels.swiglu_fused "X" "Y" "OUT" n B := rfl
+example (n B : Nat) :
+    (FusedSwigluFPEquiv.unfusedIO n B).kernel =
+      FusedSwiglu.Kernels.swiglu_unfused "X" "Y" "S" "OUT" n B := rfl
 example (n B : Nat) :
     FusedSwigluFPEquiv.fusedIO n B ≡[FusedSwigluFPEquiv.R]
       FusedSwigluFPEquiv.unfusedIO n B := FusedSwigluFPEquiv.swiglu_equiv n B
@@ -93,7 +93,7 @@ example (n B : Nat) :
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 
     def test_rowmax_proof_is_independent_and_has_no_numerical_assumptions(self):
-        source = (ROOT / "bench/examples/RowWiseMaxFPEquiv.lean").read_text() + '''
+        source = (ROOT / "bench/examples/RowWiseMax/FPEquiv.lean").read_text() + '''
 open Lean Elab Command in
 run_cmd do
   if (← getEnv).contains `VeriTile.Bench.Examples.RowWiseMax.rowWiseMaxIO then
@@ -105,14 +105,14 @@ run_cmd do
 
     def test_rowmax_preserves_original_source_and_symbolic_nonempty_rows(self):
         result = self.lean('''
-import bench.examples.RowWiseMaxCorrect
-import bench.examples.RowWiseMaxFPEquiv
+import bench.examples.RowWiseMax.Correct
+import bench.examples.RowWiseMax.FPEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 open scoped VeriTile.Spec
-example (x y : RegionName) (nCol B : Nat) :
-    RowWiseMaxFPEquiv.rowWiseMaxKernel x y nCol B =
-      RowWiseMax.rowWiseMaxKernel x y nCol B := rfl
+example (nCol B : Nat) :
+    (RowWiseMaxFPEquiv.originalIO nCol B).kernel =
+      RowWiseMax.Kernels.rowWiseMaxKernel "x" "y" nCol B := rfl
 example (nCol B : Nat) (hB : 0 < B) :
     RowWiseMaxFPEquiv.originalIO nCol B ≡[RowWiseMaxFPEquiv.R]
       RowWiseMaxFPEquiv.inlinedIO nCol B := RowWiseMaxFPEquiv.rowwise_max_equiv nCol B hB

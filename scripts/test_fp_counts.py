@@ -10,8 +10,8 @@ ROOT = Path(__file__).resolve().parents[1]
 class FPCountTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
-        result = subprocess.run(['lake', 'build', 'bench.examples.WelfordFPEquiv',
-                                 'bench.examples.FusedLayerNormFPEquiv'],
+        result = subprocess.run(['lake', 'build', 'bench.examples.Welford.FPEquiv',
+                                 'bench.examples.FusedLayerNorm.FPEquiv'],
                                 cwd=ROOT, text=True, capture_output=True, timeout=600)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -31,8 +31,8 @@ class FPCountTests(unittest.TestCase):
 
     def test_original_public_transforms_and_used_atoms_at_default_print_settings(self):
         output = self.check('''
-import bench.examples.WelfordFPEquiv
-import bench.examples.FusedLayerNormFPEquiv
+import bench.examples.Welford.FPEquiv
+import bench.examples.FusedLayerNorm.FPEquiv
 #print_fp_assumptions VeriTile.Bench.Examples.WelfordFPEquiv.welford_equiv
 #print_fp_assumptions VeriTile.Bench.Examples.FusedLayerNormFPEquiv.layernorm_equiv
 ''')
@@ -48,8 +48,8 @@ import bench.examples.FusedLayerNormFPEquiv
 
     def test_upper_bound_and_layernorm_empty_case_are_public(self):
         self.check('''
-import bench.examples.WelfordFPEquiv
-import bench.examples.FusedLayerNormFPEquiv
+import bench.examples.Welford.FPEquiv
+import bench.examples.FusedLayerNorm.FPEquiv
 open VeriTile Triton FP.CountConversion
 open VeriTile.Bench.Examples
 open _root_.VeriTile.Triton.FP.Equational (ReductionPlan)
