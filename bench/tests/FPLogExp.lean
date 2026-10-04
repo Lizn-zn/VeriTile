@@ -62,11 +62,11 @@ private def initial : State ℚ where
 
 set_option maxHeartbeats 1600000 in
 theorem piecewise_execution (a : ℚ) :
-    (evalOp model (some .fp32) (FP.LogExp.expression (FP.ScalarArithmetic.ref "a"))
+    (evalOp model (some .fp32) (FP.LogExp.expression FP.LogExp.input)
       (initial.setReg "a" .real [] (fun _ => a))).map (fun v => v PUnit.unit) =
       some (if (if a < 0 then -a else a) ≤ 1 / 2 then a + 110 else a + 11000) := by
   simp [evalOp_unfold, FP.LogExp.expression, FP.LogExp.nearZero,
-    FP.ScalarArithmetic.ref, FP.ScalarArithmetic.minus, numeric, numericLt, numericLe,
+    FP.LogExp.input, numeric, numericLt, numericLe,
     State.setReg, bop, model]
   split <;> split <;> (try simp_all) <;> ring
 
@@ -82,7 +82,7 @@ theorem threshold_branches :
 
 theorem missing_comparison_fails :
     evalOp model none (FP.LogExp.nearZero (.const 0)) initial = none := by
-  simp [evalOp_unfold, FP.LogExp.nearZero, FP.ScalarArithmetic.minus,
+  simp [evalOp_unfold, FP.LogExp.nearZero,
     numericLt, numericLe, model]
 
 theorem comparison_default_precision :

@@ -1,37 +1,89 @@
-/- PR #13 admits the masked, piecewise LOG-EXP-EXPM1 expression only.
-Plain tl.log/libdevice.log after libdevice.exp failed its bias gate.
-LOG-MUL remains inconclusive. Neither old relation is an assumption here. -/
 import VeriTile.Triton.Float.LogAdmission
-import VeriTile.Triton.Float.ScalarArithmetic
+import VeriTile.Triton.Float.GuardedIO
 import VeriTile.Meta.StatementAudit
+
+/-!
+Replace a piecewise fp32 log-exp computation with its input.
+
+Input: one finite fp32 value `a`. Output: the fp32 register `out`.
+The original Triton computation is:
+
+```python
+near_zero = tl.abs(a) <= 0.5
+small_a = tl.where(near_zero, a, 0.0)
+other_a = tl.where(near_zero, 0.0, a)
+small = libdevice.log1p(libdevice.expm1(small_a))
+other = libdevice.log(libdevice.exp(other_a))
+out = tl.where(near_zero, small, other)
+```
+
+The replacement is simply:
+
+```python
+out = a
+```
+
+`expm1(x)` computes `exp(x) - 1`; `log1p(x)` computes `log(1 + x)`.
+Their small-argument implementations avoid losing a small `a` when `exp(a)`
+rounds to 1. Outside that branch, the original log-exp path is retained. Since
+`tl.where` evaluates both arms, each unused argument is first set to zero.
+The threshold selects the implementation; it does not restrict the input.
+
+The specification below is `[piecewiseLogExp] ≡[R] [identity]`. Its sole
+numerical assumption is `log_exp_expm1`, admitted by the PR #13 two-gates
+experiment. This file defines both fragments, binds that accepted row to
+their exact syntax, and proves the rewrite by using the atom once. The
+experiment chooses the assumption; its array shape is not a proof parameter.
+
+This is an accepted FP rewrite, not a claim of exact IEEE equality. In
+particular, the plain `log(exp(a)) = a` relation failed admission, and
+`LOG-MUL` remains inconclusive. Neither is assumed or proved here.
+-/
 
 noncomputable section
 namespace VeriTile.Triton.FP.LogExp
-open Structural Guarded ScalarArithmetic
+open Structural Guarded
 open scoped VeriTile.Spec
 
+/-- Both fragments require the same finite input register `a`. -/
 def guards : List OperandGuard := [⟨"a", .finite⟩]
 
 /-- Same comparison as `tl.abs(a) <= 0.5`; no near-zero input restriction. -/
 def nearZero (a : Op .real []) : Op .bool [] :=
   .le .real .nil
-    (.where (.lt .real .nil a (.const 0)) (minus (.const 0) a) a)
+    (.where (.lt .real .nil a (.const 0)) (.sub .real .nil (.const 0) a) a)
     (.const (1 / 2))
 
 /-- Both arms of `where` are evaluated. Mask the unused argument to zero,
 as in the measured PR #13 source, before either libdevice call. -/
 def expression (a : Op .real []) : Op .real [] :=
   let near := nearZero a
-  .where near
-    (.libdeviceLog1p (.libdeviceExpm1 (.where near a (.const 0))))
-    (.libdeviceLog (.libdeviceExp (.where near (.const 0) a)))
+  let small_a := .where near a (.const 0)
+  let other_a := .where near (.const 0) a
+  let small := .libdeviceLog1p (.libdeviceExpm1 small_a)
+  let other := .libdeviceLog (.libdeviceExp other_a)
+  .where near small other
 
-def lhsCode : List ComputeStmt := fragment (expression (ref "a"))
-def rhsCode : List ComputeStmt := fragment (ref "a")
-def lhs : GuardedFragment := ⟨guards, lhsCode⟩
-def rhs : GuardedFragment := ⟨guards, rhsCode⟩
-def entry := LogAdmission.fp32_log_exp_expm1.bind lhsCode rhsCode
+/-- Read one scalar register. `[]` is the scalar tile shape. -/
+def input : Op .real [] := .ref .real [] "a"
 
+/-- Write `out` with explicit fp32 computation. The AST's `.real` tag is the
+floating carrier; `.compute (.alg .fp32 ...)` selects the numerical precision.
+All arithmetic, comparisons and libdevice calls execute at that precision. -/
+def assignOutput (e : Op .real []) : List ComputeStmt :=
+  [.assign .real [] "out" (.compute (.alg .fp32 e))]
+
+/-- The original scalar computation, with the input condition attached. -/
+def piecewiseLogExp : GuardedFragment := ⟨guards, assignOutput (expression input)⟩
+
+/-- The replacement `out = a`, with the same input condition and precision. -/
+def identity : GuardedFragment := ⟨guards, assignOutput input⟩
+
+/-- Bind the accepted PR #13 row to the two fragments written above. The
+imported admission table supplies report data, not a hidden theorem. -/
+def entry := LogAdmission.fp32_log_exp_expm1.bind piecewiseLogExp.code identity.code
+
+/-- Check that the selected row is exactly this fp32 rule and input domain. -/
 theorem report_matches :
     LogAdmission.fp32_log_exp_expm1.report.ruleID = "LOG-EXP-EXPM1" ∧
     LogAdmission.fp32_log_exp_expm1.report.input = "fp32" ∧
@@ -40,6 +92,8 @@ theorem report_matches :
     LogAdmission.fp32_log_exp_expm1.report.output = "fp32" ∧
     LogAdmission.fp32_log_exp_expm1.guards = guards := by decide
 
+/-- The one experiment-selected assumption used in this example. Its validity
+is the premise supplied by the two-gates workflow, not proved by Lean here. -/
 structure Rules where
   log_exp_expm1 : Spec.EvidenceValidated entry.rule entry.evidence
 
@@ -47,10 +101,31 @@ def Rules.assumptions (_ : Rules) : Spec.Assumptions GuardedFragment := [entry]
 
 instance : CoeOut Rules (Spec.Assumptions GuardedFragment) := ⟨Rules.assumptions⟩
 
-theorem admitted (R : Rules) : Spec.Derivation R.assumptions [lhs] [rhs] :=
+/-- One application of the admitted atom rewrites the original into `out = a`. -/
+theorem admitted (R : Rules) : Spec.Derivation R.assumptions [piecewiseLogExp] [identity] :=
   .atom entry (by simp [Rules.assumptions])
     (LogAdmission.fp32_log_exp_expm1.admit _ _ R.log_exp_expm1)
 
+/-- Public specification: replace the piecewise computation with its input
+under the single two-gates-accepted atomic assumption. -/
+specification log_exp_expm1_equiv (R : Rules) : [piecewiseLogExp] ≡[R] [identity] :=
+  Spec.FloatingPoint.ofDerivation rfl trivial (admitted R)
+
+-- Output:
+-- FP assumptions used by log_exp_expm1_equiv:
+--   log_exp_expm1
+#print_fp_assumptions log_exp_expm1_equiv
+
+/-! Execution interpretation of the same rewrite.
+
+The specification above is complete. The remaining helper lets a larger
+kernel proof use it on a scalar value: `M` interprets FP operations as opaque
+functions, `D` interprets the input domain, and `Models` says that successful
+executions obey the selected atoms. `lt` and `le` provide the two comparisons;
+no real-number arithmetic laws or additional numerical atoms are introduced.
+-/
+
+/-- Evaluate the original piecewise computation using the FP operations in M. -/
 def value {α : Type} (M : Algebra α) (lt le : α → α → Bool) (a : α) : α :=
   let z := M.literal (some .fp32) .real 0
   let half := M.literal (some .fp32) .real (1 / 2)
@@ -77,18 +152,12 @@ theorem apply_rule {α : Type} [Inhabited α] (R : Rules)
     simp only [guards, List.mem_singleton] at hg
     subst g
     exact ⟨fun _ => a, by simp [t], ha⟩
-  have h := hM lhs rhs (admitted R) t hg hg
-  simp only [lhs, rhs, lhsCode, rhsCode, fragment, run, step, evalExpr,
-    evalComputeOp, evalOp_unfold, expression, nearZero, ref, minus,
+  have h := hM piecewiseLogExp identity (admitted R) t hg hg
+  simp only [piecewiseLogExp, identity, assignOutput, run, step, evalExpr,
+    evalComputeOp, evalOp_unfold, expression, nearZero, input,
     ComputeDType.eraseDType, numeric, numericLt, numericLe, hlt, hle,
     State.setReg_same, t] at h
   simp [State.setReg, bop, value] at h ⊢
   exact congrFun h PUnit.unit
-
-/-- FP equivalence under the single accepted atom, not bitwise IEEE equality. -/
-specification log_exp_expm1_equiv (R : Rules) : [lhs] ≡[R] [rhs] :=
-  Spec.FloatingPoint.ofDerivation rfl trivial (admitted R)
-
-#print_fp_assumptions log_exp_expm1_equiv
 
 end VeriTile.Triton.FP.LogExp
