@@ -19,6 +19,35 @@ namespace VeriTile.Triton.FP.LogExp
 open Structural Guarded
 open scoped VeriTile.Spec
 
+/-- Candidate names describe exact implementations, including rejected or
+inconclusive relations. All fragments in this catalog compute in fp32. -/
+inductive Atom where
+  | log_mul | log_mul_libdevice
+  | log_exp | log_exp_libdevice | log_exp_full_libdevice | log_exp_expm1
+  deriving DecidableEq, Repr
+
+/-- Candidate rewrites and their experiment identifiers. Every floating
+operation below uses fp32. An arrow describes a proposed rewrite; using it
+requires two-gates admission for that exact candidate. -/
+def Atom.ruleID : Atom → String
+  -- tl.log(a * b) → tl.log(a) + tl.log(b); finite a,b with a > 0 and b > 0.
+  | .log_mul => "LOG-MUL"
+  -- libdevice.log(a * b) → libdevice.log(a) + libdevice.log(b); same positive domain.
+  | .log_mul_libdevice => "LOG-MUL-LIBDEVICE"
+  -- tl.log(tl.exp(a)) → a; any finite a, including negative values.
+  | .log_exp => "LOG-EXP"
+  -- tl.log(libdevice.exp(a)) → a; any finite a. Only exp uses libdevice.
+  | .log_exp_libdevice => "LOG-EXP-LIBDEVICE"
+  -- libdevice.log(libdevice.exp(a)) → a; any finite a. Both calls use libdevice.
+  | .log_exp_full_libdevice => "LOG-EXP-FULL-LIBDEVICE"
+  -- (if |a| ≤ 0.5 then libdevice.log1p(libdevice.expm1(a))
+  --  else libdevice.log(libdevice.exp(a))) → a; any finite a.
+  -- Both branches evaluate, with the inactive branch's argument masked to zero.
+  | .log_exp_expm1 => "LOG-EXP-EXPM1"
+
+def candidates : List Atom := [.log_mul, .log_mul_libdevice, .log_exp,
+  .log_exp_libdevice, .log_exp_full_libdevice, .log_exp_expm1]
+
 /-- Both fragments require the same finite input register `a`. -/
 def guards : List OperandGuard := [⟨"a", .finite⟩]
 
@@ -53,24 +82,6 @@ def piecewiseLogExp : GuardedFragment := ⟨guards, assignOutput (expression inp
 /-- The replacement `out = a`, with the same input condition and precision. -/
 def identity : GuardedFragment := ⟨guards, assignOutput input⟩
 
-/-- Candidate names describe exact implementations, including rejected or
-inconclusive relations. All fragments in this catalog compute in fp32. -/
-inductive Atom where
-  | log_mul | log_mul_libdevice
-  | log_exp | log_exp_libdevice | log_exp_full_libdevice | log_exp_expm1
-  deriving DecidableEq, Repr
-
-def candidates : List Atom := [.log_mul, .log_mul_libdevice, .log_exp,
-  .log_exp_libdevice, .log_exp_full_libdevice, .log_exp_expm1]
-
-def Atom.ruleID : Atom → String
-  | .log_mul => "LOG-MUL"
-  | .log_mul_libdevice => "LOG-MUL-LIBDEVICE"
-  | .log_exp => "LOG-EXP"
-  | .log_exp_libdevice => "LOG-EXP-LIBDEVICE"
-  | .log_exp_full_libdevice => "LOG-EXP-FULL-LIBDEVICE"
-  | .log_exp_expm1 => "LOG-EXP-EXPM1"
-
 /-- A log-product rewrite requires positive finite operands on both sides. -/
 def productGuards : List OperandGuard :=
   [⟨"a", .finite⟩, ⟨"b", .finite⟩, ⟨"a", .positive⟩, ⟨"b", .positive⟩]
@@ -82,13 +93,7 @@ def Atom.guards : Atom → List OperandGuard
 
 def secondInput : Op .real [] := .ref .real [] "b"
 
-/-- Left-hand scalar expressions, before any experimental admission:
-* log_mul: tl.log(a * b)
-* log_mul_libdevice: libdevice.log(a * b)
-* log_exp: tl.log(tl.exp(a))
-* log_exp_libdevice: tl.log(libdevice.exp(a))
-* log_exp_full_libdevice: libdevice.log(libdevice.exp(a))
-* log_exp_expm1: the masked piecewise expression defined above.
+/-- Left-hand fp32 fragments for the candidate rewrites listed above.
 The tl.exp variant remains a candidate; its identity cannot be substituted
 for libdevice.exp when selecting a report. -/
 def Atom.lhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a with
