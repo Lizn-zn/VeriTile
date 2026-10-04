@@ -95,6 +95,12 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.exp($e:tritonExpr))         => exprRegions assigned e
   | `(tritonExpr| libdevice.exp($e:tritonExpr))  => exprRegions assigned e
   | `(tritonExpr| tl.extra.cuda.libdevice.exp($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| libdevice.log($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.log($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| libdevice.expm1($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.expm1($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| libdevice.log1p($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.log1p($e:tritonExpr)) => exprRegions assigned e
   | `(tritonExpr| tl.exp2($e:tritonExpr))        => exprRegions assigned e
   | `(tritonExpr| tl.math.exp2($e:tritonExpr))   => exprRegions assigned e
   | `(tritonExpr| tl.extra.cuda.libdevice.pow($a:tritonExpr, $b:tritonExpr)) =>

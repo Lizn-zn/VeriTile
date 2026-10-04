@@ -84,6 +84,9 @@ noncomputable def evalOpR (R : RoundingModel) :
   | .shiftRight bc a b, s => return Tile.bop (· >>> ·) bc (← evalOpR R a s) (← evalOpR R b s)
   | .exp a, s => return Tile.uop WithBot.realExp (← evalOpR R a s)
   | .libdeviceExp a, s => return Tile.uop WithBot.realExp (← evalOpR R a s)
+  | .libdeviceLog a, s => return Tile.uop WithBot.realLog (← evalOpR R a s)
+  | .libdeviceExpm1 a, s => return Tile.uop WithBot.realExpm1 (← evalOpR R a s)
+  | .libdeviceLog1p a, s => return Tile.uop WithBot.realLog1p (← evalOpR R a s)
   | .exp2 a, s => return Tile.uop WithBot.realExp2 (← evalOpR R a s)
   | .log a, s => return Tile.uop WithBot.realLog (← evalOpR R a s)
   | .log2 a, s => return Tile.uop WithBot.realLog2 (← evalOpR R a s)
@@ -302,6 +305,9 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
       simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
   | _, _, .exp a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .libdeviceExp a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .libdeviceLog a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .libdeviceExpm1 a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .libdeviceLog1p a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .exp2 a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .log a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .log2 a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]

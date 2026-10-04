@@ -205,6 +205,9 @@ def flattenOp (A : FlatAlloc) :
   | _, _, .shiftRight bc a b => .shiftRight bc (A.flattenOp a) (A.flattenOp b)
   | _, _, .exp a => .exp (A.flattenOp a)
   | _, _, .libdeviceExp a => .libdeviceExp (A.flattenOp a)
+  | _, _, .libdeviceLog a => .libdeviceLog (A.flattenOp a)
+  | _, _, .libdeviceExpm1 a => .libdeviceExpm1 (A.flattenOp a)
+  | _, _, .libdeviceLog1p a => .libdeviceLog1p (A.flattenOp a)
   | _, _, .exp2 a => .exp2 (A.flattenOp a)
   | _, _, .log a => .log (A.flattenOp a)
   | _, _, .log2 a => .log2 (A.flattenOp a)
@@ -482,6 +485,9 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .shiftRight _ a b => a.FlattenOk ∧ b.FlattenOk
   | .exp a => a.FlattenOk
   | .libdeviceExp a => a.FlattenOk
+  | .libdeviceLog a => a.FlattenOk
+  | .libdeviceExpm1 a => a.FlattenOk
+  | .libdeviceLog1p a => a.FlattenOk
   | .exp2 a => a.FlattenOk
   | .log a => a.FlattenOk
   | .log2 a => a.FlattenOk
@@ -585,6 +591,9 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .shiftRight _ a b => a.FlattenOkR ∧ b.FlattenOkR
   | .exp a => a.FlattenOkR
   | .libdeviceExp a => a.FlattenOkR
+  | .libdeviceLog a => a.FlattenOkR
+  | .libdeviceExpm1 a => a.FlattenOkR
+  | .libdeviceLog1p a => a.FlattenOkR
   | .exp2 a => a.FlattenOkR
   | .log a => a.FlattenOkR
   | .log2 a => a.FlattenOkR
@@ -839,6 +848,9 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .shiftRight _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .exp a => a.SafeAt bounds s
   | .libdeviceExp a => a.SafeAt bounds s
+  | .libdeviceLog a => a.SafeAt bounds s
+  | .libdeviceExpm1 a => a.SafeAt bounds s
+  | .libdeviceLog1p a => a.SafeAt bounds s
   | .exp2 a => a.SafeAt bounds s
   | .log a => a.SafeAt bounds s
   | .log2 a => a.SafeAt bounds s
@@ -1213,6 +1225,24 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .libdeviceExp a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .libdeviceLog a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .libdeviceExpm1 a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .libdeviceLog1p a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,

@@ -37,6 +37,12 @@ syntax "tl.arange(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.exp(" tritonExpr ")" : tritonExpr
 syntax "libdevice.exp(" tritonExpr ")" : tritonExpr
 syntax "tl.extra.cuda.libdevice.exp(" tritonExpr ")" : tritonExpr
+syntax "libdevice.log(" tritonExpr ")" : tritonExpr
+syntax "tl.extra.cuda.libdevice.log(" tritonExpr ")" : tritonExpr
+syntax "libdevice.expm1(" tritonExpr ")" : tritonExpr
+syntax "tl.extra.cuda.libdevice.expm1(" tritonExpr ")" : tritonExpr
+syntax "libdevice.log1p(" tritonExpr ")" : tritonExpr
+syntax "tl.extra.cuda.libdevice.log1p(" tritonExpr ")" : tritonExpr
 syntax "tl.exp2(" tritonExpr ")" : tritonExpr
 syntax "tl.math.exp2(" tritonExpr ")" : tritonExpr
 syntax "tl.extra.cuda.libdevice.pow(" tritonExpr ", " tritonExpr ")" : tritonExpr

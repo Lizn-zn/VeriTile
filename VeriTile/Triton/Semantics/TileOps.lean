@@ -158,6 +158,14 @@ noncomputable def WithBot.realLog : WithBot ℝ → WithBot ℝ
   | none   => none
   | some r => some (Real.log r)
 
+noncomputable def WithBot.realExpm1 : WithBot ℝ → WithBot ℝ
+  | none   => some (-1)
+  | some r => some (Real.exp r - 1)
+
+noncomputable def WithBot.realLog1p : WithBot ℝ → WithBot ℝ
+  | none   => none
+  | some r => some (Real.log (1 + r))
+
 noncomputable def WithBot.realLog2 : WithBot ℝ → WithBot ℝ
   | none   => none
   | some r => some (Real.log r / Real.log 2)

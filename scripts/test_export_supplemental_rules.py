@@ -103,6 +103,23 @@ class SupplementalExportTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('--trust-report', result.stderr)
 
+    def test_pr13_only_admits_the_distinct_piecewise_expression(self):
+        report = exporter.REPORT.parent / 'log_report'
+        _, _, rows, _, _ = exporter.load_report(report)
+        self.assertEqual([(r['rule'], r['format']) for r in rows],
+                         [('LOG-EXP-EXPM1', 'fp32')])
+        self.assertEqual(exporter.domain('LOG-EXP-EXPM1'), [('a', 'finite')])
+        text = exporter.render(report, 'LogAdmission')
+        self.assertEqual(text, (exporter.ROOT /
+            'VeriTile/Triton/Float/LogAdmission.lean').read_text())
+        for name in ('fp32_log_mul', 'fp32_log_mul_libdevice',
+                     'fp32_log_exp_libdevice', 'fp32_log_exp_full_libdevice'):
+            self.assertNotIn(f'def {name} :', text)
+
+    def test_invalid_namespace_is_rejected(self):
+        with self.assertRaisesRegex(ValueError, 'identifier'):
+            exporter.render(namespace='LogAdmission\naxiom injected : False')
+
 
 if __name__ == '__main__':
     unittest.main()

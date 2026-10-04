@@ -12,7 +12,8 @@ class LogSumExpFPTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ['lake', 'build', 'bench.examples.support.StableLogSumExpContract',
-             'bench.examples.StableLogSumExpCorrect', 'VeriTile.Meta.StatementAudit'],
+             'bench.examples.StableLogSumExpCorrect', 'VeriTile.Meta.StatementAudit',
+             'VeriTile.Triton.Float.LogExp', 'VeriTile.Triton.Float.LogExpCounterexample'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
             raise AssertionError(result.stdout + result.stderr)
@@ -62,6 +63,17 @@ run_cmd do
                      '  unresolved FP proof: h.1 (atomic assumptions unavailable)\n'
                      'FP assumptions used by exp_sub_holds:\n  none\n')
         self.assertEqual(output[output.index('FP assumptions used by'):], expected)
+
+    def test_pr13_branching_precision_and_exact_counterexamples(self):
+        self.check_lean((ROOT / 'bench/tests/FPLogExp.lean').read_text())
+
+    def test_pr13_prints_only_the_new_expression_atom(self):
+        output = self.check_lean('''
+import VeriTile.Triton.Float.LogExp
+#print_fp_assumptions VeriTile.Triton.FP.LogExp.log_exp_expm1_equiv
+''')
+        self.assertEqual(output, 'FP assumptions used by log_exp_expm1_equiv:\n'
+                                 '  log_exp_expm1\n')
 
 
 if __name__ == '__main__':

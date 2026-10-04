@@ -8,6 +8,7 @@ import argparse
 from collections import Counter
 from copy import deepcopy
 from pathlib import Path
+import re
 
 if __package__:
     from . import check_numerics_supplement as experiment
@@ -96,7 +97,9 @@ def load_report(directory):
     return settings, profile, accepted, hashes, snapshot
 
 
-def render(directory=REPORT):
+def render(directory=REPORT, namespace="SupplementalAdmission"):
+    if re.fullmatch(r"[A-Za-z][A-Za-z0-9_]*", namespace) is None:
+        raise ValueError("namespace must be a single Lean identifier")
     settings, profile, rows, hashes, snapshot = load_report(directory)
     original_count = len(load_original_report(ORIGINAL_REPORT)[2])
     canonical = experiment.original.registry.canonical_json
@@ -112,7 +115,7 @@ def render(directory=REPORT):
              "   This file contains data, not numerical validity proofs or IEEE axioms. -/",
              "import VeriTile.Triton.Float.GuardedRules",
              "import VeriTile.Triton.Float.ReportedAdmission", "",
-             "namespace VeriTile.Triton.FP.SupplementalAdmission", "",
+             f"namespace VeriTile.Triton.FP.{namespace}", "",
              f"def snapshot : String := {lean_string(snapshot)}",
              f"def reportMetadata : Lean.Json := (Lean.Json.parse {lean_string(encoded)}).toOption.getD .null", ""]
     formats = {f["name"]: f for f in profile["formats"]}
@@ -137,9 +140,10 @@ def render(directory=REPORT):
         lines += ["  }", f"  guards := [{guards}]", ""]
     lines += ["def all : List ReportedScalarRule := [",
               "  " + ",\n  ".join(declaration_name(r) for r in rows) + "]", "",
-              f"theorem accepted_count : all.length = {len(rows)} := rfl",
-              f"theorem total_accepted_count : ReportedAdmission.all.length + all.length = {original_count + len(rows)} := rfl", "",
-              "end VeriTile.Triton.FP.SupplementalAdmission", ""]
+              f"theorem accepted_count : all.length = {len(rows)} := rfl"]
+    if namespace == "SupplementalAdmission":
+        lines += [f"theorem total_accepted_count : ReportedAdmission.all.length + all.length = {original_count + len(rows)} := rfl"]
+    lines += ["", f"end VeriTile.Triton.FP.{namespace}", ""]
     return "\n".join(lines)
 
 
@@ -147,11 +151,12 @@ def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--report", type=Path, default=REPORT)
     parser.add_argument("--output", type=Path, default=OUTPUT)
+    parser.add_argument("--namespace", default="SupplementalAdmission")
     parser.add_argument("--trust-report", action="store_true", required=True)
     parser.add_argument("--check", action="store_true")
     args = parser.parse_args()
     try:
-        content = render(args.report)
+        content = render(args.report, args.namespace)
         if args.check:
             if args.output.read_text() != content:
                 raise ValueError("generated supplemental table is stale")

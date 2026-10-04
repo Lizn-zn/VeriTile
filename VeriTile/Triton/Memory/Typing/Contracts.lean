@@ -134,6 +134,9 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .shiftRight _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .exp a => a.RespectsRegionTyping Γ
   | .libdeviceExp a => a.RespectsRegionTyping Γ
+  | .libdeviceLog a => a.RespectsRegionTyping Γ
+  | .libdeviceExpm1 a => a.RespectsRegionTyping Γ
+  | .libdeviceLog1p a => a.RespectsRegionTyping Γ
   | .exp2 a => a.RespectsRegionTyping Γ
   | .log a => a.RespectsRegionTyping Γ
   | .log2 a => a.RespectsRegionTyping Γ

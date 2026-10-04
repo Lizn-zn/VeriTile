@@ -978,6 +978,27 @@ partial def expandExpr (env : Env) (stx : TSyntax `tritonExpr) : MacroM EOut := 
       let term ← `(Op.libdeviceExp $eTerm)
       let (ct, cp) ← floatingComputeArith? "libdevice.exp" term e' e'
       pure ⟨term, .real, e'.shape, ct, cp⟩
+  | `(tritonExpr| libdevice.log($e:tritonExpr))
+  | `(tritonExpr| tl.extra.cuda.libdevice.log($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "libdevice.log" e'
+      let term ← `(Op.libdeviceLog $eTerm)
+      let (ct, cp) ← floatingComputeArith? "libdevice.log" term e' e'
+      pure ⟨term, .real, e'.shape, ct, cp⟩
+  | `(tritonExpr| libdevice.expm1($e:tritonExpr))
+  | `(tritonExpr| tl.extra.cuda.libdevice.expm1($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "libdevice.expm1" e'
+      let term ← `(Op.libdeviceExpm1 $eTerm)
+      let (ct, cp) ← floatingComputeArith? "libdevice.expm1" term e' e'
+      pure ⟨term, .real, e'.shape, ct, cp⟩
+  | `(tritonExpr| libdevice.log1p($e:tritonExpr))
+  | `(tritonExpr| tl.extra.cuda.libdevice.log1p($e:tritonExpr)) => do
+      let e' ← expandExpr env e
+      let eTerm ← realMathTerm "libdevice.log1p" e'
+      let term ← `(Op.libdeviceLog1p $eTerm)
+      let (ct, cp) ← floatingComputeArith? "libdevice.log1p" term e' e'
+      pure ⟨term, .real, e'.shape, ct, cp⟩
   | `(tritonExpr| tl.exp2($e:tritonExpr)) => do
       let e' ← expandExpr env e
       let eTerm ← realMathTerm "tl.exp2" e'

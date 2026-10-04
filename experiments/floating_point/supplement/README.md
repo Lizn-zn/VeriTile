@@ -89,6 +89,35 @@ LOG-MUL 仍未准入，原 StableLogSumExp 实现的 log-exp 前提也未满足�
 完整当前结果见 [log_report/summary.md](./log_report/summary.md)，
 数值审核见 [log_report/warning_audit.json](./log_report/warning_audit.json)。
 
+PR #13 的 Lean 接入位于
+[`LogAdmission.lean`](../../../VeriTile/Triton/Float/LogAdmission.lean) 和
+[`LogExp.lean`](../../../VeriTile/Triton/Float/LogExp.lean)。独立表只包含
+`fp32_log_exp_expm1`；保留 fp32 精度、有限输入定义域、`abs(a) <= 0.5`
+及未选分支传零的源表达式。`libdevice.log`、`libdevice.expm1`、
+`libdevice.log1p` 都是独立的 FP 运算符，不会和 `tl.log` 混用。
+`log_exp_expm1_equiv` 使用原有 `≡[R]` 接口；打印的假设只有
+`log_exp_expm1`。`apply_rule` 从成功执行的标量片段导出该规则，比较运算
+也保留精度；未提供比较解释时，执行失败，不能据此推出数值恒等式。
+
+[`LogExpCounterexample.lean`](../../../VeriTile/Triton/Float/LogExpCounterexample.lean)
+把反例范围分开写清：给定报告中的 `logExp(2^-25)=0`，可否定普通
+log-exp 的逐点精确恒等式；再给定 `logExp(0)=0`，单元素 LSE 的 direct
+和 stable 公式在 bf16 输出后分别为 `0` 与 `2^-25`，仍不相等。
+Lean 检查位模式、减法、加法及转换；libdevice 的两次复合求值显式作为
+实验前提。边界报告测的是 `libdevice.log(libdevice.exp(a))`，没有直接
+测完整 LSE kernel，也没有将 `tl.log` 与 `libdevice.log` 全局等同。
+这些反例否定精确恒等式，不否定原实数正确性，也不单独否定整个 LSE
+在某个分布下的 two-gates 准入。新分段表达式自身也不是精确恒等式：
+报告中的 `a=-0.4999999701976776` 得到 `-0.5`，但整体统计满足准入条件。
+
+按已提交报告重新生成新表（无需重放 GPU 实验）：
+
+```bash
+python3 scripts/export_supplemental_rules.py --trust-report \
+  --report experiments/floating_point/supplement/log_report \
+  --namespace LogAdmission --output VeriTile/Triton/Float/LogAdmission.lean
+```
+
 在仓库根目录、安装下述依赖后执行：
 
 ```bash

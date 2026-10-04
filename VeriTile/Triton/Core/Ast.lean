@@ -123,6 +123,9 @@ inductive Op : TileDType → TileShape → Type where
   /-- CUDA libdevice exp. Real semantics is exp, but FP interpretation must
   retain its identity separately from Triton's approximate `tl.exp`. -/
   | libdeviceExp : Op .real shape → Op .real shape
+  | libdeviceLog : Op .real shape → Op .real shape
+  | libdeviceExpm1 : Op .real shape → Op .real shape
+  | libdeviceLog1p : Op .real shape → Op .real shape
   | exp2      : Op .real shape → Op .real shape
   | log       : Op .real shape → Op .real shape
   | log2      : Op .real shape → Op .real shape

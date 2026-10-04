@@ -45,7 +45,8 @@ inductive Binary where
   deriving DecidableEq, Repr
 
 inductive Unary where
-  | exp | libdeviceExp | exp2 | log | log2 | sigmoid | sqrt | rsqrt | tanh
+  | exp | libdeviceExp | libdeviceLog | libdeviceExpm1 | libdeviceLog1p
+  | exp2 | log | log2 | sigmoid | sqrt | rsqrt | tanh
   | sin | cos | tan | atan | cosh | sinh | erf
   deriving DecidableEq, Repr
 
@@ -57,6 +58,10 @@ structure Algebra (α : Type) where
   negInf : α
   binary : Option ComputeDType → FloatDType → Binary → α → α → α
   unary : Option ComputeDType → Unary → α → α
+  /-- Floating comparisons stay opaque and retain precision/dtype. Missing
+  support still fails; no order on the floating carrier is assumed. -/
+  compareLt : Option ComputeDType → FloatDType → Option (α → α → Bool) := fun _ _ => none
+  compareLe : Option ComputeDType → FloatDType → Option (α → α → Bool) := fun _ _ => none
   cast : Option ComputeDType → FloatDType → FloatDType → α → α
   fromNat : Option ComputeDType → Nat → α
   fromInt : Option ComputeDType → Int → α
@@ -254,6 +259,32 @@ def natLe {α : Type} : {dtype : TileDType} → ComparableDType dtype →
   | _, .nat => some (fun a b => decide (a ≤ b))
   | _, _ => none
 
+def numericLt {α : Type} (M : Algebra α) (p : Option ComputeDType) :
+    {dtype : TileDType} → ComparableDType dtype → Option (Value α dtype → Value α dtype → Bool)
+  | _, .real => M.compareLt p .real
+  | _, .fp32 => M.compareLt p .fp32
+  | _, .fp16 => M.compareLt p .fp16
+  | _, .bf16 => M.compareLt p .bf16
+  | _, .f8e4 => M.compareLt p .f8e4
+  | _, .f8e5 => M.compareLt p .f8e5
+  | _, h => natLt h
+
+def numericLe {α : Type} (M : Algebra α) (p : Option ComputeDType) :
+    {dtype : TileDType} → ComparableDType dtype → Option (Value α dtype → Value α dtype → Bool)
+  | _, .real => M.compareLe p .real
+  | _, .fp32 => M.compareLe p .fp32
+  | _, .fp16 => M.compareLe p .fp16
+  | _, .bf16 => M.compareLe p .bf16
+  | _, .f8e4 => M.compareLe p .f8e4
+  | _, .f8e5 => M.compareLe p .f8e5
+  | _, h => natLe h
+
+@[simp] theorem numericLt_nat {α : Type} (M : Algebra α) (p : Option ComputeDType) :
+    numericLt M p .nat = natLt (α := α) .nat := rfl
+
+@[simp] theorem numericLe_nat {α : Type} (M : Algebra α) (p : Option ComputeDType) :
+    numericLe M p .nat = natLe (α := α) .nat := rfl
+
 set_option maxHeartbeats 1600000 in
 /-- Evaluate the supported expression fragment without any floating laws.
 The final failure branch is deliberate: never fall back to the Real evaluator. -/
@@ -287,6 +318,9 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .div d bc a b, s => return bop (numeric M p .div d) bc (← evalOp M p a s) (← evalOp M p b s)
   | .exp a, s => return (M.unary p .exp) ∘ (← evalOp M p a s)
   | .libdeviceExp a, s => return (M.unary p .libdeviceExp) ∘ (← evalOp M p a s)
+  | .libdeviceLog a, s => return (M.unary p .libdeviceLog) ∘ (← evalOp M p a s)
+  | .libdeviceExpm1 a, s => return (M.unary p .libdeviceExpm1) ∘ (← evalOp M p a s)
+  | .libdeviceLog1p a, s => return (M.unary p .libdeviceLog1p) ∘ (← evalOp M p a s)
   | .exp2 a, s => return (M.unary p .exp2) ∘ (← evalOp M p a s)
   | .log a, s => return (M.unary p .log) ∘ (← evalOp M p a s)
   | .log2 a, s => return (M.unary p .log2) ∘ (← evalOp M p a s)
@@ -315,10 +349,10 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
       let v ← evalOp M p a s
       return fun i => !(v i)
   | .lt h bc a b, s => do
-      let f ← natLt h
+      let f ← numericLt M p h
       return bop f bc (← evalOp M p a s) (← evalOp M p b s)
   | .le h bc a b, s => do
-      let f ← natLe h
+      let f ← numericLe M p h
       return bop f bc (← evalOp M p a s) (← evalOp M p b s)
   | .ptrBase r, _ => some (fun _ => (Region.cast r, 0))
   | .ptrAdd bc a b, s => return bop (fun (a : RegionName × Nat) (b : Nat) => (a.1, a.2 + b)) bc (← evalOp M p a s) (← evalOp M p b s)

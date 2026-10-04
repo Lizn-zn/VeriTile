@@ -370,6 +370,9 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .shiftRight _ a b => a.check ctx *> b.check ctx
   | .exp a => a.check ctx
   | .libdeviceExp a => a.check ctx
+  | .libdeviceLog a => a.check ctx
+  | .libdeviceExpm1 a => a.check ctx
+  | .libdeviceLog1p a => a.check ctx
   | .exp2 a => a.check ctx
   | .log a => a.check ctx
   | .log2 a => a.check ctx
