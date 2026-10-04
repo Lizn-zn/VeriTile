@@ -8,6 +8,7 @@ ROOT = Path(__file__).resolve().parents[1]
 FAMILIES = (
     "VectorAdd", "FlatVectorAdd", "FloatDTypeAdd", "TritonBenchVectorAddition",
     "AdamUpdateGridLaunch", "HyperConnectionsDepth", "HyperConnectionsWidth",
+    "RowWiseSum",
 )
 
 
@@ -33,6 +34,11 @@ class EquivalenceTacticTests(unittest.TestCase):
 
     def test_composition_metadata_precision_and_admission_boundaries(self):
         result = self.lean((ROOT / "bench/tests/EquivTactics.lean").read_text())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("warning:", result.stdout)
+
+    def test_semantic_decomposition_and_reduction_boundaries(self):
+        result = self.lean((ROOT / "bench/tests/ReductionTactics.lean").read_text())
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("warning:", result.stdout)
 

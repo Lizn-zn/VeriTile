@@ -32,7 +32,7 @@ required input/intermediate domains remain part of the FP statements.
 | [HyperConnectionsDepth](HyperConnectionsDepth/) | Depth connection, `S=T=D=1`, zero normalization iterations; commute the final addition. |
 | [HyperConnectionsWidth](HyperConnectionsWidth/) | Width connection, the same scalar slice; commute the selected multiplications. |
 | [RowWiseMax](RowWiseMax/) | Inline the maximum computation; structural FP equivalence without numerical assumptions. |
-| [RowWiseSum](RowWiseSum/) | Reverse reduction lanes using admitted addition commutation and association. |
+| [RowWiseSum](RowWiseSum/) | Decompose observable outputs and prove reversed reduction lanes using admitted addition commutation and association. |
 | [FusedSiLU](FusedSiLU/) | Fuse the pipeline; structural FP equivalence without numerical assumptions. |
 | [FusedSwiglu](FusedSwiglu/) | Fuse the masked pipeline while retaining casts; structural FP equivalence without numerical assumptions. |
 | [SoftmaxReciprocal](SoftmaxReciprocal/) | Replace per-lane division with reciprocal multiplication. |
@@ -57,6 +57,9 @@ program bodies using `equiv_decompose` followed by `all_goals fp_prove`.
 The first exposes structural differences; the second composes the registered
 atomic lemmas. See [the tactic guide](../../documents/EquivalenceTactics.md)
 for inspecting intermediate goals, supplying hints and handling failed searches.
+RowWiseSum uses the same two tactics with the FP IO adapter: certified execution
+summaries expose the output relation, then a generic permutation lemma reduces
+it to scalar addition assumptions. Its row length and stride remain symbolic.
 The other completed FP examples connect their transformations
 to execution or observable outputs. A proof of one stated slice or observation
 does not certify a larger kernel or a different precision/intrinsic variant.
