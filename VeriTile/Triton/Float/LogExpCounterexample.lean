@@ -1,5 +1,6 @@
 /- Exact-value counterexamples, separate from statistical FP equivalence.
-PR #13's boundaries.json records log(exp(a)) = 0 at a = 2^-25 and at a = 0.
+The boundary probe in experiments/floating_point/supplement/log_report/boundaries.json
+records log(exp(a)) = 0 at a = 2^-25 and at a = 0.
 Transcendental evaluations are explicit premises: this module does not
 implement libdevice or turn a GPU observation into a Lean axiom. All remaining
 arithmetic and casts are kernel-checked in the concrete software profile. -/

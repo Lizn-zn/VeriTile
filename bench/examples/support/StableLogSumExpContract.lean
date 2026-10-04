@@ -1,6 +1,6 @@
 /- Original logsumexp programs connected through scalar-derived sum recovery.
 Libdevice exp-sub is admitted; the two log obligations remain pending.
-PR #13 admits LOG-EXP-EXPM1 for a different, masked piecewise expression.
+The admitted LOG-EXP-EXPM1 rule covers a different, masked piecewise expression.
 It cannot discharge this source's plain LOG-EXP obligation; LOG-MUL is still
 inconclusive. See FP.LogExpCounterexample for the tiny-input exact-identity
 counterexample and its explicit transcendental-evaluation premises. The

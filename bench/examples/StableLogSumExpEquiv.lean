@@ -1,12 +1,12 @@
 /- Legacy equivalence under REAL intermediate arithmetic and final-store
 rounding (`execR`). This theorem remains valid in that semantics; it is not
-a two-gates FP-equivalence proof. PR #13's accepted piecewise LOG-EXP-EXPM1
+a two-gates FP-equivalence proof. The accepted piecewise LOG-EXP-EXPM1 rule
 does not supply the original kernels' plain LOG-EXP or LOG-MUL obligations.
 See `FP.LogExpCounterexample.singleton_lse_not_exact` for the conditional
 tiny-input counterexample to exact equality when intermediate arithmetic is
 fp32, including the final bf16 cast. -/
-/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
-with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+/- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
+has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
 That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 import VeriTile.Triton
 import VeriTile.Examples.Common

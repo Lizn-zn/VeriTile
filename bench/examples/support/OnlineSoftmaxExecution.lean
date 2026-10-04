@@ -1,5 +1,5 @@
-/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
-with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+/- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
+has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
 That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 /- Opaque FP execution of the original online softmax recurrence. The source
 has no store: the result lives in m/l, and all memory is preserved. Equating

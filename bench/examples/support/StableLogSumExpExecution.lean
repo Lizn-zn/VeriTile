@@ -1,5 +1,5 @@
-/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
-with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+/- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
+has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
 That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 /- Original direct and stable logsumexp execution under opaque FP operations.
 The source's scalar output address and bf16 conversion remain explicit. -/

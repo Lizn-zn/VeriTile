@@ -1,5 +1,5 @@
 /- Stable versus naive softmax under admitted scalar FP assumptions.
-Both implementations use libdevice.exp: PR #12's tl.exp exp-sub relation
+Both implementations use libdevice.exp: the measured tl.exp exp-sub relation
 failed the configured bias gate (0.1608954387 ULP > 0.05). -/
 import bench.examples.support.SoftmaxStableContract
 import VeriTile.Triton.Float.Exponential

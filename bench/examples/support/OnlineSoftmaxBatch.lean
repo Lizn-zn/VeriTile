@@ -1,5 +1,5 @@
-/- Use libdevice.exp for exp-sub rewrites: PR #12 measured fp32 tl.exp
-with B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+/- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
+has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
 That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 /- The original OnlineSoftmax batch reference stores real-typed values.
 This is an independent source copy; no bf16 cast or online store is added. -/

@@ -1,6 +1,6 @@
 /- Softmax shift derived through scalar arithmetic and an explicit sum tree.
 Exp denotes libdevice.exp. Float/Exponential obtains its scalar EXP-SUB law
-from the admitted report; PR #12's tl.exp version failed the bias budget. -/
+from the admitted report; the measured tl.exp version failed the bias budget. -/
 import VeriTile.Triton.Float.WelfordConditions
 
 namespace VeriTile.Triton.FP.SoftmaxShift

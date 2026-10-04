@@ -1,5 +1,6 @@
-/- Use the shared softmax libdevice.exp implementation. PR #12 rejected
-fp32 tl.exp exp-sub under the configured probe (B = 0.1608954387 > 0.05).
+/- Use the shared softmax libdevice.exp implementation. The measured
+fp32 tl.exp exp-sub relation failed admission under the configured probe
+(B = 0.1608954387 > 0.05).
 The reciprocal rewrite itself treats exp opaquely, at its stated precision. -/
 import VeriTile.Triton
 import VeriTile.Examples.Common

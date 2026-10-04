@@ -1,5 +1,5 @@
 /- Bind the admitted fp32 libdevice EXP-SUB relation to its exact scalar
-syntax. PR #12's tl.exp EXP-SUB-INTRINSIC fails the configured bias gate
+syntax. The measured tl.exp EXP-SUB-INTRINSIC relation fails the configured bias gate
 (B = 0.1608954387 ULP > 0.05); no assumption for that symbol is supplied. -/
 import VeriTile.Triton.Float.SoftmaxShift
 

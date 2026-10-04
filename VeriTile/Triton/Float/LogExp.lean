@@ -14,8 +14,9 @@ path preserves small inputs that plain `exp` can round to 1. Both unused
 branch arguments are masked to zero because `tl.where` evaluates both arms.
 The input condition is finite fp32 values; the threshold is not a domain filter.
 
-PR #13 admitted this piecewise expression. Plain log-exp failed admission and
-LOG-MUL remains inconclusive; this example does not supply those LSE premises.
+The admitted LOG-EXP-EXPM1 rule covers this piecewise expression. Plain log-exp
+failed admission and LOG-MUL remains inconclusive; this example does not supply
+those LSE premises.
 `tl.exp` did not satisfy the gates; the source below uses `libdevice.exp`.
 The symbolic block size is independent of the shape used to select the atom.
 -/
@@ -27,7 +28,7 @@ open scoped VeriTile.Spec
 
 set_option maxHeartbeats 1600000
 
-/-- Original PR #13 computation, applied elementwise to a symbolic tile. -/
+/-- Piecewise log-exp computation, applied elementwise to a symbolic tile. -/
 def originalKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
@@ -61,7 +62,7 @@ def nearZero (a : Op .real []) : Op .bool [] :=
     (.const (1 / 2))
 
 /-- Both arms of `where` are evaluated. Mask the unused argument to zero,
-as in the measured PR #13 source, before either libdevice call. -/
+as in the measured piecewise expression, before either libdevice call. -/
 def expression (a : Op .real []) : Op .real [] :=
   let near := nearZero a
   let small_a := .where near a (.const 0)
@@ -85,7 +86,7 @@ def piecewiseLogExp : GuardedFragment := ⟨guards, assignOutput (expression inp
 /-- The replacement `out = a`, with the same input condition and precision. -/
 def identity : GuardedFragment := ⟨guards, assignOutput input⟩
 
-/-- Bind the accepted PR #13 row to the two fragments written above. The
+/-- Bind the accepted LOG-EXP-EXPM1 row to the two fragments written above. The
 imported admission table supplies report data, not a hidden theorem. -/
 def entry := LogAdmission.fp32_log_exp_expm1.bind piecewiseLogExp.code identity.code
 

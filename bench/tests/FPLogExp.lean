@@ -1,4 +1,4 @@
-/- PR #13 implementation identity, branching and exact-counterexample checks.
+/- Piecewise log-exp implementation, branching and exact-counterexample checks.
 The rational interpreter below is a test fixture, not numerical evidence. -/
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.LogExp

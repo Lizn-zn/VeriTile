@@ -1,5 +1,6 @@
-/- Use the shared softmax libdevice.exp implementation. PR #12 rejected
-fp32 tl.exp exp-sub under the configured probe (B = 0.1608954387 > 0.05).
+/- Use the shared softmax libdevice.exp implementation. The measured
+fp32 tl.exp exp-sub relation failed admission under the configured probe
+(B = 0.1608954387 > 0.05).
 The reciprocal rewrite itself treats exp opaquely, at its stated precision. -/
 /- Real correctness of stable softmax with per-lane division and with a
 shared reciprocal. The original bf16 output cast is retained in both sources. -/

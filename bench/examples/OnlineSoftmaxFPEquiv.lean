@@ -1,6 +1,6 @@
 /- Batch softmax output versus the normalized value from the original online
-m/l registers. Both use libdevice.exp: PR #12 rejected tl.exp exp-sub under
-the configured bias gate (0.1608954387 ULP > 0.05). -/
+m/l registers. Both use libdevice.exp: the measured tl.exp exp-sub relation
+failed the configured bias gate (0.1608954387 ULP > 0.05). -/
 import bench.examples.support.OnlineSoftmaxContract
 import VeriTile.Meta.StatementAudit
 
