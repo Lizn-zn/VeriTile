@@ -81,7 +81,7 @@ example (B : Nat) (hB : 0 < B) (R : FloatDTypeSoftmaxFPEquiv.Rules) :
 
 -- An input-domain change is a public signature change, not a structural rewrite.
 example (B : Nat) :
-    (Spec.ProgramSyntax.signature (SoftmaxReciprocalFPEquiv.originalIO B)).2.guards.length = 3 := rfl
+    (Spec.ProgramSyntax.signature (SoftmaxReciprocalFPEquiv.originalIO B)).2.1.guards.length = 3 := rfl
 
 -- Precision boundaries of the actual DSL output are retained in the AST.
 private def precisionOf : ComputeStmt → Option ComputeDType

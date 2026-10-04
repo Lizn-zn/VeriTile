@@ -3,6 +3,7 @@ Numerical premises apply only to admitted scalar fragments in their declared
 operand domain. Program signatures retain the input contract and IO windows. -/
 import VeriTile.Triton.Float.GuardedRules
 import VeriTile.Triton.Float.StructuralIO
+import VeriTile.Triton.Float.ExecutionProfile
 
 namespace VeriTile.Triton.FP.Guarded
 open Structural
@@ -43,12 +44,21 @@ def Precondition.Holds {α : Type} [Inhabited α] (P : Precondition)
 structure IO where
   io : KernelIO₁
   domain : Precondition
+  defaultPrecision : Option ComputeDType := none
+
+/-- Keep explicit precision tags; optionally supply the precision of ordinary
+Triton expressions, including comparisons and `where` temporaries. -/
+def IO.algebra {α : Type} (io : IO) (M : Algebra α) : Algebra α :=
+  match io.defaultPrecision with
+  | none => M
+  | some p => M.withDefaultPrecision p
 
 def Equivalent (R : Spec.Assumptions GuardedFragment) (lhs rhs : IO) : Prop :=
   IO₁PrivateScratch lhs.io ∧ IO₁PrivateScratch rhs.io ∧
   ∀ (α : Type) [Inhabited α] (M : Algebra α) (D : Domain α), Models R M D →
-    ∀ s, lhs.domain.Holds M D s →
-      ∃ a b, Structural.exec M lhs.io.kernel s = some a ∧ Structural.exec M rhs.io.kernel s = some b ∧
+    ∀ s, lhs.domain.Holds (lhs.algebra M) D s →
+      ∃ a b, Structural.exec (lhs.algebra M) lhs.io.kernel s = some a ∧
+        Structural.exec (rhs.algebra M) rhs.io.kernel s = some b ∧
         (∀ i : Fin lhs.io.Bout,
           a.mem lhs.io.out (lhs.io.write (s.pids 0) + i.val) =
             b.mem rhs.io.out (rhs.io.write (s.pids 0) + i.val)) ∧
@@ -56,8 +66,8 @@ def Equivalent (R : Spec.Assumptions GuardedFragment) (lhs rhs : IO) : Prop :=
 
 instance : Spec.ProgramSyntax IO where
   Statement := GuardedFragment
-  Signature := IO₁Signature × Precondition
-  signature p := (io₁Signature p.io, p.domain)
+  Signature := IO₁Signature × Precondition × Option ComputeDType
+  signature p := (io₁Signature p.io, p.domain, p.defaultPrecision)
   body p := [⟨[], p.io.kernel.surfaceBody⟩]
   structural := some (fun _ _ => False)
   numerical := Equivalent
