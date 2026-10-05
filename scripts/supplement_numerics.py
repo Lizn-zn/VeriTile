@@ -19,7 +19,9 @@ KERNELS = DIRECTORY / "kernels.py"
 NumericEvent = original.NumericEvent
 COUNT_RULES = {"COUNT-ZERO", "COUNT-SUCCESSOR"}
 PAIRED_INPUTS = {"LOG-MUL-LIBDEVICE": "LOG-MUL", "LOG-EXP-FULL-LIBDEVICE": "LOG-EXP-LIBDEVICE",
-                 "LOG-EXP-EXPM1": "LOG-EXP-LIBDEVICE"}
+                 "LOG-EXP-EXPM1": "LOG-EXP-LIBDEVICE", "LOG-MUL-LOG1P": "LOG-MUL",
+                 "LOG-MUL-GUARDED": "LOG-MUL"}
+FP32_ONLY_RULES = {"EXP-SUB-INTRINSIC", "LOG-EXP-EXPM1", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}
 
 
 def seed_for(profile, fmt, rule):
@@ -89,7 +91,7 @@ def unsupported(rule, fmt):
         return None
     if fmt["input"] == "int32":
         return "int32 inputs apply only to count conversion"
-    if rule in {"EXP-SUB-INTRINSIC", "LOG-EXP-EXPM1"} and (fmt["input"], fmt["compute"], fmt["output"]) != ("fp32", "fp32", "fp32"):
+    if rule in FP32_ONLY_RULES and (fmt["input"], fmt["compute"], fmt["output"]) != ("fp32", "fp32", "fp32"):
         return "this experiment covers only fp32 inputs, arithmetic and outputs"
     if fmt["compute"] == "fp64" and rule != "DIV-MUL-RCP":
         return "fp64-work supplement covers only ordinary division with fp32 output"
@@ -125,6 +127,21 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
             "inside": "fp32 log1p(fp32 expm1(a))",
             "outside": "fp32 log(fp32 exp(a))",
             "inactive_arguments": "zero before evaluating unused tl.where arms",
+        }
+    if rule == "LOG-MUL-LOG1P":
+        config["numerics"]["intrinsics"].update(log1p="libdevice.log1p", fma="explicit fp32 tl.fma, round once")
+        config["relation"]["branch"] = {
+            "condition": "0.5 <= fp32(a*b) <= 1.5", "lower": 0.5, "upper": 1.5,
+            "side": "reference", "inside": "libdevice.log1p(tl.fma(a,b,-1))",
+            "outside": "libdevice.log(fp32(a*b))", "inactive_arguments": "one before evaluating unused paths",
+        }
+    if rule == "LOG-MUL-GUARDED":
+        config["relation"]["branch"] = {
+            "condition": "0.5 <= fp32(a*b) <= 2", "lower": 0.5, "upper": 2.0,
+            "side": "candidate", "inside": "libdevice.log(fp32(a*b))",
+            "outside": "fp32(libdevice.log(a)+libdevice.log(b))",
+            "inactive_arguments": "one before evaluating unused paths",
+            "scope": "conditional decomposition; does not admit unconditional log-product splitting",
         }
     if fmt["compute"] == "fp64":
         config["numerics"]["intrinsics"]["oracle"] = (
@@ -173,7 +190,7 @@ def oracle(torch, rule, inputs):
         return a / b
     if rule == "MUL-RCP-CANCEL":
         return torch.ones_like(a)
-    if rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE"}:
+    if rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}:
         return torch.log(a * b)
     if rule in {"EXP-SUB", "EXP-SUB-INTRINSIC"}:
         return torch.exp(a - b)

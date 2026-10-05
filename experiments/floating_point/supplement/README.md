@@ -32,7 +32,7 @@ U gate 的幅度阈值为 10/100：`U <= 10` 为 PASS，`10 < U <= 100` 为 WARN
 
 ## 直接运行
 
-### log 实现及 expm1/log1p 的配对实验
+### log 实现、expm1/log1p 与条件式乘积分解
 
 [log_config.py](./log_config.py) 保留 `4096×4096`、独立 `Normal(1,1)`、
 fp32 输入/计算/输出及现有 two-gates 参数，只运行：
@@ -51,7 +51,13 @@ PR #12 的 `tl.exp` exp-sub 不满足当前偏差条件，因此相关例子使�
 它保留所有有限输入，并复用 LOG-EXP-LIBDEVICE 的输入种子；不是只测试近零样本。
 `tl.where` 两侧均会求值，因此未选路径的输入先置零，避免无用分支溢出或产生 `log1p(-1)`。
 这是独立的新表达式，结果不能作为原 LOG-EXP 的准入证据。
-本配置已在 H200 完成，DLC 任务 `dlcyu7h8qlz4yfn1`，任务名
+完整配置 [log_product_config.py](./log_product_config.py) 同时运行七项，其中新增两项：
+
+- `LOG-MUL-LOG1P`：参考侧在 `0.5 <= fp32(a*b) <= 1.5` 时用 `log1p(fma(a,b,-1))`；候选仍是两个 log 相加。
+- `LOG-MUL-GUARDED`：参考侧保留 `log(fp32(a*b))`；候选在 `0.5 <= fp32(a*b) <= 2` 时也保留该表达式，范围外才拆为两个 log 相加。
+
+两项均只使用 FP32，沿用同一正输入定义域、采样和 gate；分支范围在运行前固定。
+本配置已在 H200 完成，DLC 任务 `dlc1hczsayjv5apb`，任务名
 `traces_kernel_equivalence_testing`；独立 CPU 重放与 GPU 环境的表格完全一致。
 有效输入上出现非有限输出仍算失败，不会被过滤。
 
@@ -62,6 +68,8 @@ PR #12 的 `tl.exp` exp-sub 不满足当前偏差条件，因此相关例子使�
 | LOG-EXP-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | 否：bias FAIL |
 | LOG-EXP-FULL-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | 否：bias FAIL |
 | LOG-EXP-EXPM1 / fp32 | 4096 | 25775.46400 | 0.0494428110 | 0 | 是 |
+| LOG-MUL-LOG1P / fp32 | 4096 | 2.061440595 | 0.1240315873 | 6.685560237 | 否：bias INCONCLUSIVE |
+| LOG-MUL-GUARDED / fp32 | 4096 | 296.6221498 | 0.0006248690 | 6.685560237 | 是：条件式 |
 
 换成 `libdevice.log` 没有改变结果。在本次 Triton 3.7.1 / CUDA 13.0、sm_90
 和记录的编译设置下，两种 log 的 PTX 都包含 `__nv_logf` 实现；每对两侧的 PTX
@@ -76,7 +84,7 @@ LOG-EXP-LIBDEVICE 的平均偏差为 -0.6804358853 local ULP，五个标准误�
 完全落在容差范围外。它的 U=0 是因为候选 `a` 对 oracle 没有误差，
 并不表示参考 `tl.log(libdevice.exp(a))` 和候选相等。
 
-五项的 U 都通过；只有分段 LOG-EXP-EXPM1 满足 bias 预算。其平均偏差为
+七项的 U 都通过；LOG-EXP-EXPM1 和 LOG-MUL-GUARDED 满足 bias 预算。前者的平均偏差为
 -0.04943322176 local ULP，SE=0.000001917840228，B=0.04944281096，
 距离 0.05 预算约 0.00055718904 ULP。z 很大表示偏差稳定可测，不等于超预算。
 这不是零偏差或所有输入上的精确恒等式，也没有准入原 LOG-EXP 表达式。
@@ -84,15 +92,29 @@ LOG-EXP-LIBDEVICE 的平均偏差为 -0.6804358853 local ULP，五个标准误�
 [GPU 边界检查](./log_report/boundaries.json) 验证 15 个输入：`a=±2^-25` 时
 原实现得到 0，新实现恢复 `a`；±0.5 的相邻 FP32 数检查分段边界，`a=-20`
 使用原路径，`a=90` 的溢出仍保留为非有限结果。PTX 确认新表达式没有 FP64 运算。
-LOG-MUL 仍未准入，原 StableLogSumExp 实现的 log-exp 前提也未满足，
+条件式 LOG-MUL 的主实验均值为 -0.0006145105 local ULP。独立种子 20261005
+复核同样通过：z=296.0360072、B=0.0006251552、U=7.418400148。两次各有
+4096 个 replicate；两组完整表均经独立 CPU 回放核对。
+[独立种子配置](./log_product_validation_config.py) 与 [复核结果](./log_product_validation_report/summary.md)
+属于同一版本的独立验证，不是历史结果。FMA/log1p 方案在复核中仍为 INCONCLUSIVE。
+
+[乘积诊断](./log_report/log_product_diagnostics.json) 包含 16 个 GPU 边界输入，
+以及最初 32 批采样的分支统计：43.6002% 的有效输入保留乘积路径，56.3998%
+仍使用两个 log 相加。原式在保留区间观察到 33,554,432 ULP 的单元素差值；
+区间外的观察最大值只有 4 ULP。这些诊断不代替正式准入实验。
+条件式不修改输入掩码，也不证明可以无条件拆分 log；未更改 Lean 原子绑定。
+
+原 LOG-MUL 仍未准入，原 StableLogSumExp 实现的 log-exp 前提也未满足，
 因此 StableLogSumExp 仍未完成。
 完整当前结果见 [log_report/summary.md](./log_report/summary.md)，
 数值审核见 [log_report/warning_audit.json](./log_report/warning_audit.json)。
 
-PR #13 的 Lean 接入位于
-[`LogAdmission.lean`](../../../VeriTile/Triton/Float/LogAdmission.lean) 和
-[`LogExp.lean`](../../../VeriTile/Triton/Float/LogExp.lean)。独立表只包含
-`fp32_log_exp_expm1`；保留 fp32 精度、有限输入定义域、`abs(a) <= 0.5`
+当前报告的 Lean 数据位于
+[`LogAdmission.lean`](../../../VeriTile/Triton/Float/LogAdmission.lean)，
+原子绑定位于 [`LogExp.lean`](../../../VeriTile/Triton/Float/LogExp.lean)。独立表包含
+`fp32_log_exp_expm1` 与 `fp32_log_mul_guarded` 两项；条件式乘积的数据保留正有限输入、
+FP32 精度和 `0.5 <= fp32(a*b) <= 2` 的分支表达式，尚未接入 Lean 原子绑定。
+已绑定的 `log_exp_expm1` 保留 fp32 精度、有限输入定义域、`abs(a) <= 0.5`
 及未选分支传零的源表达式。`libdevice.log`、`libdevice.expm1`、
 `libdevice.log1p` 都是独立的 FP 运算符，不会和 `tl.log` 混用。
 `log_exp_expm1_equiv` 使用原有 `≡[R]` 接口；打印的假设只有
@@ -121,15 +143,23 @@ python3 scripts/export_supplemental_rules.py --trust-report \
 在仓库根目录、安装下述依赖后执行：
 
 ```bash
-python3 scripts/check_numerics_supplement.py check --profile experiments/floating_point/supplement/log_accuracy_config.py
+python3 scripts/check_numerics_supplement.py check --profile experiments/floating_point/supplement/log_product_config.py
 python3 scripts/check_log_accuracy.py --output Logs/fp-log-accuracy-boundaries
-python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_accuracy_config.py --smoke --output Logs/fp-log-accuracy-smoke
-python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_accuracy_config.py --output Logs/fp-log-accuracy
+python3 scripts/check_log_product.py --output Logs/fp-log-product-diagnostics
+python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_product_config.py --smoke --output Logs/fp-log-accuracy-smoke
+python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_product_config.py --output Logs/fp-log-accuracy
 python3 scripts/check_numerics_supplement.py report Logs/fp-log-accuracy --output-dir Logs/fp-log-accuracy-report
 ```
 
 复现时先确认 smoke 没有 `ERROR`，再运行正式实验并带回 `Logs/fp-log-accuracy-report/`。
-本轮使用 `scalar-supplement-10`，请用新目录；当前 log 报告维护这五项配对结果。
+本轮使用 `scalar-supplement-11`，请用新目录；当前 log 报告维护这七项配对结果。
+
+独立种子复核：
+
+```bash
+python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_product_validation_config.py --output Logs/fp-log-product-validation
+python3 scripts/check_numerics_supplement.py report Logs/fp-log-product-validation --output-dir Logs/fp-log-product-validation-report
+```
 
 ### 全部补充实验
 
@@ -191,6 +221,8 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 | exp-zero | `exp(0) → 1` | 指数初值 |
 | log-mul | `log(a * b) → log(a) + log(b)` | 对数因子分解，`a,b > 0` |
 | log-mul-libdevice | `libdevice.log(a * b) → libdevice.log(a) + libdevice.log(b)` | 配对比较 log 实现，`a,b > 0` |
+| log-mul-log1p | 乘积近 1 时参考用 `log1p(fma(a,b,-1))`，候选两个 log 相加 | 仅 FP32；两种子均未准入 |
+| log-mul-guarded | 候选在 `0.5 <= fp32(a*b) <= 2` 时保留参考，范围外拆分 log | 仅 FP32；只准入条件式 |
 | log-exp | `tl.log(tl.exp(a)) → a` | 原 intrinsic 组合 |
 | log-exp-libdevice | `tl.log(libdevice.exp(a)) → a` | 当前 fp32 实验因 bias 拒绝 |
 | log-exp-full-libdevice | `libdevice.log(libdevice.exp(a)) → a` | 两个函数都使用 libdevice，当前 fp32 实验因 bias 拒绝 |
@@ -205,9 +237,9 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 避免把无穷大当成普通有限数套进 exp-sub；它不是 online-softmax 整体关系。
 常数和恒等式可能被编译器折叠，保存的 PTX 反映实际执行图。
 
-目录现在包含 21 条关系。默认浮点 profile 有 **54 个可执行实例、108 个左右两侧 kernel 特化**，
-外加 1 个 fp64 残差 oracle；完整笛卡尔表有 84 行，其余组合明确标为 `UNSUPPORTED`。
-其中 EXP-SUB-INTRINSIC 和 LOG-EXP-EXPM1 只支持 fp32 输入、计算和输出。COUNT-ZERO、COUNT-SUCCESSOR
+目录现在包含 23 条关系。默认浮点 profile 有 **56 个可执行实例、112 个左右两侧 kernel 特化**，
+外加 1 个 fp64 残差 oracle；完整笛卡尔表有 92 行，其余组合明确标为 `UNSUPPORTED`。
+其中 EXP-SUB-INTRINSIC、LOG-EXP-EXPM1、LOG-MUL-LOG1P 和 LOG-MUL-GUARDED 只支持 fp32 输入、计算和输出。COUNT-ZERO、COUNT-SUCCESSOR
 使用独立的 int32 输入配置，不能用正态浮点输入替代，见
 [三个新增 primitive 的配置与当前结果](../primitives/README.md)。
 
@@ -257,6 +289,7 @@ EXP-SUB、LOG-EXP-LIBDEVICE、LOG-EXP-FULL-LIBDEVICE 和 LOG-EXP-EXPM1 使用 `l
 其他 exp 原子使用 `tl.exp`。LOG-MUL-LIBDEVICE 和 LOG-EXP-FULL-LIBDEVICE 使用
 `libdevice.log`，其他 log 原子使用 `tl.log`，max 使用 `tl.maximum`。
 LOG-EXP-EXPM1 使用 `libdevice.log` 及 `libdevice.log1p` / `libdevice.expm1` 分段路径。
+LOG-MUL-LOG1P 使用显式 `tl.fma` 和 `libdevice.log1p`；LOG-MUL-GUARDED 使用 `libdevice.log`。
 intrinsic 身份保存在每条规则的契约中；禁止隐式 FMA fusion。
 
 只跑某组关系可以显式选择：
@@ -279,7 +312,7 @@ python3 scripts/check_numerics_supplement.py run --rules ADD-ZERO,MUL-ONE,DIV-ON
 NPZ 的 `valid_samples` 保存每次抽样的有效元组数，record 保存尝试次数、空批次、
 有效及跳过总数，报告的 Valid / Skipped 两列显示元组总数。
 
-当前定义域过滤及配对 log 精度实验使用 `scalar-supplement-10`，
+当前定义域过滤及配对 log 精度实验使用 `scalar-supplement-11`，
 须使用新的输出目录。已提交的 PR #11
 报告仍保留旧策略及其 `NUMERIC_EVENT` 结果，不能当作新策略已通过的证据。
 导出器保留对该报告准确源码标识的识别。当前过滤策略的结果见
@@ -323,8 +356,8 @@ python3 scripts/export_numerical_rules.py --trust-report --check
 python3 scripts/export_supplemental_rules.py --trust-report --check
 ```
 
-默认浮点 profile 有 54 对表达式。CPU 解释器检查其中 41 对的精度和非整块矩形索引；
-十三个 libdevice 组合明确跳过，因为解释器不支持 CUDA `extern_elementwise`，
+默认浮点 profile 有 56 对表达式。CPU 解释器检查其中 41 对的精度和非整块矩形索引；
+十五个 libdevice 组合明确跳过，因为解释器不支持 CUDA `extern_elementwise`，
 这些组合用离线编译和真实 GPU 实验验证，不替换其函数实现。另有 profile、定义域、
 fp64 除法残差、报告、源/PTX/观测/配置/统计篡改检测测试。离线编译不需要 GPU，
 默认目标 sm_80。解释器和离线编译结果均不是 GPU two-gates 准入结果。

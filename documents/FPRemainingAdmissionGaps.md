@@ -44,10 +44,10 @@ return the same zero. Extracting the actual conversion equality requires
 so they cannot be accidentally imported without this integer-range-aware binding. See the [current report](../experiments/floating_point/primitives/report/summary.md)
 and [reproduction instructions](../experiments/floating_point/primitives/README.md).
 
-### Current log experiment results: piecewise expm1/log1p passes
+### Current log experiments: piecewise expm1/log1p and conditional product splitting pass
 
-Five paired fp32 cases completed on H200 in DLC job `dlcyu7h8qlz4yfn1`, using
-`log_accuracy_config.py`: 4096 replicates of shape `[4096, 4096]`, Normal(1,1),
+Seven paired fp32 cases completed on H200 in DLC job `dlc1hczsayjv5apb`, using
+`log_product_config.py`: 4096 replicates of shape `[4096, 4096]`, Normal(1,1),
 tau=0.05 local ULP and U thresholds 10/100. Independent CPU replay exactly
 matches the GPU-environment reports.
 
@@ -58,6 +58,8 @@ matches the GPU-environment reports.
 | LOG-EXP-LIBDEVICE: `tl.log(libdevice.exp(a))` vs `a` | 68.59740095 | 0.7300322166 | 0 | REJECT: bias |
 | LOG-EXP-FULL-LIBDEVICE: `libdevice.log(libdevice.exp(a))` vs `a` | 68.59740095 | 0.7300322166 | 0 | REJECT: bias |
 | LOG-EXP-EXPM1: `log1p(expm1(a))` for `abs(a)<=0.5`, otherwise `log(exp(a))`, vs `a` | 25775.46400 | 0.0494428110 | 0 | ACCEPT: new piecewise expression |
+| LOG-MUL-LOG1P: near-one FMA/log1p reference vs split logs | 2.061440595 | 0.1240315873 | 6.685560237 | INCONCLUSIVE: bias |
+| LOG-MUL-GUARDED: retain product log for `0.5<=fp32(a*b)<=2`, split elsewhere | 296.6221498 | 0.0006248690 | 6.685560237 | ACCEPT: conditional expression |
 
 The libdevice.log variants reuse their controls' input seeds. Under this run's
 Triton 3.7.1 / CUDA 13.0, sm_90 and compiler settings, both log interfaces
@@ -90,6 +92,22 @@ PTX contains no fp64 operations. See the
 [boundary evidence](../experiments/floating_point/supplement/log_report/boundaries.json).
 Acceptance applies only to this new piecewise expression. It is not a binding
 for the original log-exp operation, and no Lean assumption was replaced.
+
+LOG-MUL-GUARDED preserves the original reference and changes only the candidate.
+All positive finite inputs are retained; the fixed branch selects which expression
+runs, rather than removing sensitive samples. Independent seed 20261005 also
+passes at z=296.0360072, B=0.0006251552 and U=7.418400148 after 4096 replicates.
+The FMA/log1p alternative remains inconclusive under both seeds. The
+[independent-seed report](../experiments/floating_point/supplement/log_product_validation_report/summary.md)
+and main report both match independent CPU replay.
+
+Sixteen GPU boundary cases verify branch endpoints, preserved sides, underflow
+and overflow; all tested kernels retain FP32 arithmetic. Diagnostics on the
+first 32 paired draws retain the product expression for 43.6002% of valid
+tuples and split logs for 56.3998%. Large local-ULP differences occur near a
+product of one. These diagnostics do not replace the full two-gates runs.
+Neither new rule supplies the unconditional log-product premise required by
+the existing proof; no Lean admission binding was changed.
 
 StableLogSumExp therefore remains incomplete. See the
 [current log report](../experiments/floating_point/supplement/log_report/summary.md)

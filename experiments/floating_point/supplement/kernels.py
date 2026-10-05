@@ -15,6 +15,7 @@ SUPPORTED = {
     "EXP-SUB-INTRINSIC", "COUNT-ZERO", "COUNT-SUCCESSOR", "LOG-EXP-LIBDEVICE",
     "LOG-MUL-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE",
     "LOG-EXP-EXPM1",
+    "LOG-MUL-LOG1P", "LOG-MUL-GUARDED",
 }
 
 
@@ -105,6 +106,30 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = rnd(libdevice.log(rnd(a * b, PRECISION)), PRECISION)
         else:
             out = rnd(rnd(libdevice.log(a), PRECISION) + rnd(libdevice.log(b), PRECISION), PRECISION)
+    elif RULE == "LOG-MUL-LOG1P":
+        tl.static_assert(PRECISION == "fp32", "log-product probe requires fp32")
+        if SIDE == 0:
+            p = a * b
+            near_one = (p >= 0.5) & (p <= 1.5)
+            small_a = tl.where(near_one, a, 1.0)
+            small_b = tl.where(near_one, b, 1.0)
+            small = libdevice.log1p(tl.fma(small_a, small_b, -1.0))
+            other = libdevice.log(tl.where(near_one, 1.0, p))
+            out = tl.where(near_one, small, other)
+        else:
+            out = libdevice.log(a) + libdevice.log(b)
+    elif RULE == "LOG-MUL-GUARDED":
+        tl.static_assert(PRECISION == "fp32", "guarded log-product probe requires fp32")
+        p = a * b
+        if SIDE == 0:
+            out = libdevice.log(p)
+        else:
+            keep_product = (p >= 0.5) & (p <= 2.0)
+            direct = libdevice.log(tl.where(keep_product, p, 1.0))
+            split_a = tl.where(keep_product, 1.0, a)
+            split_b = tl.where(keep_product, 1.0, b)
+            split = libdevice.log(split_a) + libdevice.log(split_b)
+            out = tl.where(keep_product, direct, split)
     elif RULE == "LOG-EXP":
         if SIDE == 0:
             out = rnd(tl.log(rnd(tl.exp(a), PRECISION)), PRECISION)

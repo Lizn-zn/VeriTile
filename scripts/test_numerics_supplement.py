@@ -85,8 +85,8 @@ class ContractTests(unittest.TestCase):
 
     def test_supported_matrix_and_invalid_precision(self):
         p = profile()
-        self.assertEqual(len(p["rules"]), 21)
-        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 54)
+        self.assertEqual(len(p["rules"]), 23)
+        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 56)
         for field in ("input", "output", "accumulator"):
             bad = deepcopy(p)
             bad["formats"][-1][field] = "bf16"
@@ -159,6 +159,28 @@ class ContractTests(unittest.TestCase):
         for fmt in profile()['formats']:
             self.assertEqual(supplement.unsupported('LOG-EXP-EXPM1', fmt) is None,
                              fmt['name'] == 'fp32')
+
+    def test_log_product_branches_preserve_domains_and_have_independent_confirmation(self):
+        p = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'log_product_config.py').PROFILE))
+        validation = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'log_product_validation_config.py').PROFILE))
+        baseline = runner.validate_profile(deepcopy(runner.load_module(
+            supplement.DIRECTORY / 'log_accuracy_config.py').PROFILE))
+        self.assertEqual({k: v for k, v in p.items() if k != 'rules'},
+                         {k: v for k, v in baseline.items() if k != 'rules'})
+        self.assertEqual({k: v for k, v in p.items() if k not in ('rules', 'seed')},
+                         {k: v for k, v in validation.items() if k not in ('rules', 'seed')})
+        self.assertNotEqual(p['seed'], validation['seed'])
+        self.assertEqual(validation['rules'], ['LOG-MUL', 'LOG-MUL-LOG1P', 'LOG-MUL-GUARDED'])
+        lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
+        for rule, side, upper in [('LOG-MUL-LOG1P', 'reference', 1.5), ('LOG-MUL-GUARDED', 'candidate', 2.)]:
+            c = supplement.contract_for(p, p['formats'][0], rule, {}, runner.source_hashes(), lowerings)
+            self.assertEqual(c['relation']['branch']['side'], side)
+            self.assertEqual(c['relation']['branch']['lower'], 0.5)
+            self.assertEqual(c['relation']['branch']['upper'], upper)
+            for fmt in profile()['formats']:
+                self.assertEqual(supplement.unsupported(rule, fmt) is None, fmt['name'] == 'fp32')
 
     def test_composite_rejected_before_creating_bundle(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -421,7 +443,7 @@ class InterpreterTests(unittest.TestCase):
                 if supplement.unsupported(rule, fmt):
                     continue
                 with self.subTest(rule=rule, fmt=fmt["name"]):
-                    if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-MUL-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-EXPM1"}:
+                    if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-MUL-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-EXPM1", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}:
                         # CUDA extern_elementwise has no CPU interpreter
                         # implementation. Do not substitute tl.exp: offline
                         # compilation and the GPU run check these exact calls.

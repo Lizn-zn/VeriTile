@@ -6,6 +6,9 @@ import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
+# These GPU probes have no Lean fragments yet. Keep the exception explicit so
+# adding experiment data cannot silently enable an unconditional product rule.
+EXPERIMENT_ONLY = {'LOG-MUL-LOG1P', 'LOG-MUL-GUARDED'}
 
 
 class LogCandidateTests(unittest.TestCase):
@@ -46,11 +49,14 @@ open VeriTile.Triton.FP.LogExp
         catalog, selected = [json.loads(json.loads(line)) for line in output.splitlines()]
         registry = json.loads((ROOT / 'experiments/floating_point/supplement/rules.json').read_text())
         expected = {r['id'] for r in registry['rules'] if r['id'].startswith('LOG-')}
-        self.assertEqual(set(catalog), expected)
-        self.assertEqual(len(catalog), len(expected))
+        self.assertEqual(expected - set(catalog), EXPERIMENT_ONLY)
+        self.assertEqual(set(catalog), expected - EXPERIMENT_ONLY)
+        self.assertEqual(len(catalog), len(expected - EXPERIMENT_ONLY))
         report = json.loads((ROOT / 'experiments/floating_point/supplement/log_report/summary.json').read_text())
         accepted = {r['rule'] for r in report['rows'] if r['format'] == 'fp32' and r['accept']}
-        self.assertEqual(set(selected), accepted)
+        self.assertEqual(set(selected), accepted - EXPERIMENT_ONLY)
+        self.assertEqual(accepted & EXPERIMENT_ONLY, {'LOG-MUL-GUARDED'})
+        self.assertEqual(set(selected), {'LOG-EXP-EXPM1'})
 
     def test_catalog_compiles_with_no_admitted_rules(self):
         source = (ROOT / 'VeriTile/Triton/Float/LogExp.lean').read_text()
@@ -72,7 +78,7 @@ import VeriTile.Triton.Float.LogExp
 open VeriTile.Triton.FP.LogExp
 open scoped VeriTile.Spec
 '''
-        for rule in sorted(candidates - accepted):
+        for rule in sorted(candidates - accepted - EXPERIMENT_ONLY):
             atom = rule.lower().replace('-', '_')
             with self.subTest(atom=atom):
                 result = self.lean(prefix + f'''

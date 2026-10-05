@@ -3,6 +3,22 @@
   "semantics": "Q rounds each node to compute precision; both entire expressions are finally cast to output precision; / is ordinary Triton division, never tl.div_rn",
   "rules": [
     {
+      "id": "LOG-MUL-LOG1P",
+      "reference": "p=fp32(a*b); if 0.5 <= p <= 1.5 then libdevice.log1p(fp32_fma(a,b,-1)) else libdevice.log(p)",
+      "candidate": "fp32(libdevice.log(a) + libdevice.log(b))",
+      "domain": "finite positive fp32 a,b; branch selects implementation without filtering inputs",
+      "operands": ["a", "b"],
+      "category": "two_gates_candidate"
+    },
+    {
+      "id": "LOG-MUL-GUARDED",
+      "reference": "p=fp32(a*b); libdevice.log(p)",
+      "candidate": "p=fp32(a*b); if 0.5 <= p <= 2 then libdevice.log(p) else fp32(libdevice.log(a) + libdevice.log(b))",
+      "domain": "finite positive fp32 a,b; conditional rewrite retains log of rounded product near one",
+      "operands": ["a", "b"],
+      "category": "two_gates_candidate"
+    },
+    {
       "id": "LOG-EXP-EXPM1",
       "reference": "if abs(a) <= 0.5 then fp32(libdevice.log1p(fp32(libdevice.expm1(a)))) else fp32(libdevice.log(fp32(libdevice.exp(a))))",
       "candidate": "a",

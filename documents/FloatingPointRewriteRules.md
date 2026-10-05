@@ -61,6 +61,10 @@ example (R : Rules) :
 
 这里 `by decide` 只检查当前表是否选中了该候选；数值关系仍是 `R` 中的外部准入假设。
 刷新实验结果后，已定义候选的可用性随准入表更新，无须重写候选表达式。
+当前报告还包含通过两轮采样的条件式 `LOG-MUL-GUARDED`：在
+`0.5 <= fp32(a*b) <= 2` 时保留乘积的 log，范围外才拆分。它已导出为报告数据，
+尚未定义对应的 Lean 候选片段；该结果不会启用现有的无条件 `log_mul` 或
+`log_mul_libdevice`。数值结果和独立种子复核见[补充实验](../experiments/floating_point/supplement/README.md)。
 
 其他原语库采用同样的结构：文件开头列出 `Atom`、`ruleID` 和每条关系的公式、
 intrinsic、精度与定义域，然后定义左右片段，最后按准入表选择可用规则。

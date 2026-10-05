@@ -1,6 +1,6 @@
 # Numerical rule results
 
-7 instances; 7 replayed; 2 accepted.
+3 instances; 3 replayed; 1 accepted.
 
 Each nonempty replicate contributes one mean across its in-domain IID scalar instances; R counts these replicates.
 Out-of-domain input tuples are skipped without resampling; valid/skipped counts describe scalar tuples, not R.
@@ -18,10 +18,6 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 
 | Rule | Format | R | z | B (ULP) | tau (ULP) | U | U type | Bias | Vars | Accept | State | Valid | Skipped |
 |---|---|---:|---:|---:|---:|---:|---|---|---|---|---|---:|---:|
-| LOG-MUL | fp32 | 4096 | 2.924915 | 0.1679353 | 0.05 | 6.68556 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643849868 | 20075626868 |
-| LOG-MUL-LIBDEVICE | fp32 | 4096 | 2.924915 | 0.1679353 | 0.05 | 6.68556 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643849868 | 20075626868 |
-| LOG-EXP-LIBDEVICE | fp32 | 4096 | 68.5974 | 0.7300322 | 0.05 | 0 | empirical_max | FAIL | PASS | no | COMPLETE | 68719476736 | 0 |
-| LOG-EXP-FULL-LIBDEVICE | fp32 | 4096 | 68.5974 | 0.7300322 | 0.05 | 0 | empirical_max | FAIL | PASS | no | COMPLETE | 68719476736 | 0 |
-| LOG-EXP-EXPM1 | fp32 | 4096 | 25775.46 | 0.04944281 | 0.05 | 0 | empirical_max | PASS | PASS | yes | COMPLETE | 68719476736 | 0 |
-| LOG-MUL-LOG1P | fp32 | 4096 | 2.061441 | 0.1240316 | 0.05 | 6.68556 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643849868 | 20075626868 |
-| LOG-MUL-GUARDED | fp32 | 4096 | 296.6221 | 0.000624869 | 0.05 | 6.68556 | pot_pwm | PASS | PASS | yes | COMPLETE | 48643849868 | 20075626868 |
+| LOG-MUL | fp32 | 4096 | 1.016402 | 0.1629234 | 0.05 | 7.4184 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643797954 | 20075678782 |
+| LOG-MUL-LOG1P | fp32 | 4096 | 1.793469 | 0.1644765 | 0.05 | 7.4184 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643797954 | 20075678782 |
+| LOG-MUL-GUARDED | fp32 | 4096 | 296.036 | 0.0006251552 | 0.05 | 7.4184 | pot_pwm | PASS | PASS | yes | COMPLETE | 48643797954 | 20075678782 |

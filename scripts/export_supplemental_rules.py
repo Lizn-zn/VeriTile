@@ -35,7 +35,7 @@ def domain(rule):
         guards.append(("b", "nonzero"))
     elif rule == "MUL-RCP-CANCEL":
         guards.append(("a", "nonzero"))
-    elif rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE"}:
+    elif rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}:
         guards.extend([(name, "positive") for name in ("a", "b")])
     return guards
 

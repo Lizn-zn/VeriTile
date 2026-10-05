@@ -110,14 +110,17 @@ loads, which these examples do not use. This is not a complete IEEE evaluator.
 [The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
 main-table algebraic countermodels from the supplemental rule set. Stable
 logsumexp remains pending. Its two scalar probes and paired libdevice.log
-variants in `experiments/floating_point/supplement/log_accuracy_config.py`
+variants in `experiments/floating_point/supplement/log_product_config.py`
 completed on H200: LOG-MUL is bias-INCONCLUSIVE and LOG-EXP-LIBDEVICE is
 bias-REJECT. Both variants have identical observations and PTX after removing
 source-location directives under the recorded Triton 3.7.1 configuration.
 None supplies the missing admission. The same profile also tests a new fp32
 piecewise expression: log1p(expm1(a)) for abs(a)<=0.5, otherwise log(exp(a)).
 It passes with B=0.0494428110 and U=0, but changes the operation and cannot
-justify the original log-exp premise. See the [current log report](../experiments/floating_point/supplement/log_report/summary.md).
+justify the original log-exp premise. The conditional log-product candidate
+also passes under two seeds (B=0.0006248690 / 0.0006251552), retaining the
+product log when `0.5<=fp32(a*b)<=2` and splitting it elsewhere. This does
+not justify the unconditional log-product premise. See the [current log report](../experiments/floating_point/supplement/log_report/summary.md).
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently
@@ -229,12 +232,16 @@ The checks cover:
   execution contract, public specification and boundary fixture. Regressions
   check its eleven printed scalar atoms, source independence, missing-register
   failure, aliased readback and both memory frames. The paired log profile's
-  ten fp32 kernel specializations compile for sm_90. All five cases completed
+  fourteen fp32 kernel specializations compile for sm_90. All seven cases completed
   4096 H200 replicates with identical independent CPU replay; LOG-MUL and its
   libdevice.log variant remain bias-INCONCLUSIVE, while LOG-EXP-LIBDEVICE and
   its libdevice.log variant are bias-REJECT. The added piecewise expm1/log1p
   expression passes, but does not admit the original operation. Fifteen GPU
   boundary inputs check small values, branch neighbors, fallback and overflow.
+  Three product cases also completed 4096 replicates with an independent seed
+  and matching CPU replay. The conditional product candidate passes both seeds;
+  the FMA/log1p reference variant remains inconclusive. Sixteen additional GPU
+  fixtures check product branch boundaries and retained numerical events.
   CPU tests retain negative log-exp inputs and reject
   nonfinite outputs on valid inputs, and existing admission tables remain
   byte-for-byte reproducible from their frozen reports.

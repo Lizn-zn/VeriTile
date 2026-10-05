@@ -9,10 +9,12 @@ OPERANDS = {
     **dict.fromkeys(("ROUND-IDEM", "BF16-WIDEN-RETURN", "SQRT-RSQRT", "ADD-ZERO",
                      "MUL-ONE", "DIV-ONE", "MUL-RCP-CANCEL", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE",
                      "LOG-EXP-EXPM1", "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB"), "a"),
-    **dict.fromkeys(("DIV-MUL-RCP", "EXP-SUB", "EXP-SUB-INTRINSIC", "LOG-MUL", "LOG-MUL-LIBDEVICE", "MAX-COMMUTE"), "ab"),
+    **dict.fromkeys(("DIV-MUL-RCP", "EXP-SUB", "EXP-SUB-INTRINSIC", "LOG-MUL", "LOG-MUL-LIBDEVICE",
+                     "LOG-MUL-LOG1P", "LOG-MUL-GUARDED", "MAX-COMMUTE"), "ab"),
     "MAX-ASSOC": "abc", "EXP-ZERO": "", "COUNT-ZERO": "", "COUNT-SUCCESSOR": "a",
 }
-POSITIVE = {"SQRT-RSQRT": "a", "LOG-MUL": "ab", "LOG-MUL-LIBDEVICE": "ab"}
+POSITIVE = {"SQRT-RSQRT": "a", "LOG-MUL": "ab", "LOG-MUL-LIBDEVICE": "ab",
+            "LOG-MUL-LOG1P": "ab", "LOG-MUL-GUARDED": "ab"}
 NONZERO = {"DIV-RCP": "b", "DIV-MUL-RCP": "b", "MUL-RCP-CANCEL": "a"}
 
 
