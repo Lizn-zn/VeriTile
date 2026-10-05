@@ -103,7 +103,7 @@ theorem candidate_run {α : Type} [Inhabited α] (M : Algebra α)
     TileShape.axisDim, TileShape.eraseAxis, hB, Region.cast, ofFloat, toFloat,
     hx, hlt', hle']
   refine ⟨?_, ?_⟩
-  · simp [candidateValue, FP.LogSumExpCandidate.finish, FP.LogExp.value,
+  · simp [candidateValue, FP.LogSumExpCandidate.finish, FP.LogExp.value, FP.LogExp.Backend.logOp,
       E, FP.Scheduled.Profile.algebra, FP.Scheduled.fp32, FP.ScalarReduction.algebra,
       Algebra.withDefaultPrecision, resolvePrecision, shifted, maximum, rowSum,
       FP.Structural.bop, Function.comp_def,

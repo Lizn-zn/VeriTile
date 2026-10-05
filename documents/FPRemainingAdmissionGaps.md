@@ -1,19 +1,19 @@
 # Remaining FP example prerequisites
 
-The migration has 19 real correctness files and 18 completed FP equivalence files.
-The current main and supplemental reports select numerical assumptions using
-a local-ULP mean-bias budget and a peak absolute-error ratio gate.
-The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
-binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
-instances. StableLogSumExp is the remaining incomplete transformation.
+The migration has 19 real correctness files and 19 files with completed FP
+specifications. StableLogSumExp now proves its conditional candidate against
+the unchanged direct reference. The older unconditional shift remains pending.
+The current reports select numerical assumptions using a local-ULP mean-bias
+budget and a peak absolute-error ratio gate.
 
-Its `candidateLSEKernel` now composes `log_mul_split` and `log_exp_elim`,
-including their product/center thresholds and inactive-argument masks. The
-candidate has an independent real correctness proof. The scalar composition
-is derived in `Float/LogSumExpCandidate.finish_eq`; it uses no unconditional
-log identity. The original direct reference uses `tl.log`, while these atoms
-use `libdevice.log`. Completing a source-pair FP certificate therefore still
-requires an admitted intrinsic bridge or an explicitly revised reference.
+`candidateLSEKernel` composes `log_mul_split .tl` and `log_exp_cancel .tl`,
+including both selectors and inactive-argument masks. Its independent real
+proof and complete FP specification refer to that exact tl.log source.
+`Float/LogSumExpCandidate.finish_eq` derives the scalar suffix; `candidate_values`
+and `candidate_runs` connect it through exp-sub and arithmetic to the original
+bf16 result and memory frame. The public `logsumexp_equiv` keeps symbolic row
+length, a shared reduction schedule, numeric operand conditions and explicit
+fp32 comparison support. It assumes no intrinsic bridge or whole-kernel law.
 
 ## Current primitive experiment results
 
@@ -77,9 +77,9 @@ and unchanged gates. Both reports match independent CPU replay exactly.
 All six pairs have identical normalized PTX and observations under the recorded
 compiler configuration. Separate experiment IDs and typed Lean fragments prevent
 one API's report from selecting the other API. The four guarded variants pass
-both seeds and are bound as `log_mul_split`, `log_mul_split_intrinsic`,
-`log_exp_elim`, and `log_exp_elim_intrinsic`. Unconditional rewrites remain
-unadmitted, so the original StableLogSumExp obligations remain pending.
+both seeds and are bound as `log_mul_split .tl`, `log_mul_split .libdevice`,
+`log_exp_cancel .tl`, and `log_exp_cancel .libdevice`. Unconditional rewrites
+remain unadmitted; this limits the older shift, not the new conditional proof.
 Both LOG1P diagnostic variants keep libdevice.log1p and the same FMA; only ordinary
 log calls differ. They remain bias-INCONCLUSIVE and experiment-only.
 See the [paired experiments](../experiments/floating_point/supplement/README.md)
@@ -119,7 +119,7 @@ formats. It supplies no fp64 instance.
 |---|---|---|
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
 | `SoftmaxStable` | fp32 libdevice EXP-SUB is admitted and bound together with the scalar arithmetic rules. | `SoftmaxStableFPEquiv.softmax_stable_equiv` completes the guarded, scheduled equivalence; max, bf16 stores, output frames and symbolic positive row length are retained. |
-| `StableLogSumExp` | libdevice EXP-SUB is bound. LOG-MUL/fp32 is bias-INCONCLUSIVE; LOG-EXP-LIBDEVICE/fp32 is bias-REJECT. Neither is admitted. | Both libdevice source variants remain conditional on the two log obligations; the completed GPU experiments do not close the specification. |
+| `StableLogSumExp` | Both conditional tl.log atoms and libdevice EXP-SUB are bound. Unconditional LOG-MUL is INCONCLUSIVE and LOG-EXP-LIBDEVICE is FAIL. | `logsumexp_equiv` completes the conditional candidate/reference comparison. The older unconditional shifted source is still not certified. |
 | `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | `OnlineSoftmaxFPEquiv.online_softmax_equiv` completes the original Correct observation scope: batch stored values versus read-only normalization using actual final online m/l registers. Both original executions and separate memory frames are retained; no output store is added. |
 | `Welford` | Both count atoms are admitted and bound for integer `0 <= i < 2^24`. | `WelfordFPEquiv.welford_equiv` closes the original comparison for `0 < N <= 2^24`, retaining both bf16 outputs and frames. |
 | `FusedLayerNorm` | The same two count atoms are admitted and bound. | `FusedLayerNormFPEquiv.layernorm_equiv` closes the original comparison for `N <= 2^24`; empty output rows remain covered. |
@@ -193,7 +193,9 @@ derivation to both successful executions under the scheduled fp32 profile.
 `original_runs_under_log` discharges exp-sub from the admitted table; the
 two log obligations remain explicit.
 In-place output is allowed. The original max and final bf16 conversion remain
-opaque. This is a conditional connection, not a completed admitted FP example.
+opaque. That lemma concerns only the older unconditional shift. The new
+`candidate_runs` combines `recover_sum` with the two admitted conditional tl.log
+atoms and supplies the complete `logsumexp_equiv` specification.
 
 The dedicated `experiments/floating_point/supplement/log_config.py` profile runs
 LOG-MUL/fp32 with input-domain filtering and the new LOG-EXP-LIBDEVICE/fp32 probe.

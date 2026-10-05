@@ -34,8 +34,8 @@ class LogCandidateTests(unittest.TestCase):
 
     def test_syntax_domains_precision_and_conditional_reuse(self):
         output = self.check((ROOT / 'bench/tests/FPLogCandidates.lean').read_text())
-        self.assertIn('FP assumptions used by selected_piecewise:\n  log_exp_elim\n', output)
-        self.assertIn('FP assumptions used by selected_product_split:\n  log_mul_split\n', output)
+        self.assertIn('FP assumptions used by selected_piecewise:\n  log_exp_cancel(libdevice.log, libdevice.exp)\n', output)
+        self.assertIn('FP assumptions used by selected_product_split:\n  log_mul_split(libdevice.log)\n', output)
         self.assertNotIn('  log_mul_guarded\n', output)
         self.assertNotIn('unresolved FP proof', output)
 
@@ -72,8 +72,8 @@ import VeriTile.Triton.Float.LogExp
 open VeriTile.Triton.FP.LogExp
 open scoped VeriTile.Spec
 specification product_split (R : Rules) :
-    [Atom.log_mul_split.lhs] ≡[R] [Atom.log_mul_split.rhs] :=
-  VeriTile.Triton.FP.LogExp.rewrite R .log_mul_split (by decide)
+    [(Atom.log_mul_split .libdevice).lhs] ≡[R] [(Atom.log_mul_split .libdevice).rhs] :=
+  VeriTile.Triton.FP.LogExp.rewrite R (.log_mul_split .libdevice) (by decide)
 #print_spec product_split full
 ''')
         self.assertIn('LOG-MUL-GUARDED', output)
@@ -84,7 +84,8 @@ specification product_split (R : Rules) :
                                 '([] : List ReportedScalarRule).find? a.matches')
         self.check(source + '''
 open VeriTile.Triton.FP.LogExp
-example (a : Atom) : ¬ a.Available := by cases a <;> decide
+example (a : Atom) : ¬ a.Available := by
+  rcases a with ⟨_ | _⟩ | ⟨_ | _⟩ | ⟨_ | _, _ | _⟩ | ⟨_ | _⟩ <;> decide
 example (R : Rules) : R.assumptions = [] := rfl
 ''')
 
@@ -99,11 +100,18 @@ open VeriTile.Triton.FP.LogExp
 open scoped VeriTile.Spec
 '''
         for rule in sorted(candidates - accepted - EXPERIMENT_ONLY):
-            atom = rule.lower().replace('-', '_')
+            atom = {
+                'LOG-MUL': 'log_mul .tl',
+                'LOG-MUL-LIBDEVICE': 'log_mul .libdevice',
+                'LOG-EXP': 'log_exp .tl .tl',
+                'LOG-EXP-LOG-LIBDEVICE': 'log_exp .libdevice .tl',
+                'LOG-EXP-LIBDEVICE': 'log_exp .tl .libdevice',
+                'LOG-EXP-FULL-LIBDEVICE': 'log_exp .libdevice .libdevice',
+            }[rule]
             with self.subTest(atom=atom):
                 result = self.lean(prefix + f'''
-example (R : Rules) : [Atom.{atom}.lhs] ≡[R] [Atom.{atom}.rhs] :=
-  VeriTile.Triton.FP.LogExp.rewrite R .{atom} (by decide)
+example (R : Rules) : [(Atom.{atom}).lhs] ≡[R] [(Atom.{atom}).rhs] :=
+  VeriTile.Triton.FP.LogExp.rewrite R (.{atom}) (by decide)
 ''')
                 self.assertNotEqual(result.returncode, 0)
                 self.assertIn('decide', result.stdout)

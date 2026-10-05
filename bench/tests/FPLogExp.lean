@@ -62,11 +62,11 @@ private def initial : State ℚ where
 
 set_option maxHeartbeats 1600000 in
 theorem piecewise_execution (a : ℚ) :
-    (evalOp model (some .fp32) (FP.LogExp.expression FP.LogExp.input)
+    (evalOp model (some .fp32) (FP.LogExp.expression .libdevice FP.LogExp.input)
       (initial.setReg "a" .real [] (fun _ => a))).map (fun v => v PUnit.unit) =
       some (if 1 / 2 < (if a < 0 then -a else a) ∧
         (if a < 0 then -a else a) ≤ 80 then a else a + 11000) := by
-  norm_num [evalOp_unfold, FP.LogExp.expression, FP.LogExp.useIdentity, FP.LogExp.absolute,
+  norm_num [evalOp_unfold, FP.LogExp.expression, FP.LogExp.Backend.log, FP.LogExp.useIdentity, FP.LogExp.absolute,
     FP.LogExp.input, numeric, numericLt, numericLe,
     State.setReg, bop, model]
   split <;> simp_all <;> ring
@@ -74,23 +74,23 @@ theorem piecewise_execution (a : ℚ) :
 -- Both signs at 0.5 use fallback, both signs at 80 return a, and the
 -- near-zero and extreme negative inputs still execute the original calls.
 theorem threshold_branches :
-    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    FP.LogExp.value .libdevice model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         (-(1 / 2)) = 21999 / 2 ∧
-    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    FP.LogExp.value .libdevice model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         (1 / 2) = 22001 / 2 ∧
-    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    FP.LogExp.value .libdevice model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         (-1) = -1 ∧
-    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    FP.LogExp.value .libdevice model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         80 = 80 ∧
-    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    FP.LogExp.value .libdevice model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         (-80) = -80 ∧
-    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    FP.LogExp.value .libdevice model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         (-90) = 10910 ∧
-    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    FP.LogExp.value .libdevice model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         0 = 11000 ∧
-    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    FP.LogExp.value .libdevice model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         90 = 11090 := by
-  norm_num [FP.LogExp.value, model]
+  norm_num [FP.LogExp.value, FP.LogExp.Backend.logOp, model]
 
 theorem missing_comparison_fails :
     evalOp model none (FP.LogExp.useIdentity (.const 0)) initial = none := by
@@ -130,7 +130,7 @@ theorem negative_in_place_kernel :
     (withInput (-1)) (fun _ => -1) (fun _ => rfl)
   refine ⟨t, ht, ?_, ?_⟩
   · norm_num [withInput, initial, LogExp.FPEquiv.output, LogExp.FPEquiv.loaded,
-      FP.LogExp.value, model] at hv
+      FP.LogExp.value, FP.LogExp.Backend.logOp, model] at hv
     exact hv
   · have hmiss : ∀ i : Fin 4, 4 ≠ (withInput (-1)).pids 0 * 4 + i.val := by
       intro i
@@ -149,7 +149,7 @@ theorem reference_retains_output_cast (a : ℚ) :
   refine ⟨t, ht, ?_⟩
   have h := hv ⟨0, by decide⟩
   norm_num [withInput, initial, LogExp.FPEquiv.output, LogExp.FPEquiv.loaded,
-    FP.LogExp.referenceValue, model, add_assoc] at h ⊢
+    FP.LogExp.referenceValue, FP.LogExp.Backend.logOp, model, add_assoc] at h ⊢
   exact h
 
 -- Both candidate branches retain the output conversion, even when the
@@ -158,7 +158,7 @@ theorem candidate_retains_output_cast (a : ℚ) :
     ∃ t, exec (LogExp.FPEquiv.engine { model with cast := fun _ _ _ x => x + 7 })
         (LogExp.optimizedKernel "x" "y" 1) (withInput a) = some t ∧
       t.mem "y" 0 = .mk .real
-        (FP.LogExp.value model (fun a b => decide (a < b))
+        (FP.LogExp.value .libdevice model (fun a b => decide (a < b))
           (fun a b => decide (a ≤ b)) a + 7) := by
   obtain ⟨t, ht, hv, _⟩ := LogExp.FPEquiv.optimized_run
     { model with cast := fun _ _ _ x => x + 7 }
@@ -167,7 +167,7 @@ theorem candidate_retains_output_cast (a : ℚ) :
     "x" "y" 1 (withInput a) (fun _ => a) (fun _ => rfl)
   refine ⟨t, ht, ?_⟩
   simpa [withInput, initial, LogExp.FPEquiv.output, LogExp.FPEquiv.loaded,
-    FP.LogExp.value, model] using hv ⟨0, by decide⟩
+    FP.LogExp.value, FP.LogExp.Backend.logOp, model] using hv ⟨0, by decide⟩
 
 -- The public proof is about both source kernels, with symbolic dimensions.
 open scoped VeriTile.Spec in
@@ -186,7 +186,7 @@ theorem precision_is_in_signature (B : Nat) :
   cases hp
 
 #axiomsClean LogExp.FPEquiv.log_exp_equiv
-#axiomsClean FP.LogExp.apply_rule
+#axiomsClean FP.LogExp.apply_log_exp_cancel
 #axiomsClean FP.LogExpCounterexample.plain_log_exp_not_identity
 #axiomsClean FP.LogExpCounterexample.singleton_lse_not_exact
 #guard_msgs (drop info) in

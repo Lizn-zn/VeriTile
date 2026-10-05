@@ -261,6 +261,7 @@ private def fpProofType (name : Name) : Bool :=
     `VeriTile.Triton.FP.Scheduled.Equivalent₁ₓ₂,
     `VeriTile.Triton.FP.Scheduled.Equivalent₃,
     `VeriTile.Triton.FP.Scheduled.Equivalent₁,
+    `VeriTile.Triton.FP.Scheduled.ConditionalEquivalent₁,
     `VeriTile.Triton.FP.SoftmaxShift.LibdeviceExpSub,
     `VeriTile.Triton.FP.LogSumExpShift.IntrinsicLogMul,
     `VeriTile.Triton.FP.LogSumExpShift.LogLibdeviceExp,
@@ -371,11 +372,18 @@ private def shortSpecName : Name → String
 This affects only the concise display; contracts and detailed reports retain
 their original identity. -/
 private def fpAtomName (id : String) : String :=
-  if id == "LOG-MUL-GUARDED-INTRINSIC" then "log_mul_split_intrinsic"
-  else if id == "LOG-EXP-GUARDED-INTRINSIC" then "log_exp_elim_intrinsic"
-  else if id == "LOG-MUL-GUARDED" then "log_mul_split"
-  else if id == "LOG-EXP-GUARDED" then "log_exp_elim"
-  else id.toLower.replace "-" "_"
+  match id with
+  | "LOG-MUL" => "log_mul(tl.log)"
+  | "LOG-MUL-LIBDEVICE" => "log_mul(libdevice.log)"
+  | "LOG-MUL-GUARDED" => "log_mul_split(libdevice.log)"
+  | "LOG-MUL-GUARDED-INTRINSIC" => "log_mul_split(tl.log)"
+  | "LOG-EXP" => "log_exp(tl.log, tl.exp)"
+  | "LOG-EXP-LOG-LIBDEVICE" => "log_exp(libdevice.log, tl.exp)"
+  | "LOG-EXP-LIBDEVICE" => "log_exp(tl.log, libdevice.exp)"
+  | "LOG-EXP-FULL-LIBDEVICE" => "log_exp(libdevice.log, libdevice.exp)"
+  | "LOG-EXP-GUARDED" => "log_exp_cancel(libdevice.log, libdevice.exp)"
+  | "LOG-EXP-GUARDED-INTRINSIC" => "log_exp_cancel(tl.log, libdevice.exp)"
+  | _ => id.toLower.replace "-" "_"
 
 private def printFPAtom (entry : Expr) (details : Bool := false) : MetaM Unit := do
   let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[entry]

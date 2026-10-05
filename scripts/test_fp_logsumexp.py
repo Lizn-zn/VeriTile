@@ -11,7 +11,7 @@ class LogSumExpFPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ['lake', 'build', 'bench.examples.StableLogSumExp.Contract',
+            ['lake', 'build', 'bench.examples.StableLogSumExp.FPEquiv',
              'bench.examples.StableLogSumExp.Correct', 'VeriTile.Meta.StatementAudit',
              'bench.examples.LogExp.Correct', 'bench.examples.LogExp.FPEquiv',
              'VeriTile.Triton.Float.LogExpCounterexample'],
@@ -81,7 +81,33 @@ import bench.examples.LogExp.FPEquiv
 #print_fp_assumptions VeriTile.Bench.Examples.LogExp.FPEquiv.log_exp_equiv
 ''')
         self.assertEqual(output, 'FP assumptions used by log_exp_equiv:\n'
-                                 '  log_exp_elim\n')
+                                 '  log_exp_cancel(libdevice.log, libdevice.exp)\n')
+
+    def test_completed_logsumexp_lists_only_used_atoms(self):
+        output = self.check_lean("""
+import bench.examples.StableLogSumExp.FPEquiv
+#print_fp_assumptions VeriTile.Bench.Examples.StableLogSumExpFPEquiv.logsumexp_equiv
+""")
+        self.assertEqual(output.splitlines()[0], 'FP assumptions used by logsumexp_equiv:')
+        self.assertEqual(set(line.strip() for line in output.splitlines()[1:]), {
+            'log_mul_split(tl.log)', 'log_exp_cancel(tl.log, libdevice.exp)',
+            'exp_sub', 'div_mul_rcp', 'mul_commute', 'add_commute', 'add_zero',
+            'cancel', 'add_assoc', 'mul_distrib', 'mul_assoc', 'mul_rcp_cancel', 'mul_one',
+        })
+
+    def test_opaque_conditional_certificate_is_not_reported_as_proved(self):
+        output = self.check_lean("""
+import bench.examples.StableLogSumExp.FPEquiv
+open VeriTile Triton Bench.Examples.StableLogSumExpFPContract
+open scoped VeriTile.Spec
+specification opaque_candidate
+    (h : FP.Scheduled.ConditionalEquivalent₁ [] (candidate "x" "y" 2) (original "x" "y" 2)) :
+    candidate "x" "y" 2 ≡[[]] original "x" "y" 2 :=
+  Spec.FloatingPoint.ofNumerical (structural := fun _ _ => False) rfl rfl h
+#print_fp_assumptions opaque_candidate
+""")
+        self.assertEqual(output, 'FP assumptions used by opaque_candidate:\n'
+                         '  unresolved FP proof: h (atomic assumptions unavailable)\n')
 
     def test_log_exp_shared_sources_and_independent_proofs(self):
         self.check_lean('''

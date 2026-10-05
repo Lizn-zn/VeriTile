@@ -42,7 +42,7 @@ required input/intermediate domains remain part of the FP statements.
 | [Welford](Welford/) | Two-pass versus online mean/variance, with the stated count bound and reduction plan. |
 | [FusedLayerNorm](FusedLayerNorm/) | Two-pass versus Welford-based LayerNorm, with the stated count bound and domains. |
 | [LogExp](LogExp/) | Eliminate the masked, piecewise libdevice log-exp expression using its admitted atom. |
-| [StableLogSumExp](StableLogSumExp/) | Original direct/shifted sources and new conditional candidate have real correctness proofs. The candidate composes `log_mul_split` and `log_exp_elim` with libdevice.log; the original tl.log FP target remains pending an intrinsic bridge or an explicitly revised reference. |
+| [StableLogSumExp](StableLogSumExp/) | Conditional candidate versus the unchanged direct tl.log reference, proved using `log_mul_split .tl`, `log_exp_cancel .tl`, libdevice exp-sub and arithmetic. Symbolic row size, reduction schedule, bf16 output and frame retained. The older unconditional shifted source remains unadmitted. |
 
 Both versions now have real correctness specifications for vector addition,
 the Lion update, the fixed-rank mHC slices, reversed row sum and inlined row max.

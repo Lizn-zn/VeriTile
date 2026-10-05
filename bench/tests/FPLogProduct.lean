@@ -33,13 +33,13 @@ theorem measured_candidate_runs {α : Type} [Inhabited α] (M : Algebra α)
     (hle : M.compareLe (some .fp32) .real = some le) :
     ∃ t, Structural.exec (M.withDefaultPrecision .fp32) measuredCandidate s = some t ∧
       t.mem "z" 0 = Cell.mk .real
-        (splitProductValue M le (M.fp32Load ((s.mem "x" 0).read .real))
+        (splitProductValue .libdevice M le (M.fp32Load ((s.mem "x" 0).read .real))
           (M.fp32Load ((s.mem "y" 0).read .real))) ∧
       ∀ (r : RegionName) o, (r ≠ "z" ∨ o ≠ 0) → t.mem r o = s.mem r o := by
   simp [measuredCandidate, Structural.exec, run, step, evalExpr, evalComputeOp,
     Algebra.withDefaultPrecision, resolvePrecision,
     evalOp_unfold, numeric, numericLe, hle, bop, store, Region.cast,
-    ComputeDType.eraseDType, TileShape.allIndices, splitProductValue, half_eq, one_eq, two_eq]
+    ComputeDType.eraseDType, TileShape.allIndices, splitProductValue, Backend.logOp, half_eq, one_eq, two_eq]
   intro r o hmiss
   exact (State.write_other _ "z" r 0 o _ hmiss).trans rfl
 
@@ -65,11 +65,11 @@ private def le (a b : ℚ) : Bool := decide (a ≤ b)
 
 -- Both endpoints retain the product; both exterior intervals split the logs.
 theorem branch_endpoints_and_exterior :
-    splitProductValue model le (1 / 2) 1 = 21 / 2 ∧
-    splitProductValue model le 2 1 = 12 ∧
-    splitProductValue model le (1 / 4) 1 = 85 / 4 ∧
-    splitProductValue model le 3 1 = 24 := by
-  norm_num [splitProductValue, model, le]
+    splitProductValue .libdevice model le (1 / 2) 1 = 21 / 2 ∧
+    splitProductValue .libdevice model le 2 1 = 12 ∧
+    splitProductValue .libdevice model le (1 / 4) 1 = 85 / 4 ∧
+    splitProductValue .libdevice model le 3 1 = 24 := by
+  norm_num [splitProductValue, Backend.logOp, model, le]
 
 -- The selector observes the model's multiplication result, not a separately
 -- computed real product. Here multiplication returns one even for inputs 3,1.
@@ -78,8 +78,8 @@ private def roundedModel : Algebra ℚ :=
       if op = .mul then 1 else model.binary p d op a b }
 
 theorem selector_uses_computed_product :
-    splitProductValue roundedModel le 3 1 = 11 := by
-  norm_num [splitProductValue, roundedModel, model, le]
+    splitProductValue .libdevice roundedModel le 3 1 = 11 := by
+  norm_num [splitProductValue, Backend.logOp, roundedModel, model, le]
 
 private def initial : State ℚ where
   mem := fun _ _ => .mk .real 0
@@ -90,8 +90,8 @@ private def initial : State ℚ where
 
 theorem missing_fp32_comparison_fails :
     evalOp { model with compareLe := fun _ _ => none } (some .fp32)
-      (splitProduct (.const 1) (.const 1)) initial = none := by
-  simp [splitProduct, keepProduct, evalOp_unfold, numeric, numericLe]
+      (splitProduct .libdevice (.const 1) (.const 1)) initial = none := by
+  simp [splitProduct, Backend.log, keepProduct, evalOp_unfold, numeric, numericLe]
 
 theorem wrong_precision_cannot_execute_comparison :
     evalOp model (some .fp64) (keepProduct (.const 1)) initial = none := by
@@ -108,7 +108,7 @@ private def domain : Domain ℚ
 -- No branch interval is smuggled into the input condition. A positive product
 -- formed from negative operands still does not meet the experiment's domain.
 theorem domain_has_only_positive_operand_conditions (a b : ℚ) :
-    ScalarDomain domain Atom.log_mul_split.guards (operands a b) ↔ 0 < a ∧ 0 < b := by
+    ScalarDomain domain (Atom.log_mul_split .libdevice).guards (operands a b) ↔ 0 < a ∧ 0 < b := by
   simp [ScalarDomain, Atom.guards, productGuards, operands, State.setReg, domain]
 
 #axiomsClean measured_candidate_runs

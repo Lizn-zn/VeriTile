@@ -13,19 +13,19 @@ open Structural Guarded
 
 /-- Product-dependent splitting followed by conditional log-exp elimination.
 The outer inactive split masks the center to zero. In the active split arm,
-the inner fallback retains libdevice.log(libdevice.exp(center)). -/
+the inner fallback retains tl.log(libdevice.exp(center)). -/
 def finish {α : Type} (M : Algebra α) (lt le : α → α → Bool) (sum center : α) : α :=
   let p := M.binary (some .fp32) .real .mul sum
     (M.unary (some .fp32) .libdeviceExp center)
   let keep := le (M.literal (some .fp32) .real (1 / 2)) p &&
     le p (M.literal (some .fp32) .real 2)
-  let direct := M.unary (some .fp32) .libdeviceLog
+  let direct := M.unary (some .fp32) .log
     (if keep then p else M.literal (some .fp32) .real 1)
   let splitSum := if keep then M.literal (some .fp32) .real 1 else sum
   let splitCenter := if keep then M.literal (some .fp32) .real 0 else center
   let split := M.binary (some .fp32) .real .add
-    (M.unary (some .fp32) .libdeviceLog splitSum)
-    (LogExp.value M lt le splitCenter)
+    (M.unary (some .fp32) .log splitSum)
+    (LogExp.value .tl M lt le splitCenter)
   if keep then direct else split
 
 /-- The branch thresholds select implementations, not an extra input domain.
@@ -40,13 +40,15 @@ theorem finish_eq {α : Type} [Inhabited α] (R : LogExp.Rules)
     (hm : D .finite center)
     (he : D .finite (M.unary (some .fp32) .libdeviceExp center))
     (hpe : D .positive (M.unary (some .fp32) .libdeviceExp center)) :
-    finish M lt le sum center = M.unary (some .fp32) .libdeviceLog
+    finish M lt le sum center = M.unary (some .fp32) .log
       (M.binary (some .fp32) .real .mul sum
         (M.unary (some .fp32) .libdeviceExp center)) := by
-  rw [LogExp.apply_log_mul_split R (by decide) M D hM s le hle sum _ hs he hps hpe]
-  have hlog := LogExp.apply_rule R (by decide) M D hM s lt le hlt hle center hm
+  have hsplit := LogExp.apply_log_mul_split .tl R (by decide) M D hM s le hle sum _ hs he hps hpe
+  simp only [LogExp.Backend.logOp] at hsplit
+  rw [hsplit]
+  have hlog := LogExp.apply_log_exp_cancel .tl R (by decide) M D hM s lt le hlt hle center hm
   unfold finish LogExp.splitProductValue
   dsimp only
-  split <;> simp_all [LogExp.referenceValue]
+  split <;> simp_all [LogExp.referenceValue, LogExp.Backend.logOp]
 
 end VeriTile.Triton.FP.LogSumExpCandidate

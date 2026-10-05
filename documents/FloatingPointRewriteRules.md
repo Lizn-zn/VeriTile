@@ -38,14 +38,19 @@
 以下公式是模式说明，正式检查必须实例化为完整的 typed Compute IR，明确每一步精度、转换和计算顺序。\(q_d\) 表示指定配置下转换到格式 \(d\)；数学规格会按其定义处理或投影这些转换。箭头标注数值检查的参考到候选方向；反向的实验结论需要另建记录。准入后的形式等价假设可以使用对称规则，但这不产生反向实验记录。
 
 候选关系先在 Lean 中定义左右片段和条件，定义本身不依赖是否通过实验。
-[LogExp.lean](../VeriTile/Triton/Float/LogExp.lean) defines ten FP32 candidates:
-`log_mul`, `log_mul_libdevice`, `log_mul_split`, `log_mul_split_intrinsic`,
-`log_exp`, `log_exp_log_libdevice`, `log_exp_libdevice`, `log_exp_full_libdevice`,
-`log_exp_elim`, and `log_exp_elim_intrinsic`. The product domain is finite and
-positive; log-exp accepts finite signed inputs. Both ordinary log APIs have
-separate fragments and report IDs, including the guarded expressions. A report
-for one backend cannot select the other's candidate. The two FMA/log1p diagnostic
-variants remain experiment-only.
+[LogExp.lean](../VeriTile/Triton/Float/LogExp.lean) 用实现参数定义十个 fp32 候选：
+
+| Lean 名称 | 改写 |
+|---|---|
+| `log_mul log` | 无条件拆分 `log(a*b)`；`log` 可选 `.tl` 或 `.libdevice` |
+| `log_mul_split log` | 乘积在 `[0.5, 2]` 内保留原计算，否则拆分；两种 log 分别准入 |
+| `log_exp log exp` | 无条件消去 `log(exp(a))`；log、exp 分别选择实现，共四种组合 |
+| `log_exp_cancel log` | `0.5 < abs(a) <= 80` 时消去，其余保留 fallback；exp 固定为 libdevice |
+
+乘积关系要求正有限输入；log-exp 允许有限负数。实现参数选择不同的 typed
+片段和报告，不提供两种 API 相等的假设。两种 FMA/log1p 诊断仍只在实验侧定义。
+默认打印如 `log_mul_split(tl.log)`、`log_exp_cancel(tl.log, libdevice.exp)`，
+只列实际使用的原子，不显示配置或 gate 状态。
 
 two-gates 结果生成 [LogAdmission.lean](../VeriTile/Triton/Float/LogAdmission.lean)，
 `Atom.report?` 按规则、精度和定义域选择已准入条目，`Rules.assumptions` 自动收集这些条目。
@@ -59,32 +64,33 @@ open VeriTile.Triton.FP.LogExp
 open scoped VeriTile.Spec
 
 example (R : Rules) :
-    [Atom.log_exp_elim.lhs] ≡[R] [Atom.log_exp_elim.rhs] :=
-  VeriTile.Triton.FP.LogExp.rewrite R .log_exp_elim (by decide)
+    [(Atom.log_exp_cancel .libdevice).lhs] ≡[R] [(Atom.log_exp_cancel .libdevice).rhs] :=
+  VeriTile.Triton.FP.LogExp.rewrite R (.log_exp_cancel .libdevice) (by decide)
 ```
 
 这里 `by decide` 只检查当前表是否选中了该候选；数值关系仍是 `R` 中的外部准入假设。
 刷新实验结果后，已定义候选的可用性随准入表更新，无须重写候选表达式。
-`log_exp_elim` 对应 `LOG-EXP-GUARDED`，原始表达式始终是
+`log_exp_cancel .libdevice` 对应 `LOG-EXP-GUARDED`，原始表达式始终是
 `libdevice.log(libdevice.exp(a))`。候选只在 `0.5 < abs(a) <= 80` 时返回 `a`，
 其余输入保留原计算；未选中的 fallback 参数先置零。两轮种子的 fp32 实验均通过。
 分支属于候选程序，输入条件仍是 finite，不要求输入落在消去区间。
 该关系不能用于无条件消去 log-exp。完整例子的公开规格是
 [`log_exp_equiv`](../bench/examples/LogExp/FPEquiv.lean)。
 
-条件式乘积关系的 Lean 名称和默认打印名称为 `log_mul_split`；它对应已冻结的
+条件式乘积关系 `log_mul_split .libdevice` 默认打印为
+`log_mul_split(libdevice.log)`；它对应已冻结的
 实验标识 `LOG-MUL-GUARDED`。在
 `0.5 <= fp32(a*b) <= 2` 时保留 `libdevice.log` 的乘积形式，范围外才拆分。
 左右候选保留 fp32 精度、正有限输入以及未选分支传入 `1` 的处理。
 
 ```lean
 example (R : Rules) :
-    [Atom.log_mul_split.lhs] ≡[R] [Atom.log_mul_split.rhs] :=
-  VeriTile.Triton.FP.LogExp.rewrite R .log_mul_split (by decide)
+    [(Atom.log_mul_split .libdevice).lhs] ≡[R] [(Atom.log_mul_split .libdevice).rhs] :=
+  VeriTile.Triton.FP.LogExp.rewrite R (.log_mul_split .libdevice) (by decide)
 ```
 
 `apply_log_mul_split` 将该原子用于具体的正有限操作数，并保留比较器支持和
-乘积分支；它不提供无条件拆分。`log_mul` 和 `log_mul_libdevice` 仍未准入。
+乘积分支；它不提供无条件拆分。`log_mul .tl` 和 `log_mul .libdevice` 仍未准入。
 尚未准入的 FMA/log1p 实验仍只保留实验定义，接入它需要显式融合运算语义。
 数值结果和独立种子复核见[补充实验](../experiments/floating_point/supplement/README.md)。
 

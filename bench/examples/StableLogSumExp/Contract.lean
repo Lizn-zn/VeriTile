@@ -1,15 +1,13 @@
 import bench.examples.StableLogSumExp.Kernels
-/- Original logsumexp programs connected through scalar-derived sum recovery.
-Libdevice exp-sub is admitted; the two log obligations remain pending.
-The admitted LOG-EXP-GUARDED rule covers a different, masked piecewise expression.
-It cannot discharge this source's plain LOG-EXP obligation; LOG-MUL is still
-inconclusive. See FP.LogExpCounterexample for the tiny-input exact-identity
-counterexample and its explicit transcendental-evaluation premises. The
-existing real-correctness theorem remains valid in its stated semantics. -/
+/- Logsumexp source contracts and scalar-derived sum recovery.
+The conditional candidate is proved from admitted tl.log rewrites. The older
+unconditional shift retains explicit, unadmitted primitive log premises below;
+those lemmas do not certify the unconditional transformation. -/
 import bench.examples.StableLogSumExp.Execution
 import bench.examples.SoftmaxStable.Contract
 import VeriTile.Triton.Float.LogSumExpShift
-import VeriTile.Triton.Float.ExponentialLaws
+import VeriTile.Triton.Float.LogSumExpRules
+import VeriTile.Triton.Float.ConditionalIO
 
 namespace VeriTile.Bench.Examples.StableLogSumExpFPContract
 open VeriTile.Bench.Examples.StableLogSumExp.Kernels
@@ -85,4 +83,82 @@ theorem original_runs_under_log {α : Type} [Inhabited α] (R : FP.Exponential.R
     apply hfb r o
     simpa only [direct, directIO, Fin.forall_fin_one, Fin.val_zero, Nat.add_zero] using ho
 
+
+noncomputable section Candidate
+
+/-- The candidate and reference share numeric-domain checks and require only
+availability of the fp32 comparisons used by the candidate. Either result of
+each comparison is allowed. No kernel-output equation is a precondition. -/
+def candidate (x y : RegionName) (B : Nat) : FP.Scheduled.ConditionalIO₁ where
+  io := candidateIO x y B
+  profile := FP.Scheduled.fp32
+  domain := requirements x B
+  comparisons := [.lt .fp32 .real, .le .fp32 .real]
+
+def original (x y : RegionName) (B : Nat) : FP.Scheduled.ConditionalIO₁ :=
+  { candidate x y B with io := directIO x y B }
+
+/-- Recover the direct sum from exp-sub and arithmetic atoms, then compose
+conditional product splitting and log-exp cancellation, both using tl.log.
+The bf16 conversion is preserved by congruence, never cancelled. -/
+theorem candidate_values {α : Type} [Inhabited α] (R : FP.LogSumExp.Rules)
+    (M : Algebra α) (D : Domain α) (hM : Models R.assumptions M D)
+    (s : State α) (plans : Schedules) (lt le : α → α → Bool)
+    (hlt : M.compareLt (some .fp32) .real = some lt)
+    (hle : M.compareLe (some .fp32) .real = some le)
+    (xs : Fin B → α)
+    (hd : FP.LogSumExpShift.ShiftDomain M D xs (center M xs) (rowPlan plans B).tree) :
+    candidateValue M plans lt le xs = directValue (engine M plans) xs := by
+  have he := FP.LogSumExp.exponential_models R M D hM
+  have hl := FP.LogSumExp.logarithm_models R M D hM
+  dsimp only [candidateValue, directValue]
+  change M.cast (some .fp32) .real .bf16
+    (FP.LogSumExpCandidate.finish M lt le
+      (SoftmaxStableFPExecution.rowSum (engine M plans)
+        (SoftmaxStableFPExecution.shifted (engine M plans) xs)) (center M xs)) =
+    M.cast (some .fp32) .real .bf16
+      (M.unary (some .fp32) .log (SoftmaxStableFPExecution.rowSum (engine M plans)
+        (SoftmaxStableFPExecution.exponentials (engine M plans) xs)))
+  rw [SoftmaxStableFPContract.sum_value, SoftmaxStableFPContract.sum_value]
+  apply congrArg (M.cast (some .fp32) .real .bf16)
+  change FP.LogSumExpCandidate.finish M lt le
+    (FP.ScalarReduction.value M (FP.SoftmaxShift.shifted M xs (center M xs))
+      (zero M) (rowPlan plans B).tree) (center M xs) = _
+  rw [FP.LogSumExpCandidate.finish_eq R.logarithm M D hl s lt le hlt hle
+    _ _ hd.shiftedSum hd.shiftedSumPositive hd.center hd.centerExp hd.centerExpPositive]
+  exact congrArg (M.unary (some .fp32) .log)
+    (FP.LogSumExpShift.recover_sum R.exponential.arithmetic M D
+      (FP.Exponential.arithmetic_models R.exponential M D he) s
+      (FP.Exponential.exp_sub R.exponential M D he s) xs
+      (center M xs) (rowPlan plans B).tree hd)
+
+/-- Successful executions, the scalar bf16 observation and the memory frame
+for the actual two sources. The original unconditional shift remains separate. -/
+theorem candidate_runs {α : Type} [Inhabited α] (R : FP.LogSumExp.Rules)
+    (M : Algebra α) (D : Domain α) (hM : Models R.assumptions M D)
+    (s : State α) (plans : Schedules) (lt le : α → α → Bool)
+    (hlt : M.compareLt (some .fp32) .real = some lt)
+    (hle : M.compareLe (some .fp32) .real = some le)
+    (x y : RegionName) (B : Nat) (hB : 0 < B)
+    (hd : (requirements x B plans).Holds M D s) :
+    ∃ a b,
+      FP.Structural.exec (engine M plans) (candidateLSEKernel x y B) s = some a ∧
+      FP.Structural.exec (engine M plans) (directLSEKernel x y B) s = some b ∧
+      a.mem y (s.pids 0) = b.mem y (s.pids 0) ∧
+      IO₁Frame (candidateIO x y B) s a ∧ IO₁Frame (directIO x y B) s b := by
+  let xs := rowValues s x B
+  have hd' := (requirements_holds M D s x B plans).mp hd
+  obtain ⟨a, ha, hva, hfa⟩ := candidate_run M plans lt le hlt hle x y B hB xs s (fun _ => rfl)
+  obtain ⟨b, hb, hvb, hfb⟩ := direct_run (engine M plans) x y B xs s (fun _ => rfl)
+  refine ⟨a, b, ha, hb, ?_, ?_, ?_⟩
+  · exact hva.trans ((congrArg (Cell.mk .bf16)
+      (candidate_values R M D hM s plans lt le hlt hle xs hd')).trans hvb.symm)
+  · intro r o ho _
+    apply hfa r o
+    simpa only [candidateIO, directIO, Fin.forall_fin_one, Fin.val_zero, Nat.add_zero] using ho
+  · intro r o ho _
+    apply hfb r o
+    simpa only [directIO, Fin.forall_fin_one, Fin.val_zero, Nat.add_zero] using ho
+
+end Candidate
 end VeriTile.Bench.Examples.StableLogSumExpFPContract

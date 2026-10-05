@@ -1,4 +1,4 @@
-import bench.examples.StableLogSumExp.Execution
+import bench.examples.StableLogSumExp.FPEquiv
 import bench.examples.StableLogSumExp.Correct
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
@@ -41,23 +41,23 @@ private def model : Algebra ℚ where
 
 /-- Endpoints keep the product log, even when the center could simplify. -/
 theorem product_endpoints :
-    FP.LogSumExpCandidate.finish model lt le (1 / 2) 1 = 21 / 2 ∧
-    FP.LogSumExpCandidate.finish model lt le 2 1 = 12 ∧
-    FP.LogSumExpCandidate.finish model lt le (1 / 4) 1 = 45 / 4 ∧
-    FP.LogSumExpCandidate.finish model lt le 4 1 = 15 := by
-  norm_num [FP.LogSumExpCandidate.finish, FP.LogExp.value, model, lt, le]
+    FP.LogSumExpCandidate.finish model lt le (1 / 2) 1 = 201 / 2 ∧
+    FP.LogSumExpCandidate.finish model lt le 2 1 = 102 ∧
+    FP.LogSumExpCandidate.finish model lt le (1 / 4) 1 = 405 / 4 ∧
+    FP.LogSumExpCandidate.finish model lt le 4 1 = 105 := by
+  norm_num [FP.LogSumExpCandidate.finish, FP.LogExp.value, FP.LogExp.Backend.logOp, model, lt, le]
 
 /-- The split arm retains both signs of the strict lower and inclusive upper
 center threshold, as well as the near-zero and extreme-input fallbacks. -/
 theorem center_endpoints :
-    FP.LogSumExpCandidate.finish model lt le 4 (1 / 2) = 25 ∧
-    FP.LogSumExpCandidate.finish model lt le 4 (-(1 / 2)) = 25 ∧
-    FP.LogSumExpCandidate.finish model lt le 4 80 = 94 ∧
-    FP.LogSumExpCandidate.finish model lt le 4 (-80) = -66 ∧
-    FP.LogSumExpCandidate.finish model lt le 4 0 = 25 ∧
-    FP.LogSumExpCandidate.finish model lt le 4 81 = 25 ∧
-    FP.LogSumExpCandidate.finish model lt le 4 (-81) = 25 := by
-  norm_num [FP.LogSumExpCandidate.finish, FP.LogExp.value, model, lt, le]
+    FP.LogSumExpCandidate.finish model lt le 4 (1 / 2) = 205 ∧
+    FP.LogSumExpCandidate.finish model lt le 4 (-(1 / 2)) = 205 ∧
+    FP.LogSumExpCandidate.finish model lt le 4 80 = 184 ∧
+    FP.LogSumExpCandidate.finish model lt le 4 (-80) = 24 ∧
+    FP.LogSumExpCandidate.finish model lt le 4 0 = 205 ∧
+    FP.LogSumExpCandidate.finish model lt le 4 81 = 205 ∧
+    FP.LogSumExpCandidate.finish model lt le 4 (-81) = 205 := by
+  norm_num [FP.LogSumExpCandidate.finish, FP.LogExp.value, FP.LogExp.Backend.logOp, model, lt, le]
 
 private def initial : State ℚ where
   mem := fun _ _ => .mk .real 0
@@ -71,7 +71,7 @@ bf16 cast and scalar output address, including when input and output alias. -/
 theorem negative_center_in_place :
     ∃ t, exec (FP.Scheduled.fp32.algebra model FP.Equational.seededSchedules)
         (StableLogSumExp.Kernels.candidateLSEKernel "x" "x" 4) initial = some t ∧
-      t.mem "x" 1 = .mk .bf16 (53 / 4) ∧
+      t.mem "x" 1 = .mk .bf16 (413 / 4) ∧
       ∀ (r : RegionName) o, (r ≠ "x" ∨ o ≠ 1) → t.mem r o = initial.mem r o := by
   obtain ⟨t, ht, hv, hf⟩ := candidate_run model FP.Equational.seededSchedules lt le
     (by simp [model]) (by simp [model]) "x" "x" 4 (by decide)
@@ -87,7 +87,7 @@ theorem negative_center_in_place :
       (.add (.input 0) (.add (.input 1) (.add (.input 2) (.add (.input 3) .zero)))) = 4
     norm_num [FP.ScalarReduction.value, FP.ScalarArithmetic.add, FP.ScalarArithmetic.zero, model]
   simp only [candidateValue, hs]
-  norm_num [FP.LogSumExpCandidate.finish, FP.LogExp.value,
+  norm_num [FP.LogSumExpCandidate.finish, FP.LogExp.value, FP.LogExp.Backend.logOp,
     SoftmaxStableFPExecution.maximum, FP.Scheduled.Profile.algebra,
     FP.Scheduled.fp32, FP.ScalarReduction.algebra, Algebra.withDefaultPrecision,
     resolvePrecision, model, lt, le]
@@ -110,6 +110,58 @@ theorem missing_comparison_fails :
     evalOp_unfold, numeric, numericLe, TileShape.axisDim,
     FP.Scheduled.Profile.algebra, FP.Scheduled.fp32, FP.ScalarReduction.algebra,
     Algebra.withDefaultPrecision]
+
+/-- The domain permits both product branches; negative centers are valid.
+This fixture only checks contract satisfiability, not numerical admission. -/
+private def domain : FP.Guarded.Domain ℚ
+  | .finite => fun _ => True
+  | .positive => fun a => 0 < a
+  | .nonzero => fun a => a ≠ 0
+
+theorem domain_is_satisfiable :
+    (StableLogSumExpFPContract.requirements "x" 2 FP.Equational.seededSchedules).Holds
+      model domain initial := by
+  rw [StableLogSumExpFPContract.requirements_holds]
+  change FP.LogSumExpShift.ShiftDomain _ _ _ _ (.add (.input 0) (.add (.input 1) .zero))
+  constructor <;>
+    norm_num [domain, FP.SoftmaxShift.exp, FP.SoftmaxShift.exponentials,
+      FP.SoftmaxShift.shifted, FP.ScalarArithmetic.zero, FP.ScalarArithmetic.add,
+      FP.ScalarReduction.value, FP.ScalarReduction.FiniteTree, model]
+
+theorem split_domain_is_satisfiable :
+    (StableLogSumExpFPContract.requirements "x" 4 FP.Equational.seededSchedules).Holds
+      model domain initial := by
+  rw [StableLogSumExpFPContract.requirements_holds]
+  change FP.LogSumExpShift.ShiftDomain _ _ _ _
+    (.add (.input 0) (.add (.input 1) (.add (.input 2) (.add (.input 3) .zero))))
+  constructor <;>
+    norm_num [domain, FP.SoftmaxShift.exp, FP.SoftmaxShift.exponentials,
+      FP.SoftmaxShift.shifted, FP.ScalarArithmetic.zero, FP.ScalarArithmetic.add,
+      FP.ScalarReduction.value, FP.ScalarReduction.FiniteTree, model]
+
+theorem comparison_contract_is_satisfiable (B : Nat) :
+    ∀ c ∈ (StableLogSumExpFPContract.candidate "x" "y" B).comparisons,
+      c.Supported model := by
+  intro c hc
+  simp only [StableLogSumExpFPContract.candidate, List.mem_cons, List.not_mem_nil, or_false] at hc
+  rcases hc with rfl | rfl <;> simp [FP.Scheduled.Comparison.Supported, model]
+
+theorem comparison_support_is_part_of_signature (B : Nat) :
+    Spec.ProgramSyntax.signature (StableLogSumExpFPContract.candidate "x" "y" B) ≠
+      Spec.ProgramSyntax.signature
+        { StableLogSumExpFPContract.candidate "x" "y" B with comparisons := [] } := by
+  intro h
+  have bad := congrArg (fun sig => sig.2.2.2) h
+  cases bad
+
+example (B : Nat) : (StableLogSumExpFPContract.original "x" "y" B).io.kernel =
+    StableLogSumExp.Kernels.directLSEKernel "x" "y" B := rfl
+
+example (B : Nat) : (StableLogSumExpFPContract.candidate "x" "y" B).io.kernel =
+    StableLogSumExp.Kernels.candidateLSEKernel "x" "y" B := rfl
+
+#guard_msgs (drop info) in
+#axiomsClean StableLogSumExpFPEquiv.logsumexp_equiv
 
 #guard_msgs (drop info) in
 #axiomsClean FP.LogSumExpCandidate.finish_eq

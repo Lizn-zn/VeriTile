@@ -16,32 +16,32 @@ def references : ComputeKernel := triton {
 }
 
 theorem reference_matrix :
-    Atom.log_exp.lhs.code = references.surfaceBody[1]?.toList ∧
-    Atom.log_exp_log_libdevice.lhs.code = references.surfaceBody[2]?.toList ∧
-    Atom.log_exp_libdevice.lhs.code = references.surfaceBody[3]?.toList ∧
-    Atom.log_exp_full_libdevice.lhs.code = references.surfaceBody[4]?.toList :=
+    (Atom.log_exp .tl .tl).lhs.code = references.surfaceBody[1]?.toList ∧
+    (Atom.log_exp .libdevice .tl).lhs.code = references.surfaceBody[2]?.toList ∧
+    (Atom.log_exp .tl .libdevice).lhs.code = references.surfaceBody[3]?.toList ∧
+    (Atom.log_exp .libdevice .libdevice).lhs.code = references.surfaceBody[4]?.toList :=
   ⟨rfl, rfl, rfl, rfl⟩
 
 theorem each_guarded_reference_is_unchanged :
-    Atom.log_exp_elim_intrinsic.lhs = Atom.log_exp_libdevice.lhs ∧
-    Atom.log_exp_elim.lhs = Atom.log_exp_full_libdevice.lhs ∧
-    Atom.log_mul_split_intrinsic.lhs = Atom.log_mul.lhs ∧
-    Atom.log_mul_split.lhs = Atom.log_mul_libdevice.lhs := ⟨rfl, rfl, rfl, rfl⟩
+    (Atom.log_exp_cancel .tl).lhs = (Atom.log_exp .tl .libdevice).lhs ∧
+    (Atom.log_exp_cancel .libdevice).lhs = (Atom.log_exp .libdevice .libdevice).lhs ∧
+    (Atom.log_mul_split .tl).lhs = (Atom.log_mul .tl).lhs ∧
+    (Atom.log_mul_split .libdevice).lhs = (Atom.log_mul .libdevice).lhs := ⟨rfl, rfl, rfl, rfl⟩
 
 /-- Equal measured results must never let one backend's report select the other. -/
 theorem reports_cannot_cross_backends :
-    Atom.log_exp_elim_intrinsic.matches LogAdmission.fp32_log_exp_guarded = Bool.false ∧
-    Atom.log_exp_elim.matches LogAdmission.fp32_log_exp_guarded_intrinsic = Bool.false ∧
-    Atom.log_mul_split_intrinsic.matches LogAdmission.fp32_log_mul_guarded = Bool.false ∧
-    Atom.log_mul_split.matches LogAdmission.fp32_log_mul_guarded_intrinsic = Bool.false := by decide
+    (Atom.log_exp_cancel .tl).matches LogAdmission.fp32_log_exp_guarded = Bool.false ∧
+    (Atom.log_exp_cancel .libdevice).matches LogAdmission.fp32_log_exp_guarded_intrinsic = Bool.false ∧
+    (Atom.log_mul_split .tl).matches LogAdmission.fp32_log_mul_guarded = Bool.false ∧
+    (Atom.log_mul_split .libdevice).matches LogAdmission.fp32_log_mul_guarded_intrinsic = Bool.false := by decide
 
 theorem selected_intrinsic_elimination (R : Rules) :
-    [Atom.log_exp_elim_intrinsic.lhs] ≡[R] [Atom.log_exp_elim_intrinsic.rhs] :=
-  FP.LogExp.rewrite R .log_exp_elim_intrinsic (by decide)
+    [(Atom.log_exp_cancel .tl).lhs] ≡[R] [(Atom.log_exp_cancel .tl).rhs] :=
+  FP.LogExp.rewrite R (.log_exp_cancel .tl) (by decide)
 
 theorem selected_intrinsic_product (R : Rules) :
-    [Atom.log_mul_split_intrinsic.lhs] ≡[R] [Atom.log_mul_split_intrinsic.rhs] :=
-  FP.LogExp.rewrite R .log_mul_split_intrinsic (by decide)
+    [(Atom.log_mul_split .tl).lhs] ≡[R] [(Atom.log_mul_split .tl).rhs] :=
+  FP.LogExp.rewrite R (.log_mul_split .tl) (by decide)
 
 noncomputable section
 
@@ -82,19 +82,19 @@ private def evaluate (e : Op .real []) : Option ℚ :=
 
 set_option maxHeartbeats 1600000 in
 theorem intrinsic_elimination_routes :
-    evaluate (intrinsicExpression (.const 1)) = some 1 ∧
-    evaluate (intrinsicExpression (.const (1 / 2))) = some (2021 / 2) ∧
-    evaluate (expression (.const (1 / 2))) = some (2201 / 2) := by
-  norm_num [evaluate, intrinsicExpression, expression, useIdentity, absolute,
+    evaluate (expression .tl (.const 1)) = some 1 ∧
+    evaluate (expression .tl (.const (1 / 2))) = some (2021 / 2) ∧
+    evaluate (expression .libdevice (.const (1 / 2))) = some (2201 / 2) := by
+  norm_num [evaluate, expression, Backend.log, useIdentity, absolute,
     evalOp_unfold, numeric, numericLt, numericLe, bop, model]
 
 set_option maxHeartbeats 1600000 in
 theorem intrinsic_product_routes :
-    evaluate (splitProductIntrinsic (.const 1) (.const 1)) = some 11 ∧
-    evaluate (splitProduct (.const 1) (.const 1)) = some 101 ∧
-    evaluate (splitProductIntrinsic (.const 2) (.const 2)) = some 24 ∧
-    evaluate (splitProduct (.const 2) (.const 2)) = some 204 := by
-  norm_num [evaluate, splitProductIntrinsic, splitProduct, keepProduct,
+    evaluate (splitProduct .tl (.const 1) (.const 1)) = some 11 ∧
+    evaluate (splitProduct .libdevice (.const 1) (.const 1)) = some 101 ∧
+    evaluate (splitProduct .tl (.const 2) (.const 2)) = some 24 ∧
+    evaluate (splitProduct .libdevice (.const 2) (.const 2)) = some 204 := by
+  norm_num [evaluate, splitProduct, Backend.log, keepProduct,
     evalOp_unfold, numeric, numericLe, bop, model]
 
 end

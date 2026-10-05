@@ -5,7 +5,7 @@ import VeriTile.Meta.StatementAudit
 /-!
 FP equivalence of originalKernel and optimizedKernel from Kernels.lean.
 Each loaded operand must be finite. The only numerical assumption is the
-admitted log_exp_elim scalar relation. Comparisons and casts retain fp32
+admitted `log_exp_cancel .libdevice` scalar relation. Comparisons and casts retain fp32
 precision. The symbolic tile size is independent of the experimental shape.
 The proof lifts the scalar relation to equal writes and a memory frame.
 -/
@@ -69,7 +69,7 @@ theorem original_run {α : Type} [Inhabited α] (M : Algebra α)
     (hx : ∀ i : Fin B, (s.mem xReg (s.pids 0 * B + i.val)).read .real = xs i) :
     ∃ t, Structural.exec (engine M) (originalKernel xReg yReg B) s = some t ∧
       (∀ i : Fin B, t.mem yReg (s.pids 0 * B + i.val) =
-        Cell.mk .real (output M (referenceValue M (loaded M (xs i))))) ∧
+        Cell.mk .real (output M (referenceValue .libdevice M (loaded M (xs i))))) ∧
       (∀ (r : RegionName) o, (r ≠ yReg ∨ ∀ i : Fin B, o ≠ s.pids 0 * B + i.val) →
         t.mem r o = s.mem r o) := by
   have hinj : Function.Injective (fun i : TileIndex [B] => s.pids 0 * B + i.1.val) := by
@@ -81,7 +81,7 @@ theorem original_run {α : Type} [Inhabited α] (M : Algebra α)
     resolvePrecision, numeric, bop, store, toFloat, ofFloat]
   refine ⟨fun i => ?_, fun r o hmiss => ?_⟩
   · rw [State.scatter_readback _ _ _ _ (i, PUnit.unit) hinj]
-    simp [hx, output, loaded, referenceValue]
+    simp [hx, output, loaded, referenceValue, Backend.logOp]
   · apply (State.scatter_frame _ _ _ _ r o ?_ _).trans rfl
     rcases hmiss with hr | ho
     · exact Or.inl hr
@@ -95,7 +95,7 @@ theorem optimized_run {α : Type} [Inhabited α] (M : Algebra α)
     (hx : ∀ i : Fin B, (s.mem xReg (s.pids 0 * B + i.val)).read .real = xs i) :
     ∃ t, Structural.exec (engine M) (optimizedKernel xReg yReg B) s = some t ∧
       (∀ i : Fin B, t.mem yReg (s.pids 0 * B + i.val) = Cell.mk .real
-        (output M (value M lt le (loaded M (xs i))))) ∧
+        (output M (value .libdevice M lt le (loaded M (xs i))))) ∧
       (∀ (r : RegionName) o, (r ≠ yReg ∨ ∀ i : Fin B, o ≠ s.pids 0 * B + i.val) →
         t.mem r o = s.mem r o) := by
   have hinj : Function.Injective (fun i : TileIndex [B] => s.pids 0 * B + i.1.val) := by
@@ -108,7 +108,7 @@ theorem optimized_run {α : Type} [Inhabited α] (M : Algebra α)
     store, toFloat, ofFloat]
   refine ⟨fun i => ?_, fun r o hmiss => ?_⟩
   · rw [State.scatter_readback _ _ _ _ (i, PUnit.unit) hinj]
-    simp [hx, output, loaded, value, half_eq, upper_eq, zero_eq]
+    simp [hx, output, loaded, value, Backend.logOp, half_eq, upper_eq, zero_eq]
   · apply (State.scatter_frame _ _ _ _ r o ?_ _).trans rfl
     rcases hmiss with hr | ho
     · exact Or.inl hr
@@ -147,7 +147,7 @@ specification log_exp_equiv (R : Rules)
     refine ⟨a, b, ha, hb, ?_, ?_, ?_⟩
     · intro i
       change a.mem yReg (s.pids 0 * blockSize + i.val) = b.mem yReg (s.pids 0 * blockSize + i.val)
-      rw [hva i, hvb i, apply_rule R (by decide) M D hM s lt le hlt hle _ (hf i)]
+      rw [hva i, hvb i, apply_log_exp_cancel .libdevice R (by decide) M D hM s lt le hlt hle _ (hf i)]
     · intro r o ho _
       exact hfa r o ho
     · intro r o ho _

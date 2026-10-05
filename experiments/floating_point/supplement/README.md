@@ -120,8 +120,10 @@ the fixed-reference and fixed-candidate checks. IDs, contracts and Lean fragment
 remain separate even when compiled results coincide.
 
 The generated admission contains four guarded variants. The Lean candidates
-are `log_mul_split`, `log_mul_split_intrinsic`, `log_exp_elim`, and
-`log_exp_elim_intrinsic`. Unconditional LOG-MUL/LOG-EXP and the two LOG1P probes
+are `log_mul_split .libdevice`, `log_mul_split .tl`,
+`log_exp_cancel .libdevice`, and `log_exp_cancel .tl`. The backend argument
+selects log; cancellation always retains libdevice.exp. Public names do not
+change the frozen report IDs or measured source hashes. Unconditional LOG-MUL/LOG-EXP and the two LOG1P probes
 remain unadmitted. The LOG1P pair remains experiment-only because its fused
 operation still needs a corresponding Lean execution model.
 

@@ -35,8 +35,8 @@ FP equivalence. Pending entries must not be advertised as proved.
 | mHC width | `HyperConnectionsWidth/Correct.lean` — checked for original and optimized sources, original rank-one/zero-iteration scope | `HyperConnectionsWidth/FPEquiv.lean` — checked in the same scope; two multiplication commutations |
 | Adam-named Lion update | `AdamUpdateGridLaunch/Correct.lean` — checked for both sources per program; original grid proofs retained | `AdamUpdateGridLaunch/FPEquiv.lean` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStable/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxStable/FPEquiv.lean` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
-| Log-exp elimination | `LogExp/Correct.lean` — checked for the fixed reference and guarded candidate against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted conditional log_exp_elim atom |
-| Stable logsumexp | `StableLogSumExp/Correct.lean` — checked for both original kernels and the new conditional candidate against logsumexp | Candidate composes admitted `log_mul_split` and `log_exp_elim` with libdevice.log. The original direct/shifted tl.log pair remains pending; no admitted rule bridges the two log intrinsics. |
+| Log-exp elimination | `LogExp/Correct.lean` — checked for the fixed reference and guarded candidate against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted conditional `log_exp_cancel .libdevice` atom |
+| Stable logsumexp | `StableLogSumExp/Correct.lean` — checked for both original kernels and the conditional candidate against logsumexp | `StableLogSumExp/FPEquiv.lean` — `logsumexp_equiv` checks the conditional tl.log candidate against the unchanged direct reference, using `log_mul_split .tl`, `log_exp_cancel .tl`, exp-sub and arithmetic. The older unconditional shifted source is not certified. |
 | Softmax reciprocal | `SoftmaxReciprocal/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxReciprocal/FPEquiv.lean` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
 | Float dtype softmax | `FloatDTypeSoftmax/Correct.lean` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmax/FPEquiv.lean` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
 | Fused SiLU | `FusedSiLU/Correct.lean` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLU/FPEquiv.lean` — checked; original fused versus materialized pipeline, with no numerical assumptions |
@@ -44,8 +44,9 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Welford | `Welford/Correct.lean` — checked for both original kernels against population mean and variance; both output windows and memory framing | `Welford/FPEquiv.lean` — checked under scalar arithmetic and the two bounded count atoms, for `0 < N <= 2^24`; both original bf16 outputs and memory frames retained |
 | Fused layernorm | `FusedLayerNorm/Correct.lean` — checked for both original kernels against population-variance normalization and affine transformation | `FusedLayerNorm/FPEquiv.lean` — checked for `N <= 2^24`, including empty output rows; original statistics, affine suffix, bf16 stores and frames retained |
 
-There are 19 correctness modules, 18 completed FP equivalence modules, and
-one goal-only FP file for StableLogSumExp. The eight `RealEquiv.lean` modules
+There are 19 correctness modules and 19 modules with completed FP specifications.
+StableLogSumExp proves the conditional candidate; its older unconditional shift
+remains a separately recorded pending goal. The eight `RealEquiv.lean` modules
 retain proofs with real intermediate arithmetic and their stated cast semantics.
 Their presence does not complete a pending FP transformation.
 
@@ -108,8 +109,8 @@ interpreter deliberately rejects raw fp64 payload constants and typed fp64
 loads, which these examples do not use. This is not a complete IEEE evaluator.
 
 [The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
-main-table algebraic countermodels from the supplemental rule set. Stable
-logsumexp remains pending. Its two scalar probes and paired libdevice.log
+main-table algebraic countermodels from the supplemental rule set. The
+unconditional logsumexp shift remains pending. Its two scalar probes and paired libdevice.log
 variants in `experiments/floating_point/supplement/log_product_config.py`
 completed on H200: LOG-MUL is bias-INCONCLUSIVE and LOG-EXP-LIBDEVICE is
 bias-REJECT. Both variants have identical observations and PTX after removing
@@ -125,8 +126,12 @@ unconditional controls. The conditional log-product candidate
 also passes under two seeds (B=0.0006248690 / 0.0006251552), retaining the
 product log when `0.5<=fp32(a*b)<=2` and splitting it elsewhere. This does
 not justify the unconditional log-product premise. It is available in the Lean
-candidate catalog as `log_mul_split`, preserving the complete conditional
-expression and the original report identifier `LOG-MUL-GUARDED`. See the
+candidate catalog as `log_mul_split .libdevice` and `log_mul_split .tl`, each
+preserving its complete expression and frozen report identifier. The same
+backend parameter selects `log_exp_cancel`. The conditional logsumexp proof
+uses the two tl.log variants without changing the direct reference.
+Its scheduled IO contract explicitly requires fp32 comparison support;
+this specifies available operations, not a branch outcome or numerical law. See the
 [current log report](../experiments/floating_point/supplement/log_report/summary.md).
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
