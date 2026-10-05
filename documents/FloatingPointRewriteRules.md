@@ -61,10 +61,12 @@ example (R : Rules) :
 
 这里 `by decide` 只检查当前表是否选中了该候选；数值关系仍是 `R` 中的外部准入假设。
 刷新实验结果后，已定义候选的可用性随准入表更新，无须重写候选表达式。
-`LOG-EXP-GUARDED` keeps the reference `libdevice.log(libdevice.exp(a))` unchanged.
-Its candidate returns `a` for `0.5 < abs(a) <= 80` and retains that reference
-computation otherwise. Both seeds pass with FP32 arithmetic; this conditional
-relation cannot authorize unconditional log-exp cancellation.
+`log_exp_guarded` 对应 `LOG-EXP-GUARDED`，原始表达式始终是
+`libdevice.log(libdevice.exp(a))`。候选只在 `0.5 < abs(a) <= 80` 时返回 `a`，
+其余输入保留原计算；未选中的 fallback 参数先置零。两轮种子的 fp32 实验均通过。
+分支属于候选程序，输入条件仍是 finite，不要求输入落在消去区间。
+该关系不能用于无条件消去 log-exp。完整例子的公开规格是
+[`log_exp_guarded_equiv`](../bench/examples/LogExp/FPEquiv.lean)。
 
 条件式乘积关系的 Lean 名称和默认打印名称为 `log_mul_split`；它对应已冻结的
 实验标识 `LOG-MUL-GUARDED`。在

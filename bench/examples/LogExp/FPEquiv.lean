@@ -3,10 +3,10 @@ import VeriTile.Triton.Float.LogExp
 import VeriTile.Meta.StatementAudit
 
 /-!
-FP equivalence under the admitted scalar rule of originalKernel and optimizedKernel from Kernels.lean.
+FP equivalence of originalKernel and optimizedKernel from Kernels.lean.
 Each loaded operand must be finite. The only numerical assumption is the
-admitted log_exp_guarded scalar relation. Comparisons and casts
-retain fp32 precision. The symbolic tile size is independent of the experimental shape.
+admitted log_exp_guarded scalar relation. Comparisons and casts retain fp32
+precision. The symbolic tile size is independent of the experimental shape.
 The proof lifts the scalar relation to equal writes and a memory frame.
 -/
 
@@ -25,9 +25,9 @@ def loaded {α : Type} (M : Algebra α) (a : α) : α := M.fp32Load a
 def output {α : Type} (M : Algebra α) (a : α) : α :=
   M.cast (some .fp32) .real .real a
 
-/-- The candidate prefix reads `a` and evaluates the branch selector. Its successful
-execution requires the interpreter to support comparisons. The only numerical
-input restriction is that each loaded `a` is finite. -/
+/-- The candidate prefix reads `a` and evaluates the branch selector. Successful
+execution requires comparison support, for either branch outcome. The only
+numerical input restriction is that each loaded `a` is finite. -/
 def domain (xReg : RegionName) (B : Nat) : Precondition where
   code := (optimizedKernel xReg "y" B).surfaceBody.take 4
   guards := [⟨"a", [B], .finite⟩]

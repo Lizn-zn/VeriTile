@@ -71,7 +71,8 @@ theorem piecewise_execution (a : ℚ) :
     State.setReg, bop, model]
   split <;> simp_all <;> ring
 
--- Both signs at 0.5 use fallback; moderate exterior inputs return a.
+-- Both signs at 0.5 use fallback, both signs at 80 return a, and the
+-- near-zero and extreme negative inputs still execute the original calls.
 theorem threshold_branches :
     FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         (-(1 / 2)) = 21999 / 2 ∧
@@ -81,6 +82,12 @@ theorem threshold_branches :
         (-1) = -1 ∧
     FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         80 = 80 ∧
+    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+        (-80) = -80 ∧
+    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+        (-90) = 10910 ∧
+    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+        0 = 11000 ∧
     FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
         90 = 11090 := by
   norm_num [FP.LogExp.value, model]
@@ -100,7 +107,7 @@ private def withInput (a : ℚ) : State ℚ :=
   { initial with mem := fun _ _ => .mk .real a }
 
 -- The domain is inhabited for arbitrary signed inputs, including the fallback
--- branch; successful comparison evaluation does not restrict inputs to |a| ≤ 0.5.
+-- branch; successful comparisons impose neither branch interval on the inputs.
 set_option maxHeartbeats 1600000 in
 theorem finite_input_domain (a : ℚ) (B : Nat) :
     (LogExp.FPEquiv.domain "x" B).Holds (LogExp.FPEquiv.engine model)
@@ -144,6 +151,23 @@ theorem reference_retains_output_cast (a : ℚ) :
   norm_num [withInput, initial, LogExp.FPEquiv.output, LogExp.FPEquiv.loaded,
     FP.LogExp.referenceValue, model, add_assoc] at h ⊢
   exact h
+
+-- Both candidate branches retain the output conversion, even when the
+-- identity path eliminates the log and exp calls.
+theorem candidate_retains_output_cast (a : ℚ) :
+    ∃ t, exec (LogExp.FPEquiv.engine { model with cast := fun _ _ _ x => x + 7 })
+        (LogExp.optimizedKernel "x" "y" 1) (withInput a) = some t ∧
+      t.mem "y" 0 = .mk .real
+        (FP.LogExp.value model (fun a b => decide (a < b))
+          (fun a b => decide (a ≤ b)) a + 7) := by
+  obtain ⟨t, ht, hv, _⟩ := LogExp.FPEquiv.optimized_run
+    { model with cast := fun _ _ _ x => x + 7 }
+    (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+    (by simp [model]) (by simp [model])
+    "x" "y" 1 (withInput a) (fun _ => a) (fun _ => rfl)
+  refine ⟨t, ht, ?_⟩
+  simpa [withInput, initial, LogExp.FPEquiv.output, LogExp.FPEquiv.loaded,
+    FP.LogExp.value, model] using hv ⟨0, by decide⟩
 
 -- The public proof is about both source kernels, with symbolic dimensions.
 open scoped VeriTile.Spec in

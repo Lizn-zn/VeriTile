@@ -7,9 +7,9 @@ The fp32 log/exp candidates below exist independently of experiment outcomes.
 Each candidate specifies its exact intrinsics, operand domain and two scalar
 fragments. Defining a candidate supplies no numerical equality.
 
-The generated LogAdmission table selects which candidates can be used as
-assumptions. LOG-EXP-GUARDED keeps the original log(exp(a)) reference and changes
-only the candidate to a guarded identity with the original fallback. Refreshing
+The generated LogAdmission table selects log_exp_guarded and log_mul_split.
+The former keeps the original log(exp(a)) reference and changes only the
+candidate to a guarded identity with the original fallback. Refreshing
 the report changes availability, not the candidate definitions. Kernel
 implementations and their separate specifications are in bench/examples/LogExp/.
 -/
@@ -127,8 +127,8 @@ def Atom.lhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a 
   | .log_exp_libdevice => .log (.libdeviceExp input)
   | .log_exp_full_libdevice | .log_exp_guarded => .libdeviceLog (.libdeviceExp input))⟩
 
-/-- Product rules propose split logs; cancellation rules propose the input.
-The guarded probe proposes conditional elimination with the same input domain. -/
+/-- Product rules propose unconditional or conditional splitting. Cancellation
+rules propose the input, or conditional elimination with the same input domain. -/
 def Atom.rhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a with
   | .log_mul => .add .real .nil (.log input) (.log secondInput)
   | .log_mul_libdevice => .add .real .nil (.libdeviceLog input) (.libdeviceLog secondInput)
