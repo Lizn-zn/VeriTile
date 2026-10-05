@@ -1,5 +1,6 @@
 import VeriTile.Triton.Float.GuardedRewrite
 import VeriTile.Triton.Float.ExecutionProfile
+import VeriTile.Meta.Specification
 
 /-! Contextual scalar rewrites in fp32-profiled algorithm-typed source.
 The checks refer to actual operands after the indicated prefix. Matrix products,
@@ -9,6 +10,21 @@ open Structural Guarded
 open GuardedRewrite (sameShape sameShape_left sameShape_right)
 
 def engine {α : Type} (M : Algebra α) : Algebra α := M.withDefaultPrecision .fp32
+
+/-- Locate a register assignment in the source, counting repeated writes from
+zero. A source edit before the assignment does not change the requested site. -/
+def prefixBefore (code : List ComputeStmt) (name : RegName) (occurrence : Nat := 0) : List ComputeStmt :=
+  match code with
+  | [] => []
+  | st :: rest =>
+    match st with
+    | .assign _ _ out _ =>
+      if out = name then
+        match occurrence with
+        | 0 => []
+        | n + 1 => st :: prefixBefore rest name n
+      else st :: prefixBefore rest name occurrence
+    | _ => st :: prefixBefore rest name occurrence
 
 inductive Site where
   | add (before : List ComputeStmt) (shape : TileShape) (left right : Op .real shape)
@@ -117,5 +133,31 @@ theorem div_mul_rcp {α : Type} [Inhabited α] (R : ScalarArithmetic.Rules)
         exact ScalarArithmetic.div_mul_rcp R M D hM t _ _ (hva i) hb hn
       simp only [Option.bind_some]
       rw [hv]
+
+/-- One changed statement in its original execution context. The prefix is
+retained so guards describe actual intermediate values, not fresh inputs. -/
+def Contextual {α : Type} [Inhabited α] (M : Algebra α) (s : State α)
+    (before after : List ComputeStmt) (lhs rhs : ComputeStmt) : Prop :=
+  run (engine M) (before ++ lhs :: after) s = run (engine M) (before ++ rhs :: after) s
+
+@[spec_rule] theorem contextual_add_commute {α : Type} [Inhabited α]
+    (R : ScalarArithmetic.Rules) (M : Algebra α) (D : Domain α)
+    (hM : Models R.assumptions M D) (s : State α) (before after : List ComputeStmt)
+    (out : RegName) (a b : Op .real shape)
+    (hd : (Site.add before shape a b).Holds M D s) :
+    Contextual M s before after
+      (.assign .real shape out (.alg (.add .real (sameShape shape) a b)))
+      (.assign .real shape out (.alg (.add .real (sameShape shape) b a))) :=
+  add_commute R M D hM s before after out a b hd
+
+@[spec_rule] theorem contextual_div_mul_rcp {α : Type} [Inhabited α]
+    (R : ScalarArithmetic.Rules) (M : Algebra α) (D : Domain α)
+    (hM : Models R.assumptions M D) (s : State α) (before after : List ComputeStmt)
+    (out : RegName) (a : Op .real (n :: rest)) (b : ℝ)
+    (hd : (Site.div before n rest a b).Holds M D s) :
+    Contextual M s before after
+      (.assign .real (n :: rest) out (.alg (.div .real .scalarR a (.const b))))
+      (.assign .real (n :: rest) out (.alg (.mul .real .scalarR a (.div .real .nil (.const 1) (.const b))))) :=
+  div_mul_rcp R M D hM s before after out a b hd
 
 end VeriTile.Triton.FP.ProfiledRewrite

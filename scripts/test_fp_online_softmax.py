@@ -46,6 +46,9 @@ example (x y : RegionName) (N : Nat) :
     (OnlineSoftmaxFPContract.online x y N).io.kernel =
       OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N := rfl
 example (N : Nat) :
+    (OnlineSoftmax.onlineSoftmaxIO N).kernel =
+      OnlineSoftmax.Kernels.onlineSoftmaxKernel "x" "y" N := rfl
+example (N : Nat) :
     (OnlineSoftmax.batchSoftmaxIO N).kernel =
       OnlineSoftmax.Kernels.batchSoftmaxKernel "x" "y" N := rfl
 ''')

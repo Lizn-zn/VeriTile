@@ -30,9 +30,9 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype addition | `FloatDTypeAdd/Correct.lean` — checked for original and optimized sources, including empty tiles | `FloatDTypeAdd/FPEquiv.lean` — checked; add commutation; output cast retained |
 | Row-wise sum | `RowWiseSum/Correct.lean` — checked for original and optimized sources | `RowWiseSum/FPEquiv.lean` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
 | Row-wise max | `RowWiseMax/Correct.lean` — checked for original and optimized sources | `RowWiseMax/FPEquiv.lean` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
-| Online softmax | `OnlineSoftmax/Correct.lean` — checked for batch and complete online output; region-memory stores/frame plus retained batch flat-memory bridge | `OnlineSoftmax/FPEquiv.lean` — checked for actual stored outputs on both sides; libdevice EXP-SUB and scalar arithmetic, symbolic positive row length and memory frames |
-| mHC depth | `HyperConnectionsDepth/Correct.lean` — checked for general matrix sources and finite Sinkhorn iterations in region memory, plus scalar flat-memory specializations | `HyperConnectionsDepth/FPEquiv.lean` — checked for symbolic dimensions and iteration count; final pointwise add commutation |
-| mHC width | `HyperConnectionsWidth/Correct.lean` — checked for general matrix sources and finite Sinkhorn iterations in region memory, plus scalar flat-memory specializations | `HyperConnectionsWidth/FPEquiv.lean` — checked for symbolic dimensions and iteration count; logit division versus reciprocal multiplication, with unchanged matrix products |
+| Online softmax | `OnlineSoftmax/Correct.lean` — checked for batch and complete online output; bounded flat-memory stores/frame for both sources | `OnlineSoftmax/FPEquiv.lean` — checked for actual stored outputs on both sides; libdevice EXP-SUB and scalar arithmetic, symbolic positive row length and memory frames |
+| mHC depth | `HyperConnectionsDepth/Correct.lean` — checked for general matrix sources and finite Sinkhorn iterations, including bounded flat memory for both original and optimized versions | `HyperConnectionsDepth/FPEquiv.lean` — checked for symbolic dimensions and iteration count; final pointwise add commutation |
+| mHC width | `HyperConnectionsWidth/Correct.lean` — checked for general matrix sources and finite Sinkhorn iterations, including bounded flat memory for both original and optimized versions | `HyperConnectionsWidth/FPEquiv.lean` — checked for symbolic dimensions and iteration count; logit division versus reciprocal multiplication, with unchanged matrix products |
 | Adam-named Lion update | `AdamUpdateGridLaunch/Correct.lean` — checked for both sources per program; original grid proofs retained | `AdamUpdateGridLaunch/FPEquiv.lean` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStable/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxStable/FPEquiv.lean` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
 | Log-exp elimination | `LogExp/Correct.lean` — checked for the fixed reference and guarded candidate against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted conditional `log_exp_cancel .libdevice` atom |
@@ -216,7 +216,7 @@ rereads the row, and stores `exp(x-m)/l`. Both kernels must execute successfully
 their stored output cells agree, and all other memory is framed. The signature
 retains fp32, the row layout, symbolic size and actual intermediate domains.
 The real output theorem proves the same two-pass source against the independent
-softmax formula in region memory. The old register observations are auxiliary
+softmax formula, with a `KernelIO₁` specification for bounded flat memory. The old register observations are auxiliary
 lemmas, not the public equivalence scope.
 
 Stable logsumexp retains its single bf16 store at `pid` while replacing both

@@ -1,6 +1,6 @@
 import bench.examples.HyperConnectionsDepth.Kernels
 import VeriTile.Triton.Float.GuardedRewrite
-import VeriTile.Triton.Float.ProfiledRewrite
+import VeriTile.Triton.Float.RewriteTactics
 import VeriTile.Meta.StatementAudit
 
 /- The matrix specifications below cover symbolic dimensions and every
@@ -53,7 +53,7 @@ specification mhc_depth_equiv (tau : ℝ) (R : Rules) :
 /-- The final two matrix operands must be finite entrywise, after every
 Sinkhorn iteration and the unchanged matrix multiplication have executed. -/
 def matrixAdditionSite (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Site :=
-  .add ((matrixOriginal S T D numIters tau).surfaceBody.take 17) [S, D]
+  .add (FP.ProfiledRewrite.prefixBefore (matrixOriginal S T D numIters tau).surfaceBody "out") [S, D]
     (.ref .real [S, D] "res_mix") (.ref .real [S, D] "branch_mix")
 
 def matrixOriginalProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
@@ -66,13 +66,8 @@ def matrixOptimizedProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewri
 /-- Contextual equivalence for every matrix dimension and iteration count. -/
 specification mhc_depth_matrix_equiv (S T D numIters : Nat) (tau : ℝ) (R : Rules) :
     matrixOriginalProgram S T D numIters tau ≡[R] matrixOptimizedProgram S T D numIters tau := by
-  apply Spec.FloatingPoint.ofNumerical (lhs := matrixOriginalProgram S T D numIters tau)
-    (rhs := matrixOptimizedProgram S T D numIters tau) (structural := fun _ _ => False) rfl rfl
-  intro α _ M domain hM s hd
-  exact FP.ProfiledRewrite.add_commute R M domain hM s
-    ((matrixOriginal S T D numIters tau).surfaceBody.take 17)
-    ((matrixOriginal S T D numIters tau).surfaceBody.drop 18) "out" _ _
-    (hd _ (by simp [matrixOriginalProgram, matrixAdditionSite]))
+  equiv_decompose
+  all_goals fp_prove
 
 #print_fp_assumptions mhc_depth_matrix_equiv
 #guard_msgs (drop info) in

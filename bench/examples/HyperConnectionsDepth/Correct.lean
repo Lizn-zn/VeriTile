@@ -1,10 +1,11 @@
 import bench.examples.HyperConnectionsDepth.Kernels
+import bench.examples.HyperConnectionsDepth.Memory
 import VeriTile.Triton.Math.Sinkhorn
 import VeriTile.Triton.Math.MatrixRewrite
 
 /- The matrix specifications at the end cover symbolic S/T/D and every finite
-normalization count, with region-memory outputs and frames. The earlier scalar
-KernelIO proofs additionally retain their flat-memory bridge. -/
+normalization count, including disjoint flat buffer placement, bounded accesses,
+output formulas and memory frames for both matrix sources. Scalar examples remain available. -/
 /-
 bench/examples/HyperConnectionsDepth
 
@@ -484,5 +485,62 @@ specification mhc_depth_matrix_optimized_correct (S T D iters : Nat) (tau : ℝ)
     ((matrixOriginal S T D iters tau).body.drop 18) "out" _ _ s t ht
 
 #axiomsClean mhc_depth_matrix_optimized_correct
+
+open scoped VeriTile.Triton.KernelIO₃
+
+/-- Row-major input/output windows for either complete matrix source. -/
+def matrixIO (optimized : Bool) (S T D iters : Nat) (tau : ℝ) : KernelIO₃ where
+  kernel := if optimized then matrixOptimized "res_mix" "branch_out" "h_post" "out" S T D iters tau
+    else matrixOriginal S T D iters tau
+  projection := by cases optimized <;> rfl
+  in1 := "res_mix"
+  in2 := "branch_out"
+  in3 := "h_post"
+  out := "out"
+  B1 := S * D
+  B2 := T * D
+  B3 := T * S
+  Bout := S * D
+  read1 := fun pid => pid * (S * D)
+  read2 := fun pid => pid * (T * D)
+  read3 := fun _ => 0
+  write := fun pid => pid * (S * D)
+
+/-- Successful pointer-kernel execution, independent matrix formula and frame,
+for every disjoint placement whose buffers cover the declared windows. -/
+specification mhc_depth_matrix_flat_correctness (optimized : Bool)
+    (S T D iters : Nat) (tau : ℝ) :
+    Spec.Real (matrixIO optimized S T D iters tau ⊨ fun res branch logits i =>
+      ((formula (matrixTile res) (matrixTile branch) (matrixTile logits) tau iters).data
+        (matrixIndex i)).unbotD 0) := by
+  refine KernelIO₃.Implements.intro _ ?_ ?_ ?_
+  · simpa only [matrixIO, apply_ite] using Memory.flattenOk optimized S T D iters tau
+  · intro bounds s h1 h2 h3 h4 _
+    simp only [matrixIO, Nat.zero_add] at h1 h2 h3 h4
+    simpa only [matrixIO, apply_ite] using Memory.traceSafe optimized S T D iters tau bounds s h1 h2 h3 h4
+  · intro s xs ys zs hx hy hz
+    cases optimized
+    ·
+      obtain ⟨t, ht, hv, hf⟩ := mhc_depth_matrix_correct S T D iters tau s
+      have hxs := readMatrix_eq_tile s "res_mix" (s.pid * (S * D)) S D xs hx
+      have hys := readMatrix_eq_tile s "branch_out" (s.pid * (T * D)) T D ys hy
+      have hzs := readMatrix_eq_tile s "h_post" 0 T S zs hz
+      refine ⟨t, ht, ?_, ?_⟩
+      · intro i
+        simpa only [hxs, hys, hzs, Nat.add_assoc, matrixIndex_address] using hv (matrixIndex i)
+      · intro r o h _
+        exact matrix_frame hf r o h
+    ·
+      obtain ⟨t, ht, hv, hf⟩ := mhc_depth_matrix_optimized_correct S T D iters tau s
+      have hxs := readMatrix_eq_tile s "res_mix" (s.pid * (S * D)) S D xs hx
+      have hys := readMatrix_eq_tile s "branch_out" (s.pid * (T * D)) T D ys hy
+      have hzs := readMatrix_eq_tile s "h_post" 0 T S zs hz
+      refine ⟨t, ht, ?_, ?_⟩
+      · intro i
+        simpa only [hxs, hys, hzs, Nat.add_assoc, matrixIndex_address] using hv (matrixIndex i)
+      · intro r o h _
+        exact matrix_frame hf r o h
+
+#axiomsClean mhc_depth_matrix_flat_correctness
 
 end VeriTile.Bench.Examples.HyperConnectionsDepth.MatrixCorrect

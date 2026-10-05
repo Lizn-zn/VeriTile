@@ -1,4 +1,5 @@
 import bench.examples.OnlineSoftmax.Kernels
+import bench.examples.OnlineSoftmax.Memory
 /- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
 has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
 That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
@@ -521,7 +522,8 @@ private theorem normalization_region_run (x y : RegionName) (N : Nat)
     · exact ho k.1 hc.2.symm
 
 /-- Real correctness of the complete online source, including the output store
-and cell-level frame. This region-memory theorem is independent of FP admission. -/
+and cell-level frame. The flat-memory specification below transports this result
+through the separately proved address bounds; both proofs are independent of FP admission. -/
 specification online_softmax_output_correctness (N : Nat) (hN : 0 < N)
     (s : BlockState) (xs : Fin N → ℝ) (hx : InputLoadedAt s "x" N xs) :
     Spec.Real (∃ t, exec (onlineSoftmaxKernel "x" "y" N) s = some t ∧
@@ -757,6 +759,31 @@ specification online_softmax_correctness (B : Nat) (hB : 0 < B) :
     obtain ⟨s1, hexec, hval, hframe⟩ := batchSoftmax_region_run B hB s₀ xs hx
     -- scratch is empty, so its frame side condition is vacuous
     exact ⟨s1, hexec, hval, fun r o hout _ => hframe r o hout⟩
+
+/-- The complete two-pass source has the same bounded row windows as batch softmax. -/
+def onlineSoftmaxIO (N : Nat) : KernelIO₁ where
+  kernel := onlineSoftmaxKernel "x" "y" N
+  inp := "x"
+  out := "y"
+  Bin := N
+  Bout := N
+  read := fun pid => pid * N
+  write := fun pid => pid * N
+
+/-- Real softmax correctness for the complete pointer kernel, including successful
+execution, both input passes in bounds, all output stores and the flat-memory frame. -/
+specification online_softmax_flat_correctness (N : Nat) (hN : 0 < N) :
+    Spec.Real (onlineSoftmaxIO N ⊨ fun xs i =>
+      Real.exp (xs i - tileMax hN xs) / ∑ j, Real.exp (xs j - tileMax hN xs)) := by
+  refine KernelIO₁.Implements.intro _ ?_ ?_ ?_
+  · exact Memory.flattenOk "x" "y" N
+  · intro bounds s hx hy _
+    exact Memory.traceSafe "x" "y" N bounds s hx hy
+  · intro s xs hx
+    obtain ⟨t, ht, hv, hf⟩ := online_softmax_output_correctness N hN s xs hx
+    exact ⟨t, ht, hv, fun r o h _ => hf r o h⟩
+
+#axiomsClean online_softmax_flat_correctness
 
 end OnlineSoftmax.kernelIO
 

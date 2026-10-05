@@ -123,7 +123,7 @@ def search (goal : MVarId) (facts : Array Expr) (maxSteps : Nat) : MetaM Bool :=
 
 /-- Prove using registered rules and optional explicit hints. The step bound
 controls the number of atomic edges, independently of premise-search depth. -/
-syntax (name := fpProve) "fp_prove" (" (" "maxSteps" " := " num ")")?
+syntax (name := fpProve) "fp_prove" (" (" &"maxSteps" " := " num ")")?
   (" [" term,* "]")? : tactic
 
 elab_rules : tactic

@@ -29,8 +29,8 @@ required input/intermediate domains remain part of the FP statements.
 | [FlatVectorAdd](FlatVectorAdd/) | Masked addition; FP addition commutation. |
 | [FloatDTypeAdd](FloatDTypeAdd/) | Explicitly typed addition; FP addition commutation. |
 | [AdamUpdateGridLaunch](AdamUpdateGridLaunch/) | In-place Lion update (the source is named Adam); commute the update's addition. |
-| [HyperConnectionsDepth](HyperConnectionsDepth/) | Symbolic `S/T/D` and normalization count; commute the final pointwise addition. General real matrix formula and contextual FP proof; scalar flat-memory proof retained. |
-| [HyperConnectionsWidth](HyperConnectionsWidth/) | Symbolic `S/T/D` and normalization count; replace logit division by reciprocal multiplication, preserving both matrix products. General real formulas and contextual FP proof; scalar specialization retained. |
+| [HyperConnectionsDepth](HyperConnectionsDepth/) | Symbolic `S/T/D` and normalization count; commute the final pointwise addition. General real matrix formula with bounded flat memory; contextual FP proof uses the two tactics. |
+| [HyperConnectionsWidth](HyperConnectionsWidth/) | Symbolic `S/T/D` and normalization count; replace logit division by reciprocal multiplication, preserving both matrix products. General real formulas with bounded flat memory; the two tactics compose both FP rewrite sites. |
 | [RowWiseMax](RowWiseMax/) | Inline the maximum computation; structural FP equivalence without numerical assumptions. |
 | [RowWiseSum](RowWiseSum/) | Decompose observable outputs and prove reversed reduction lanes using guarded addition commutation, association and zero identities. |
 | [FusedSiLU](FusedSiLU/) | Fuse the pipeline; structural FP equivalence without numerical assumptions. |
@@ -38,7 +38,7 @@ required input/intermediate domains remain part of the FP statements.
 | [SoftmaxReciprocal](SoftmaxReciprocal/) | Replace per-lane division with reciprocal multiplication; unchanged tl.exp prefix, only div_mul_rcp assumed. |
 | [FloatDTypeSoftmax](FloatDTypeSoftmax/) | The reciprocal rewrite with fp32 loads/stores and fp64 work; unchanged tl.exp prefix, only the casted div_mul_rcp atom assumed. |
 | [SoftmaxStable](SoftmaxStable/) | Naive versus max-shifted softmax, derived from scalar assumptions and reduction plans. |
-| [OnlineSoftmax](OnlineSoftmax/) | Complete two-pass online kernel versus batch softmax; successful executions, stored output rows and memory frames. |
+| [OnlineSoftmax](OnlineSoftmax/) | Complete two-pass online kernel versus batch softmax; successful executions, stored output rows and memory frames; real correctness includes bounded flat memory. |
 | [Welford](Welford/) | Two-pass versus online mean/variance, with the stated count bound and reduction plan. |
 | [FusedLayerNorm](FusedLayerNorm/) | Two-pass versus Welford-based LayerNorm, with the stated count bound and domains. |
 | [LogExp](LogExp/) | Eliminate the masked, piecewise libdevice log-exp expression using its admitted atom. |
@@ -46,7 +46,7 @@ required input/intermediate domains remain part of the FP statements.
 
 Both versions now have real correctness specifications for vector addition,
 the Lion update, general mHC matrices and their scalar specializations, reversed row sum and inlined row max.
-Each real statement includes successful execution and a memory frame. The new general mHC and complete online statements use region memory; the retained scalar/batch KernelIO statements additionally bridge to bounded flat memory. Empty tiles are covered by the optimized aligned/float/TritonBench adds,
+Each real statement includes successful execution and a memory frame. General mHC and complete online correctness include bounded flat memory: buffer placements are disjoint, both input/output windows are bounded, and all other flat cells are preserved. Empty tiles are covered by the optimized aligned/float/TritonBench adds,
 row sum and Lion update; masked FlatVectorAdd and row max retain their stated
 positive-block-size conditions. OnlineSoftmax proves actual stored outputs; the recurrence-only helper remains available separately.
 
@@ -65,7 +65,7 @@ add_zero, including the zero steps introduced by normalization. Padding stays
 explicit in the original schedules, and row length/stride remain symbolic.
 The generic tactics remain available for syntax derivations and their existing
 IO adapter; see [the tactic guide](../../documents/EquivalenceTactics.md).
-These guarded examples use explicit domain-preserving composition lemmas.
+The general matrix examples use `equiv_decompose` and `fp_prove` through the `ProfiledRewrite` adapter. It retains actual-prefix domain checks and composes checked contextual lemmas; scalar examples retain their explicit bridges.
 The other completed FP examples connect their transformations
 to execution or observable outputs. A proof of one stated slice or observation
 does not certify a larger kernel or a different precision/intrinsic variant.

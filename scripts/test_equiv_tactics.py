@@ -42,6 +42,11 @@ class EquivalenceTacticTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         self.assertNotIn("warning:", result.stdout)
 
+    def test_contextual_rewrites_keep_domains_and_precision(self):
+        result = self.lean((ROOT / "bench/tests/ProfiledRewriteTactics.lean").read_text())
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertNotIn("warning:", result.stdout)
+
     def test_decomposition_is_independent_of_the_fp_model(self):
         result = self.lean("""
 import VeriTile.Meta.EquivDecompose
@@ -55,6 +60,16 @@ open Lean Elab Command in
 run_cmd do
   if (← getEnv).contains `VeriTile.Triton.ComputeKernel then
     throwError "Generic decomposition imported the Triton numerical model"
+""")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
+    def test_tactic_option_does_not_reserve_structure_field_names(self):
+        result = self.lean("""
+import VeriTile.Triton.Float.RewriteTactics
+structure UserOptions where
+  maxSteps : Nat
+example : ({ maxSteps := 5 } : UserOptions).maxSteps = 5 := by
+  simp (config := { maxSteps := 100 })
 """)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
 

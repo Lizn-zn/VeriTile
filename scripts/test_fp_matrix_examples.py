@@ -56,6 +56,8 @@ run_cmd do
     throwError "General original correctness is missing"
   unless env.contains `VeriTile.Bench.Examples.HyperConnections{side}.MatrixCorrect.mhc_{side.lower()}_matrix_optimized_correct do
     throwError "General optimized correctness is missing"
+  unless env.contains `VeriTile.Bench.Examples.HyperConnections{side}.MatrixCorrect.mhc_{side.lower()}_matrix_flat_correctness do
+    throwError "General flat-memory correctness is missing"
   if env.contains `VeriTile.Bench.Examples.HyperConnections{side}FPEquiv.mhc_{side.lower()}_matrix_equiv then
     throwError "Real correctness imported FP equivalence"
 """)

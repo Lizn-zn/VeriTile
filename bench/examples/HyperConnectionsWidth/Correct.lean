@@ -1,10 +1,11 @@
 import bench.examples.HyperConnectionsWidth.Kernels
+import bench.examples.HyperConnectionsWidth.Memory
 import VeriTile.Triton.Math.Sinkhorn
 import VeriTile.Triton.Math.MatrixRewrite
 
 /- The matrix specifications at the end cover symbolic S/T/D and every finite
-normalization count, with region-memory outputs and frames. The earlier scalar
-KernelIO proofs additionally retain their flat-memory bridge. -/
+normalization count, including disjoint flat buffer placement, bounded accesses,
+output formulas and memory frames for both matrix sources. Scalar examples remain available. -/
 /-
 bench/examples/HyperConnectionsWidth
 
@@ -554,5 +555,83 @@ specification mhc_width_matrix_optimized_correct (S T D iters : Nat) (tau : ℝ)
     "z" _ tau s t hmid
 
 #axiomsClean mhc_width_matrix_optimized_correct
+
+open scoped VeriTile.Triton.KernelIO₃ₓ₂
+
+/-- Both output matrices have their own bounded row-major windows. -/
+def matrixIO (optimized : Bool) (S T D iters : Nat) (tau : ℝ) : KernelIO₃ₓ₂ where
+  kernel := if optimized then matrixOptimized "res" "h_res" "h_pre" "res_mix" "branch_in" S T D iters tau
+    else matrixOriginal S T D iters tau
+  projection := by cases optimized <;> rfl
+  in1 := "res"
+  in2 := "h_res"
+  in3 := "h_pre"
+  out1 := "res_mix"
+  out2 := "branch_in"
+  B1 := S * D
+  B2 := S * S
+  B3 := S * T
+  Bout1 := S * D
+  Bout2 := T * D
+  read1 := fun pid => pid * (S * D)
+  read2 := fun _ => 0
+  read3 := fun _ => 0
+  write1 := fun pid => pid * (S * D)
+  write2 := fun pid => pid * (T * D)
+
+/-- The complete pointer kernel computes both independent matrix formulas and
+preserves every flat cell outside their output windows. -/
+specification mhc_width_matrix_flat_correctness (optimized : Bool)
+    (S T D iters : Nat) (tau : ℝ) :
+    Spec.Real (matrixIO optimized S T D iters tau ⊨ fun res hres hpre =>
+      (fun i => ((residualFormula (matrixTile res) (matrixTile hres) tau iters).data
+        (matrixIndex i)).unbotD 0,
+       fun i => ((branchFormula (matrixTile res) (matrixTile hpre) tau iters).data
+        (matrixIndex i)).unbotD 0)) := by
+  refine KernelIO₃ₓ₂.Implements.intro _ ?_ ?_ ?_
+  · simpa only [matrixIO, apply_ite] using Memory.flattenOk optimized S T D iters tau
+  · intro bounds s h1 h2 h3 h4 h5
+    simp only [matrixIO, Nat.zero_add] at h1 h2 h3 h4 h5
+    simpa only [matrixIO, apply_ite] using Memory.traceSafe optimized S T D iters tau bounds s h1 h2 h3 h4 h5
+  · intro s xs ys zs hx hy hz
+    cases optimized
+    ·
+      obtain ⟨t, ht, hv1, hv2, hf⟩ := mhc_width_matrix_correct S T D iters tau s
+      have hxs := readMatrix_eq_tile s "res" (s.pid * (S * D)) S D xs hx
+      have hys := readMatrix_eq_tile s "h_res" 0 S S ys hy
+      have hzs := readMatrix_eq_tile s "h_pre" 0 S T zs hz
+      refine ⟨t, ht, ?_, ?_, ?_⟩
+      · intro i
+        simpa only [hxs, hys, Nat.add_assoc, matrixIndex_address] using hv1 (matrixIndex i)
+      · intro i
+        simpa only [hxs, hzs, Nat.add_assoc, matrixIndex_address] using hv2 (matrixIndex i)
+      · intro r o h1 h2
+        apply hf r o
+        · rcases h1 with h | h
+          · exact Or.inl h
+          · exact Or.inr (fun i => by simpa [matrixIO, finProdFinEquiv, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.mul_comm] using (h (finProdFinEquiv (i.1, i.2.1))))
+        · rcases h2 with h | h
+          · exact Or.inl h
+          · exact Or.inr (fun i => by simpa [matrixIO, finProdFinEquiv, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.mul_comm] using (h (finProdFinEquiv (i.1, i.2.1))))
+    ·
+      obtain ⟨t, ht, hv1, hv2, hf⟩ := mhc_width_matrix_optimized_correct S T D iters tau s
+      have hxs := readMatrix_eq_tile s "res" (s.pid * (S * D)) S D xs hx
+      have hys := readMatrix_eq_tile s "h_res" 0 S S ys hy
+      have hzs := readMatrix_eq_tile s "h_pre" 0 S T zs hz
+      refine ⟨t, ht, ?_, ?_, ?_⟩
+      · intro i
+        simpa only [hxs, hys, Nat.add_assoc, matrixIndex_address] using hv1 (matrixIndex i)
+      · intro i
+        simpa only [hxs, hzs, Nat.add_assoc, matrixIndex_address] using hv2 (matrixIndex i)
+      · intro r o h1 h2
+        apply hf r o
+        · rcases h1 with h | h
+          · exact Or.inl h
+          · exact Or.inr (fun i => by simpa [matrixIO, finProdFinEquiv, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.mul_comm] using (h (finProdFinEquiv (i.1, i.2.1))))
+        · rcases h2 with h | h
+          · exact Or.inl h
+          · exact Or.inr (fun i => by simpa [matrixIO, finProdFinEquiv, Nat.add_assoc, Nat.add_comm, Nat.add_left_comm, Nat.mul_comm] using (h (finProdFinEquiv (i.1, i.2.1))))
+
+#axiomsClean mhc_width_matrix_flat_correctness
 
 end VeriTile.Bench.Examples.HyperConnectionsWidth.MatrixCorrect

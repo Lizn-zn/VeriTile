@@ -72,7 +72,7 @@ templates and their scoped rule bindings remain explicit Lean definitions.
 ## Guarded program rewrites
 
 VectorAdd, FlatVectorAdd, FloatDTypeAdd, TritonBenchVectorAddition,
-AdamUpdateGridLaunch, HyperConnectionsDepth and HyperConnectionsWidth use
+AdamUpdateGridLaunch and the scalar HyperConnectionsDepth/Width examples use
 `GuardedRewrite.Program`. Its domain records a shared prefix and the two actual
 operand expressions for each rewrite site. `add_commute` and `mul_commute`
 derive contextual execution equality from the guarded scalar atoms. The
@@ -82,7 +82,38 @@ including failure; it does not independently prove successful execution.
 
 These examples use explicit composition of the checked bridge lemmas. The
 syntax tactic cannot discharge program-point domains by discarding them.
-HyperConnectionsWidth composes two sites and prints `mul_commute` once.
+The scalar HyperConnectionsWidth example composes two sites and prints `mul_commute` once.
+
+## General matrix program rewrites
+
+Import `VeriTile.Triton.Float.RewriteTactics` for the `ProfiledRewrite.Program`
+adapter. Both general HyperConnections proofs now use:
+
+```lean
+specification mhc_width_matrix_equiv (S T D numIters : Nat) (tau : ℝ) (R : Rules) :
+    matrixOriginalProgram S T D numIters tau ≡[R]
+      matrixOptimizedProgram S T D numIters tau := by
+  equiv_decompose
+  all_goals fp_prove
+```
+
+`equiv_decompose` compares the aligned source statements, carries the shared
+signature and declared domains, and exposes one `Contextual` goal per changed
+statement. Every goal retains its complete prefix and suffix. Earlier changes
+are present in later prefixes, so a second rewrite is checked against the
+actual intermediate program. Loops, casts, masks and stores are kept intact.
+Different list lengths require an explicit execution lemma in this adapter.
+
+`fp_prove` selects checked contextual arithmetic lemmas and discharges their
+premises from the model and the retained site guards. It does not invent
+finite/nonzero facts, discard guards, or change a precision tag. Depth prints
+only `add_commute`; Width prints only `div_mul_rcp`. Both leave the matrix
+products and normalization loops unchanged.
+
+Site definitions use `prefixBefore source "register" occurrence` instead of
+statement numbers; occurrences count from zero. Inserting a shared statement
+before a rewrite no longer requires renumbering its site. The selected prefix,
+operand expression and precision must still match the contextual lemma.
 
 ## Observable outputs and reduction permutations
 
@@ -109,6 +140,7 @@ FP assumptions used by rowwise_sum_equiv:
 
 Run `python3 -m unittest scripts.test_equiv_tactics` for the tactic regressions.
 They cover decomposition, composition, missing admissions, retained guards,
-precision, casts, masks, and the existing output/reduction adapter. Run
+precision, casts, masks, the existing output/reduction adapter, and contextual
+matrix rewrites with shifted prefixes and multiple sites. Run
 `python3 -m unittest scripts.test_fp_guarded_examples` for program-point domains,
 intermediate-value rejection and successful execution witnesses.

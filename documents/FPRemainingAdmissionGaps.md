@@ -302,7 +302,7 @@ normalization using the first pass's final m/l. Both executions succeed,
 output cells agree, and all other memory is preserved. The admitted atoms
 remain libdevice exp-sub and scalar arithmetic; no new numerical rule is
 needed for the store. The independent real theorem proves the complete output
-formula and region-memory frame. The old observation lemmas remain auxiliary.
+formula and a bounded flat-memory frame. The old observation lemmas remain auxiliary.
 
 ### Welford mean step and integer conversion
 
