@@ -85,8 +85,8 @@ class ContractTests(unittest.TestCase):
 
     def test_supported_matrix_and_invalid_precision(self):
         p = profile()
-        self.assertEqual(len(p["rules"]), 23)
-        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 56)
+        self.assertEqual(len(p["rules"]), 27)
+        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 62)
         for field in ("input", "output", "accumulator"):
             bad = deepcopy(p)
             bad["formats"][-1][field] = "bf16"
@@ -136,11 +136,34 @@ class ContractTests(unittest.TestCase):
                        for rule in (variant, base)]
             self.assertEqual(configs[0]['probe']['seed'], seed)
             self.assertEqual(configs[0]['probe']['paired_input_rule'], base)
-            self.assertEqual(configs[0]['numerics']['intrinsics']['log'], 'libdevice.log')
-            self.assertEqual(configs[1]['numerics']['intrinsics']['log'], 'tl.log')
+            for config, name in zip(configs, [variant, base]):
+                self.assertEqual(config['numerics']['intrinsics']['log'],
+                                 supplement.load_catalog()[name]['intrinsics']['log'])
             self.assertNotEqual(*[supplement.instance_key(c) for c in configs])
             self.assertEqual(domain(variant), domain(base))
             self.assertEqual(runner.domains.policy(variant), runner.domains.policy(base))
+
+    def test_log_variants_change_only_log_and_use_paired_inputs(self):
+        p = profile()
+        fmt = p['formats'][2]
+        lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
+        catalog = supplement.load_catalog()
+        for tl_rule, lib_rule in supplement.LOG_PAIRS:
+            with self.subTest(pair=(tl_rule, lib_rule)):
+                tl_row, lib_row = catalog[tl_rule], catalog[lib_rule]
+                self.assertEqual(tl_row['intrinsics']['log'], 'tl.log')
+                self.assertEqual(lib_row['intrinsics']['log'], 'libdevice.log')
+                self.assertEqual(tl_row['intrinsics'].get('exp'), lib_row['intrinsics'].get('exp'))
+                self.assertEqual(tl_row['intrinsics'].get('log1p'), lib_row['intrinsics'].get('log1p'))
+                for side in ['reference', 'candidate']:
+                    # The original catalogue uses unqualified log/exp for tl intrinsics.
+                    normalize = lambda x: x.replace('libdevice.log(', 'log(').replace('tl.log(', 'log(').replace('tl.exp(', 'exp(')
+                    self.assertEqual(normalize(tl_row[side]), normalize(lib_row[side]))
+                self.assertEqual(runner.seed_for(p, fmt, tl_rule), runner.seed_for(p, fmt, lib_rule))
+                self.assertEqual(runner.domains.policy(tl_rule), runner.domains.policy(lib_rule))
+                configs = [supplement.contract_for(p, fmt, rule, {}, runner.source_hashes(), lowerings)
+                           for rule in (tl_rule, lib_rule)]
+                self.assertNotEqual(*[supplement.instance_key(c) for c in configs])
 
     def test_guarded_log_exp_probe_keeps_profile_and_records_its_own_expression(self):
         p = runner.validate_profile(deepcopy(runner.load_module(
@@ -177,7 +200,8 @@ class ContractTests(unittest.TestCase):
         self.assertEqual({k: v for k, v in p.items() if k not in ('rules', 'seed')},
                          {k: v for k, v in validation.items() if k not in ('rules', 'seed')})
         self.assertNotEqual(p['seed'], validation['seed'])
-        self.assertEqual(validation['rules'], ['LOG-MUL', 'LOG-MUL-LOG1P', 'LOG-MUL-GUARDED', 'LOG-EXP-GUARDED'])
+        self.assertEqual(validation['rules'], p['rules'])
+        self.assertEqual(set(p['rules']), {r for pair in supplement.LOG_PAIRS for r in pair})
         lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
         for rule, side, upper in [('LOG-MUL-LOG1P', 'reference', 1.5), ('LOG-MUL-GUARDED', 'candidate', 2.)]:
             c = supplement.contract_for(p, p['formats'][0], rule, {}, runner.source_hashes(), lowerings)

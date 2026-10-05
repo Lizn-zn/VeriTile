@@ -6,35 +6,17 @@ import VeriTile.Triton.Float.ReportedAdmission
 
 namespace VeriTile.Triton.FP.LogAdmission
 
-def snapshot : String := "10e0ef1b6f6e4632c2e00a1801a2ebab9d3275e32f98d9c575fe47bdec554df1"
-def reportMetadata : Lean.Json := (Lean.Json.parse "{\"experiment\":{\"backend\":{\"compile_options\":{\"enable_fp_fusion\":false},\"compiler\":{\"cuda\":\"13.0\",\"numpy\":\"2.3.5\",\"torch\":\"2.13.0+cu130\",\"triton\":\"3.7.1\"},\"implementation_version\":\"cf5e2c28e954e2e658c306f371e6c36fa0ac848f5aeddb3c10bf5e08e024377c\",\"kind\":\"triton-cuda\",\"launch\":{\"block\":1024,\"num_warps\":4},\"target\":{\"capability\":[9,0],\"device\":\"NVIDIA L20X\",\"driver_versions\":[\"570.133.20\"]}},\"bundle_version\":\"scalar-supplement-13\",\"entries\":[\"fp32__LOG-MUL\",\"fp32__LOG-MUL-LIBDEVICE\",\"fp32__LOG-EXP-LIBDEVICE\",\"fp32__LOG-EXP-FULL-LIBDEVICE\",\"fp32__LOG-EXP-GUARDED\",\"fp32__LOG-MUL-LOG1P\",\"fp32__LOG-MUL-GUARDED\"],\"execution\":{\"hardware_model\":\"H200\",\"independent_cpu_replay\":{\"complete_rows\":7,\"numpy\":\"2.5.2\",\"tables_identical_to_gpu_environment\":true},\"job\":{\"DisplayName\":\"traces_kernel_equivalence_testing\",\"GmtFinishTime\":\"2026-10-05T06:18:41Z\",\"GmtRunningTime\":\"2026-10-05T06:14:56Z\",\"JobId\":\"dlc1713xu2g5t8e2\",\"Status\":\"Succeeded\"},\"manifest_sha256\":\"155172f81951bc8e1bfba2dc853e44f7cf1623cd1611d908c9b6c522677eb473\"},\"profile\":{\"batch\":512,\"distribution\":{\"family\":\"normal\",\"mean\":1.0,\"std\":1.0},\"formats\":[{\"accumulator\":\"fp32\",\"compute\":\"fp32\",\"input\":\"fp32\",\"name\":\"fp32\",\"output\":\"fp32\"}],\"gates\":{\"bias\":{\"se_multiplier\":5.0,\"tau\":0.05},\"vars\":{\"alpha\":0.00135,\"bootstrap\":1000,\"fail\":100.0,\"horizon\":625000,\"min_exceedances\":40,\"quantile\":0.9,\"warn\":10.0},\"warning_policy\":\"pass_only\"},\"launch\":{\"block\":1024,\"num_warps\":4},\"replicates\":4096,\"replicates_max\":50000,\"rules\":[\"LOG-MUL\",\"LOG-MUL-LIBDEVICE\",\"LOG-EXP-LIBDEVICE\",\"LOG-EXP-FULL-LIBDEVICE\",\"LOG-EXP-GUARDED\",\"LOG-MUL-LOG1P\",\"LOG-MUL-GUARDED\"],\"seed\":20261003,\"shape\":[4096,4096]},\"smoke\":false,\"sources\":{\"experiments/floating_point/kernels.py\":\"f239cb37af1eab11170c912303a82fa4201c681caa1273db7acb0e0e746aa98e\",\"experiments/floating_point/rules.json\":\"bb43a240b2fa0a7599b527c320701b863329b344a14397aeedc1d1db45a7c2e7\",\"experiments/floating_point/supplement/kernels.py\":\"cf5e2c28e954e2e658c306f371e6c36fa0ac848f5aeddb3c10bf5e08e024377c\",\"experiments/floating_point/supplement/rules.json\":\"844444b4d8c5ead49d247063def5399d04828d1bf337b662be32888165b902a7\",\"scripts/check_numerics.py\":\"89b70451ec2d0f6d26fbaad25d169a7c6167b9134262a85bc64e883efd0f3155\",\"scripts/check_numerics_supplement.py\":\"33fd69b18fd1714787fccb13ac4309dc7fc6739987bed789b3e3a9ba78e5f8ae\",\"scripts/numerical_domains.py\":\"d2b3d4652c9c124836ffab14cb684f46f30362e672798df1f2f82cbe7001b68f\",\"scripts/numerical_gates.py\":\"b280bb606d5b92510b1f8a3fbda01661cf74093d49dd35b4c4ba0a5c344bceb9\",\"scripts/numerical_registry.py\":\"ad746a9603067218b288aca2d1c1119f92ea7cdc0589e2c44b78742ab01d9e54\",\"scripts/supplement_numerics.py\":\"9bfdebb3e53c138ce3699859e4ec7385cad5ca7846748188f4098ad0fd4db4eb\"}},\"report_sha256\":{\"experiment.json\":\"d2eb1c1d2f74a0c327e277c101e4b4661b35519caf10022de71a9fc6b9eba14c\",\"summary.json\":\"efcc7646d6ad07fe15b3ca154aacc42b62d16257893e0efbef7d633cb12d5003\"},\"trust\":\"user-trusted published report; no independent replay during export\"}").toOption.getD .null
+def snapshot : String := "e9df577327b16051b73cb0838e2271836754727a4972fe20719eb82821d6efa0"
+def reportMetadata : Lean.Json := (Lean.Json.parse "{\"experiment\":{\"backend\":{\"compile_options\":{\"enable_fp_fusion\":false},\"compiler\":{\"cuda\":\"13.0\",\"numpy\":\"2.3.5\",\"torch\":\"2.13.0+cu130\",\"triton\":\"3.7.1\"},\"implementation_version\":\"48bd4ad9f4b68df564ba391d983262a9862c5592a622297ff7c1a34645231995\",\"kind\":\"triton-cuda\",\"launch\":{\"block\":1024,\"num_warps\":4},\"target\":{\"capability\":[9,0],\"device\":\"NVIDIA L20X\",\"driver_versions\":[\"570.133.20\"]}},\"bundle_version\":\"scalar-supplement-14\",\"entries\":[\"fp32__LOG-MUL\",\"fp32__LOG-MUL-LIBDEVICE\",\"fp32__LOG-EXP\",\"fp32__LOG-EXP-LOG-LIBDEVICE\",\"fp32__LOG-EXP-LIBDEVICE\",\"fp32__LOG-EXP-FULL-LIBDEVICE\",\"fp32__LOG-MUL-GUARDED-INTRINSIC\",\"fp32__LOG-MUL-GUARDED\",\"fp32__LOG-EXP-GUARDED-INTRINSIC\",\"fp32__LOG-EXP-GUARDED\",\"fp32__LOG-MUL-LOG1P-INTRINSIC\",\"fp32__LOG-MUL-LOG1P\"],\"execution\":{\"hardware_model\":\"H200\",\"independent_cpu_replay\":{\"complete_rows\":12,\"numpy\":\"2.5.2\",\"tables_identical_to_gpu_environment\":true},\"job\":{\"DisplayName\":\"traces_kernel_equivalence_testing\",\"GmtFinishTime\":\"2026-10-05T07:37:35Z\",\"GmtRunningTime\":\"2026-10-05T07:29:44Z\",\"JobId\":\"dlc1ysn7re29e9jd\",\"Status\":\"Succeeded\"},\"manifest_sha256\":\"6ef2b340916343af21850152c30bb84d9c974dc546bc5e477deea0febdca271f\"},\"profile\":{\"batch\":512,\"distribution\":{\"family\":\"normal\",\"mean\":1.0,\"std\":1.0},\"formats\":[{\"accumulator\":\"fp32\",\"compute\":\"fp32\",\"input\":\"fp32\",\"name\":\"fp32\",\"output\":\"fp32\"}],\"gates\":{\"bias\":{\"se_multiplier\":5.0,\"tau\":0.05},\"vars\":{\"alpha\":0.00135,\"bootstrap\":1000,\"fail\":100.0,\"horizon\":625000,\"min_exceedances\":40,\"quantile\":0.9,\"warn\":10.0},\"warning_policy\":\"pass_only\"},\"launch\":{\"block\":1024,\"num_warps\":4},\"replicates\":4096,\"replicates_max\":50000,\"rules\":[\"LOG-MUL\",\"LOG-MUL-LIBDEVICE\",\"LOG-EXP\",\"LOG-EXP-LOG-LIBDEVICE\",\"LOG-EXP-LIBDEVICE\",\"LOG-EXP-FULL-LIBDEVICE\",\"LOG-MUL-GUARDED-INTRINSIC\",\"LOG-MUL-GUARDED\",\"LOG-EXP-GUARDED-INTRINSIC\",\"LOG-EXP-GUARDED\",\"LOG-MUL-LOG1P-INTRINSIC\",\"LOG-MUL-LOG1P\"],\"seed\":20261003,\"shape\":[4096,4096]},\"smoke\":false,\"sources\":{\"experiments/floating_point/kernels.py\":\"f239cb37af1eab11170c912303a82fa4201c681caa1273db7acb0e0e746aa98e\",\"experiments/floating_point/rules.json\":\"bb43a240b2fa0a7599b527c320701b863329b344a14397aeedc1d1db45a7c2e7\",\"experiments/floating_point/supplement/kernels.py\":\"48bd4ad9f4b68df564ba391d983262a9862c5592a622297ff7c1a34645231995\",\"experiments/floating_point/supplement/rules.json\":\"4127cf3b97803632696dfb8f9a7bf0655e1ed33e309b004eda726c98cee12942\",\"scripts/check_numerics.py\":\"89b70451ec2d0f6d26fbaad25d169a7c6167b9134262a85bc64e883efd0f3155\",\"scripts/check_numerics_supplement.py\":\"da439ca17f3183ddc18818864d529dfd2d22f73e5a395c02f1aa40bd02d41337\",\"scripts/numerical_domains.py\":\"8d821b3c0b97dd278e1041b9ede83e478b02f8bb724c70c59673e121796e0bec\",\"scripts/numerical_gates.py\":\"b280bb606d5b92510b1f8a3fbda01661cf74093d49dd35b4c4ba0a5c344bceb9\",\"scripts/numerical_registry.py\":\"ad746a9603067218b288aca2d1c1119f92ea7cdc0589e2c44b78742ab01d9e54\",\"scripts/supplement_numerics.py\":\"69bb673e2e672c74108af394bcc97e386c82ee42cd1436f9d14f4d82da159c1f\"}},\"report_sha256\":{\"experiment.json\":\"1351474d111726f7457d4593f425f3967b95ad56e7543486192d1da7cc17e583\",\"summary.json\":\"e832b92e83bf9be08e3b02165e0dcef4a31a6064f03eb6a503a871d8efb7840d\"},\"trust\":\"user-trusted published report; no independent replay during export\"}").toOption.getD .null
 
-def fp32_log_exp_guarded : ReportedScalarRule where
+def fp32_log_mul_guarded_intrinsic : ReportedScalarRule where
   report := {
-    ruleID := "LOG-EXP-GUARDED"
+    ruleID := "LOG-MUL-GUARDED-INTRINSIC"
     format := "fp32"
-    key := "report:10e0ef1b6f6e4632c2e00a1801a2ebab9d3275e32f98d9c575fe47bdec554df1:fp32:LOG-EXP-GUARDED"
-    artifact := "experiments/floating_point/supplement/log_report/summary.json#fp32/LOG-EXP-GUARDED"
+    key := "report:e9df577327b16051b73cb0838e2271836754727a4972fe20719eb82821d6efa0:fp32:LOG-MUL-GUARDED-INTRINSIC"
+    artifact := "experiments/floating_point/supplement/log_report/summary.json#fp32/LOG-MUL-GUARDED-INTRINSIC"
     configuration := Lean.Json.mkObj [("report", reportMetadata),
-      ("relation", (Lean.Json.parse "{\"relation\":{\"candidate\":\"if 0.5 < abs(a) <= 80 then a else fp32(libdevice.log(fp32(libdevice.exp(a))))\",\"category\":\"two_gates_candidate\",\"domain\":\"finite fp32 a; branch threshold is an implementation choice, not an input filter\",\"id\":\"LOG-EXP-GUARDED\",\"operands\":[\"a\"],\"reference\":\"fp32(libdevice.log(fp32(libdevice.exp(a))))\"},\"row\":{\"B\":0.04578995059123393,\"U\":0.625,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"LOG-EXP-GUARDED\",\"skipped_samples\":0,\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"valid_samples\":68719476736,\"vars\":\"PASS\",\"z\":28014.76841111653}}").toOption.getD .null)]
-    description := "finite fp32 a; branch threshold is an implementation choice, not an input filter"
-    shape := [4096, 4096]
-    block := 1024
-    input := "fp32"
-    compute := "fp32"
-    accumulator := "fp32"
-    output := "fp32"
-  }
-  guards := [⟨"a", .finite⟩]
-
-def fp32_log_mul_guarded : ReportedScalarRule where
-  report := {
-    ruleID := "LOG-MUL-GUARDED"
-    format := "fp32"
-    key := "report:10e0ef1b6f6e4632c2e00a1801a2ebab9d3275e32f98d9c575fe47bdec554df1:fp32:LOG-MUL-GUARDED"
-    artifact := "experiments/floating_point/supplement/log_report/summary.json#fp32/LOG-MUL-GUARDED"
-    configuration := Lean.Json.mkObj [("report", reportMetadata),
-      ("relation", (Lean.Json.parse "{\"relation\":{\"candidate\":\"p=fp32(a*b); if 0.5 <= p <= 2 then libdevice.log(p) else fp32(libdevice.log(a) + libdevice.log(b))\",\"category\":\"two_gates_candidate\",\"domain\":\"finite positive fp32 a,b; conditional rewrite retains log of rounded product near one\",\"id\":\"LOG-MUL-GUARDED\",\"operands\":[\"a\",\"b\"],\"reference\":\"p=fp32(a*b); libdevice.log(p)\"},\"row\":{\"B\":0.0006248690032757374,\"U\":6.685560236530723,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"LOG-MUL-GUARDED\",\"skipped_samples\":20075626868,\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"valid_samples\":48643849868,\"vars\":\"PASS\",\"z\":296.62214981092404}}").toOption.getD .null)]
+      ("relation", (Lean.Json.parse "{\"relation\":{\"candidate\":\"p=fp32(a*b); if 0.5 <= p <= 2 then tl.log(p) else fp32(tl.log(a) + tl.log(b))\",\"category\":\"two_gates_candidate\",\"domain\":\"finite positive fp32 a,b; conditional rewrite retains log of rounded product near one\",\"id\":\"LOG-MUL-GUARDED-INTRINSIC\",\"intrinsics\":{\"log\":\"tl.log\"},\"operands\":[\"a\",\"b\"],\"reference\":\"p=fp32(a*b); tl.log(p)\"},\"row\":{\"B\":0.0006248690032757374,\"U\":6.685560236530723,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"LOG-MUL-GUARDED-INTRINSIC\",\"skipped_samples\":20075626868,\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"valid_samples\":48643849868,\"vars\":\"PASS\",\"z\":296.62214981092404}}").toOption.getD .null)]
     description := "finite positive fp32 a,b; conditional rewrite retains log of rounded product near one"
     shape := [4096, 4096]
     block := 1024
@@ -45,10 +27,66 @@ def fp32_log_mul_guarded : ReportedScalarRule where
   }
   guards := [⟨"a", .finite⟩, ⟨"b", .finite⟩, ⟨"a", .positive⟩, ⟨"b", .positive⟩]
 
-def all : List ReportedScalarRule := [
-  fp32_log_exp_guarded,
-  fp32_log_mul_guarded]
+def fp32_log_mul_guarded : ReportedScalarRule where
+  report := {
+    ruleID := "LOG-MUL-GUARDED"
+    format := "fp32"
+    key := "report:e9df577327b16051b73cb0838e2271836754727a4972fe20719eb82821d6efa0:fp32:LOG-MUL-GUARDED"
+    artifact := "experiments/floating_point/supplement/log_report/summary.json#fp32/LOG-MUL-GUARDED"
+    configuration := Lean.Json.mkObj [("report", reportMetadata),
+      ("relation", (Lean.Json.parse "{\"relation\":{\"candidate\":\"p=fp32(a*b); if 0.5 <= p <= 2 then libdevice.log(p) else fp32(libdevice.log(a) + libdevice.log(b))\",\"category\":\"two_gates_candidate\",\"domain\":\"finite positive fp32 a,b; conditional rewrite retains log of rounded product near one\",\"id\":\"LOG-MUL-GUARDED\",\"intrinsics\":{\"log\":\"libdevice.log\"},\"operands\":[\"a\",\"b\"],\"reference\":\"p=fp32(a*b); libdevice.log(p)\"},\"row\":{\"B\":0.0006248690032757374,\"U\":6.685560236530723,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"LOG-MUL-GUARDED\",\"skipped_samples\":20075626868,\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"pot_pwm\",\"valid_samples\":48643849868,\"vars\":\"PASS\",\"z\":296.62214981092404}}").toOption.getD .null)]
+    description := "finite positive fp32 a,b; conditional rewrite retains log of rounded product near one"
+    shape := [4096, 4096]
+    block := 1024
+    input := "fp32"
+    compute := "fp32"
+    accumulator := "fp32"
+    output := "fp32"
+  }
+  guards := [⟨"a", .finite⟩, ⟨"b", .finite⟩, ⟨"a", .positive⟩, ⟨"b", .positive⟩]
 
-theorem accepted_count : all.length = 2 := rfl
+def fp32_log_exp_guarded_intrinsic : ReportedScalarRule where
+  report := {
+    ruleID := "LOG-EXP-GUARDED-INTRINSIC"
+    format := "fp32"
+    key := "report:e9df577327b16051b73cb0838e2271836754727a4972fe20719eb82821d6efa0:fp32:LOG-EXP-GUARDED-INTRINSIC"
+    artifact := "experiments/floating_point/supplement/log_report/summary.json#fp32/LOG-EXP-GUARDED-INTRINSIC"
+    configuration := Lean.Json.mkObj [("report", reportMetadata),
+      ("relation", (Lean.Json.parse "{\"relation\":{\"candidate\":\"if 0.5 < abs(a) <= 80 then a else fp32(tl.log(fp32(libdevice.exp(a))))\",\"category\":\"two_gates_candidate\",\"domain\":\"finite fp32 a; branch threshold is an implementation choice, not an input filter\",\"id\":\"LOG-EXP-GUARDED-INTRINSIC\",\"intrinsics\":{\"exp\":\"libdevice.exp\",\"log\":\"tl.log\"},\"operands\":[\"a\"],\"reference\":\"fp32(tl.log(fp32(libdevice.exp(a))))\"},\"row\":{\"B\":0.04578995059123393,\"U\":0.625,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"LOG-EXP-GUARDED-INTRINSIC\",\"skipped_samples\":0,\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"valid_samples\":68719476736,\"vars\":\"PASS\",\"z\":28014.76841111653}}").toOption.getD .null)]
+    description := "finite fp32 a; branch threshold is an implementation choice, not an input filter"
+    shape := [4096, 4096]
+    block := 1024
+    input := "fp32"
+    compute := "fp32"
+    accumulator := "fp32"
+    output := "fp32"
+  }
+  guards := [⟨"a", .finite⟩]
+
+def fp32_log_exp_guarded : ReportedScalarRule where
+  report := {
+    ruleID := "LOG-EXP-GUARDED"
+    format := "fp32"
+    key := "report:e9df577327b16051b73cb0838e2271836754727a4972fe20719eb82821d6efa0:fp32:LOG-EXP-GUARDED"
+    artifact := "experiments/floating_point/supplement/log_report/summary.json#fp32/LOG-EXP-GUARDED"
+    configuration := Lean.Json.mkObj [("report", reportMetadata),
+      ("relation", (Lean.Json.parse "{\"relation\":{\"candidate\":\"if 0.5 < abs(a) <= 80 then a else fp32(libdevice.log(fp32(libdevice.exp(a))))\",\"category\":\"two_gates_candidate\",\"domain\":\"finite fp32 a; branch threshold is an implementation choice, not an input filter\",\"id\":\"LOG-EXP-GUARDED\",\"intrinsics\":{\"exp\":\"libdevice.exp\",\"log\":\"libdevice.log\"},\"operands\":[\"a\"],\"reference\":\"fp32(libdevice.log(fp32(libdevice.exp(a))))\"},\"row\":{\"B\":0.04578995059123393,\"U\":0.625,\"accept\":true,\"bias\":\"PASS\",\"decision\":\"ACCEPT\",\"format\":\"fp32\",\"reason\":\"\",\"replayed\":true,\"replicates\":4096,\"rule\":\"LOG-EXP-GUARDED\",\"skipped_samples\":0,\"state\":\"COMPLETE\",\"tau\":0.05,\"u_kind\":\"empirical_max\",\"valid_samples\":68719476736,\"vars\":\"PASS\",\"z\":28014.76841111653}}").toOption.getD .null)]
+    description := "finite fp32 a; branch threshold is an implementation choice, not an input filter"
+    shape := [4096, 4096]
+    block := 1024
+    input := "fp32"
+    compute := "fp32"
+    accumulator := "fp32"
+    output := "fp32"
+  }
+  guards := [⟨"a", .finite⟩]
+
+def all : List ReportedScalarRule := [
+  fp32_log_mul_guarded_intrinsic,
+  fp32_log_mul_guarded,
+  fp32_log_exp_guarded_intrinsic,
+  fp32_log_exp_guarded]
+
+theorem accepted_count : all.length = 4 := rfl
 
 end VeriTile.Triton.FP.LogAdmission

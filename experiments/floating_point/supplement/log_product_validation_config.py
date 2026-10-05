@@ -12,7 +12,7 @@ PROFILE = {
     "formats": [
         {"name": "fp32", "input": "fp32", "compute": "fp32", "accumulator": "fp32", "output": "fp32"},
     ],
-    "rules": ["LOG-MUL", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED", "LOG-EXP-GUARDED"],
+    "rules": ["LOG-MUL", "LOG-MUL-LIBDEVICE", "LOG-EXP", "LOG-EXP-LOG-LIBDEVICE", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-MUL-GUARDED-INTRINSIC", "LOG-MUL-GUARDED", "LOG-EXP-GUARDED-INTRINSIC", "LOG-EXP-GUARDED", "LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-LOG1P"],
     "launch": {"block": 1024, "num_warps": 4},
     "gates": {
         "bias": {"tau": 0.05, "se_multiplier": 5.0},

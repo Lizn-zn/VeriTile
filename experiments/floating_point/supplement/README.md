@@ -32,101 +32,111 @@ U gate 的幅度阈值为 10/100：`U <= 10` 为 PASS，`10 < U <= 100` 为 WARN
 
 ## 直接运行
 
-### Guarded log-exp elimination with a fixed reference
+### Paired tl.log and libdevice.log implementations
 
-`LOG-EXP-GUARDED` compares the unchanged libdevice composition against a conditional
-identity. The candidate is a simplification on its selected range:
+Every ordinary-log relation has independent `tl.log` and `libdevice.log` versions.
+The supported import is `from triton.language.extra.cuda import libdevice`.
+Each pair keeps the expression, exp implementation, branch bounds, precision,
+input domain, input draws and gates fixed; only ordinary log calls change.
+The compiler uses `enable_fp_fusion=False` and its default math settings.
+
+| Relation | tl.log version | libdevice.log version | Fixed exp |
+|---|---|---|---|
+| LOG-MUL | LOG-MUL | LOG-MUL-LIBDEVICE | — |
+| LOG-EXP | LOG-EXP | LOG-EXP-LOG-LIBDEVICE | tl.exp |
+| LOG-EXP-LIBDEVICE | LOG-EXP-LIBDEVICE | LOG-EXP-FULL-LIBDEVICE | libdevice.exp |
+| LOG-MUL-GUARDED | LOG-MUL-GUARDED-INTRINSIC | LOG-MUL-GUARDED | — |
+| LOG-EXP-GUARDED | LOG-EXP-GUARDED-INTRINSIC | LOG-EXP-GUARDED | libdevice.exp |
+| LOG-MUL-LOG1P | LOG-MUL-LOG1P-INTRINSIC | LOG-MUL-LOG1P | — |
+
+`LOG-EXP-LIBDEVICE` uses **tl.log and libdevice.exp**. The full-libdevice
+version uses both libdevice calls. `LOG-EXP-LOG-LIBDEVICE` uses libdevice.log
+with tl.exp, completing the two-by-two unconditional log/exp matrix.
+The `-INTRINSIC` guarded variants select tl.log; guarded log-exp retains libdevice.exp.
+
+Triton has no `tl.log1p` in this environment. Both LOG1P diagnostic versions
+retain `libdevice.log1p(tl.fma(a,b,-1))` near one, and switch only the ordinary
+logs in the fallback and candidate. These diagnostics change the product-log
+reference and cannot establish equivalence to its unchanged implementation.
+
+The guarded log-exp pair uses the following scalar formula, entirely in FP32:
 
 ```python
-reference = libdevice.log(libdevice.exp(a))
-if 0.5 < abs(a) <= 80.0:
-    candidate = a
-else:
-    candidate = libdevice.log(libdevice.exp(a))
+reference = log_impl(libdevice.exp(a))
+candidate = a if 0.5 < abs(a) <= 80 else log_impl(libdevice.exp(a))
 ```
 
-All operations remain FP32. The candidate eliminates both calls away from zero;
-near zero it preserves the reference's intermediate rounding. The upper bound
-retains the original overflow, underflow and subnormal-exp behavior on extreme
-inputs. These are implementation branches, not input filters. The reference,
-sampling distribution and two-gates thresholds remain unchanged.
+The guarded product pair keeps `log_impl(fp32(a*b))` for
+`0.5 <= fp32(a*b) <= 2` and splits the logs elsewhere. Each candidate keeps its
+own backend's fixed reference. Branches choose implementations without filtering
+inputs. GPU guarded log-exp kernels skip exp/log for whole identity blocks and
+use masked fallback arguments for mixed blocks. The Lean fragments describe the
+lane-wise expression, without verifying GPU compilation or block scheduling.
 
-The GPU skips exp/log when every active lane of a block selects the identity.
-Mixed blocks use zero-masked fallback arguments and select the result per lane.
-The Lean example represents this lane-wise expression; its proof does not verify
-the GPU compiler or the block-level scheduling optimization.
+The current H200 job is `dlc1ysn7re29e9jd`, named `traces_kernel_equivalence_testing`.
+Both primary seed 20261003 and confirmation seed 20261005 run all 12 variants,
+with 4096 replicates, shape `[4096,4096]`, Normal(1,1), bias budget 0.05 local ULP
+and U thresholds 10/100. Independent CPU replay matches both complete tables.
 
-[log_product_config.py](./log_product_config.py) runs seven paired FP32 relations
-on H200. The current DLC job is `dlc1713xu2g5t8e2`, named
-`traces_kernel_equivalence_testing`, using `scalar-supplement-13`.
-Each relation uses 4096 replicates, shape `[4096,4096]`, Normal(1,1),
-bias budget tau=0.05 local ULP and U thresholds 10/100.
-Independent CPU replay matches the GPU-environment JSON, CSV and Markdown tables.
+Primary results:
 
-| Rule | R | z | B (local ULP) | U | Accept |
-|---|---:|---:|---:|---:|---|
-| LOG-MUL / fp32 | 4096 | 2.924915168 | 0.1679352504 | 6.685560237 | No: bias INCONCLUSIVE |
-| LOG-MUL-LIBDEVICE / fp32 | 4096 | 2.924915168 | 0.1679352504 | 6.685560237 | No: bias INCONCLUSIVE |
-| LOG-EXP-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | No: bias FAIL |
-| LOG-EXP-FULL-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | No: bias FAIL |
-| LOG-EXP-GUARDED / fp32 | 4096 | 28014.76841 | 0.04578995059 | 0.625 | Yes |
-| LOG-MUL-LOG1P / fp32 | 4096 | 2.061440595 | 0.1240315873 | 6.685560237 | No: bias INCONCLUSIVE |
-| LOG-MUL-GUARDED / fp32 | 4096 | 296.6221498 | 0.0006248690033 | 6.685560237 | Yes |
+| Rule | log | exp | z | B (local ULP) | U | Accept |
+|---|---|---|---:|---:|---:|---|
+| LOG-MUL | tl.log | — | 2.924915168 | 0.1679352504 | 6.685560237 | No: INCONCLUSIVE |
+| LOG-MUL-LIBDEVICE | libdevice.log | — | 2.924915168 | 0.1679352504 | 6.685560237 | No: INCONCLUSIVE |
+| LOG-EXP | tl.log | tl.exp | 1.916658654 | 0.06895380711 | 0 | No: INCONCLUSIVE |
+| LOG-EXP-LOG-LIBDEVICE | libdevice.log | tl.exp | 1.916658654 | 0.06895380711 | 0 | No: INCONCLUSIVE |
+| LOG-EXP-LIBDEVICE | tl.log | libdevice.exp | 68.59740095 | 0.7300322166 | 0 | No: FAIL |
+| LOG-EXP-FULL-LIBDEVICE | libdevice.log | libdevice.exp | 68.59740095 | 0.7300322166 | 0 | No: FAIL |
+| LOG-MUL-GUARDED-INTRINSIC | tl.log | — | 296.6221498 | 0.0006248690033 | 6.685560237 | Yes |
+| LOG-MUL-GUARDED | libdevice.log | — | 296.6221498 | 0.0006248690033 | 6.685560237 | Yes |
+| LOG-EXP-GUARDED-INTRINSIC | tl.log | libdevice.exp | 28014.76841 | 0.04578995059 | 0.625 | Yes |
+| LOG-EXP-GUARDED | libdevice.log | libdevice.exp | 28014.76841 | 0.04578995059 | 0.625 | Yes |
+| LOG-MUL-LOG1P-INTRINSIC | tl.log | — | 2.061440595 | 0.1240315873 | 6.685560237 | No: INCONCLUSIVE |
+| LOG-MUL-LOG1P | libdevice.log | — | 2.061440595 | 0.1240315873 | 6.685560237 | No: INCONCLUSIVE |
 
-The independent seed 20261005 also passes the guarded log-exp rewrite:
+Independent-seed confirmation:
 
-| Rule | R | z | B (local ULP) | U | Accept |
-|---|---:|---:|---:|---:|---|
-| LOG-MUL / fp32 | 4096 | 1.016401743 | 0.1629233926 | 7.418400148 | No: bias INCONCLUSIVE |
-| LOG-MUL-LOG1P / fp32 | 4096 | 1.79346894 | 0.1644764832 | 7.418400148 | No: bias INCONCLUSIVE |
-| LOG-MUL-GUARDED / fp32 | 4096 | 296.0360072 | 0.0006251552164 | 7.418400148 | Yes |
-| LOG-EXP-GUARDED / fp32 | 4096 | 28421.27843 | 0.04579159812 | 0.625 | Yes |
+| Rule | log | exp | z | B (local ULP) | U | Accept |
+|---|---|---|---:|---:|---:|---|
+| LOG-MUL | tl.log | — | 1.016401743 | 0.1629233926 | 7.418400148 | No: INCONCLUSIVE |
+| LOG-MUL-LIBDEVICE | libdevice.log | — | 1.016401743 | 0.1629233926 | 7.418400148 | No: INCONCLUSIVE |
+| LOG-EXP | tl.log | tl.exp | 1.297135961 | 0.06276389208 | 0 | No: INCONCLUSIVE |
+| LOG-EXP-LOG-LIBDEVICE | libdevice.log | tl.exp | 1.297135961 | 0.06276389208 | 0 | No: INCONCLUSIVE |
+| LOG-EXP-LIBDEVICE | tl.log | libdevice.exp | 68.23167626 | 0.7236907333 | 0 | No: FAIL |
+| LOG-EXP-FULL-LIBDEVICE | libdevice.log | libdevice.exp | 68.23167626 | 0.7236907333 | 0 | No: FAIL |
+| LOG-MUL-GUARDED-INTRINSIC | tl.log | — | 296.0360072 | 0.0006251552164 | 7.418400148 | Yes |
+| LOG-MUL-GUARDED | libdevice.log | — | 296.0360072 | 0.0006251552164 | 7.418400148 | Yes |
+| LOG-EXP-GUARDED-INTRINSIC | tl.log | libdevice.exp | 28421.27843 | 0.04579159812 | 0.625 | Yes |
+| LOG-EXP-GUARDED | libdevice.log | libdevice.exp | 28421.27843 | 0.04579159812 | 0.625 | Yes |
+| LOG-MUL-LOG1P-INTRINSIC | tl.log | — | 1.79346894 | 0.1644764832 | 7.418400148 | No: INCONCLUSIVE |
+| LOG-MUL-LOG1P | libdevice.log | — | 1.79346894 | 0.1644764832 | 7.418400148 | No: INCONCLUSIVE |
 
-The [boundary fixture](./log_report/boundaries.json) checks 25 inputs, including
-both signs of the branch endpoints and their neighboring FP32 values, signed
-zero, tiny inputs, and extreme tails. The reference matches the original baseline
-bit-for-bit. At `a=±2^-25`, both reference and candidate retain the reference's
-zero result; at `a=90` and `a=-120`, both retain the nonfinite result. The fixture
-checks these semantics explicitly; valid-input nonfinite events still fail the
-statistical runner rather than being filtered out. Both measured kernels contain
-no FP64 arithmetic. [comparison.json](./log_report/comparison.json) additionally
-checks unchanged reference PTX (ignoring only source locations), paired seeds,
-and reference-error observations.
+Under the recorded Triton 3.7.1 / CUDA 13.0 configuration on sm_90, all six log
+pairs have identical normalized PTX and paired observations. This is a measured
+compiler result for this configuration, not a general equality between APIs.
+[comparison.json](./log_report/comparison.json) records each comparison, including
+the fixed-reference and fixed-candidate checks. IDs, contracts and Lean fragments
+remain separate even when compiled results coincide.
 
-For LOG-EXP-GUARDED, U=0.625 is the empirical maximum fallback because a tail
-fit is unavailable; it is not an extrapolated confidence bound.
+The generated admission contains four guarded variants. The Lean candidates
+are `log_mul_split`, `log_mul_split_intrinsic`, `log_exp_elim`, and
+`log_exp_elim_intrinsic`. Unconditional LOG-MUL/LOG-EXP and the two LOG1P probes
+remain unadmitted. The LOG1P pair remains experiment-only because its fused
+operation still needs a corresponding Lean execution model.
 
-Passing two gates does not establish a performance win. Preallocated standalone
-kernels were timed with Triton do_bench (100 ms warmup, 300 ms repeat, median):
+Twenty-five log-exp boundary inputs exercise all six log-exp variants; sixteen
+product boundary inputs exercise all six product variants. Both guarded backends
+preserve their own reference bits near zero and in the extreme tails. Nonfinite
+outputs on valid inputs remain statistical failures, even when a boundary fixture
+explicitly checks matching nonfinite behavior. Compiled reference/candidate PTX
+contains no FP64 operations. [Boundary data](./log_report/boundaries.json) also
+contains separate descriptive timings for both guarded log backends on all-fast,
+all-fallback and mixed inputs. Numerical acceptance is not a performance claim.
+U for guarded log-exp uses the empirical-maximum fallback, not a fitted tail
+confidence bound. Full result tables retain each row's U type.
 
-| Workload (16,777,216 elements) | Reference (ms) | Candidate (ms) | Speedup |
-|---|---:|---:|---:|
-| all_simplify_uniform_1_2 | 0.036992 | 0.037280 | 0.9923× |
-| all_fallback_uniform_0_0.25 | 0.036768 | 0.039072 | 0.9410× |
-| mixed_normal_1_1 | 0.037952 | 0.039296 | 0.9658× |
-
-No speedup was measured for these workloads. Runtime guards and mixed-block
-fallbacks have a cost. A compiler may use the identity when the range is known,
-but any application-level speedup still needs a separate benchmark.
-
-`LOG-MUL-GUARDED` also passes both seeds and remains bound as Lean `log_mul_split`.
-`LOG-MUL-LOG1P` is a separate reference-changing diagnostic and remains
-bias-INCONCLUSIVE; it is not evidence for rewriting the unchanged product-log
-reference. Unconditional LOG-MUL and LOG-EXP remain unadmitted.
-
-The generated [LogAdmission.lean](../../../VeriTile/Triton/Float/LogAdmission.lean)
-contains the two accepted guarded relations. [LogExp.lean](../../../VeriTile/Triton/Float/LogExp.lean)
-and the shared [example kernels](../../../bench/examples/LogExp/Kernels.lean)
-retain the original reference and guarded candidate. The FP derivation uses the
-selected `log_exp_elim` assumption; independent real-correctness proofs cover
-both kernels. Neither guarded rule supplies the unconditional premises missing
-from StableLogSumExp.
-
-Current full results: [summary.md](./log_report/summary.md),
-[confirmation](./log_product_validation_report/summary.md), and
-[warning_audit.json](./log_report/warning_audit.json).
-
-Reproduce the current implementation:
+Reproduce both reports:
 
 ```bash
 python3 scripts/check_log_accuracy.py --output Logs/fp-log-boundaries
@@ -201,8 +211,12 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 | log-mul-log1p | 乘积近 1 时参考用 `log1p(fma(a,b,-1))`，候选两个 log 相加 | 仅 FP32；两种子均未准入 |
 | log-mul-guarded | 候选在 `0.5 <= fp32(a*b) <= 2` 时保留参考，范围外拆分 log | 仅 FP32；只准入条件式 |
 | log-exp | `tl.log(tl.exp(a)) → a` | 原 intrinsic 组合 |
+| log-exp-log-libdevice | `libdevice.log(tl.exp(a)) → a` | Log-only libdevice variant |
 | log-exp-libdevice | `tl.log(libdevice.exp(a)) → a` | 当前 fp32 实验因 bias 拒绝 |
 | log-exp-full-libdevice | `libdevice.log(libdevice.exp(a)) → a` | 两个函数都使用 libdevice，当前 fp32 实验因 bias 拒绝 |
+| log-mul-guarded-intrinsic | Same product guard, with tl.log on every path | FP32 conditional split |
+| log-mul-log1p-intrinsic | Same log1p/FMA reference near one; tl.log for ordinary logs | FP32 diagnostic, not admitted |
+| log-exp-guarded-intrinsic | Same log-exp guard, with tl.log and libdevice.exp fallback | FP32 conditional identity |
 | log-exp-guarded | Fixed `log(exp(a))` reference; candidate returns `a` for `0.5 < abs(a) <= 80`, otherwise the reference | FP32 libdevice fallback |
 | max-commute | `max(a,b) → max(b,a)` | max 标量换序 |
 | max-assoc | `max(max(a,b),c) → max(a,max(b,c))` | max 标量重组 |
@@ -214,11 +228,14 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 避免把无穷大当成普通有限数套进 exp-sub；它不是 online-softmax 整体关系。
 常数和恒等式可能被编译器折叠，保存的 PTX 反映实际执行图。
 
-目录现在包含 23 条关系。默认浮点 profile 有 **56 个可执行实例、112 个左右两侧 kernel 特化**，
-外加 1 个 fp64 残差 oracle；完整笛卡尔表有 92 行，其余组合明确标为 `UNSUPPORTED`。
-其中 EXP-SUB-INTRINSIC、LOG-EXP-GUARDED、LOG-MUL-LOG1P 和 LOG-MUL-GUARDED 只支持 fp32 输入、计算和输出。COUNT-ZERO、COUNT-SUCCESSOR
-使用独立的 int32 输入配置，不能用正态浮点输入替代，见
-[三个新增 primitive 的配置与当前结果](../primitives/README.md)。
+The catalog contains 27 relations. The default floating-point profile has
+**62 executable cases and 124 reference/candidate kernel specializations**,
+plus one FP64 residual oracle. The complete Cartesian table has 108 rows;
+unsupported combinations are marked `UNSUPPORTED`.
+EXP-SUB-INTRINSIC and both log implementations of the guarded and LOG1P
+relations support only FP32 inputs, computation and outputs. COUNT-ZERO and
+COUNT-SUCCESSOR use a separate int32 input profile; see the
+[primitive configuration and results](../primitives/README.md).
 
 ## 配置与精度
 
@@ -333,7 +350,7 @@ python3 scripts/export_numerical_rules.py --trust-report --check
 python3 scripts/export_supplemental_rules.py --trust-report --check
 ```
 
-默认浮点 profile 有 56 对表达式。CPU 解释器检查其中 41 对的精度和非整块矩形索引；
+默认浮点 profile 有 62 对表达式。CPU 解释器检查其中 41 对的精度和非整块矩形索引；
 十五个 libdevice 组合明确跳过，因为解释器不支持 CUDA `extern_elementwise`，
 这些组合用离线编译和真实 GPU 实验验证，不替换其函数实现。另有 profile、定义域、
 fp64 除法残差、报告、源/PTX/观测/配置/统计篡改检测测试。离线编译不需要 GPU，

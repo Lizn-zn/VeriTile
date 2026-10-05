@@ -8,13 +8,14 @@ OPERANDS = {
                      "CAST-REMOVE", "ACC-WIDEN"), "abc"),
     **dict.fromkeys(("ROUND-IDEM", "BF16-WIDEN-RETURN", "SQRT-RSQRT", "ADD-ZERO",
                      "MUL-ONE", "DIV-ONE", "MUL-RCP-CANCEL", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE",
-                     "LOG-EXP-GUARDED", "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB"), "a"),
+                     "LOG-EXP-GUARDED", "LOG-EXP-GUARDED-INTRINSIC", "LOG-EXP-LOG-LIBDEVICE", "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB"), "a"),
     **dict.fromkeys(("DIV-MUL-RCP", "EXP-SUB", "EXP-SUB-INTRINSIC", "LOG-MUL", "LOG-MUL-LIBDEVICE",
-                     "LOG-MUL-LOG1P", "LOG-MUL-GUARDED", "MAX-COMMUTE"), "ab"),
+                     "LOG-MUL-LOG1P", "LOG-MUL-GUARDED", "LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-GUARDED-INTRINSIC", "MAX-COMMUTE"), "ab"),
     "MAX-ASSOC": "abc", "EXP-ZERO": "", "COUNT-ZERO": "", "COUNT-SUCCESSOR": "a",
 }
 POSITIVE = {"SQRT-RSQRT": "a", "LOG-MUL": "ab", "LOG-MUL-LIBDEVICE": "ab",
-            "LOG-MUL-LOG1P": "ab", "LOG-MUL-GUARDED": "ab"}
+            "LOG-MUL-LOG1P": "ab", "LOG-MUL-GUARDED": "ab",
+            "LOG-MUL-LOG1P-INTRINSIC": "ab", "LOG-MUL-GUARDED-INTRINSIC": "ab"}
 NONZERO = {"DIV-RCP": "b", "DIV-MUL-RCP": "b", "MUL-RCP-CANCEL": "a"}
 
 

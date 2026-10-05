@@ -16,6 +16,8 @@ SUPPORTED = {
     "LOG-MUL-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE",
     "LOG-EXP-GUARDED",
     "LOG-MUL-LOG1P", "LOG-MUL-GUARDED",
+    "LOG-EXP-LOG-LIBDEVICE", "LOG-EXP-GUARDED-INTRINSIC",
+    "LOG-MUL-GUARDED-INTRINSIC", "LOG-MUL-LOG1P-INTRINSIC",
 }
 
 
@@ -27,6 +29,14 @@ def rnd(x, PRECISION: tl.constexpr):
         return x.to(tl.float64)
     else:
         return x.to(tl.float32)
+
+
+@triton.jit
+def logarithm(x, USE_LIBDEVICE: tl.constexpr):
+    if USE_LIBDEVICE:
+        return libdevice.log(x)
+    else:
+        return tl.log(x)
 
 
 @triton.jit
@@ -106,7 +116,8 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = rnd(libdevice.log(rnd(a * b, PRECISION)), PRECISION)
         else:
             out = rnd(rnd(libdevice.log(a), PRECISION) + rnd(libdevice.log(b), PRECISION), PRECISION)
-    elif RULE == "LOG-MUL-LOG1P":
+    elif RULE == "LOG-MUL-LOG1P" or RULE == "LOG-MUL-LOG1P-INTRINSIC":
+        USE_LIBDEVICE: tl.constexpr = RULE == "LOG-MUL-LOG1P"
         tl.static_assert(PRECISION == "fp32", "log-product probe requires fp32")
         if SIDE == 0:
             p = a * b
@@ -114,31 +125,35 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             small_a = tl.where(near_one, a, 1.0)
             small_b = tl.where(near_one, b, 1.0)
             small = libdevice.log1p(tl.fma(small_a, small_b, -1.0))
-            other = libdevice.log(tl.where(near_one, 1.0, p))
+            other = logarithm(tl.where(near_one, 1.0, p), USE_LIBDEVICE)
             out = tl.where(near_one, small, other)
         else:
-            out = libdevice.log(a) + libdevice.log(b)
-    elif RULE == "LOG-MUL-GUARDED":
+            out = logarithm(a, USE_LIBDEVICE) + logarithm(b, USE_LIBDEVICE)
+    elif RULE == "LOG-MUL-GUARDED" or RULE == "LOG-MUL-GUARDED-INTRINSIC":
+        USE_LIBDEVICE: tl.constexpr = RULE == "LOG-MUL-GUARDED"
         tl.static_assert(PRECISION == "fp32", "guarded log-product probe requires fp32")
         p = a * b
         if SIDE == 0:
-            out = libdevice.log(p)
+            out = logarithm(p, USE_LIBDEVICE)
         else:
             keep_product = (p >= 0.5) & (p <= 2.0)
-            direct = libdevice.log(tl.where(keep_product, p, 1.0))
+            direct = logarithm(tl.where(keep_product, p, 1.0), USE_LIBDEVICE)
             split_a = tl.where(keep_product, 1.0, a)
             split_b = tl.where(keep_product, 1.0, b)
-            split = libdevice.log(split_a) + libdevice.log(split_b)
+            split = logarithm(split_a, USE_LIBDEVICE) + logarithm(split_b, USE_LIBDEVICE)
             out = tl.where(keep_product, direct, split)
     elif RULE == "LOG-EXP":
         if SIDE == 0:
             out = rnd(tl.log(rnd(tl.exp(a), PRECISION)), PRECISION)
         else:
             out = a
+    elif RULE == "LOG-EXP-LOG-LIBDEVICE":
+        if SIDE == 0:
+            out = rnd(libdevice.log(rnd(tl.exp(a), PRECISION)), PRECISION)
+        else:
+            out = a
     elif RULE == "LOG-EXP-LIBDEVICE":
-        # Keep a distinct identity: prior LOG-EXP results tested tl.exp.
-        # PR #12 rejected the fp32 tl.exp exp-sub rewrite; the examples use
-        # libdevice.exp, whose log-inverse relation needs its own experiment.
+        # The exp uses libdevice; the log uses tl.log.
         if SIDE == 0:
             out = rnd(tl.log(rnd(libdevice.exp(a), PRECISION)), PRECISION)
         else:
@@ -148,10 +163,11 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = rnd(libdevice.log(rnd(libdevice.exp(a), PRECISION)), PRECISION)
         else:
             out = a
-    elif RULE == "LOG-EXP-GUARDED":
+    elif RULE == "LOG-EXP-GUARDED" or RULE == "LOG-EXP-GUARDED-INTRINSIC":
+        USE_LIBDEVICE: tl.constexpr = RULE == "LOG-EXP-GUARDED"
         tl.static_assert(PRECISION == "fp32", "guarded log-exp requires fp32")
         if SIDE == 0:
-            out = libdevice.log(libdevice.exp(a))
+            out = logarithm(libdevice.exp(a), USE_LIBDEVICE)
         else:
             simplify = (tl.abs(a) > 0.5) & (tl.abs(a) <= 80.0)
             # A whole safe block skips both transcendental calls. In mixed
@@ -160,7 +176,7 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
                 out = a
             else:
                 fallback_a = tl.where(simplify, 0.0, a)
-                fallback = libdevice.log(libdevice.exp(fallback_a))
+                fallback = logarithm(libdevice.exp(fallback_a), USE_LIBDEVICE)
                 out = tl.where(simplify, a, fallback)
     elif RULE == "MAX-COMMUTE":
         if SIDE == 0:

@@ -7,7 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 # The unadmitted FMA/log1p probe still needs an explicit fused-operation model.
-EXPERIMENT_ONLY = {'LOG-MUL-LOG1P'}
+EXPERIMENT_ONLY = {'LOG-MUL-LOG1P', 'LOG-MUL-LOG1P-INTRINSIC'}
 
 
 class LogCandidateTests(unittest.TestCase):
@@ -57,7 +57,11 @@ open VeriTile.Triton.FP.LogExp
         accepted = {r['rule'] for r in report['rows'] if r['format'] == 'fp32' and r['accept']}
         self.assertEqual(set(selected), accepted - EXPERIMENT_ONLY)
         self.assertEqual(accepted & EXPERIMENT_ONLY, set())
-        self.assertEqual(set(selected), {'LOG-EXP-GUARDED', 'LOG-MUL-GUARDED'})
+        self.assertEqual(set(selected), {'LOG-EXP-GUARDED', 'LOG-MUL-GUARDED',
+                                         'LOG-EXP-GUARDED-INTRINSIC', 'LOG-MUL-GUARDED-INTRINSIC'})
+
+    def test_log_backend_fragments_and_selection_are_independent(self):
+        self.check((ROOT / 'bench/tests/FPLogBackends.lean').read_text())
 
     def test_product_execution_branches_and_domains(self):
         self.check((ROOT / 'bench/tests/FPLogProduct.lean').read_text())

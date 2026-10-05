@@ -35,7 +35,9 @@ def main():
     p = a * b
     small_profile = deepcopy(profile)
     small_profile['shape'] = [1, len(values)]
-    rules = ['LOG-MUL-LIBDEVICE', 'LOG-MUL-LOG1P', 'LOG-MUL-GUARDED']
+    versions = [('LOG-MUL', 'LOG-MUL-LOG1P-INTRINSIC', 'LOG-MUL-GUARDED-INTRINSIC'),
+                ('LOG-MUL-LIBDEVICE', 'LOG-MUL-LOG1P', 'LOG-MUL-GUARDED')]
+    rules = [rule for triple in versions for rule in triple]
     outputs = {}
     args.output.mkdir(parents=True, exist_ok=False)
     for rule in rules:
@@ -45,21 +47,22 @@ def main():
             for i, text in enumerate(texts):
                 assert '.f64' not in text
                 (args.output / f'{rule}.{side}.{i}.ptx').write_text(text)
-    baseline, corrected, guarded = [outputs[r] for r in rules]
-    same_bits = lambda x, y: torch.equal(x.view(torch.int32), y.view(torch.int32))
-    assert same_bits(guarded[0], baseline[0])
-    assert same_bits(corrected[1], baseline[1])
-    keep = (p >= 0.5) & (p <= 2.)
-    assert same_bits(guarded[1][keep], baseline[0][keep])
-    assert same_bits(guarded[1][~keep], baseline[1][~keep])
-    fallback = (p < 0.5) | (p > 1.5)
-    assert same_bits(corrected[0][fallback], baseline[0][fallback])
-    golden = runner.oracle(torch, 'LOG-MUL', inputs)
-    assert baseline[0][0] == 0
-    assert (corrected[0][0].double() - golden[0]).abs() < (baseline[0][0].double() - golden[0]).abs()
-    # Underflow/overflow are valid-input failures, never removed from the sample.
-    assert runner.domains.mask(torch, 'LOG-MUL-GUARDED', inputs).all()
-    assert torch.isposinf(guarded[0][5]) and torch.isneginf(guarded[0][6])
+    for triple in versions:
+        baseline, corrected, guarded = [outputs[r] for r in triple]
+        same_bits = lambda x, y: torch.equal(x.view(torch.int32), y.view(torch.int32))
+        assert same_bits(guarded[0], baseline[0])
+        assert same_bits(corrected[1], baseline[1])
+        keep = (p >= 0.5) & (p <= 2.)
+        assert same_bits(guarded[1][keep], baseline[0][keep])
+        assert same_bits(guarded[1][~keep], baseline[1][~keep])
+        fallback = (p < 0.5) | (p > 1.5)
+        assert same_bits(corrected[0][fallback], baseline[0][fallback])
+        golden = runner.oracle(torch, 'LOG-MUL', inputs)
+        assert baseline[0][0] == 0
+        assert (corrected[0][0].double() - golden[0]).abs() < (baseline[0][0].double() - golden[0]).abs()
+        # Underflow/overflow are valid-input failures, never removed from the sample.
+        assert runner.domains.mask(torch, triple[2], inputs).all()
+        assert torch.isposinf(guarded[0][5]) and torch.isneginf(guarded[0][6])
     rows = []
     for i, (av, bv) in enumerate(values):
         rows.append({'a': float(av), 'b': float(bv), 'keep_product': bool(keep[i]),
@@ -93,7 +96,7 @@ def main():
         'scope': 'GPU boundary fixtures and 32-draw descriptive diagnostics; not statistical admission',
         'sources': runner.source_hashes(), 'check_script_sha256': runner.sha(Path(__file__).read_bytes()),
         'boundary_checks_passed': True, 'boundaries': rows,
-        'branch_diagnostics': {'replicates': 32, 'valid_samples': valid_total, 'groups': {
+        'branch_diagnostics': {'rule': 'LOG-MUL', 'log': 'tl.log', 'replicates': 32, 'valid_samples': valid_total, 'groups': {
             name: {'count': counts[name], 'fraction': counts[name] / valid_total,
                    'mean_contribution_to_total_delta': float(np.mean(data)),
                    'std_contribution_to_total_delta': float(np.std(data, ddof=1)),

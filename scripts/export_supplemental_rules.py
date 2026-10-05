@@ -35,7 +35,7 @@ def domain(rule):
         guards.append(("b", "nonzero"))
     elif rule == "MUL-RCP-CANCEL":
         guards.append(("a", "nonzero"))
-    elif rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}:
+    elif rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED", "LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-GUARDED-INTRINSIC"}:
         guards.extend([(name, "positive") for name in ("a", "b")])
     return guards
 
@@ -122,7 +122,11 @@ def render(directory=REPORT, namespace="SupplementalAdmission"):
     for row in rows:
         fmt, rule = formats[row["format"]], row["rule"]
         guards = ", ".join(f"⟨{lean_string(n)}, .{k}⟩" for n, k in domain(rule))
-        payload = {"row": row, "relation": experiment.supplemental.load_catalog()[rule]}
+        relation = deepcopy(experiment.supplemental.load_catalog()[rule])
+        if settings["bundle_version"] == "scalar-supplement-5":
+            # Preserve the catalog schema bound to the frozen report.
+            relation.pop("intrinsics", None)
+        payload = {"row": row, "relation": relation}
         encoded_row = canonical(payload).decode("ascii")
         key = f"report:{snapshot}:{row['format']}:{rule}"
         artifact = f"{path}/summary.json#{row['format']}/{rule}"

@@ -371,7 +371,9 @@ private def shortSpecName : Name → String
 This affects only the concise display; contracts and detailed reports retain
 their original identity. -/
 private def fpAtomName (id : String) : String :=
-  if id == "LOG-MUL-GUARDED" then "log_mul_split"
+  if id == "LOG-MUL-GUARDED-INTRINSIC" then "log_mul_split_intrinsic"
+  else if id == "LOG-EXP-GUARDED-INTRINSIC" then "log_exp_elim_intrinsic"
+  else if id == "LOG-MUL-GUARDED" then "log_mul_split"
   else if id == "LOG-EXP-GUARDED" then "log_exp_elim"
   else id.toLower.replace "-" "_"
 

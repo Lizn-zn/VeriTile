@@ -107,21 +107,27 @@ class SupplementalExportTests(unittest.TestCase):
         report = exporter.REPORT.parent / 'log_report'
         _, _, rows, _, _ = exporter.load_report(report)
         self.assertEqual({(r['rule'], r['format']) for r in rows},
-                         {('LOG-MUL-GUARDED', 'fp32'), ('LOG-EXP-GUARDED', 'fp32')})
+                         {('LOG-MUL-GUARDED', 'fp32'), ('LOG-EXP-GUARDED', 'fp32'),
+                          ('LOG-MUL-GUARDED-INTRINSIC', 'fp32'), ('LOG-EXP-GUARDED-INTRINSIC', 'fp32')})
         self.assertEqual(exporter.domain('LOG-EXP-GUARDED'), [('a', 'finite')])
         self.assertEqual(exporter.domain('LOG-MUL-GUARDED'),
                          [('a', 'finite'), ('b', 'finite'), ('a', 'positive'), ('b', 'positive')])
+        self.assertEqual(exporter.domain('LOG-MUL-GUARDED-INTRINSIC'),
+                         exporter.domain('LOG-MUL-GUARDED'))
+        self.assertEqual(exporter.domain('LOG-EXP-GUARDED-INTRINSIC'), [('a', 'finite')])
         text = exporter.render(report, 'LogAdmission')
         self.assertEqual(text, (exporter.ROOT /
             'VeriTile/Triton/Float/LogAdmission.lean').read_text())
         for name in ('fp32_log_mul', 'fp32_log_mul_libdevice', 'fp32_log_mul_log1p',
-                     'fp32_log_exp_libdevice', 'fp32_log_exp_full_libdevice'):
+                     'fp32_log_exp_libdevice', 'fp32_log_exp_full_libdevice',
+                     'fp32_log_exp_log_libdevice', 'fp32_log_mul_log1p_intrinsic'):
             self.assertNotIn(f'def {name} :', text)
 
         validation = exporter.REPORT.parent / 'log_product_validation_report'
         _, _, confirmed, _, _ = exporter.load_report(validation)
         self.assertEqual({(r['rule'], r['format']) for r in confirmed},
-                         {('LOG-MUL-GUARDED', 'fp32'), ('LOG-EXP-GUARDED', 'fp32')})
+                         {('LOG-MUL-GUARDED', 'fp32'), ('LOG-EXP-GUARDED', 'fp32'),
+                          ('LOG-MUL-GUARDED-INTRINSIC', 'fp32'), ('LOG-EXP-GUARDED-INTRINSIC', 'fp32')})
 
     def test_invalid_namespace_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'identifier'):

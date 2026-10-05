@@ -38,10 +38,14 @@
 以下公式是模式说明，正式检查必须实例化为完整的 typed Compute IR，明确每一步精度、转换和计算顺序。\(q_d\) 表示指定配置下转换到格式 \(d\)；数学规格会按其定义处理或投影这些转换。箭头标注数值检查的参考到候选方向；反向的实验结论需要另建记录。准入后的形式等价假设可以使用对称规则，但这不产生反向实验记录。
 
 候选关系先在 Lean 中定义左右片段和条件，定义本身不依赖是否通过实验。
-[LogExp.lean](../VeriTile/Triton/Float/LogExp.lean) 预定义了七种 fp32 候选：
-`log_mul`、`log_mul_libdevice`、`log_mul_split`、`log_exp`、`log_exp_libdevice`、
-`log_exp_full_libdevice`、`log_exp_elim`。不同 intrinsic 保留独立身份；
-乘积规则要求输入 finite 且 positive，抵消规则允许任意 finite 输入。
+[LogExp.lean](../VeriTile/Triton/Float/LogExp.lean) defines ten FP32 candidates:
+`log_mul`, `log_mul_libdevice`, `log_mul_split`, `log_mul_split_intrinsic`,
+`log_exp`, `log_exp_log_libdevice`, `log_exp_libdevice`, `log_exp_full_libdevice`,
+`log_exp_elim`, and `log_exp_elim_intrinsic`. The product domain is finite and
+positive; log-exp accepts finite signed inputs. Both ordinary log APIs have
+separate fragments and report IDs, including the guarded expressions. A report
+for one backend cannot select the other's candidate. The two FMA/log1p diagnostic
+variants remain experiment-only.
 
 two-gates 结果生成 [LogAdmission.lean](../VeriTile/Triton/Float/LogAdmission.lean)，
 `Atom.report?` 按规则、精度和定义域选择已准入条目，`Rules.assumptions` 自动收集这些条目。

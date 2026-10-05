@@ -21,7 +21,7 @@ KERNELS = supplemental.KERNELS
 SOURCES = [*original.SOURCES, Path(__file__).resolve(), Path(supplemental.__file__),
            KERNELS, supplemental.CATALOG]
 ACCEPTED = original.ACCEPTED
-BUNDLE_VERSION = "scalar-supplement-13"
+BUNDLE_VERSION = "scalar-supplement-14"
 gates = original.gates
 domains = original.domains
 NumericEvent = original.NumericEvent

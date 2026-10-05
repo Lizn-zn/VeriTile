@@ -18,10 +18,22 @@ DEFAULT_PROFILE = DIRECTORY / "config.py"
 KERNELS = DIRECTORY / "kernels.py"
 NumericEvent = original.NumericEvent
 COUNT_RULES = {"COUNT-ZERO", "COUNT-SUCCESSOR"}
-PAIRED_INPUTS = {"LOG-MUL-LIBDEVICE": "LOG-MUL", "LOG-EXP-FULL-LIBDEVICE": "LOG-EXP-LIBDEVICE",
-                 "LOG-EXP-GUARDED": "LOG-EXP-LIBDEVICE", "LOG-MUL-LOG1P": "LOG-MUL",
-                 "LOG-MUL-GUARDED": "LOG-MUL"}
-FP32_ONLY_RULES = {"EXP-SUB-INTRINSIC", "LOG-EXP-GUARDED", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}
+# Each pair changes only ordinary log calls; log1p and exp stay fixed.
+LOG_PAIRS = [
+    ("LOG-MUL", "LOG-MUL-LIBDEVICE"),
+    ("LOG-EXP", "LOG-EXP-LOG-LIBDEVICE"),
+    ("LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE"),
+    ("LOG-MUL-GUARDED-INTRINSIC", "LOG-MUL-GUARDED"),
+    ("LOG-EXP-GUARDED-INTRINSIC", "LOG-EXP-GUARDED"),
+    ("LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-LOG1P"),
+]
+PAIRED_INPUTS = {"LOG-MUL-LIBDEVICE": "LOG-MUL", "LOG-EXP-LOG-LIBDEVICE": "LOG-EXP",
+                 "LOG-EXP-FULL-LIBDEVICE": "LOG-EXP-LIBDEVICE",
+                 "LOG-EXP-GUARDED": "LOG-EXP-LIBDEVICE", "LOG-EXP-GUARDED-INTRINSIC": "LOG-EXP-LIBDEVICE",
+                 "LOG-MUL-LOG1P": "LOG-MUL", "LOG-MUL-LOG1P-INTRINSIC": "LOG-MUL",
+                 "LOG-MUL-GUARDED": "LOG-MUL", "LOG-MUL-GUARDED-INTRINSIC": "LOG-MUL"}
+FP32_ONLY_RULES = {"EXP-SUB-INTRINSIC", "LOG-EXP-GUARDED", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED",
+                   "LOG-EXP-GUARDED-INTRINSIC", "LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-GUARDED-INTRINSIC"}
 
 
 def seed_for(profile, fmt, rule):
@@ -116,11 +128,13 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
         intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-GUARDED"} else "tl.exp",
                     "log": "libdevice.log" if rule in PAIRED_INPUTS else "tl.log", "max": "tl.maximum",
                     "oracle": "torch fp64 mathematical reference on the same quantized operands"})
+    config["numerics"]["intrinsics"].update(load_catalog()[rule].get("intrinsics", {}))
+    log = config["numerics"]["intrinsics"]["log"]
     config["probe"]["special_values"]["literals"] = "only explicit -inf literals in the relation"
     config["probe"]["active_operands"] = load_catalog()[rule]["operands"]
     if rule in PAIRED_INPUTS:
         config["probe"].update(seed=seed_for(profile, fmt, rule), paired_input_rule=PAIRED_INPUTS[rule])
-    if rule == "LOG-EXP-GUARDED":
+    if rule in {"LOG-EXP-GUARDED", "LOG-EXP-GUARDED-INTRINSIC"}:
         config["relation"]["branch"] = {
             "condition": "0.5 < abs(a) <= 80", "lower": 0.5, "upper": 80.0,
             "side": "candidate", "reference": "fp32 log(fp32 exp(a))",
@@ -128,18 +142,18 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
             "inactive_arguments": "zero before evaluating unused tl.where arms",
             "block_fast_path": "skip exp and log when every active lane selects a",
         }
-    if rule == "LOG-MUL-LOG1P":
+    if rule in {"LOG-MUL-LOG1P", "LOG-MUL-LOG1P-INTRINSIC"}:
         config["numerics"]["intrinsics"].update(log1p="libdevice.log1p", fma="explicit fp32 tl.fma, round once")
         config["relation"]["branch"] = {
             "condition": "0.5 <= fp32(a*b) <= 1.5", "lower": 0.5, "upper": 1.5,
             "side": "reference", "inside": "libdevice.log1p(tl.fma(a,b,-1))",
-            "outside": "libdevice.log(fp32(a*b))", "inactive_arguments": "one before evaluating unused paths",
+            "outside": f"{log}(fp32(a*b))", "inactive_arguments": "one before evaluating unused paths",
         }
-    if rule == "LOG-MUL-GUARDED":
+    if rule in {"LOG-MUL-GUARDED", "LOG-MUL-GUARDED-INTRINSIC"}:
         config["relation"]["branch"] = {
             "condition": "0.5 <= fp32(a*b) <= 2", "lower": 0.5, "upper": 2.0,
-            "side": "candidate", "inside": "libdevice.log(fp32(a*b))",
-            "outside": "fp32(libdevice.log(a)+libdevice.log(b))",
+            "side": "candidate", "inside": f"{log}(fp32(a*b))",
+            "outside": f"fp32({log}(a)+{log}(b))",
             "inactive_arguments": "one before evaluating unused paths",
             "scope": "conditional decomposition; does not admit unconditional log-product splitting",
         }
@@ -190,7 +204,7 @@ def oracle(torch, rule, inputs):
         return a / b
     if rule == "MUL-RCP-CANCEL":
         return torch.ones_like(a)
-    if rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}:
+    if rule in {"LOG-MUL", "LOG-MUL-LIBDEVICE", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED", "LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-GUARDED-INTRINSIC"}:
         return torch.log(a * b)
     if rule in {"EXP-SUB", "EXP-SUB-INTRINSIC"}:
         return torch.exp(a - b)
@@ -205,7 +219,7 @@ def oracle(torch, rule, inputs):
     if rule in {"MAX-COMMUTE", "MAX-ASSOC"}:
         ab = torch.maximum(a, b)
         return torch.maximum(ab, c) if rule == "MAX-ASSOC" else ab
-    if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-GUARDED", "MAX-IDEM", "MAX-NEG-INF"}:
+    if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-GUARDED", "LOG-EXP-GUARDED-INTRINSIC", "LOG-EXP-LOG-LIBDEVICE", "MAX-IDEM", "MAX-NEG-INF"}:
         return a
     raise ValueError("unknown supplemental oracle")
 
