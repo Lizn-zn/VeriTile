@@ -43,7 +43,7 @@ All logs retain tl.log, exactly as in the original direct reference. The rounded
 its direct log on [0.5, 2]; the split branch eliminates log(exp(m)) only when
 0.5 < |m| ≤ 80. Unused log arguments are one and unused exp arguments are zero.
 The source preserves both conditional fallbacks and the final bf16 cast. -/
-def candidateLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
+def optimizedLSEKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKernel := triton {
   pid := tl.program_id(0)
   offs := pid * $(blockSize) + tl.arange(0, $(blockSize))
   x := tl.load($(xReg) + offs)

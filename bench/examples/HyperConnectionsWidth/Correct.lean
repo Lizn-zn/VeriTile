@@ -1,4 +1,10 @@
 import bench.examples.HyperConnectionsWidth.Kernels
+import VeriTile.Triton.Math.Sinkhorn
+import VeriTile.Triton.Math.MatrixRewrite
+
+/- The matrix specifications at the end cover symbolic S/T/D and every finite
+normalization count, with region-memory outputs and frames. The earlier scalar
+KernelIO proofs additionally retain their flat-memory bridge. -/
 /-
 bench/examples/HyperConnectionsWidth
 
@@ -20,7 +26,7 @@ Four parts, following the canonical KernelIO showcase
 
 1. **The kernel** — `mhcWidthConnectionKernel`; its `S = T = D = 1,
    numIters = 0` match arm is the scalar fixed-rank slice the proof covers
-   (generic rank still future work).
+   (the general matrix specifications follow at the end).
 2. **Region-model Hoare triple** — value view `mhcWidth_exec_view`,
    two-store frame `mhcWidth_frame`, and their package
    `mhcWidth_region_run`.
@@ -411,3 +417,142 @@ two-output Hoare-triple combinator — no other project constant. -/
    VeriTile.Triton.KernelIO₃ₓ₂.Bout2]
 
 end VeriTile.Bench.Examples.HyperConnectionsWidth
+
+
+/-! General width connection: Sinkhorn(H_res / tau) R and
+Sinkhorn(H_pre / tau)ᵀ R. Both normalization loops and both output stores
+are part of the proved source. The recurrence is defined in Math/Sinkhorn. -/
+namespace VeriTile.Bench.Examples.HyperConnectionsWidth.MatrixCorrect
+open VeriTile Triton LogSinkhorn
+open VeriTile.Bench.Examples.HyperConnectionsWidth.Kernels
+set_option maxHeartbeats 6400000
+set_option linter.unusedSimpArgs false
+
+noncomputable def residualFormula (res : Tile .real [S, D]) (logits : Tile .real [S, S])
+    (tau : ℝ) (iters : Nat) : Tile .real [S, D] := Tile.dot [] (weights (scale logits tau) iters) res
+
+noncomputable def branchFormula (res : Tile .real [S, D]) (logits : Tile .real [S, T])
+    (tau : ℝ) (iters : Nat) : Tile .real [T, D] :=
+  Tile.dot [] (Tile.transpose [] (weights (scale logits tau) iters)) res
+
+private theorem prefix_run (S T D iters : Nat) (tau : ℝ) (s : BlockState) :
+    ∃ a, stepStmts ((matrixOriginal S T D iters tau).body.take 12) s = some a ∧
+      a.regs .real [S, S] "z" = some (scale (readMatrix s "h_res" 0 S S) tau) ∧
+      a.regs .real [S] "u" = some (iterates (scale (readMatrix s "h_res" 0 S S) tau) 0).1 ∧
+      a.regs .real [S] "v" = some (iterates (scale (readMatrix s "h_res" 0 S S) tau) 0).2 ∧
+      a.regs .real [S, D] "residuals" = some (readMatrix s "res" (s.pid * (S * D)) S D) ∧
+      a.regs .nat [] "b" = some (Tile.scalar s.pid) ∧
+      a.regs .nat [S] "offs_s" = some (Tile.vec (fun i => i.val)) ∧
+      a.regs .nat [T] "offs_t" = some (Tile.vec (fun i => i.val)) ∧
+      a.regs .nat [D] "offs_d" = some (Tile.vec (fun i => i.val)) ∧
+      a.mem = s.mem ∧ a.pids = s.pids := by
+  simp [matrixOriginal, matrixKernel, ComputeKernel.body, ComputeKernel.toAlgKernel,
+    List.take, stepStmts, stepStmt, evalOp.eq_def, BlockState.setReg,
+    NumericDType.add, NumericDType.mul, NumericDType.div, readMatrix, scale, iterates,
+    BlockState.readMem, Region.cast, Option.bind, Tile.bop, Tile.expandDim, TileShape.dropInsertedIndex, TileShape.insertAxis]
+  repeat' first | exact rfl | apply And.intro
+
+specification mhc_width_matrix_correct (S T D iters : Nat) (tau : ℝ) (s : BlockState) :
+    Spec.Real (∃ t, exec (matrixOriginal S T D iters tau) s = some t ∧
+      (∀ i : TileIndex [S, D], t.readMem "res_mix" (s.pid * (S * D) + i.1.val * D + i.2.1.val) =
+        ((residualFormula (readMatrix s "res" (s.pid * (S * D)) S D)
+          (readMatrix s "h_res" 0 S S) tau iters).data i).unbotD 0) ∧
+      (∀ i : TileIndex [T, D], t.readMem "branch_in" (s.pid * (T * D) + i.1.val * D + i.2.1.val) =
+        ((branchFormula (readMatrix s "res" (s.pid * (S * D)) S D)
+          (readMatrix s "h_pre" 0 S T) tau iters).data i).unbotD 0) ∧
+      (∀ (r : RegionName) o,
+        (r ≠ "res_mix" ∨ ∀ i : TileIndex [S, D], o ≠ s.pid * (S * D) + i.1.val * D + i.2.1.val) →
+        (r ≠ "branch_in" ∨ ∀ i : TileIndex [T, D], o ≠ s.pid * (T * D) + i.1.val * D + i.2.1.val) →
+        t.mem r o = s.mem r o)) := by
+  obtain ⟨a, ha, hz, hu, hv, hres, hb, hs, ht, hd, hm, hp⟩ := prefix_run S T D iters tau s
+  obtain ⟨t, hloop, hz', hu', hv', hmem, hpids, hr⟩ :=
+    loop_run (scale (readMatrix s "h_res" 0 S S) tau) iters a hz hu hv
+  have hres' := (hr .real [S, D] "residuals" (by decide) (by decide) (by decide)).trans hres
+  have hb' := (hr .nat [] "b" (by decide) (by decide) (by decide)).trans hb
+  have hs' := (hr .nat [S] "offs_s" (by decide) (by decide) (by decide)).trans hs
+  have ht' := (hr .nat [T] "offs_t" (by decide) (by decide) (by decide)).trans ht
+  have hd' := (hr .nat [D] "offs_d" (by decide) (by decide) (by decide)).trans hd
+  have hmem' : t.mem = s.mem := hmem.trans hm
+  have hmid : ∃ q, stepStmts (((matrixOriginal S T D iters tau).body.drop 13).take 7) t = some q ∧
+      q.regs .real [S, T] "z" = some (scale (readMatrix s "h_pre" 0 S T) tau) ∧
+      q.regs .real [S] "u" = some (iterates (scale (readMatrix s "h_pre" 0 S T) tau) 0).1 ∧
+      q.regs .real [T] "v" = some (iterates (scale (readMatrix s "h_pre" 0 S T) tau) 0).2 ∧
+      q.regs .real [S, D] "res_mix" = some (residualFormula
+        (readMatrix s "res" (s.pid * (S * D)) S D) (readMatrix s "h_res" 0 S S) tau iters) ∧
+      q.regs .real [S, D] "residuals" = some (readMatrix s "res" (s.pid * (S * D)) S D) ∧
+      q.regs .nat [] "b" = some (Tile.scalar s.pid) ∧
+      q.regs .nat [S] "offs_s" = some (Tile.vec (fun i => i.val)) ∧
+      q.regs .nat [T] "offs_t" = some (Tile.vec (fun i => i.val)) ∧
+      q.regs .nat [D] "offs_d" = some (Tile.vec (fun i => i.val)) ∧ q.mem = s.mem := by
+    simp [matrixOriginal, matrixKernel, ComputeKernel.body, ComputeKernel.toAlgKernel,
+      List.drop, List.take, stepStmts, stepStmt, evalOp.eq_def, BlockState.setReg,
+      hz', hu', hv', hres', hb', hs', ht', hd', hmem', Option.bind,
+      NumericDType.add, NumericDType.mul, NumericDType.div, weights, residualFormula, scale, readMatrix, iterates,
+      BlockState.readMem, Region.cast, Tile.bop, Tile.uop, Tile.expandDim, TileShape.dropInsertedIndex, TileShape.insertAxis]
+    repeat' first | exact rfl | apply And.intro
+  obtain ⟨q, hq, hqz, hqu, hqv, hmix, hqr, hqb, hqs, hqt, hqd, hqm⟩ := hmid
+  obtain ⟨u, hloop2, huz, huu, huv, hum, _, hur⟩ :=
+    loop_run (scale (readMatrix s "h_pre" 0 S T) tau) iters q hqz hqu hqv
+  have hmix' := (hur .real [S, D] "res_mix" (by decide) (by decide) (by decide)).trans hmix
+  have hur' := (hur .real [S, D] "residuals" (by decide) (by decide) (by decide)).trans hqr
+  have hub := (hur .nat [] "b" (by decide) (by decide) (by decide)).trans hqb
+  have hus := (hur .nat [S] "offs_s" (by decide) (by decide) (by decide)).trans hqs
+  have hut := (hur .nat [T] "offs_t" (by decide) (by decide) (by decide)).trans hqt
+  have hud := (hur .nat [D] "offs_d" (by decide) (by decide) (by decide)).trans hqd
+  have hbody : (matrixOriginal S T D iters tau).toAlgKernel.body =
+      (matrixOriginal S T D iters tau).body.take 12 ++
+        [.forLoop "iter" iters (LogSinkhorn.body S S)] ++
+        ((matrixOriginal S T D iters tau).body.drop 13).take 7 ++
+        .forLoop "iter" iters (LogSinkhorn.body S T) :: (matrixOriginal S T D iters tau).body.drop 21 := rfl
+  change ∃ v, stepStmts _ s = some v ∧ _
+  rw [hbody, List.append_assoc, List.append_assoc, stepStmts.append_some ha]
+  change ∃ v, stepStmts (.forLoop "iter" iters (LogSinkhorn.body S S) :: _) a = some v ∧ _
+  rw [stepStmts.cons_some hloop]
+  change ∃ v, stepStmts (((matrixOriginal S T D iters tau).body.drop 13).take 7 ++
+    .forLoop "iter" iters (LogSinkhorn.body S T) :: (matrixOriginal S T D iters tau).body.drop 21) t = some v ∧ _
+  rw [stepStmts.append_some hq, stepStmts.cons_some hloop2]
+  simp [matrixOriginal, matrixKernel, ComputeKernel.body, ComputeKernel.toAlgKernel,
+    List.drop, stepStmts, stepStmt, evalOp.eq_def, BlockState.setReg,
+    huz, huu, huv, hmix', hur', hub, hus, hut, hud, Option.bind,
+    NumericDType.add, NumericDType.mul, weights, residualFormula, branchFormula]
+  refine ⟨?_, ?_, ?_⟩
+  · intro i j
+    rw [scatter_read_other _ _ _ _ _ _ _ (by decide)]
+    rw [BlockState.scatter_readback_nd _ _ _ (address_injective _ S D) (i, j, PUnit.unit)]
+    rintro ⟨⟩
+    rfl
+  · intro i j
+    rw [BlockState.scatter_readback_nd _ _ _ (address_injective _ T D) (i, j, PUnit.unit)]
+    rintro ⟨⟩
+    rfl
+  · intro r o hR hB
+    rw [scatter_frame _ _ _ _ _ r o (by simpa using hB), scatter_frame _ _ _ _ _ r o (by simpa using hR)]
+    exact congrFun (congrFun (hum.trans hqm) r) o
+
+#axiomsClean mhc_width_matrix_correct
+
+specification mhc_width_matrix_optimized_correct (S T D iters : Nat) (tau : ℝ) (s : BlockState) :
+    Spec.Real (∃ t, exec (matrixOptimized "res" "h_res" "h_pre" "res_mix" "branch_in" S T D iters tau) s = some t ∧
+      (∀ i : TileIndex [S, D], t.readMem "res_mix" (s.pid * (S * D) + i.1.val * D + i.2.1.val) =
+        ((residualFormula (readMatrix s "res" (s.pid * (S * D)) S D)
+          (readMatrix s "h_res" 0 S S) tau iters).data i).unbotD 0) ∧
+      (∀ i : TileIndex [T, D], t.readMem "branch_in" (s.pid * (T * D) + i.1.val * D + i.2.1.val) =
+        ((branchFormula (readMatrix s "res" (s.pid * (S * D)) S D)
+          (readMatrix s "h_pre" 0 S T) tau iters).data i).unbotD 0) ∧
+      (∀ (r : RegionName) o,
+        (r ≠ "res_mix" ∨ ∀ i : TileIndex [S, D], o ≠ s.pid * (S * D) + i.1.val * D + i.2.1.val) →
+        (r ≠ "branch_in" ∨ ∀ i : TileIndex [T, D], o ≠ s.pid * (T * D) + i.1.val * D + i.2.1.val) →
+        t.mem r o = s.mem r o)) := by
+  obtain ⟨t, ht, post⟩ := mhc_width_matrix_correct S T D iters tau s
+  refine ⟨t, ?_, post⟩
+  have hmid : exec (matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D iters tau) s = some t :=
+    MatrixRewrite.div_mul_rcp ((matrixOriginal S T D iters tau).body.take 9)
+      ((matrixOriginal S T D iters tau).body.drop 10) "z" _ tau s t ht
+  exact MatrixRewrite.div_mul_rcp
+    ((matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D iters tau).body.take 17)
+    ((matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D iters tau).body.drop 18)
+    "z" _ tau s t hmid
+
+#axiomsClean mhc_width_matrix_optimized_correct
+
+end VeriTile.Bench.Examples.HyperConnectionsWidth.MatrixCorrect

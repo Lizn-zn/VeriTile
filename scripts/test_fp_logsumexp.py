@@ -101,8 +101,8 @@ import bench.examples.StableLogSumExp.FPEquiv
 open VeriTile Triton Bench.Examples.StableLogSumExpFPContract
 open scoped VeriTile.Spec
 specification opaque_candidate
-    (h : FP.Scheduled.ConditionalEquivalent₁ [] (candidate "x" "y" 2) (original "x" "y" 2)) :
-    candidate "x" "y" 2 ≡[[]] original "x" "y" 2 :=
+    (h : FP.Scheduled.ConditionalEquivalent₁ [] (optimized "x" "y" 2) (original "x" "y" 2)) :
+    optimized "x" "y" 2 ≡[[]] original "x" "y" 2 :=
   Spec.FloatingPoint.ofNumerical (structural := fun _ _ => False) rfl rfl h
 #print_fp_assumptions opaque_candidate
 """)

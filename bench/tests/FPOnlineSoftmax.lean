@@ -148,13 +148,13 @@ example {α : Type} (M : Algebra α) (xs : Nat → α) (N i : Nat) (hi : i ≤ N
 -- The original source has no output port or store. Its y argument cannot
 -- become an observable output merely through the numerical invariant.
 example (x y z : RegionName) (N : Nat) :
-    OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N =
-      OnlineSoftmax.Kernels.onlineSoftmaxKernel x z N := rfl
+    OnlineSoftmax.Kernels.onlineNormalizerKernel x y N =
+      OnlineSoftmax.Kernels.onlineNormalizerKernel x z N := rfl
 
 example {α : Type} [Inhabited α] (M : Algebra α) (N : Nat) (xs : Fin N → α) (s : State α)
     (hx : ∀ i : Fin N, (s.mem "x" (s.pids 0 * N + i.val)).read .real = xs i) :
     ∃ t, FP.Structural.exec (OnlineSoftmaxFPComparison.engine M)
-        (OnlineSoftmax.Kernels.onlineSoftmaxKernel "x" "x" N) s = some t ∧
+        (OnlineSoftmax.Kernels.onlineNormalizerKernel "x" "x" N) s = some t ∧
       t.mem = s.mem := by
   obtain ⟨t, ht, _, _, hm, _⟩ :=
     OnlineSoftmaxFPExecution.online_run (OnlineSoftmaxFPComparison.engine M) "x" "x" xs s hx

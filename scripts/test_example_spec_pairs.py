@@ -129,8 +129,12 @@ run_cmd do
   if (← getEnv).contains `{correct_io} then
     throwError "FP example imported the correctness implementation"
 '''
-                self.assertEqual(self.lean(source),
-                                 f"FP assumptions used by {headline}:\n  {atom}\n")
+                expected = f"FP assumptions used by {headline}:\n  {atom}\n"
+                if name == "HyperConnectionsDepth":
+                    expected += "FP assumptions used by mhc_depth_matrix_equiv:\n  add_commute\n"
+                elif name == "HyperConnectionsWidth":
+                    expected += "FP assumptions used by mhc_width_matrix_equiv:\n  div_mul_rcp\n"
+                self.assertEqual(self.lean(source), expected)
 
     def test_reduction_correctness_preserves_sources_and_states_the_formula(self):
         imports = "\n".join(f"import bench.examples.{family}.Correct"

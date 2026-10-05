@@ -29,8 +29,8 @@ required input/intermediate domains remain part of the FP statements.
 | [FlatVectorAdd](FlatVectorAdd/) | Masked addition; FP addition commutation. |
 | [FloatDTypeAdd](FloatDTypeAdd/) | Explicitly typed addition; FP addition commutation. |
 | [AdamUpdateGridLaunch](AdamUpdateGridLaunch/) | In-place Lion update (the source is named Adam); commute the update's addition. |
-| [HyperConnectionsDepth](HyperConnectionsDepth/) | Depth connection, `S=T=D=1`, zero normalization iterations; commute the final addition. |
-| [HyperConnectionsWidth](HyperConnectionsWidth/) | Width connection, the same scalar slice; commute the selected multiplications. |
+| [HyperConnectionsDepth](HyperConnectionsDepth/) | Symbolic `S/T/D` and normalization count; commute the final pointwise addition. General real matrix formula and contextual FP proof; scalar flat-memory proof retained. |
+| [HyperConnectionsWidth](HyperConnectionsWidth/) | Symbolic `S/T/D` and normalization count; replace logit division by reciprocal multiplication, preserving both matrix products. General real formulas and contextual FP proof; scalar specialization retained. |
 | [RowWiseMax](RowWiseMax/) | Inline the maximum computation; structural FP equivalence without numerical assumptions. |
 | [RowWiseSum](RowWiseSum/) | Decompose observable outputs and prove reversed reduction lanes using guarded addition commutation, association and zero identities. |
 | [FusedSiLU](FusedSiLU/) | Fuse the pipeline; structural FP equivalence without numerical assumptions. |
@@ -38,19 +38,17 @@ required input/intermediate domains remain part of the FP statements.
 | [SoftmaxReciprocal](SoftmaxReciprocal/) | Replace per-lane division with reciprocal multiplication; unchanged tl.exp prefix, only div_mul_rcp assumed. |
 | [FloatDTypeSoftmax](FloatDTypeSoftmax/) | The reciprocal rewrite with fp32 loads/stores and fp64 work; unchanged tl.exp prefix, only the casted div_mul_rcp atom assumed. |
 | [SoftmaxStable](SoftmaxStable/) | Naive versus max-shifted softmax, derived from scalar assumptions and reduction plans. |
-| [OnlineSoftmax](OnlineSoftmax/) | Batch output versus normalization recovered from the online kernel's final `m/l` registers; the online source has no output store. |
+| [OnlineSoftmax](OnlineSoftmax/) | Complete two-pass online kernel versus batch softmax; successful executions, stored output rows and memory frames. |
 | [Welford](Welford/) | Two-pass versus online mean/variance, with the stated count bound and reduction plan. |
 | [FusedLayerNorm](FusedLayerNorm/) | Two-pass versus Welford-based LayerNorm, with the stated count bound and domains. |
 | [LogExp](LogExp/) | Eliminate the masked, piecewise libdevice log-exp expression using its admitted atom. |
-| [StableLogSumExp](StableLogSumExp/) | Conditional candidate versus the unchanged direct tl.log reference, proved using `log_mul_split .tl`, `log_exp_cancel .tl`, libdevice exp-sub and arithmetic. Symbolic row size, reduction schedule, bf16 output and frame retained. The older unconditional shifted source remains unadmitted. |
+| [StableLogSumExp](StableLogSumExp/) | Fallback-preserving optimized source versus the unchanged direct tl.log reference, proved using `log_mul_split .tl`, `log_exp_cancel .tl`, libdevice exp-sub and arithmetic. Symbolic row size, reduction schedule, bf16 output and frame retained. The historical unconditional target is isolated in `Unconditional.lean` and remains unadmitted. |
 
 Both versions now have real correctness specifications for vector addition,
-the Lion update, the fixed-rank mHC slices, reversed row sum and inlined row max.
-Each statement includes successful execution, its IO bounds and the memory
-frame. Empty tiles are covered by the optimized aligned/float/TritonBench adds,
+the Lion update, general mHC matrices and their scalar specializations, reversed row sum and inlined row max.
+Each real statement includes successful execution and a memory frame. The new general mHC and complete online statements use region memory; the retained scalar/batch KernelIO statements additionally bridge to bounded flat memory. Empty tiles are covered by the optimized aligned/float/TritonBench adds,
 row sum and Lion update; masked FlatVectorAdd and row max retain their stated
-positive-block-size conditions. OnlineSoftmax retains the batch/recurrence
-observation scope described above.
+positive-block-size conditions. OnlineSoftmax proves actual stored outputs; the recurrence-only helper remains available separately.
 
 The seven local-rewrite examples retain the finite operands of each actual
 rewrite in `GuardedRewrite.Program.domain`. The checked contextual lemmas

@@ -47,7 +47,7 @@ theorem original_recovery_run {α : Type} [Inhabited α] (R : Rules) (M : Algebr
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α)
     (x y : RegionName) (N : Nat) (hN : 0 < N) (hExp : FP.SoftmaxShift.LibdeviceExpSub M D)
     (hd : (requirements x N).Holds M D s) :
-    ∃ t m l, FP.Structural.exec (engine M) (onlineSoftmaxKernel x y N) s = some t ∧
+    ∃ t m l, FP.Structural.exec (engine M) (onlineNormalizerKernel x y N) s = some t ∧
       t.regs .real [] "m" = some (fun _ => m) ∧ t.regs .real [] "l" = some (fun _ => l) ∧
       mul M l (FP.SoftmaxShift.exp M m) = FP.OnlineSoftmax.prefixSum M (rowValues s x N) N ∧
       t.mem = s.mem ∧ t.pids = s.pids := by

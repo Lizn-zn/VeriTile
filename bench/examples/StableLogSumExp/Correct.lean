@@ -221,14 +221,14 @@ set_option maxHeartbeats 2400000
 
 /-- The candidate retains its two branch selectors when precision is erased. -/
 theorem candidate_projection (x y : RegionName) (B : Nat) :
-    (candidateLSEKernel x y B).eraseDType.toAlgorithm? = .ok (candidateLSEKernel x y B).eraseDType.toAlgKernel := by
-  simp only [ComputeKernel.eraseDType, show (candidateLSEKernel x y B).toAlgorithm? =
-    .ok (candidateLSEKernel x y B).toAlgKernel from rfl]
+    (optimizedLSEKernel x y B).eraseDType.toAlgorithm? = .ok (optimizedLSEKernel x y B).eraseDType.toAlgKernel := by
+  simp only [ComputeKernel.eraseDType, show (optimizedLSEKernel x y B).toAlgorithm? =
+    .ok (optimizedLSEKernel x y B).toAlgKernel from rfl]
   simp
 
 theorem candidate_flattenOk (x y : RegionName) (B : Nat) :
-    (candidateLSEKernel x y B).eraseDType.toAlgKernel.FlattenOk := by
-  simp [candidateLSEKernel, ComputeKernel.eraseDType, ComputeKernel.toAlgKernel,
+    (optimizedLSEKernel x y B).eraseDType.toAlgKernel.FlattenOk := by
+  simp [optimizedLSEKernel, ComputeKernel.eraseDType, ComputeKernel.toAlgKernel,
     ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?, ComputeExpr.toAlgorithm?,
     Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType, Kernel.FlattenOk,
     StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def,
@@ -238,11 +238,11 @@ set_option maxRecDepth 8000 in
 theorem candidate_traceSafe (xReg yReg : RegionName) (B : Nat) (hB : 0 < B)
     (bounds : RegionBounds) (s : BlockState)
     (hx : s.pid * B + B ≤ bounds xReg) (hy : s.pid + 1 ≤ bounds yReg) :
-    Kernel.TraceSafe bounds (candidateLSEKernel xReg yReg B).eraseDType.toAlgKernel s := by
+    Kernel.TraceSafe bounds (optimizedLSEKernel xReg yReg B).eraseDType.toAlgKernel s := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
   unfold Kernel.TraceSafe
   simp only [BlockState.pid_eq] at hx hy
-  simp [candidateLSEKernel, ComputeKernel.eraseDType, ComputeKernel.toAlgKernel,
+  simp [optimizedLSEKernel, ComputeKernel.eraseDType, ComputeKernel.toAlgKernel,
     ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?, ComputeExpr.toAlgorithm?,
     Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
     Op.eraseDType.eq_def, VeriTile.Triton.eraseDType, NumericDType.eraseDType,
@@ -259,13 +259,13 @@ theorem candidate_traceSafe (xReg yReg : RegionName) (B : Nat) (hB : 0 < B)
 set_option maxRecDepth 8000 in
 theorem candidate_region_run (B : Nat) (hB : 0 < B) (s : BlockState) (xs : Fin B → ℝ)
     (hx : ∀ i : Fin B, s.readMem "x" (s.pid * B + i.val) = xs i) :
-    ∃ t, exec (candidateLSEKernel "x" "y" B).eraseDType.toAlgKernel s = some t ∧
+    ∃ t, exec (optimizedLSEKernel "x" "y" B).eraseDType.toAlgKernel s = some t ∧
       (∀ i : Fin 1, t.readMem "y" (s.pid + i.val) = Real.log (∑ j, Real.exp (xs j))) ∧
       (∀ (r : RegionName) o, (r ≠ "y" ∨ ∀ i : Fin 1, o ≠ s.pid + i.val) →
         t.mem r o = s.mem r o) := by
   obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
   simp only [BlockState.pid_eq] at hx ⊢
-  simp [candidateLSEKernel, ComputeKernel.eraseDType, ComputeKernel.toAlgKernel,
+  simp [optimizedLSEKernel, ComputeKernel.eraseDType, ComputeKernel.toAlgKernel,
     ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?, ComputeExpr.toAlgorithm?,
     Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
     Op.eraseDType.eq_def, VeriTile.Triton.eraseDType, NumericDType.eraseDType,
@@ -300,8 +300,8 @@ theorem candidate_region_run (B : Nat) (hB : 0 < B) (s : BlockState) (xs : Fin B
     · exact h rfl
 
 /-- Mathematical interpretation of the exact candidate source. -/
-def candidateIO (B : Nat) : KernelIO₁ where
-  kernel := (candidateLSEKernel "x" "y" B).eraseDType
+def optimizedIO (B : Nat) : KernelIO₁ where
+  kernel := (optimizedLSEKernel "x" "y" B).eraseDType
   projection := candidate_projection "x" "y" B
   inp := "x"
   out := "y"
@@ -311,8 +311,8 @@ def candidateIO (B : Nat) : KernelIO₁ where
   write := fun pid => pid
 
 /-- Both conditional rewrites preserve log-sum-exp over the reals. -/
-specification candidate_logsumexp_correct (B : Nat) (hB : 0 < B) :
-    Spec.Real (candidateIO B ⊨ fun xs _ => Real.log (∑ i, Real.exp (xs i))) := by
+specification optimized_logsumexp_correct (B : Nat) (hB : 0 < B) :
+    Spec.Real (optimizedIO B ⊨ fun xs _ => Real.log (∑ i, Real.exp (xs i))) := by
   refine KernelIO₁.Implements.intro _ (candidate_flattenOk "x" "y" B) ?_ ?_
   · intro bounds s hx hy _
     exact candidate_traceSafe "x" "y" B hB bounds s hx hy

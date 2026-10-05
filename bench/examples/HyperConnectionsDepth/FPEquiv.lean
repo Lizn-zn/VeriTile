@@ -1,6 +1,11 @@
 import bench.examples.HyperConnectionsDepth.Kernels
 import VeriTile.Triton.Float.GuardedRewrite
+import VeriTile.Triton.Float.ProfiledRewrite
 import VeriTile.Meta.StatementAudit
+
+/- The matrix specifications below cover symbolic dimensions and every
+normalization count. They preserve the entire execution under their pointwise
+operand domains; matrix operations keep the same opaque backend. -/
 
 /-! HyperConnectionsDepth: contextual FP equivalence from the admitted scalar add_commute.
 The scalar, zero-iteration source is unchanged. The actual residual
@@ -41,6 +46,35 @@ specification mhc_depth_equiv (tau : ℝ) (R : Rules) :
     (hd _ (by simp [original]))
 
 #print_fp_assumptions mhc_depth_equiv
+#guard_msgs (drop info) in
+#auditModuleAxioms
+
+
+/-- The final two matrix operands must be finite entrywise, after every
+Sinkhorn iteration and the unchanged matrix multiplication have executed. -/
+def matrixAdditionSite (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Site :=
+  .add ((matrixOriginal S T D numIters tau).surfaceBody.take 17) [S, D]
+    (.ref .real [S, D] "res_mix") (.ref .real [S, D] "branch_mix")
+
+def matrixOriginalProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
+  ⟨matrixOriginal S T D numIters tau, [matrixAdditionSite S T D numIters tau]⟩
+
+def matrixOptimizedProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
+  ⟨matrixOptimized "res_mix" "branch_out" "h_post" "out" S T D numIters tau,
+    [matrixAdditionSite S T D numIters tau]⟩
+
+/-- Contextual equivalence for every matrix dimension and iteration count. -/
+specification mhc_depth_matrix_equiv (S T D numIters : Nat) (tau : ℝ) (R : Rules) :
+    matrixOriginalProgram S T D numIters tau ≡[R] matrixOptimizedProgram S T D numIters tau := by
+  apply Spec.FloatingPoint.ofNumerical (lhs := matrixOriginalProgram S T D numIters tau)
+    (rhs := matrixOptimizedProgram S T D numIters tau) (structural := fun _ _ => False) rfl rfl
+  intro α _ M domain hM s hd
+  exact FP.ProfiledRewrite.add_commute R M domain hM s
+    ((matrixOriginal S T D numIters tau).surfaceBody.take 17)
+    ((matrixOriginal S T D numIters tau).surfaceBody.drop 18) "out" _ _
+    (hd _ (by simp [matrixOriginalProgram, matrixAdditionSite]))
+
+#print_fp_assumptions mhc_depth_matrix_equiv
 #guard_msgs (drop info) in
 #auditModuleAxioms
 

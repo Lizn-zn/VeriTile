@@ -97,7 +97,7 @@ theorem original_normalization_runs {α : Type} [Inhabited α] (R : FP.Exponenti
       FP.Structural.exec (SoftmaxStableFPContract.engine M plans)
         (OnlineSoftmax.Kernels.stableSoftmaxKernel x y N) s = some batch ∧
       FP.Structural.exec (OnlineSoftmaxFPComparison.engine M)
-        (OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N) s = some online ∧
+        (OnlineSoftmax.Kernels.onlineNormalizerKernel x y N) s = some online ∧
       online.regs .real [] "m" = some (fun _ => m) ∧ online.regs .real [] "l" = some (fun _ => l) ∧
       (∀ i : Fin N, batch.mem y (s.pids 0 * N + i.val) = .mk .real
         (div M (FP.SoftmaxShift.exp M (sub M (rowValues s x N i.val) m)) l)) ∧
@@ -151,7 +151,7 @@ def normalizedOnline (x y : RegionName) (N : Nat) : FP.ObservedRow.Program where
   output := y
   size := N
   offset := fun pid => pid * N
-  kernel := OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N
+  kernel := OnlineSoftmax.Kernels.onlineNormalizerKernel x y N
   observe := fun pid i => .div .real .nil
     (.libdeviceExp (.sub .real .nil (loadRow x N pid i.val) (.ref .real [] "m")))
     (.ref .real [] "l")
@@ -192,5 +192,45 @@ theorem observed_equivalent (R : FP.Exponential.Rules) (x y : RegionName)
     simpa [batchOutput] using ho
   · intro r o _
     exact congrFun (congrFun hmem r) o
+
+/-- Both public programs now write the same output row. -/
+def batch (x y : RegionName) (N : Nat) : FP.Scheduled.IO₁ where
+  io := {
+    kernel := stableSoftmaxKernel x y N
+    inp := x
+    out := y
+    Bin := N
+    Bout := N
+    read := fun pid => pid * N
+    write := fun pid => pid * N }
+  profile := FP.Scheduled.fp32
+  domain := requirements x N
+
+def online (x y : RegionName) (N : Nat) : FP.Scheduled.IO₁ :=
+  { batch x y N with io := { (batch x y N).io with kernel := onlineSoftmaxKernel x y N, projection := rfl } }
+
+/-- The two successful kernel executions agree on stored cells and preserve
+all memory outside the output row. No readback expression supplies missing work. -/
+theorem output_equivalent (R : FP.Exponential.Rules) (x y : RegionName)
+    (N : Nat) (hN : 0 < N) :
+    FP.Scheduled.Equivalent₁ R.assumptions (batch x y N) (online x y N) := by
+  refine ⟨by simp [batch, IO₁PrivateScratch], by simp [online, batch, IO₁PrivateScratch], ?_⟩
+  intro α _ M D hM plans s hd
+  let xs := rowValues s x N
+  obtain ⟨a, ha, hva, hfa⟩ := OnlineSoftmaxFPBatch.batch_run (SoftmaxStableFPContract.engine M plans)
+    x y N hN (fun i : Fin N => xs i.val) s (fun _ => rfl)
+  obtain ⟨b, hb, hvb, hfb⟩ := OnlineSoftmaxFPExecution.online_output_run
+    (SoftmaxStableFPContract.engine M plans) x y N (fun i : Fin N => xs i.val) s (fun _ => rfl)
+  rw [scheduled_recurrence M plans xs N N le_rfl] at hvb
+  refine ⟨a, b, ha, hb, ?_, ?_, ?_⟩
+  · intro i
+    exact (hva i).trans ((congrArg (Cell.mk .real)
+      (normalized_values R.arithmetic M D (FP.Exponential.arithmetic_models R M D hM) s
+        xs N hN plans (FP.Exponential.exp_sub R M D hM s)
+        ((requirements_holds M D s x N plans).mp hd) i)).trans (hvb i).symm)
+  · intro r o ho _
+    exact hfa r o ho
+  · intro r o ho _
+    exact hfb r o ho
 
 end VeriTile.Bench.Examples.OnlineSoftmaxFPContract

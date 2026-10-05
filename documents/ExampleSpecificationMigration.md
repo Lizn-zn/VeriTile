@@ -30,9 +30,9 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Float dtype addition | `FloatDTypeAdd/Correct.lean` — checked for original and optimized sources, including empty tiles | `FloatDTypeAdd/FPEquiv.lean` — checked; add commutation; output cast retained |
 | Row-wise sum | `RowWiseSum/Correct.lean` — checked for original and optimized sources | `RowWiseSum/FPEquiv.lean` — checked under the admitted fp32 ADD-COMMUTE and ADD-ASSOC assumptions; dimensions and reduction schedules remain symbolic |
 | Row-wise max | `RowWiseMax/Correct.lean` — checked for original and optimized sources | `RowWiseMax/FPEquiv.lean` — checked; inline the load and reduction into the store, preserving the same reduction and input order; no numerical assumptions |
-| Online softmax | `OnlineSoftmax/Correct.lean` — checked, original batch-kernel/online-recurrence scope | `OnlineSoftmax/FPEquiv.lean` — checked in that same observation scope: stored batch values versus read-only normalization of the actual online m/l registers; libdevice EXP-SUB and scalar arithmetic, symbolic positive row length and separate memory frames |
-| mHC depth | `HyperConnectionsDepth/Correct.lean` — checked for original and optimized sources, original rank-one/zero-iteration scope | `HyperConnectionsDepth/FPEquiv.lean` — checked in the same scope; add commutation |
-| mHC width | `HyperConnectionsWidth/Correct.lean` — checked for original and optimized sources, original rank-one/zero-iteration scope | `HyperConnectionsWidth/FPEquiv.lean` — checked in the same scope; two multiplication commutations |
+| Online softmax | `OnlineSoftmax/Correct.lean` — checked for batch and complete online output; region-memory stores/frame plus retained batch flat-memory bridge | `OnlineSoftmax/FPEquiv.lean` — checked for actual stored outputs on both sides; libdevice EXP-SUB and scalar arithmetic, symbolic positive row length and memory frames |
+| mHC depth | `HyperConnectionsDepth/Correct.lean` — checked for general matrix sources and finite Sinkhorn iterations in region memory, plus scalar flat-memory specializations | `HyperConnectionsDepth/FPEquiv.lean` — checked for symbolic dimensions and iteration count; final pointwise add commutation |
+| mHC width | `HyperConnectionsWidth/Correct.lean` — checked for general matrix sources and finite Sinkhorn iterations in region memory, plus scalar flat-memory specializations | `HyperConnectionsWidth/FPEquiv.lean` — checked for symbolic dimensions and iteration count; logit division versus reciprocal multiplication, with unchanged matrix products |
 | Adam-named Lion update | `AdamUpdateGridLaunch/Correct.lean` — checked for both sources per program; original grid proofs retained | `AdamUpdateGridLaunch/FPEquiv.lean` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStable/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxStable/FPEquiv.lean` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
 | Log-exp elimination | `LogExp/Correct.lean` — checked for the fixed reference and guarded candidate against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted conditional `log_exp_cancel .libdevice` atom |
@@ -46,7 +46,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 
 There are 19 correctness modules and 19 modules with completed FP specifications.
 StableLogSumExp proves the conditional candidate; its older unconditional shift
-remains a separately recorded pending goal. The eight `RealEquiv.lean` modules
+remains a separately recorded goal in `StableLogSumExp/Unconditional.lean`; the fallback version is the supported optimized source. The eight `RealEquiv.lean` modules
 retain proofs with real intermediate arithmetic and their stated cast semantics.
 Their presence does not complete a pending FP transformation.
 
@@ -210,16 +210,14 @@ reduction and normalization from the admitted scalar arithmetic and libdevice
 EXP-SUB atoms. Max and bf16 casts remain opaque; the row length is symbolic
 and positive. `#print_fp_assumptions` lists only the scalar assumptions.
 
-`OnlineSoftmaxFPEquiv.online_softmax_equiv` compares `batchOutput` with
-`normalizedOnline` using `Float/ObservedRow`. The latter executes the original
-online kernel and then reads `exp(x - m) / l` using its actual final registers.
-Both executions and all readbacks must succeed; missing registers cannot make
-two failed observations count as equal. The batch retains its real-typed row
-store and frames all other cells, while the online kernel preserves all memory.
-The observation adds no store. Its signature retains the row layout, fp32
-execution profile, symbolic size and reified finite/nonzero domain; syntax-only
-steps cannot change the readback or memory frame. This preserves the existing
-Correct scope, not an equality between the kernels' final memories.
+`OnlineSoftmaxFPEquiv.online_softmax_equiv` compares `batch` with `online`
+using `Float/ScheduledIO`. The complete online source runs the recurrence,
+rereads the row, and stores `exp(x-m)/l`. Both kernels must execute successfully,
+their stored output cells agree, and all other memory is framed. The signature
+retains fp32, the row layout, symbolic size and actual intermediate domains.
+The real output theorem proves the same two-pass source against the independent
+softmax formula in region memory. The old register observations are auxiliary
+lemmas, not the public equivalence scope.
 
 Stable logsumexp retains its single bf16 store at `pid` while replacing both
 exp implementations with libdevice.exp. Its exp-sub law is admitted; LOG-MUL

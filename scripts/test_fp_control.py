@@ -34,7 +34,7 @@ class FPControlTests(unittest.TestCase):
     def test_recurrences_domains_casts_frames_and_independent_sources(self):
         self.lean((ROOT / 'bench/tests/FPRecurrenceExecution.lean').read_text())
 
-    def test_exact_original_kernels_including_both_stores_and_no_softmax_store(self):
+    def test_exact_original_kernels_and_softmax_normalizer_helper(self):
         self.lean('''
 import bench.examples.Welford.Execution
 import bench.examples.OnlineSoftmax.Execution
@@ -48,7 +48,7 @@ example (N stride : Nat) :
     (WelfordCorrect.twopassIO N stride).kernel =
       (WelfordFPExecution.twopassIO "x" "mean" "var" N stride).kernel.eraseDType := rfl
 example (x y : RegionName) (N : Nat) :
-    (OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N).surfaceBody =
+    (OnlineSoftmax.Kernels.onlineNormalizerKernel x y N).surfaceBody =
       OnlineSoftmaxFPExecution.initialCode ++
         [.forLoop "i" N (OnlineSoftmaxFPExecution.body x N)] :=
   OnlineSoftmaxFPExecution.kernel_body x y N

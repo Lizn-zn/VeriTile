@@ -70,7 +70,7 @@ private def initial : State ℚ where
 bf16 cast and scalar output address, including when input and output alias. -/
 theorem negative_center_in_place :
     ∃ t, exec (FP.Scheduled.fp32.algebra model FP.Equational.seededSchedules)
-        (StableLogSumExp.Kernels.candidateLSEKernel "x" "x" 4) initial = some t ∧
+        (StableLogSumExp.Kernels.optimizedLSEKernel "x" "x" 4) initial = some t ∧
       t.mem "x" 1 = .mk .bf16 (413 / 4) ∧
       ∀ (r : RegionName) o, (r ≠ "x" ∨ o ≠ 1) → t.mem r o = initial.mem r o := by
   obtain ⟨t, ht, hv, hf⟩ := candidate_run model FP.Equational.seededSchedules lt le
@@ -92,21 +92,21 @@ theorem negative_center_in_place :
     FP.Scheduled.fp32, FP.ScalarReduction.algebra, Algebra.withDefaultPrecision,
     resolvePrecision, model, lt, le]
 
-example (B : Nat) : (StableLogSumExpCorrect.candidateIO B).kernel =
-    (candidateIO "x" "y" B).kernel.eraseDType := rfl
+example (B : Nat) : (StableLogSumExpCorrect.optimizedIO B).kernel =
+    (optimizedIO "x" "y" B).kernel.eraseDType := rfl
 
 theorem empty_row_fails :
     exec (FP.Scheduled.fp32.algebra model FP.Equational.seededSchedules)
-      (StableLogSumExp.Kernels.candidateLSEKernel "x" "y" 0) initial = none := by
-  simp [StableLogSumExp.Kernels.candidateLSEKernel, FP.Structural.exec, run, step, evalExpr,
+      (StableLogSumExp.Kernels.optimizedLSEKernel "x" "y" 0) initial = none := by
+  simp [StableLogSumExp.Kernels.optimizedLSEKernel, FP.Structural.exec, run, step, evalExpr,
     evalOp_unfold, numeric, TileShape.axisDim, Option.bind]
 
 /-- A numerical law does not silently supply a missing comparison operation. -/
 theorem missing_comparison_fails :
     exec (FP.Scheduled.fp32.algebra { model with compareLe := fun _ _ => none }
         FP.Equational.seededSchedules)
-      (StableLogSumExp.Kernels.candidateLSEKernel "x" "y" 1) initial = none := by
-  simp [StableLogSumExp.Kernels.candidateLSEKernel, FP.Structural.exec, run, step, evalExpr,
+      (StableLogSumExp.Kernels.optimizedLSEKernel "x" "y" 1) initial = none := by
+  simp [StableLogSumExp.Kernels.optimizedLSEKernel, FP.Structural.exec, run, step, evalExpr,
     evalOp_unfold, numeric, numericLe, TileShape.axisDim,
     FP.Scheduled.Profile.algebra, FP.Scheduled.fp32, FP.ScalarReduction.algebra,
     Algebra.withDefaultPrecision]
@@ -140,16 +140,16 @@ theorem split_domain_is_satisfiable :
       FP.ScalarReduction.value, FP.ScalarReduction.FiniteTree, model]
 
 theorem comparison_contract_is_satisfiable (B : Nat) :
-    ∀ c ∈ (StableLogSumExpFPContract.candidate "x" "y" B).comparisons,
+    ∀ c ∈ (StableLogSumExpFPContract.optimized "x" "y" B).comparisons,
       c.Supported model := by
   intro c hc
-  simp only [StableLogSumExpFPContract.candidate, List.mem_cons, List.not_mem_nil, or_false] at hc
+  simp only [StableLogSumExpFPContract.optimized, List.mem_cons, List.not_mem_nil, or_false] at hc
   rcases hc with rfl | rfl <;> simp [FP.Scheduled.Comparison.Supported, model]
 
 theorem comparison_support_is_part_of_signature (B : Nat) :
-    Spec.ProgramSyntax.signature (StableLogSumExpFPContract.candidate "x" "y" B) ≠
+    Spec.ProgramSyntax.signature (StableLogSumExpFPContract.optimized "x" "y" B) ≠
       Spec.ProgramSyntax.signature
-        { StableLogSumExpFPContract.candidate "x" "y" B with comparisons := [] } := by
+        { StableLogSumExpFPContract.optimized "x" "y" B with comparisons := [] } := by
   intro h
   have bad := congrArg (fun sig => sig.2.2.2) h
   cases bad
@@ -157,8 +157,8 @@ theorem comparison_support_is_part_of_signature (B : Nat) :
 example (B : Nat) : (StableLogSumExpFPContract.original "x" "y" B).io.kernel =
     StableLogSumExp.Kernels.directLSEKernel "x" "y" B := rfl
 
-example (B : Nat) : (StableLogSumExpFPContract.candidate "x" "y" B).io.kernel =
-    StableLogSumExp.Kernels.candidateLSEKernel "x" "y" B := rfl
+example (B : Nat) : (StableLogSumExpFPContract.optimized "x" "y" B).io.kernel =
+    StableLogSumExp.Kernels.optimizedLSEKernel "x" "y" B := rfl
 
 #guard_msgs (drop info) in
 #axiomsClean StableLogSumExpFPEquiv.logsumexp_equiv
@@ -168,6 +168,6 @@ example (B : Nat) : (StableLogSumExpFPContract.candidate "x" "y" B).io.kernel =
 #guard_msgs (drop info) in
 #axiomsClean candidate_run
 #guard_msgs (drop info) in
-#axiomsClean StableLogSumExpCorrect.candidate_logsumexp_correct
+#axiomsClean StableLogSumExpCorrect.optimized_logsumexp_correct
 
 end FPLogSumExpCandidateTests

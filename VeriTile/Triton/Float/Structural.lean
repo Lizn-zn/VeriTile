@@ -79,6 +79,17 @@ structure Algebra (α : Type) where
   reduceSum : Option ComputeDType → {shape : TileShape} →
     (axis : Fin shape.length) → (keepDims : Bool) → Values α .real shape →
     Values α .real (TileShape.reduceShape shape axis keepDims)
+  /-- Matrix multiplication remains opaque, including its backend precision.
+  Missing backend support fails; no scalar expansion or transpose law is assumed. -/
+  dot : Option ComputeDType → {batch : TileShape} → {m k n : Nat} →
+    Values α .real (batch ++ [m, k]) → Values α .real (batch ++ [k, n]) →
+    Option (Values α .real (batch ++ [m, n])) := fun _ {_} {_} {_} {_} _ _ => none
+
+/-- A transpose only rearranges indices; it applies no numerical operation. -/
+def transposeValues {α : Type} {dtype : TileDType} : (batch : TileShape) → {m n : Nat} →
+    Values α dtype (batch ++ [m, n]) → Values α dtype (batch ++ [n, m])
+  | [], _, _, v => fun (j, i, _) => v (i, j, PUnit.unit)
+  | _ :: rest, _, _, v => fun (i, tail) => transposeValues rest (fun k => v (i, k)) tail
 
 inductive Cell (α : Type) where
   | mk (dtype : TileDType) (value : Value α dtype)
@@ -139,6 +150,15 @@ def write {α : Type} (s : State α) (r : RegionName) (o : Nat) (v : Cell α) : 
   simp only [write]
   rw [if_neg (by tauto)]
 
+
+/-- Storing a tile changes memory only; later stores still read the same
+registers even when the tile's index list is symbolic. -/
+@[simp] theorem scatter_regs {α ι : Type} (r : RegionName) (off : ι → Nat)
+    (val : ι → Cell α) (l : List ι) (s : State α) :
+    (l.foldl (fun acc i => acc.write r (off i) (val i)) s).regs = s.regs := by
+  induction l generalizing s with
+  | nil => rfl
+  | cons i rest ih => exact (ih _).trans rfl
 
 /-- Cell framing does not discard dtype tags or offsets. -/
 theorem scatter_frame {α ι : Type} (r : RegionName) (off : ι → Nat)
@@ -426,14 +446,18 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .argMax .., _ => none
   | .argMin .., _ => none
   | .sort .., _ => none
-  | .dot .., _ => none
+  | .dot a b, s => do
+      M.dot p (← evalOp M p a s) (← evalOp M p b s)
   | .dotInt .., _ => none
-  | .transpose .., _ => none
+  | .transpose (batch := batch) a, s => do
+      return transposeValues batch (← evalOp M p a s)
   | .reshape .., _ => none
   | .remap .., _ => none
   | .join .., _ => none
   | .split .., _ => none
-  | .expandDim .., _ => none
+  | .expandDim (shape := shape) axis a, s => do
+      let v ← evalOp M p a s
+      return fun i => v (TileShape.dropInsertedIndex shape axis 1 i)
   | .ptrSub .., _ => none
   | .makeBlockPtr .., _ => none
   | .makeBlockPtrDyn .., _ => none

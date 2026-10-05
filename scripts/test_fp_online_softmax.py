@@ -33,10 +33,18 @@ import bench.examples.OnlineSoftmax.Contract
 import bench.examples.OnlineSoftmax.Correct
 open VeriTile Triton VeriTile.Bench.Examples
 example (x y : RegionName) (N : Nat) :
-    (OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N).surfaceBody =
+    (OnlineSoftmax.Kernels.onlineNormalizerKernel x y N).surfaceBody =
       OnlineSoftmaxFPExecution.initialCode ++
         [.forLoop "i" N (OnlineSoftmaxFPExecution.body x N)] :=
   OnlineSoftmaxFPExecution.kernel_body x y N
+example (x y : RegionName) (N : Nat) :
+    (OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N).surfaceBody =
+      (OnlineSoftmax.Kernels.onlineNormalizerKernel x y N).surfaceBody ++
+        OnlineSoftmaxFPExecution.normalizationBody x y N :=
+  OnlineSoftmaxFPExecution.full_kernel_body x y N
+example (x y : RegionName) (N : Nat) :
+    (OnlineSoftmaxFPContract.online x y N).io.kernel =
+      OnlineSoftmax.Kernels.onlineSoftmaxKernel x y N := rfl
 example (N : Nat) :
     (OnlineSoftmax.batchSoftmaxIO N).kernel =
       OnlineSoftmax.Kernels.batchSoftmaxKernel "x" "y" N := rfl
@@ -54,7 +62,7 @@ run_cmd do
     def test_invariant_initialization_iteration_domains_and_unchanged_memory(self):
         self.check_lean((ROOT / 'bench/tests/FPOnlineSoftmax.lean').read_text())
 
-    def test_public_observation_spec_uses_only_admitted_scalar_atoms(self):
+    def test_public_output_spec_uses_only_admitted_scalar_atoms(self):
         output = self.check_lean('''
 import bench.examples.OnlineSoftmax.FPEquiv
 #print_fp_assumptions VeriTile.Bench.Examples.OnlineSoftmaxFPEquiv.online_softmax_equiv

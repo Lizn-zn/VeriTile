@@ -3,32 +3,12 @@ import bench.examples.OnlineSoftmax.Kernels
 has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
 That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 /-
-bench/examples/OnlineSoftmax
-
-**Online softmax**: the streaming `(M, L)` recurrence, in three parts.
-
-1. **The math** — `onlineSoftmaxM` / `onlineSoftmaxL`, the `WithBot ℝ`-valued
-   streaming recurrence (seeding `M` at `⊥` removes every range
-   precondition on the input), and `online_softmax_recurrence_eq_batch`:
-   the recurrence equals the batch form `(tileMax, ∑ exp)`.
-2. **The online kernel** — `onlineSoftmaxKernel`, a typed Triton loop that
-   maintains `(m, l)` in registers; `online_softmax_correct` proves those
-   registers hold exactly `onlineSoftmaxM/L` after the run.
-3. **The headline** — the file's single `specification`:
-
-       online_softmax_correctness : batchSoftmaxIO B ⊨ fun xs i =>
-         Real.exp (xs i - (onlineSoftmaxM xs B).unbotD 0)
-           / (onlineSoftmaxL xs B).unbotD 0
-
-   `⊨` is the audit-once Hoare-triple combinator (`KernelIO₁.Implements`):
-   ∀ disjoint buffer placement (∀ base pointers, ∀ sizes), ∀ program id in
-   bounds, ∀ launch state with the input window loaded and everything else
-   arbitrary — the pointer kernel terminates, the output window holds the
-   value pointwise, and every other cell is unchanged. The mathematical
-   function is the **online recurrence itself** — that is the point of the
-   file: the batch kernel provably implements the streaming formulation
-   (via part 1's identity), the streaming kernel provably computes it in
-   registers (part 2).
+Real correctness of both complete softmax implementations in Kernels.lean.
+The normalizer helper computes the mathematical online (m,l) recurrence.
+`online_softmax_output_correctness` proves that the complete two-pass source
+stores the softmax formula and preserves all other region-memory cells.
+`online_softmax_correctness` retains the batch kernel's flat-memory IO bridge
+and shows that its formula agrees with the online recurrence.
 -/
 
 import VeriTile.Triton.Core
@@ -241,24 +221,24 @@ private theorem onlineSoftmaxL_eq_batch
   rfl
 
 private def P_online_softmax {N : Nat} (xs : Fin N → ℝ) (xReg : RegionName)
-    (origPid : Nat) (k : Nat) (s : BlockState) : Prop :=
+    (origin : BlockState) (k : Nat) (s : BlockState) : Prop :=
   -- `onlineSoftmaxM/L xs k : WithBot ℝ` directly populates the tile.
   s.regs .real [] "m" = some (Tile.scalar (onlineSoftmaxM xs k))
   ∧ s.regs .real [] "l" = some (Tile.scalar (onlineSoftmaxL xs k))
-  ∧ s.regs .nat [] "pid" = some (Tile.scalar origPid)
-  ∧ s.pid = origPid
-  ∧ InputLoadedAt s xReg N xs
+  ∧ s.regs .nat [] "pid" = some (Tile.scalar origin.pid)
+  ∧ s.pid = origin.pid
+  ∧ InputLoadedAt s xReg N xs ∧ s.mem = origin.mem
 
 private theorem online_softmax_step
-    {N : Nat} (xs : Fin N → ℝ) (xReg : RegionName) (origPid i : Nat)
+    {N : Nat} (xs : Fin N → ℝ) (xReg : RegionName) (origin : BlockState) (i : Nat)
     (s : BlockState) (hi : i < N)
-    (hP : P_online_softmax xs xReg origPid i s) :
+    (hP : P_online_softmax xs xReg origin i s) :
     ∃ s',
       stepStmts (onlineSoftmaxLoopBody xReg N)
         (s.setReg "i" .nat [] (Tile.scalar i)) = some s' ∧
-      P_online_softmax xs xReg origPid (i + 1) s' := by
-  rcases hP with ⟨hm, hl, hpidReg, hpid, hX⟩
-  let xi : ℝ := s.readMem xReg (origPid * N + i)
+      P_online_softmax xs xReg origin (i + 1) s' := by
+  rcases hP with ⟨hm, hl, hpidReg, hpid, hX, hmem⟩
+  let xi : ℝ := s.readMem xReg (origin.pid * N + i)
   have hxi : xi = xs ⟨i, hi⟩ := by
     have hx := hX ⟨i, hi⟩
     rw [hpid] at hx
@@ -295,7 +275,7 @@ private theorem online_softmax_step
       -- Substitute the recurrence value of M_{i+1}
       rw [h_recM]
       simp [mOld, mNew, lNew, lOld, hxi]
-    refine ⟨?_, ?_, ?_, ?_, ?_⟩
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
     · show s''.regs .real [] "m" = some (Tile.scalar (onlineSoftmaxM xs (i+1)))
       rw [h_recM]
       simp [s'', s', BlockState.setReg]
@@ -306,6 +286,7 @@ private theorem online_softmax_step
     · simp [s'', s', BlockState.setReg, hpid]
     · intro j
       simpa [s'', s', BlockState.setReg] using hX j
+    · simpa [s'', s', BlockState.setReg] using hmem
 
 /-- **Math identity (paper centerpiece, h_lo-free version).** Online softmax's
 streaming `(M, L)` recurrence equals the batch form's `(tileMax, ∑ exp)` —
@@ -322,21 +303,20 @@ theorem online_softmax_recurrence_eq_batch
 termination equals `onlineSoftmaxM xs N : WithBot ℝ`, which by the math
 identity equals `↑(tileMax xs)`. Same for `l`. No range precondition on
 input data. -/
-theorem online_softmax_correct
+theorem online_normalizer_run
     (xReg yReg : RegionName) (N : Nat) (_hN : 0 < N)
     (s : BlockState) (xs : Fin N → ℝ)
     (_h_x : InputLoadedAt s xReg N xs) :
-    let final := exec (onlineSoftmaxKernel xReg yReg N) s
-    final.bind (fun s' => (s'.regs .real [] "m").map (fun t => t.data PUnit.unit))
-        = some (onlineSoftmaxM xs N)
-    ∧ final.bind (fun s' => (s'.regs .real [] "l").map (fun t => t.data PUnit.unit))
-        = some (onlineSoftmaxL xs N) := by
+    ∃ t, exec (onlineNormalizerKernel xReg yReg N) s = some t ∧
+      t.regs .real [] "m" = some (Tile.scalar (onlineSoftmaxM xs N)) ∧
+      t.regs .real [] "l" = some (Tile.scalar (onlineSoftmaxL xs N)) ∧
+      t.pid = s.pid ∧ t.mem = s.mem := by
   let s0 :=
     ((s.setReg "pid" .nat [] (Tile.scalar s.pid)).setReg
       "m" .real [] (Tile.scalar (⊥ : WithBot ℝ))).setReg
       "l" .real [] (Tile.scalar (((0 : ℝ) : WithBot ℝ)))
-  have h_init : P_online_softmax xs xReg s.pid 0 s0 := by
-    refine ⟨?_, ?_, ?_, ?_, ?_⟩
+  have h_init : P_online_softmax xs xReg s 0 s0 := by
+    refine ⟨?_, ?_, ?_, ?_, ?_, ?_⟩
     · show s0.regs .real [] "m" = some (Tile.scalar (onlineSoftmaxM xs 0))
       simp [s0, BlockState.setReg]
       rfl
@@ -348,15 +328,16 @@ theorem online_softmax_correct
     · intro j
       have := _h_x j
       simpa [s0, BlockState.setReg] using this
+    · rfl
   obtain ⟨sLoop, hLoop, hPloop⟩ :=
     forLoop_inv
       (idx := "i") (n := N)
       (body := onlineSoftmaxLoopBody xReg N)
-      (P := P_online_softmax xs xReg s.pid)
+      (P := P_online_softmax xs xReg s)
       (s_init := s0)
       h_init
-      (fun i st hi hP => online_softmax_step xs xReg s.pid i st hi hP)
-  rcases hPloop with ⟨hm, hl, _hpidReg, _hpid, _hX⟩
+      (fun i st hi hP => online_softmax_step xs xReg s i st hi hP)
+  rcases hPloop with ⟨hm, hl, _hpidReg, _hpid, _hX, hmem⟩
   have hLoopAux :
       stepForLoopAux "i" 0 N (onlineSoftmaxLoopBody xReg N) s0 =
         some sLoop := by
@@ -382,7 +363,7 @@ theorem online_softmax_correct
           Stmt.assign .real [] "m" (Op.ref .real [] "m_new")]
         s0 = some sLoop := by
     simpa [onlineSoftmaxLoopBody] using hLoopAux
-  have hExec : exec (onlineSoftmaxKernel xReg yReg N) s = some sLoop := by
+  have hExec : exec (onlineNormalizerKernel xReg yReg N) s = some sLoop := by
     -- Walk through each pre-loop statement explicitly, then forLoop via hLoop.
     have hpid : stepStmt (.assign .nat [] "pid" (.programId 0)) s
                   = some (s.setReg "pid" .nat [] (Tile.scalar s.pid)) := by
@@ -400,7 +381,7 @@ theorem online_softmax_correct
       simp [stepStmt, evalOp, s0]
       rfl
     -- Chain the pre-loop assignments and the loop statement explicitly.
-    show stepStmts (onlineSoftmaxKernel xReg yReg N).body s = some sLoop
+    show stepStmts (onlineNormalizerKernel xReg yReg N).body s = some sLoop
     show stepStmts
         [ .assign .nat [] "pid" (.programId 0)
         , .assign .real [] "m" .negInf
@@ -411,11 +392,21 @@ theorem online_softmax_correct
     rw [stepStmts.cons_some hl0]
     rw [stepStmts.cons_some hLoop]
     exact stepStmts.nil
-  constructor
-  · rw [hExec]
-    simp [hm]
-  · rw [hExec]
-    simp [hl]
+  exact ⟨sLoop, hExec, hm, hl, _hpid, hmem⟩
+
+/-- The recurrence-only helper returns the mathematical normalizer in registers. -/
+theorem online_softmax_correct (xReg yReg : RegionName) (N : Nat) (hN : 0 < N)
+    (s : BlockState) (xs : Fin N → ℝ) (hx : InputLoadedAt s xReg N xs) :
+    let final := exec (onlineNormalizerKernel xReg yReg N) s
+    final.bind (fun s' => (s'.regs .real [] "m").map (fun t => t.data PUnit.unit))
+        = some (onlineSoftmaxM xs N)
+    ∧ final.bind (fun s' => (s'.regs .real [] "l").map (fun t => t.data PUnit.unit))
+        = some (onlineSoftmaxL xs N) := by
+  obtain ⟨t, ht, hm, hl, _, _⟩ := online_normalizer_run xReg yReg N hN s xs hx
+  change ((exec _ s).bind _ = _) ∧ ((exec _ s).bind _ = _)
+  rw [ht]
+  simp only [Option.bind_some, hm, hl, Option.map_some]
+  exact ⟨rfl, rfl⟩
 
 /-! ## KernelIO spec — `batchSoftmaxIO ⊨` the online recurrence
 
@@ -501,6 +492,57 @@ private theorem foldl_store_preserve_cell {α : Type} {region : RegionName}
         BlockState.writeMem_mem]
       exact if_neg (fun hc =>
         hnot hd List.mem_cons_self ⟨hc.1.symm, hc.2.symm⟩)
+
+/-- Execute the source's second pass with a completed mathematical normalizer. -/
+private theorem normalization_region_run (x y : RegionName) (N : Nat)
+    (s : BlockState) (xs : Fin N → ℝ) (m l : ℝ)
+    (hm : s.regs .real [] "m" = some (Tile.scalar (m : WithBot ℝ)))
+    (hl : s.regs .real [] "l" = some (Tile.scalar (l : WithBot ℝ)))
+    (hx : InputLoadedAt s x N xs) :
+    ∃ t, stepStmts ((onlineSoftmaxKernel x y N).toAlgKernel.body.drop 4) s = some t ∧
+      (∀ i : Fin N, t.readMem y (s.pid * N + i.val) = Real.exp (xs i - m) / l) ∧
+      (∀ r o, (r ≠ y ∨ ∀ i : Fin N, o ≠ s.pid * N + i.val) → t.mem r o = s.mem r o) := by
+  have hinj : Function.Injective (fun i : TileIndex [N] => s.pid * N + i.1.val) := by
+    rintro ⟨a, _⟩ ⟨b, _⟩ hab
+    obtain rfl : a = b := Fin.ext (Nat.add_left_cancel hab)
+    rfl
+  simp [onlineSoftmaxKernel, ComputeKernel.surfaceBody, ComputeKernel.toAlgKernel, List.drop, stepStmts, stepStmt,
+    Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
+    NumericDType.div, hm, hl]
+  repeat unfold evalOp
+  refine ⟨fun i => ?_, fun r o hmiss => ?_⟩
+  · rw [BlockState.scatter_readback_nd _ _ _ hinj (i, PUnit.unit)]
+    simp [InputLoadedAt] at hx
+    simp [hx]
+  · apply Eq.trans (foldl_store_preserve_cell _ _ r o _ _ ?_) rfl
+    intro k _ hc
+    rcases hmiss with hr | ho
+    · exact hr hc.1.symm
+    · exact ho k.1 hc.2.symm
+
+/-- Real correctness of the complete online source, including the output store
+and cell-level frame. This region-memory theorem is independent of FP admission. -/
+specification online_softmax_output_correctness (N : Nat) (hN : 0 < N)
+    (s : BlockState) (xs : Fin N → ℝ) (hx : InputLoadedAt s "x" N xs) :
+    Spec.Real (∃ t, exec (onlineSoftmaxKernel "x" "y" N) s = some t ∧
+      (∀ i : Fin N, t.readMem "y" (s.pid * N + i.val) =
+        Real.exp (xs i - tileMax hN xs) / ∑ j, Real.exp (xs j - tileMax hN xs)) ∧
+      (∀ (r : RegionName) o, (r ≠ "y" ∨ ∀ i : Fin N, o ≠ s.pid * N + i.val) → t.mem r o = s.mem r o)) := by
+  obtain ⟨a, ha, hm, hl, hpid, hmem⟩ := online_normalizer_run "x" "y" N hN s xs hx
+  rw [(online_softmax_recurrence_eq_batch hN xs).1] at hm
+  rw [(online_softmax_recurrence_eq_batch hN xs).2] at hl
+  have hx' : InputLoadedAt a "x" N xs := by
+    simpa [InputLoadedAt, BlockState.readMem, hpid, hmem] using hx
+  obtain ⟨b, hb, hout, hf⟩ := normalization_region_run "x" "y" N a xs _ _ hm hl hx'
+  refine ⟨b, ?_, ?_, ?_⟩
+  · have hbody : (onlineSoftmaxKernel "x" "y" N).toAlgKernel.body =
+        (onlineNormalizerKernel "x" "y" N).toAlgKernel.body ++
+          (onlineSoftmaxKernel "x" "y" N).toAlgKernel.body.drop 4 := rfl
+    change stepStmts _ s = some b
+    rw [hbody]
+    exact (stepStmts.append_some ha).trans hb
+  · simpa [hpid, batchSoftmaxM, batchSoftmaxL] using hout
+  · simpa [hpid, hmem] using hf
 
 /-- Frame half: every memory cell other than the output window is preserved
 by the run. Non-emptiness is needed because `Tile.reduceMax` (hence the
@@ -724,6 +766,7 @@ end OnlineSoftmax.kernelIO
 -- (and in the online kernel's register-level theorem).
 #axiomsClean online_softmax_correctness
 #axiomsClean online_softmax_correct
+#axiomsClean online_softmax_output_correctness
 
 /- The headline's statement surface is the IO signature, the audit-once
 Hoare-triple combinator, and the online-recurrence math constants

@@ -28,7 +28,8 @@ def stableSoftmaxKernel (xReg yReg : RegionName) (blockSize : Nat) : ComputeKern
 def batchSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : ComputeKernel :=
   stableSoftmaxKernel xReg yReg N
 
-def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : ComputeKernel := triton {
+/-- First-pass helper; the complete onlineSoftmaxKernel below also writes y. -/
+def onlineNormalizerKernel (xReg _yReg : RegionName) (N : Nat) : ComputeKernel := triton {
   pid := tl.program_id(0)
   m   := -inf
   l   := 0
@@ -39,5 +40,28 @@ def onlineSoftmaxKernel (xReg _yReg : RegionName) (N : Nat) : ComputeKernel := t
     m     := m_new
   }
 }
+
+/-- Complete two-pass online softmax. The first pass computes m/l; the
+second rereads the input row and stores every normalized output. -/
+def onlineSoftmaxKernel (xReg yReg : RegionName) (N : Nat) : ComputeKernel :=
+  let code : ComputeKernel := triton {
+  pid := tl.program_id(0)
+  m := -inf
+  l := 0
+  tl.for i in $(N) {
+    xi := tl.load($(xReg) + (pid * $(N) + i))
+    m_new := tl.max(m, xi)
+    l := libdevice.exp(m - m_new) * l + libdevice.exp(xi - m_new)
+    m := m_new
+  }
+  pid := tl.program_id(0)
+  offs := pid * $(N) + tl.arange(0, $(N))
+  x := tl.load($(xReg) + offs)
+  e := libdevice.exp(x - m)
+  y := e / l
+  tl.store($(yReg) + offs, y)
+}
+  -- Both passes read the same input port.
+  .mk [xReg] [yReg] code.surfaceBody
 
 end VeriTile.Bench.Examples.OnlineSoftmax.Kernels

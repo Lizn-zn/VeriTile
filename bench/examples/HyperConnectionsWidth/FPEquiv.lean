@@ -1,6 +1,11 @@
 import bench.examples.HyperConnectionsWidth.Kernels
 import VeriTile.Triton.Float.GuardedRewrite
+import VeriTile.Triton.Float.ProfiledRewrite
 import VeriTile.Meta.StatementAudit
+
+/- The matrix specifications below cover symbolic dimensions and every
+normalization count. They preserve the entire execution under their pointwise
+operand domains; matrix operations keep the same opaque backend. -/
 
 /-! Scalar, zero-iteration mHC width: commute the two products independently.
 The actual tl.exp(h / tau) operands and residual must be finite at each site.
@@ -49,6 +54,53 @@ specification mhc_width_equiv (tau : ℝ) (R : Rules) :
   exact first.trans second
 
 #print_fp_assumptions mhc_width_equiv
+#guard_msgs (drop info) in
+#auditModuleAxioms
+
+
+/-- The division checks are on the loaded logit tiles and the actual fp32
+literal tau. Its value must be finite and nonzero. -/
+def matrixResidualSite (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Site :=
+  .div ((matrixOriginal S T D numIters tau).surfaceBody.take 9) S [S]
+    (.ref .real [S, S] "h_res_logits") tau
+
+def matrixBranchSite (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Site :=
+  .div ((matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau).surfaceBody.take 17)
+    S [T] (.ref .real [S, T] "h_pre_logits") tau
+
+def matrixOriginalProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
+  ⟨matrixOriginal S T D numIters tau,
+    [matrixResidualSite S T D numIters tau, matrixBranchSite S T D numIters tau]⟩
+
+def matrixOptimizedProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
+  ⟨matrixOptimized "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau,
+    [matrixResidualSite S T D numIters tau, matrixBranchSite S T D numIters tau]⟩
+
+/-- All dimensions and both full Sinkhorn loops remain in the source.
+The two matrix products retain their original operand order and backend. -/
+specification mhc_width_matrix_equiv (S T D numIters : Nat) (tau : ℝ) (R : Rules) :
+    matrixOriginalProgram S T D numIters tau ≡[R] matrixOptimizedProgram S T D numIters tau := by
+  apply Spec.FloatingPoint.ofNumerical (lhs := matrixOriginalProgram S T D numIters tau)
+    (rhs := matrixOptimizedProgram S T D numIters tau) (structural := fun _ _ => False) rfl rfl
+  intro α _ M domain hM s hd
+  have first : FP.Structural.exec (FP.ProfiledRewrite.engine M) (matrixOriginal S T D numIters tau) s =
+      FP.Structural.exec (FP.ProfiledRewrite.engine M)
+        (matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau) s :=
+    FP.ProfiledRewrite.div_mul_rcp R M domain hM s
+      ((matrixOriginal S T D numIters tau).surfaceBody.take 9)
+      ((matrixOriginal S T D numIters tau).surfaceBody.drop 10) "z" _ tau
+      (hd _ (by simp [matrixOriginalProgram, matrixResidualSite, matrixBranchSite]))
+  have second : FP.Structural.exec (FP.ProfiledRewrite.engine M)
+        (matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau) s =
+      FP.Structural.exec (FP.ProfiledRewrite.engine M)
+        (matrixOptimized "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau) s :=
+    FP.ProfiledRewrite.div_mul_rcp R M domain hM s
+      ((matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau).surfaceBody.take 17)
+      ((matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau).surfaceBody.drop 18)
+      "z" _ tau (hd _ (by simp [matrixOriginalProgram, matrixResidualSite, matrixBranchSite]))
+  exact first.trans second
+
+#print_fp_assumptions mhc_width_matrix_equiv
 #guard_msgs (drop info) in
 #auditModuleAxioms
 

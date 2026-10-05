@@ -1,4 +1,10 @@
 import bench.examples.HyperConnectionsDepth.Kernels
+import VeriTile.Triton.Math.Sinkhorn
+import VeriTile.Triton.Math.MatrixRewrite
+
+/- The matrix specifications at the end cover symbolic S/T/D and every finite
+normalization count, with region-memory outputs and frames. The earlier scalar
+KernelIO proofs additionally retain their flat-memory bridge. -/
 /-
 bench/examples/HyperConnectionsDepth
 
@@ -20,7 +26,7 @@ Four parts, following the canonical KernelIO showcase
 
 1. **The kernel** — `mhcDepthConnectionKernel`; its `S = T = D = 1,
    numIters = 0` match arm is the scalar fixed-rank slice the proof covers
-   (generic rank still future work).
+   (the general matrix specifications follow at the end).
 2. **Region-model Hoare triple** — value view `mhcDepth_exec_view`,
    single-cell frame `mhcDepth_frame`, and their package
    `mhcDepth_region_run`.
@@ -389,3 +395,94 @@ Hoare-triple combinator — no other project constant. -/
    VeriTile.Triton.KernelIO₃.B3, VeriTile.Triton.KernelIO₃.Bout]
 
 end VeriTile.Bench.Examples.HyperConnectionsDepth
+
+
+/-! General depth connection: R + Sinkhorn(H / tau)ᵀ B, with a finite,
+user-selected number of normalization iterations. All dimensions are symbolic. -/
+namespace VeriTile.Bench.Examples.HyperConnectionsDepth.MatrixCorrect
+open VeriTile Triton LogSinkhorn
+open VeriTile.Bench.Examples.HyperConnectionsDepth.Kernels
+set_option maxHeartbeats 3200000
+
+noncomputable def formula (res : Tile .real [S, D]) (branch : Tile .real [T, D])
+    (logits : Tile .real [T, S]) (tau : ℝ) (iters : Nat) : Tile .real [S, D] :=
+  Tile.bop WithBot.realAdd (.consSame (.consSame .nil)) res
+    (Tile.dot [] (Tile.transpose [] (weights (scale logits tau) iters)) branch)
+
+private theorem prefix_run (S T D iters : Nat) (tau : ℝ) (s : BlockState) :
+    ∃ a, stepStmts ((matrixOriginal S T D iters tau).body.take 14) s = some a ∧
+      a.regs .real [T, S] "z" = some (scale (readMatrix s "h_post" 0 T S) tau) ∧
+      a.regs .real [T] "u" = some (iterates (scale (readMatrix s "h_post" 0 T S) tau) 0).1 ∧
+      a.regs .real [S] "v" = some (iterates (scale (readMatrix s "h_post" 0 T S) tau) 0).2 ∧
+      a.regs .real [S, D] "res_mix" = some (readMatrix s "res_mix" (s.pid * (S * D)) S D) ∧
+      a.regs .real [T, D] "branch_out" = some (readMatrix s "branch_out" (s.pid * (T * D)) T D) ∧
+      a.regs .nat [] "b" = some (Tile.scalar s.pid) ∧
+      a.regs .nat [S] "offs_s" = some (Tile.vec (fun i => i.val)) ∧
+      a.regs .nat [D] "offs_d" = some (Tile.vec (fun i => i.val)) ∧
+      a.mem = s.mem ∧ a.pids = s.pids := by
+  simp [matrixOriginal, matrixKernel, ComputeKernel.body, ComputeKernel.toAlgKernel,
+    List.take, stepStmts, stepStmt, evalOp.eq_def, BlockState.setReg,
+    NumericDType.add, NumericDType.mul, NumericDType.div, readMatrix, scale, iterates,
+    BlockState.readMem, Region.cast, Option.bind, Tile.bop, Tile.expandDim, TileShape.dropInsertedIndex, TileShape.insertAxis]
+  exact ⟨rfl, rfl, rfl, rfl, rfl⟩
+
+
+specification mhc_depth_matrix_correct (S T D iters : Nat) (tau : ℝ) (s : BlockState) :
+    Spec.Real (∃ t, exec (matrixOriginal S T D iters tau) s = some t ∧
+      (∀ i : TileIndex [S, D], t.readMem "out" (s.pid * (S * D) + i.1.val * D + i.2.1.val) =
+        ((formula (readMatrix s "res_mix" (s.pid * (S * D)) S D)
+          (readMatrix s "branch_out" (s.pid * (T * D)) T D)
+          (readMatrix s "h_post" 0 T S) tau iters).data i).unbotD 0) ∧
+      (∀ (r : RegionName) o, (r ≠ "out" ∨ ∀ i : TileIndex [S, D],
+        o ≠ s.pid * (S * D) + i.1.val * D + i.2.1.val) → t.mem r o = s.mem r o)) := by
+  obtain ⟨a, ha, hz, hu, hv, hres, hbranch, hb, hs, hd, hm, hp⟩ := prefix_run S T D iters tau s
+  obtain ⟨t, ht, hz', hu', hv', hmem, hpids, hr⟩ :=
+    loop_run (scale (readMatrix s "h_post" 0 T S) tau) iters a hz hu hv
+  have hres' := (hr .real [S, D] "res_mix" (by decide) (by decide) (by decide)).trans hres
+  have hbranch' := (hr .real [T, D] "branch_out" (by decide) (by decide) (by decide)).trans hbranch
+  have hb' := (hr .nat [] "b" (by decide) (by decide) (by decide)).trans hb
+  have hs' := (hr .nat [S] "offs_s" (by decide) (by decide) (by decide)).trans hs
+  have hd' := (hr .nat [D] "offs_d" (by decide) (by decide) (by decide)).trans hd
+  have hbody : (matrixOriginal S T D iters tau).toAlgKernel.body =
+      (matrixOriginal S T D iters tau).body.take 14 ++
+        .forLoop "iter" iters (LogSinkhorn.body T S) :: (matrixOriginal S T D iters tau).body.drop 15 := rfl
+  change ∃ u, stepStmts _ s = some u ∧ _
+  rw [hbody, stepStmts.append_some ha, stepStmts.cons_some ht]
+  simp [matrixOriginal, matrixKernel, ComputeKernel.body, ComputeKernel.toAlgKernel,
+    List.drop, stepStmts, stepStmt, evalOp.eq_def, BlockState.setReg,
+    hz', hu', hv', hres', hbranch', hb', hs', hd', Option.bind,
+    NumericDType.add, NumericDType.mul, weights, formula]
+  refine ⟨?_, ?_⟩
+  · intro i j
+    rw [BlockState.scatter_readback_nd _ _ _ (address_injective _ S D) (i, j, PUnit.unit)]
+    rfl
+  · intro r o hmiss
+    rcases hmiss with hr | ho
+    · exact (BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _).trans
+        (congrFun (congrFun (hmem.trans hm) r) o)
+    · by_cases hro : r = "out"
+      · subst r
+        exact (BlockState.foldl_writeMem_mem_preserve_unhit _ _ _ o
+          (fun i _ he => ho i.1 i.2.1 he.symm) _).trans (congrFun (congrFun (hmem.trans hm) _) o)
+      · exact (BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hro o _).trans
+          (congrFun (congrFun (hmem.trans hm) r) o)
+
+#axiomsClean mhc_depth_matrix_correct
+
+specification mhc_depth_matrix_optimized_correct (S T D iters : Nat) (tau : ℝ) (s : BlockState) :
+    Spec.Real (∃ t, exec (matrixOptimized "res_mix" "branch_out" "h_post" "out" S T D iters tau) s = some t ∧
+      (∀ i : TileIndex [S, D], t.readMem "out" (s.pid * (S * D) + i.1.val * D + i.2.1.val) =
+        ((formula (readMatrix s "res_mix" (s.pid * (S * D)) S D)
+          (readMatrix s "branch_out" (s.pid * (T * D)) T D)
+          (readMatrix s "h_post" 0 T S) tau iters).data i).unbotD 0) ∧
+      (∀ (r : RegionName) o, (r ≠ "out" ∨ ∀ i : TileIndex [S, D],
+        o ≠ s.pid * (S * D) + i.1.val * D + i.2.1.val) → t.mem r o = s.mem r o)) := by
+  obtain ⟨t, ht, post⟩ := mhc_depth_matrix_correct S T D iters tau s
+  refine ⟨t, ?_, post⟩
+  exact MatrixRewrite.add_commute
+    ((matrixOriginal S T D iters tau).body.take 17)
+    ((matrixOriginal S T D iters tau).body.drop 18) "out" _ _ s t ht
+
+#axiomsClean mhc_depth_matrix_optimized_correct
+
+end VeriTile.Bench.Examples.HyperConnectionsDepth.MatrixCorrect

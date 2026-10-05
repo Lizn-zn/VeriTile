@@ -91,14 +91,14 @@ theorem candidate_run {α : Type} [Inhabited α] (M : Algebra α)
     (hle : M.compareLe (some .fp32) .real = some le)
     (x y : RegionName) (B : Nat) (hB : 0 < B) (xs : Fin B → α) (s : State α)
     (hx : ∀ i : Fin B, (s.mem x (s.pids 0 * B + i.val)).read .real = xs i) :
-    ∃ t, FP.Structural.exec (FP.Scheduled.fp32.algebra M plans) (candidateLSEKernel x y B) s = some t ∧
+    ∃ t, FP.Structural.exec (FP.Scheduled.fp32.algebra M plans) (optimizedLSEKernel x y B) s = some t ∧
       t.mem y (s.pids 0) = .mk .bf16 (candidateValue M plans lt le xs) ∧
       (∀ r o, (r ≠ y ∨ o ≠ s.pids 0) → t.mem r o = s.mem r o) := by
   let E := FP.Scheduled.fp32.algebra M plans
   have hlt' : E.compareLt none .real = some lt := hlt
   have hle' : E.compareLe none .real = some le := hle
-  change ∃ t, FP.Structural.exec E (candidateLSEKernel x y B) s = some t ∧ _
-  simp [candidateLSEKernel, FP.Structural.exec, run, step, evalExpr, evalOp_unfold,
+  change ∃ t, FP.Structural.exec E (optimizedLSEKernel x y B) s = some t ∧ _
+  simp [optimizedLSEKernel, FP.Structural.exec, run, step, evalExpr, evalOp_unfold,
     numeric, numericLt, numericLe, FP.Structural.bop, store, State.write, TileShape.allIndices,
     TileShape.axisDim, TileShape.eraseAxis, hB, Region.cast, ofFloat, toFloat,
     hx, hlt', hle']
@@ -111,8 +111,8 @@ theorem candidate_run {α : Type} [Inhabited α] (M : Algebra α)
   · intro r o hmiss hr ho
     exact (hmiss.elim (fun h => h hr) (fun h => h ho)).elim
 
-def candidateIO (x y : RegionName) (B : Nat) : KernelIO₁ :=
-  { directIO x y B with kernel := candidateLSEKernel x y B, projection := by rfl }
+def optimizedIO (x y : RegionName) (B : Nat) : KernelIO₁ :=
+  { directIO x y B with kernel := optimizedLSEKernel x y B, projection := by rfl }
 
 end Candidate
 

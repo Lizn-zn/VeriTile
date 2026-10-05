@@ -1,6 +1,6 @@
 import bench.examples.StableLogSumExp.Kernels
 /- Logsumexp source contracts and scalar-derived sum recovery.
-The conditional candidate is proved from admitted tl.log rewrites. The older
+The conditional optimized is proved from admitted tl.log rewrites. The older
 unconditional shift retains explicit, unadmitted primitive log premises below;
 those lemmas do not certify the unconditional transformation. -/
 import bench.examples.StableLogSumExp.Execution
@@ -86,17 +86,17 @@ theorem original_runs_under_log {α : Type} [Inhabited α] (R : FP.Exponential.R
 
 noncomputable section Candidate
 
-/-- The candidate and reference share numeric-domain checks and require only
-availability of the fp32 comparisons used by the candidate. Either result of
+/-- The optimized and reference share numeric-domain checks and require only
+availability of the fp32 comparisons used by the optimized. Either result of
 each comparison is allowed. No kernel-output equation is a precondition. -/
-def candidate (x y : RegionName) (B : Nat) : FP.Scheduled.ConditionalIO₁ where
-  io := candidateIO x y B
+def optimized (x y : RegionName) (B : Nat) : FP.Scheduled.ConditionalIO₁ where
+  io := optimizedIO x y B
   profile := FP.Scheduled.fp32
   domain := requirements x B
   comparisons := [.lt .fp32 .real, .le .fp32 .real]
 
 def original (x y : RegionName) (B : Nat) : FP.Scheduled.ConditionalIO₁ :=
-  { candidate x y B with io := directIO x y B }
+  { optimized x y B with io := directIO x y B }
 
 /-- Recover the direct sum from exp-sub and arithmetic atoms, then compose
 conditional product splitting and log-exp cancellation, both using tl.log.
@@ -142,10 +142,10 @@ theorem candidate_runs {α : Type} [Inhabited α] (R : FP.LogSumExp.Rules)
     (x y : RegionName) (B : Nat) (hB : 0 < B)
     (hd : (requirements x B plans).Holds M D s) :
     ∃ a b,
-      FP.Structural.exec (engine M plans) (candidateLSEKernel x y B) s = some a ∧
+      FP.Structural.exec (engine M plans) (optimizedLSEKernel x y B) s = some a ∧
       FP.Structural.exec (engine M plans) (directLSEKernel x y B) s = some b ∧
       a.mem y (s.pids 0) = b.mem y (s.pids 0) ∧
-      IO₁Frame (candidateIO x y B) s a ∧ IO₁Frame (directIO x y B) s b := by
+      IO₁Frame (optimizedIO x y B) s a ∧ IO₁Frame (directIO x y B) s b := by
   let xs := rowValues s x B
   have hd' := (requirements_holds M D s x B plans).mp hd
   obtain ⟨a, ha, hva, hfa⟩ := candidate_run M plans lt le hlt hle x y B hB xs s (fun _ => rfl)
@@ -155,7 +155,7 @@ theorem candidate_runs {α : Type} [Inhabited α] (R : FP.LogSumExp.Rules)
       (candidate_values R M D hM s plans lt le hlt hle xs hd')).trans hvb.symm)
   · intro r o ho _
     apply hfa r o
-    simpa only [candidateIO, directIO, Fin.forall_fin_one, Fin.val_zero, Nat.add_zero] using ho
+    simpa only [optimizedIO, directIO, Fin.forall_fin_one, Fin.val_zero, Nat.add_zero] using ho
   · intro r o ho _
     apply hfb r o
     simpa only [directIO, Fin.forall_fin_one, Fin.val_zero, Nat.add_zero] using ho

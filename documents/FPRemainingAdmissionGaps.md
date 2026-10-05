@@ -2,11 +2,11 @@
 
 The migration has 19 real correctness files and 19 files with completed FP
 specifications. StableLogSumExp now proves its conditional candidate against
-the unchanged direct reference. The older unconditional shift remains pending.
+the unchanged direct reference. The older unconditional shift is recorded separately in `StableLogSumExp/Unconditional.lean`.
 The current reports select numerical assumptions using a local-ULP mean-bias
 budget and a peak absolute-error ratio gate.
 
-`candidateLSEKernel` composes `log_mul_split .tl` and `log_exp_cancel .tl`,
+`optimizedLSEKernel` composes `log_mul_split .tl` and `log_exp_cancel .tl`,
 including both selectors and inactive-argument masks. Its independent real
 proof and complete FP specification refer to that exact tl.log source.
 `Float/LogSumExpCandidate.finish_eq` derives the scalar suffix; `candidate_values`
@@ -140,7 +140,7 @@ formats. It supplies no fp64 instance.
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
 | `SoftmaxStable` | fp32 libdevice EXP-SUB is admitted and bound together with the scalar arithmetic rules. | `SoftmaxStableFPEquiv.softmax_stable_equiv` completes the guarded, scheduled equivalence; max, bf16 stores, output frames and symbolic positive row length are retained. |
 | `StableLogSumExp` | Both conditional tl.log atoms and libdevice EXP-SUB are bound. Unconditional LOG-MUL is INCONCLUSIVE and LOG-EXP-LIBDEVICE is FAIL. | `logsumexp_equiv` completes the conditional candidate/reference comparison. The older unconditional shifted source is still not certified. |
-| `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | `OnlineSoftmaxFPEquiv.online_softmax_equiv` completes the original Correct observation scope: batch stored values versus read-only normalization using actual final online m/l registers. Both original executions and separate memory frames are retained; no output store is added. |
+| `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | `OnlineSoftmaxFPEquiv.online_softmax_equiv` compares actual stored output rows. The complete online source includes its second-pass load, normalization and store; both executions succeed and preserve other memory. |
 | `Welford` | Both count atoms are admitted and bound for integer `0 <= i < 2^24`. | `WelfordFPEquiv.welford_equiv` closes the original comparison for `0 < N <= 2^24`, retaining both bf16 outputs and frames. |
 | `FusedLayerNorm` | The same two count atoms are admitted and bound. | `FusedLayerNormFPEquiv.layernorm_equiv` closes the original comparison for `N <= 2^24`; empty output rows remain covered. |
 
@@ -296,13 +296,13 @@ negative-infinity sentinel finite, a later step whose valid domains do not
 cover an invalid initialization, retained prefix padding, both original source
 copies and aliased memory behavior. They supply no experimental evidence.
 
-`OnlineSoftmaxFPEquiv.online_softmax_equiv` retains the existing Correct
-example's observation scope through `Float/ObservedRow`: successful batch
-output reads equal read-only normalization using the actual final online m/l.
-It uses admitted libdevice exp-sub and arithmetic atoms. An absent register
-makes the readback fail; two failures cannot establish a numerical step.
-Each source retains its own memory frame, and no online output store is added.
-The completed FP count is 17.
+`OnlineSoftmaxFPEquiv.online_softmax_equiv` uses `Float/ScheduledIO` for the
+complete two-pass source. The second pass loads the row and stores its
+normalization using the first pass's final m/l. Both executions succeed,
+output cells agree, and all other memory is preserved. The admitted atoms
+remain libdevice exp-sub and scalar arithmetic; no new numerical rule is
+needed for the store. The independent real theorem proves the complete output
+formula and region-memory frame. The old observation lemmas remain auxiliary.
 
 ### Welford mean step and integer conversion
 

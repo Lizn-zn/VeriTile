@@ -61,7 +61,7 @@ example (x mean variance : RegionName) (N stride : Nat) :
 
 -- -inf is opaque and survives the empty online-softmax loop unchanged.
 example {α : Type} [Inhabited α] (M : Algebra α) (s : State α) :
-    ∃ t, FP.Structural.exec M (OnlineSoftmax.Kernels.onlineSoftmaxKernel "x" "y" 0) s = some t ∧
+    ∃ t, FP.Structural.exec M (OnlineSoftmax.Kernels.onlineNormalizerKernel "x" "y" 0) s = some t ∧
       t.regs .real [] "m" = some (fun _ => M.negInf) ∧
       t.regs .real [] "l" = some (fun _ => M.literal none .real 0) ∧
       t.mem = s.mem ∧ t.pids = s.pids :=
