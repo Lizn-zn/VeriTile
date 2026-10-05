@@ -118,7 +118,7 @@ The generated [LogAdmission.lean](../../../VeriTile/Triton/Float/LogAdmission.le
 contains the two accepted guarded relations. [LogExp.lean](../../../VeriTile/Triton/Float/LogExp.lean)
 and the shared [example kernels](../../../bench/examples/LogExp/Kernels.lean)
 retain the original reference and guarded candidate. The FP derivation uses the
-selected `log_exp_guarded` assumption; independent real-correctness proofs cover
+selected `log_exp_elim` assumption; independent real-correctness proofs cover
 both kernels. Neither guarded rule supplies the unconditional premises missing
 from StableLogSumExp.
 

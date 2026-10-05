@@ -174,7 +174,7 @@ open scoped VeriTile.Spec in
 theorem source_kernel_spec (R : FP.LogExp.Rules)
     (x y : RegionName) (B : Nat) :
     LogExp.FPEquiv.originalIO x y B ≡[R] LogExp.FPEquiv.optimizedIO x y B :=
-  LogExp.FPEquiv.log_exp_guarded_equiv R x y B
+  LogExp.FPEquiv.log_exp_equiv R x y B
 
 -- Changing the default precision changes the contract, even for identical code.
 theorem precision_is_in_signature (B : Nat) :
@@ -185,7 +185,7 @@ theorem precision_is_in_signature (B : Nat) :
   have hp := congrArg (fun s => s.2.2) h
   cases hp
 
-#axiomsClean LogExp.FPEquiv.log_exp_guarded_equiv
+#axiomsClean LogExp.FPEquiv.log_exp_equiv
 #axiomsClean FP.LogExp.apply_rule
 #axiomsClean FP.LogExpCounterexample.plain_log_exp_not_identity
 #axiomsClean FP.LogExpCounterexample.singleton_lse_not_exact

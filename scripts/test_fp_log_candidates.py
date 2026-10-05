@@ -34,7 +34,7 @@ class LogCandidateTests(unittest.TestCase):
 
     def test_syntax_domains_precision_and_conditional_reuse(self):
         output = self.check((ROOT / 'bench/tests/FPLogCandidates.lean').read_text())
-        self.assertIn('FP assumptions used by selected_piecewise:\n  log_exp_guarded\n', output)
+        self.assertIn('FP assumptions used by selected_piecewise:\n  log_exp_elim\n', output)
         self.assertIn('FP assumptions used by selected_product_split:\n  log_mul_split\n', output)
         self.assertNotIn('  log_mul_guarded\n', output)
         self.assertNotIn('unresolved FP proof', output)

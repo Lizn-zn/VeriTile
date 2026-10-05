@@ -7,7 +7,7 @@ The fp32 log/exp candidates below exist independently of experiment outcomes.
 Each candidate specifies its exact intrinsics, operand domain and two scalar
 fragments. Defining a candidate supplies no numerical equality.
 
-The generated LogAdmission table selects log_exp_guarded and log_mul_split.
+The generated LogAdmission table selects log_exp_elim and log_mul_split.
 The former keeps the original log(exp(a)) reference and changes only the
 candidate to a guarded identity with the original fallback. Refreshing
 the report changes availability, not the candidate definitions. Kernel
@@ -23,7 +23,7 @@ open scoped VeriTile.Spec
 inconclusive relations. All fragments in this catalog compute in fp32. -/
 inductive Atom where
   | log_mul | log_mul_libdevice | log_mul_split
-  | log_exp | log_exp_libdevice | log_exp_full_libdevice | log_exp_guarded
+  | log_exp | log_exp_libdevice | log_exp_full_libdevice | log_exp_elim
   deriving DecidableEq, Repr
 
 /-- Candidate rewrites and their experiment identifiers. Every floating
@@ -49,10 +49,10 @@ def Atom.ruleID : Atom → String
   -- libdevice.log(libdevice.exp(a)) →
   -- (if 0.5 < |a| ≤ 80 then a else libdevice.log(libdevice.exp(a))).
   -- The fallback preserves near-zero rounding and extreme-input behavior.
-  | .log_exp_guarded => "LOG-EXP-GUARDED"
+  | .log_exp_elim => "LOG-EXP-GUARDED"
 
 def candidates : List Atom := [.log_mul, .log_mul_libdevice, .log_mul_split, .log_exp,
-  .log_exp_libdevice, .log_exp_full_libdevice, .log_exp_guarded]
+  .log_exp_libdevice, .log_exp_full_libdevice, .log_exp_elim]
 
 /-- Both fragments require the same finite input register `a`. -/
 def guards : List OperandGuard := [⟨"a", .finite⟩]
@@ -112,7 +112,7 @@ def productGuards : List OperandGuard :=
 
 def Atom.guards : Atom → List OperandGuard
   | .log_mul | .log_mul_libdevice | .log_mul_split => productGuards
-  | .log_exp | .log_exp_libdevice | .log_exp_full_libdevice | .log_exp_guarded =>
+  | .log_exp | .log_exp_libdevice | .log_exp_full_libdevice | .log_exp_elim =>
       VeriTile.Triton.FP.LogExp.guards
 
 def secondInput : Op .real [] := .ref .real [] "b"
@@ -125,7 +125,7 @@ def Atom.lhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a 
   | .log_mul_libdevice | .log_mul_split => .libdeviceLog (.mul .real .nil input secondInput)
   | .log_exp => .log (.exp input)
   | .log_exp_libdevice => .log (.libdeviceExp input)
-  | .log_exp_full_libdevice | .log_exp_guarded => .libdeviceLog (.libdeviceExp input))⟩
+  | .log_exp_full_libdevice | .log_exp_elim => .libdeviceLog (.libdeviceExp input))⟩
 
 /-- Product rules propose unconditional or conditional splitting. Cancellation
 rules propose the input, or conditional elimination with the same input domain. -/
@@ -134,7 +134,7 @@ def Atom.rhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a 
   | .log_mul_libdevice => .add .real .nil (.libdeviceLog input) (.libdeviceLog secondInput)
   | .log_mul_split => splitProduct input secondInput
   | .log_exp | .log_exp_libdevice | .log_exp_full_libdevice => input
-  | .log_exp_guarded => expression input)⟩
+  | .log_exp_elim => expression input)⟩
 
 /-- Match an accepted report to the candidate's exact fp32 profile and domain.
 Experimental shape and input distribution select the row; they do not become
@@ -187,15 +187,15 @@ theorem rewrite (R : Rules) (a : Atom) (h : a.Available) : [a.lhs] ≡[R] [a.rhs
   Spec.FloatingPoint.ofDerivation rfl trivial (derive R a h)
 
 /-- The piecewise kernel example uses this one selected candidate. -/
-def entry (h : Atom.log_exp_guarded.Available) := Atom.entry .log_exp_guarded h
+def entry (h : Atom.log_exp_elim.Available) := Atom.entry .log_exp_elim h
 
-theorem admitted (R : Rules) (h : Atom.log_exp_guarded.Available) :
+theorem admitted (R : Rules) (h : Atom.log_exp_elim.Available) :
     Spec.Derivation R.assumptions [originalLogExp] [piecewiseLogExp] :=
-  derive R .log_exp_guarded h
+  derive R .log_exp_elim h
 
-theorem scalar_equiv (R : Rules) (h : Atom.log_exp_guarded.Available) :
+theorem scalar_equiv (R : Rules) (h : Atom.log_exp_elim.Available) :
     [originalLogExp] ≡[R] [piecewiseLogExp] :=
-  rewrite R .log_exp_guarded h
+  rewrite R .log_exp_elim h
 
 /- Scalar execution used to instantiate the admitted relation. -/
 
@@ -218,7 +218,7 @@ set_option maxHeartbeats 1600000 in
 /-- Instantiate the admitted scalar rule only after executing its comparisons
 and both masked branches. Unsupported comparisons cannot discharge this law. -/
 theorem apply_rule {α : Type} [Inhabited α] (R : Rules)
-    (selected : Atom.log_exp_guarded.Available)
+    (selected : Atom.log_exp_elim.Available)
     (M : Algebra α) (D : Domain α) (hM : Models R.assumptions M D)
     (s : State α) (lt le : α → α → Bool)
     (hlt : M.compareLt (some .fp32) .real = some lt)

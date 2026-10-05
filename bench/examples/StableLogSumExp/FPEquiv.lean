@@ -8,7 +8,7 @@ The missing candidates are FP.LogExp.Atom.log_mul, for tl.log(a * b),
 and FP.LogExp.Atom.log_exp_libdevice, for tl.log(libdevice.exp(a)).
 Both must be admitted with the domains needed by Contract.lean before the
 conditional execution result there can supply an FP specification.
-The admitted log_exp_guarded and log_mul_split relations retain branches;
+The admitted log_exp_elim and log_mul_split relations retain branches;
 neither supplies either missing unconditional identity.
 
 Correct.lean already proves real correctness of both sources independently.

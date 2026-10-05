@@ -5,7 +5,7 @@ import VeriTile.Meta.StatementAudit
 /-!
 FP equivalence of originalKernel and optimizedKernel from Kernels.lean.
 Each loaded operand must be finite. The only numerical assumption is the
-admitted log_exp_guarded scalar relation. Comparisons and casts retain fp32
+admitted log_exp_elim scalar relation. Comparisons and casts retain fp32
 precision. The symbolic tile size is independent of the experimental shape.
 The proof lifts the scalar relation to equal writes and a memory frame.
 -/
@@ -131,7 +131,7 @@ def optimizedIO (xReg yReg : RegionName) (B : Nat) : Guarded.IO :=
 
 /-- Under the admitted guarded relation, both kernels succeed, write equivalent
 fp32 outputs and preserve all other memory. Dimensions remain symbolic. -/
-specification log_exp_guarded_equiv (R : Rules)
+specification log_exp_equiv (R : Rules)
     (xReg yReg : RegionName) (blockSize : Nat) :
     originalIO xReg yReg blockSize ≡[R] optimizedIO xReg yReg blockSize := by
   apply Spec.FloatingPoint.ofNumerical (lhs := originalIO xReg yReg blockSize)
@@ -153,7 +153,7 @@ specification log_exp_guarded_equiv (R : Rules)
     · intro r o ho _
       exact hfb r o ho
 
-#print_fp_assumptions log_exp_guarded_equiv
+#print_fp_assumptions log_exp_equiv
 
 #guard_msgs (drop info) in
 #auditModuleAxioms

@@ -372,6 +372,7 @@ This affects only the concise display; contracts and detailed reports retain
 their original identity. -/
 private def fpAtomName (id : String) : String :=
   if id == "LOG-MUL-GUARDED" then "log_mul_split"
+  else if id == "LOG-EXP-GUARDED" then "log_exp_elim"
   else id.toLower.replace "-" "_"
 
 private def printFPAtom (entry : Expr) (details : Bool := false) : MetaM Unit := do

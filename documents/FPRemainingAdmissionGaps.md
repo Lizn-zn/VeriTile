@@ -81,7 +81,7 @@ the GPU compiler or the block-level scheduling optimization.
 
 The independent seed 20261005 gives LOG-EXP-GUARDED z=28421.27843,
 B=0.04579159812, U=0.625; it also accepts LOG-MUL-GUARDED.
-The current table binds `log_exp_guarded` and `log_mul_split`, preserving their
+The current table binds `log_exp_elim` and `log_mul_split`, preserving their
 full conditional expressions. Neither admits unconditional log cancellation
 or product splitting, so the original StableLogSumExp remains incomplete.
 The separate FMA/log1p product-reference probe remains bias-INCONCLUSIVE.
