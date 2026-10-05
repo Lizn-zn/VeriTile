@@ -1,57 +1,52 @@
 import bench.examples.HyperConnectionsWidth.Kernels
-/- FP equivalence for the original mHC width rank-one, zero-iteration case.
-Two scalar products commute independently; their exp operands and all memory
-accesses stay unchanged. This exercises composition of atomic rewrites. -/
-import VeriTile.Triton.DSL
+import VeriTile.Triton.Float.GuardedRewrite
 import VeriTile.Meta.StatementAudit
-import VeriTile.Meta.FPProve
-import VeriTile.Triton.Float.Equivalence
-import VeriTile.Triton.Float.ScalarArithmetic
+
+/-! Scalar, zero-iteration mHC width: commute the two products independently.
+The actual tl.exp(h / tau) operands and residual must be finite at each site.
+No exponential identity is used; tl.exp remains an opaque call. -/
 
 namespace VeriTile.Bench.Examples.HyperConnectionsWidthFPEquiv
 open VeriTile.Bench.Examples.HyperConnectionsWidth.Kernels
-open VeriTile Triton
+open VeriTile Triton FP.Structural FP.GuardedRewrite
 open scoped VeriTile.Spec
 
-abbrev admitted := (FP.ScalarArithmetic.report .mulCommute (by decide)).report
+abbrev Rules := FP.ScalarArithmetic.Rules
 
-/-- One multiplication, with the weight expression treated as an operand. -/
-def mulFragment (tau : ℝ) (out logit : RegName) (swapped : Bool) : List ComputeStmt :=
-  let weight : Op .real [] := .exp (.div .real .nil (.ref .real [] logit) (.const tau))
-  let residual : Op .real [] := .ref .real [] "residual"
-  [.assign .real [] out (.compute (.alg .fp32
-    (if swapped then .mul .real .nil residual weight else .mul .real .nil weight residual)))]
+/-- Check the computed weight, including the division and exponential. -/
+def residualSite (tau : ℝ) : Site where
+  before := (originalKernel tau).surfaceBody.take 3
+  shape := []
+  left := .exp (.div .real .nil (.ref .real [] "h_res") (.const tau))
+  right := .ref .real [] "residual"
 
-def resCommute (tau : ℝ) := admitted.bind
-  (mulFragment tau "res_mix" "h_res" Bool.false) (mulFragment tau "res_mix" "h_res" Bool.true)
-def preCommute (tau : ℝ) := admitted.bind
-  (mulFragment tau "branch_in" "h_pre" Bool.false) (mulFragment tau "branch_in" "h_pre" Bool.true)
+/-- The second rewrite follows the first one in the intermediate program. -/
+def branchSite (tau : ℝ) : Site where
+  before := (middleKernel tau).surfaceBody.take 5
+  shape := []
+  left := .exp (.div .real .nil (.ref .real [] "h_pre") (.const tau))
+  right := .ref .real [] "residual"
 
-structure Rules (tau : ℝ) where
-  res_mul_comm : Spec.EvidenceValidated (resCommute tau).rule (resCommute tau).evidence
-  pre_mul_comm : Spec.EvidenceValidated (preCommute tau).rule (preCommute tau).evidence
+def original (tau : ℝ) : Program :=
+  ⟨originalKernel tau, [residualSite tau, branchSite tau]⟩
 
-def Rules.assumptions {tau : ℝ} (_ : Rules tau) : Spec.Assumptions ComputeStmt :=
-  [resCommute tau, preCommute tau]
-instance {tau : ℝ} : CoeOut (Rules tau) (Spec.Assumptions (Spec.ProgramSyntax.Statement ComputeKernel)) :=
-  ⟨Rules.assumptions⟩
+def optimized (tau : ℝ) : Program :=
+  ⟨optimizedKernel tau, [residualSite tau, branchSite tau]⟩
 
-@[spec_rule] theorem admitted_res_commute {tau : ℝ} (R : Rules tau) :
-    Spec.Derivation R.assumptions
-      (mulFragment tau "res_mix" "h_res" Bool.false) (mulFragment tau "res_mix" "h_res" Bool.true) :=
-  .atom (resCommute tau) (by simp [Rules.assumptions])
-    (admitted.admit _ _ R.res_mul_comm)
-
-@[spec_rule] theorem admitted_pre_commute {tau : ℝ} (R : Rules tau) :
-    Spec.Derivation R.assumptions
-      (mulFragment tau "branch_in" "h_pre" Bool.false) (mulFragment tau "branch_in" "h_pre" Bool.true) :=
-  .atom (preCommute tau) (by simp [Rules.assumptions])
-    (admitted.admit _ _ R.pre_mul_comm)
-
-specification mhc_width_equiv (tau : ℝ) (R : Rules tau) :
-    originalKernel tau ≡[R] optimizedKernel tau := by
-  equiv_decompose
-  all_goals fp_prove
+specification mhc_width_equiv (tau : ℝ) (R : Rules) :
+    original tau ≡[R] optimized tau := by
+  apply Spec.FloatingPoint.ofNumerical (lhs := original tau) (rhs := optimized tau)
+    (structural := fun _ _ => False) rfl rfl
+  intro α _ M D hM s hd
+  have first : FP.Structural.exec M (originalKernel tau) s =
+      FP.Structural.exec M (middleKernel tau) s :=
+    mul_commute R M D hM s (residualSite tau) "res_mix"
+      ((originalKernel tau).surfaceBody.drop 4) (hd _ (by simp [original]))
+  have second : FP.Structural.exec M (middleKernel tau) s =
+      FP.Structural.exec M (optimizedKernel tau) s :=
+    mul_commute R M D hM s (branchSite tau) "branch_in"
+      ((middleKernel tau).surfaceBody.drop 6) (hd _ (by simp [original]))
+  exact first.trans second
 
 #print_fp_assumptions mhc_width_equiv
 #guard_msgs (drop info) in

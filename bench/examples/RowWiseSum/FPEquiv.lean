@@ -1,21 +1,20 @@
 import bench.examples.RowWiseSum.Kernels
-/- Row-wise sum with forward versus reversed input lanes. The conditional proof
-uses the admitted fp32 add_commute and add_assoc instances. Both definitions are
-independent of the Correct file; stride and row length remain symbolic.
-The execution lemmas below certify each kernel's output and memory frame.
-equiv_decompose uses them to expose the remaining output relation; fp_prove
-derives that relation from the scalar atoms and the lane permutation. -/
+/- Row-wise sum with reversed input lanes. The guarded scalar theory justifies
+an explicit path between the two addition trees. Its domain checks cover every
+intermediate rewrite operand, rather than only the input leaves. -/
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.StructuralIO
-import VeriTile.Triton.Float.ScalarArithmetic
+import VeriTile.Triton.Float.ReductionSchedule
+import VeriTile.Triton.Float.ScheduledIO
 import VeriTile.Meta.StatementAudit
-import VeriTile.Triton.Float.Tactics
+
 import Mathlib.Data.Fin.Rev
 
 namespace VeriTile.Bench.Examples.RowWiseSumFPEquiv
 open VeriTile.Bench.Examples.RowWiseSum.Kernels
 open VeriTile Triton
 open FP.Structural FP.Equational
+open FP.Guarded FP.ReductionSchedule FP.ScalarReduction
 
 set_option maxHeartbeats 1600000
 
@@ -24,7 +23,7 @@ def reducedValue {α : Type} (M : Algebra α) (B : Nat) (xs : Fin B → α) : α
   M.reduceSum (some .fp32) (shape := [B]) ⟨0, by simp⟩ Bool.false
     (fun i => M.fp32Load (xs i.1)) PUnit.unit
 
-@[equiv_exec] theorem original_run {α : Type} [Inhabited α] (M : Algebra α)
+theorem original_run {α : Type} [Inhabited α] (M : Algebra α)
     (nCol B : Nat) (s : State α) (xs : Fin B → α)
     (hx : ∀ i : Fin B, (s.mem "x" (s.pids 0 * nCol + i.val)).read .real = xs i) :
     ∃ t, FP.Structural.exec M (rowWiseSumKernel "x" "y" nCol B) s = some t ∧
@@ -36,7 +35,7 @@ def reducedValue {α : Type} (M : Algebra α) (B : Nat) (xs : Fin B → α) : α
   intro r o hmiss
   exact (State.write_other _ "y" r (s.pids 0) o _ hmiss).trans rfl
 
-@[equiv_exec] theorem reversed_run {α : Type} [Inhabited α] (M : Algebra α)
+theorem reversed_run {α : Type} [Inhabited α] (M : Algebra α)
     (nCol B : Nat) (s : State α) (xs : Fin B → α)
     (hx : ∀ i : Fin B, (s.mem "x" (s.pids 0 * nCol + i.val)).read .real = xs i) :
     ∃ t, FP.Structural.exec M (reversedKernel "x" "y" nCol B) s = some t ∧
@@ -62,35 +61,92 @@ def originalIO (nCol B : Nat) : KernelIO₁ where
 def reversedIO (nCol B : Nat) : KernelIO₁ :=
   { originalIO nCol B with kernel := reversedKernel "x" "y" nCol B, projection := by rfl }
 
-def addCommute := (FP.ScalarArithmetic.report .addCommute (by decide)).report.bind commuteLHS commuteRHS
-def addAssociate := (FP.ScalarArithmetic.report .addAssociate (by decide)).report.bind associateLHS associateRHS
+/-- Read exactly the fp32-loaded values consumed by the reduction. -/
+def inputExpression (nCol B : Nat) (i : Fin B) : FP.GuardExpression.Expr FP.GuardExpression.MemoryInput :=
+  .fp32Load (.input ⟨"x", fun pid => pid * nCol + i.val, .real⟩)
 
-structure Rules where
-  add_comm : Spec.EvidenceValidated addCommute.rule addCommute.evidence
-  add_assoc : Spec.EvidenceValidated addAssociate.rule addAssociate.evidence
+def plan (B : Nat) (plans : Schedules) : ReductionPlan B :=
+  plans (some .fp32) [B] ⟨0, by simp⟩ Bool.false PUnit.unit
 
-def Rules.assumptions (_R : Rules) : Spec.Assumptions ComputeStmt := [addCommute, addAssociate]
+/-- Explicit paths check the intermediate operands used in both tree
+normalizations, including padding. They impose no experiment-size restriction. -/
+def domain (nCol B : Nat) (plans : Schedules) : FP.GuardExpression.Condition :=
+  let p := plan B plans
+  let q := reindex p (Fin.revPerm : Equiv.Perm (Fin B))
+  FP.GuardExpression.Requirements.all
+    (((normalize p.tree).operands ++ (normalize q.tree).operands).map fun t =>
+      .guard .finite (value (FP.GuardExpression.algebra FP.GuardExpression.MemoryInput)
+        (inputExpression nCol B) (FP.ScalarArithmetic.zero
+          (FP.GuardExpression.algebra FP.GuardExpression.MemoryInput)) t))
 
-instance : CoeOut Rules (Spec.Assumptions (Spec.ProgramSyntax.Statement KernelIO₁)) :=
-  ⟨Rules.assumptions⟩
+theorem value_expression {α : Type} [Inhabited α] (M : Algebra α) (s : State α)
+    (nCol B : Nat) (t : ReductionTree B) :
+    (value (FP.GuardExpression.algebra FP.GuardExpression.MemoryInput)
+      (inputExpression nCol B) (FP.ScalarArithmetic.zero
+        (FP.GuardExpression.algebra FP.GuardExpression.MemoryInput)) t).eval M
+      (FP.GuardExpression.MemoryInput.read s) =
+    value M (fun i => M.fp32Load ((s.mem "x" (s.pids 0 * nCol + i.val)).read .real))
+      (FP.ScalarArithmetic.zero M) t := by
+  induction t with
+  | input => rfl
+  | zero => rfl
+  | add a b ha hb =>
+      change FP.ScalarArithmetic.add M _ _ = FP.ScalarArithmetic.add M _ _
+      rw [ha, hb]
 
-@[spec_rule] theorem admitted_commute (R : Rules) : Spec.Derivation R.assumptions commuteLHS commuteRHS :=
-  .atom addCommute (by simp [Rules.assumptions])
-    ((FP.ScalarArithmetic.report .addCommute (by decide)).report.admit _ _ R.add_comm)
+theorem domain_values {α : Type} [Inhabited α] (M : Algebra α) (D : Domain α)
+    (s : State α) (nCol B : Nat) (plans : Schedules)
+    (hd : (domain nCol B plans).Holds M D s) :
+    ScheduleDomain M D
+      (fun i => M.fp32Load ((s.mem "x" (s.pids 0 * nCol + i.val)).read .real))
+      (plan B plans) (reindex (plan B plans) Fin.revPerm) := by
+  simp only [FP.GuardExpression.Condition.Holds, domain,
+    FP.GuardExpression.Requirements.holds_all, List.mem_map] at hd
+  constructor
+  · intro t ht
+    have h := hd _ ⟨t, List.mem_append_left _ ht, rfl⟩
+    exact (value_expression M s nCol B t) ▸ h
+  · intro t ht
+    have h := hd _ ⟨t, List.mem_append_right _ ht, rfl⟩
+    exact (value_expression M s nCol B t) ▸ h
 
-@[spec_rule] theorem admitted_associate (R : Rules) : Spec.Derivation R.assumptions associateLHS associateRHS :=
-  .atom addAssociate (by simp [Rules.assumptions])
-    ((FP.ScalarArithmetic.report .addAssociate (by decide)).report.admit _ _ R.add_assoc)
+def original (nCol B : Nat) : FP.Scheduled.IO₁ :=
+  ⟨originalIO nCol B, FP.Scheduled.fp32, domain nCol B⟩
+
+def reversed (nCol B : Nat) : FP.Scheduled.IO₁ :=
+  ⟨reversedIO nCol B, FP.Scheduled.fp32, domain nCol B⟩
+
+abbrev Rules := FP.ScalarArithmetic.Rules
 
 open scoped VeriTile.Spec
 
-/-- Reversal changes the addition order. The derivation uses the admitted
-commutation and association assumptions. Dimensions and schedules are arbitrary;
-the numerical table does not supply a whole-reduction IEEE guarantee. -/
+/-- Reversal is derived from scalar commutation, association and the zero
+identity used by tree normalization. Every intermediate guard is retained.
+The statement includes successful execution and both memory frames. -/
 specification rowwise_sum_equiv (nCol B : Nat) (R : Rules) :
-    originalIO nCol B ≡[R] reversedIO nCol B := by
-  equiv_decompose
-  all_goals fp_prove
+    original nCol B ≡[R] reversed nCol B := by
+  apply Spec.FloatingPoint.ofNumerical (lhs := original nCol B) (rhs := reversed nCol B)
+    (structural := fun _ _ => False) rfl rfl
+  refine ⟨by simp [IO₁PrivateScratch, original, originalIO],
+    by simp [IO₁PrivateScratch, reversed, reversedIO, originalIO], ?_⟩
+  intro α _ M D hM plans s hd
+  let xs : Fin B → α := fun i => (s.mem "x" (s.pids 0 * nCol + i.val)).read .real
+  let A := FP.Scheduled.fp32.algebra M plans
+  obtain ⟨a, ha, hva, hfa⟩ := original_run A nCol B s xs (fun _ => rfl)
+  obtain ⟨b, hb, hvb, hfb⟩ := reversed_run A nCol B s xs (fun _ => rfl)
+  have hvalue := plans_value R M D hM s (fun i => M.fp32Load (xs i))
+    (plan B plans) (reindex (plan B plans) Fin.revPerm)
+    (domain_values M D s nCol B plans hd)
+  rw [reindex, value_reindex] at hvalue
+  refine ⟨a, b, ha, hb, ?_, ?_, ?_⟩
+  · intro i
+    change a.mem "y" (s.pids 0 + i.val) = b.mem "y" (s.pids 0 + i.val)
+    rw [Fin.val_eq_zero i, Nat.add_zero, hva, hvb]
+    exact congrArg (Cell.mk .real) hvalue
+  · intro r o ho _
+    exact hfa r o (by simpa [original, originalIO, Fin.forall_fin_one] using ho)
+  · intro r o ho _
+    exact hfb r o (by simpa [reversed, reversedIO, originalIO, Fin.forall_fin_one] using ho)
 
 #print_fp_assumptions rowwise_sum_equiv
 #guard_msgs (drop info) in

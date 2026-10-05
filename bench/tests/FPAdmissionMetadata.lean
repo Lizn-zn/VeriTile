@@ -26,13 +26,14 @@ def fp32Rule (r : ReportedRule) (ruleID : String) : Prop :=
   r.ruleID = ruleID ∧ r.input = "fp32" ∧ r.compute = "fp32" ∧
   r.accumulator = "fp32" ∧ r.output = "fp32"
 
-example : fp32Rule FloatDTypeAddFPEquiv.admitted "ADD-COMMUTE" := by unfold fp32Rule; decide
-example : fp32Rule HyperConnectionsDepthFPEquiv.admitted "ADD-COMMUTE" := by unfold fp32Rule; decide
-example : fp32Rule TritonBenchVectorAdditionFPEquiv.admitted "ADD-COMMUTE" := by unfold fp32Rule; decide
-example : fp32Rule AdamUpdateGridLaunchFPEquiv.admitted "ADD-COMMUTE" := by unfold fp32Rule; decide
-example : fp32Rule HyperConnectionsWidthFPEquiv.admitted "MUL-COMMUTE" := by unfold fp32Rule; decide
-example : fp32Rule VectorAddFPEquiv.admitted "ADD-COMMUTE" := by unfold fp32Rule; decide
-example : fp32Rule FlatVectorAddFPEquiv.admitted "ADD-COMMUTE" := by unfold fp32Rule; decide
+example : fp32Rule (ScalarArithmetic.report .addCommute (by decide)).report "ADD-COMMUTE" ∧
+    (ScalarArithmetic.lhs .addCommute).guards = [⟨"a", .finite⟩, ⟨"b", .finite⟩] := by
+  unfold fp32Rule
+  decide
+example : fp32Rule (ScalarArithmetic.report .mulCommute (by decide)).report "MUL-COMMUTE" ∧
+    (ScalarArithmetic.lhs .mulCommute).guards = [⟨"a", .finite⟩, ⟨"b", .finite⟩] := by
+  unfold fp32Rule
+  decide
 
 theorem guarded_log_exp_report_matches :
     fp32Rule LogAdmission.fp32_log_exp_guarded.report "LOG-EXP-GUARDED" ∧

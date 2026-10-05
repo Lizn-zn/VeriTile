@@ -1,4 +1,5 @@
 import bench.examples.RowWiseSum.FPEquiv
+import VeriTile.Triton.Float.Tactics
 
 /-!
 Semantic decomposition and reduction search must use actual executions and a
@@ -8,7 +9,19 @@ register names, region parameters and an extra harmless assignment.
 namespace VeriTile.Tests.ReductionTactics
 open VeriTile Triton FP.Structural FP.Equational
 open scoped VeriTile.Spec
-open VeriTile.Bench.Examples.RowWiseSumFPEquiv (Rules)
+-- This algebraic adapter is tested under explicit unconditional derivations.
+-- They are synthetic premises, not bindings of guarded experiment reports.
+structure Rules where
+  assumptions : Spec.Assumptions ComputeStmt
+  commute : Spec.Derivation assumptions commuteLHS commuteRHS
+  associate : Spec.Derivation assumptions associateLHS associateRHS
+
+instance : CoeOut Rules (Spec.Assumptions ComputeStmt) := ⟨Rules.assumptions⟩
+
+@[spec_rule] theorem commute_rule (R : Rules) :
+    Spec.Derivation R.assumptions commuteLHS commuteRHS := R.commute
+@[spec_rule] theorem associate_rule (R : Rules) :
+    Spec.Derivation R.assumptions associateLHS associateRHS := R.associate
 set_option maxHeartbeats 1600000
 set_option linter.unusedVariables false
 set_option linter.unusedSectionVars false
@@ -185,12 +198,9 @@ run_cmd do
   if deps.contains ``VeriTile.Bench.Examples.RowWiseSumFPEquiv.rowwise_sum_equiv then
     throwError "The new kernels reused the completed example instead of composing generic lemmas"
 
-/-- info: FP assumptions used by renamed_equiv:
----
-info:   add_assoc
----
-info:   add_commute -/
-#guard_msgs in
+-- These premises are opaque derivations, so the printer must not call them
+-- experimentally admitted atoms. The concrete atom printer is tested elsewhere.
+#guard_msgs (drop info) in
 #print_fp_assumptions renamed_equiv
 
 #guard_msgs (drop info) in

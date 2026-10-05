@@ -148,4 +148,34 @@ theorem plans_value {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
   rw [sorted_lanes b] at hb
   exact ha.trans hb.symm
 
+/-- Rename input lanes without changing the tree or its explicit padding. -/
+def reindexTree (σ : Equiv.Perm (Fin n)) : ReductionTree n → ReductionTree n
+  | .input i => .input (σ i)
+  | .zero => .zero
+  | .add a b => .add (reindexTree σ a) (reindexTree σ b)
+
+theorem reindexTree_leaves (σ : Equiv.Perm (Fin n)) (t : ReductionTree n) :
+    (reindexTree σ t).leaves = t.leaves.map (Option.map σ) := by
+  induction t with
+  | input => rfl
+  | zero => rfl
+  | add a b ha hb => simp [reindexTree, ReductionTree.leaves, ha, hb]
+
+def reindex (p : ReductionPlan n) (σ : Equiv.Perm (Fin n)) : ReductionPlan n where
+  tree := reindexTree σ p.tree
+  padding := p.padding
+  valid := by
+    rw [reindexTree_leaves]
+    apply (p.valid.map (Option.map σ)).trans
+    simpa [List.map_append, List.map_map, Function.comp_def, List.map_replicate] using
+      (σ.map_finRange_perm.map some).append_right (List.replicate p.padding none)
+
+theorem value_reindex {α : Type} (M : Algebra α) (xs : Fin n → α) (seed : α)
+    (σ : Equiv.Perm (Fin n)) (t : ReductionTree n) :
+    value M xs seed (reindexTree σ t) = value M (xs ∘ σ) seed t := by
+  induction t with
+  | input => rfl
+  | zero => rfl
+  | add a b ha hb => simp [reindexTree, value, ha, hb]
+
 end VeriTile.Triton.FP.ReductionSchedule

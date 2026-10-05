@@ -62,6 +62,7 @@ structure Algebra (α : Type) where
   support still fails; no order on the floating carrier is assumed. -/
   compareLt : Option ComputeDType → FloatDType → Option (α → α → Bool) := fun _ _ => none
   compareLe : Option ComputeDType → FloatDType → Option (α → α → Bool) := fun _ _ => none
+  compareEq : Option ComputeDType → FloatDType → Option (α → α → Bool) := fun _ _ => none
   cast : Option ComputeDType → FloatDType → FloatDType → α → α
   fromNat : Option ComputeDType → Nat → α
   fromInt : Option ComputeDType → Int → α
@@ -279,6 +280,19 @@ def numericLe {α : Type} (M : Algebra α) (p : Option ComputeDType) :
   | _, .f8e5 => M.compareLe p .f8e5
   | _, h => natLe h
 
+/-- Equality stays an explicit backend operation. In particular, it is not
+inferred from two ordered comparisons, which would mishandle NaN. -/
+def numericEq {α : Type} (M : Algebra α) (p : Option ComputeDType) :
+    {dtype : TileDType} → ComparableDType dtype → Option (Value α dtype → Value α dtype → Bool)
+  | _, .real => M.compareEq p .real
+  | _, .fp32 => M.compareEq p .fp32
+  | _, .fp16 => M.compareEq p .fp16
+  | _, .bf16 => M.compareEq p .bf16
+  | _, .f8e4 => M.compareEq p .f8e4
+  | _, .f8e5 => M.compareEq p .f8e5
+  | _, .nat => some (fun a b => decide (a = b))
+  | _, .int => some (fun a b => decide (a = b))
+
 @[simp] theorem numericLt_nat {α : Type} (M : Algebra α) (p : Option ComputeDType) :
     numericLt M p .nat = natLt (α := α) .nat := rfl
 
@@ -351,6 +365,15 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .lt h bc a b, s => do
       let f ← numericLt M p h
       return bop f bc (← evalOp M p a s) (← evalOp M p b s)
+  | .gt h bc a b, s => do
+      let f ← numericLt M p h
+      return bop (fun a b => f b a) bc (← evalOp M p a s) (← evalOp M p b s)
+  | .eq h bc a b, s => do
+      let f ← numericEq M p h
+      return bop f bc (← evalOp M p a s) (← evalOp M p b s)
+  | .ne h bc a b, s => do
+      let f ← numericEq M p h
+      return bop (fun a b => !(f a b)) bc (← evalOp M p a s) (← evalOp M p b s)
   | .le h bc a b, s => do
       let f ← numericLe M p h
       return bop f bc (← evalOp M p a s) (← evalOp M p b s)
@@ -398,9 +421,6 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .bitXor .., _ => none
   | .shiftLeft .., _ => none
   | .shiftRight .., _ => none
-  | .eq .., _ => none
-  | .gt .., _ => none
-  | .ne .., _ => none
   | .reduceMaxNat .., _ => none
   | .scan .., _ => none
   | .argMax .., _ => none

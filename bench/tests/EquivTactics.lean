@@ -147,45 +147,48 @@ theorem bounded_failure (R : Spec.Assumptions Nat)
 
 open VeriTile.Bench.Examples
 
--- The actual registered fp32 atom can be found in an imported module.
-theorem imported_fp_rule (B : Nat) (R : VectorAddFPEquiv.Rules B) :
-    VectorAdd.Kernels.originalKernel B ≡[R] VectorAdd.Kernels.optimizedKernel B := by
+-- Imported atoms retain their guards when the syntax tactics compose them.
+open FP.ScalarArithmetic in
+theorem imported_fp_rule (R : Rules) : [lhs .addCommute] ≡[R] [rhs .addCommute] := by
   equiv_decompose
-  fp_prove
+  fp_prove [admitted R .addCommute (by decide)]
 
--- In the two-site example, decomposition exposes both multiplication targets.
-theorem two_fp_sites (tau : Real) (R : HyperConnectionsWidthFPEquiv.Rules tau) :
-    HyperConnectionsWidth.Kernels.originalKernel tau ≡[R]
-      HyperConnectionsWidth.Kernels.optimizedKernel tau := by
+open FP.ScalarArithmetic in
+theorem two_fp_sites (R : Rules) :
+    [lhs .mulCommute, lhs .mulCommute] ≡[R] [rhs .mulCommute, rhs .mulCommute] := by
   equiv_decompose
-  · fp_prove
-  · fp_prove
+  all_goals fp_prove [admitted R .mulCommute (by decide)]
 
 def add64 (B : Nat) : List ComputeStmt :=
   [.assign .real [B] "out" (.compute (.alg .fp64
     (.add .real (.consSame .nil) (.ref .real [B] "y") (.ref .real [B] "x"))))]
 
-theorem fp_precision_and_admission (B : Nat) (R : VectorAddFPEquiv.Rules B) : True := by
+open FP.ScalarArithmetic in
+theorem fp_precision_and_admission (R : Rules) : True := by
   fail_if_success
-    have : Spec.Derivation R.assumptions (VectorAddFPEquiv.originalAdd B) (add64 B) := by
-      fp_prove
+    have : Spec.Derivation R.assumptions [lhs .addCommute] [⟨guards .addCommute, add64 1⟩] := by
+      fp_prove [admitted R .addCommute (by decide)]
   fail_if_success
-    have : Spec.Derivation ([] : Spec.Assumptions ComputeStmt)
-        (VectorAddFPEquiv.originalAdd B) (VectorAddFPEquiv.optimizedAdd B) := by
+    have : Spec.Derivation ([] : Spec.Assumptions FP.GuardedFragment)
+        [lhs .addCommute] [rhs .addCommute] := by
       fp_prove
+  -- The guarded relation cannot be used as its unguarded version.
+  fail_if_success
+    have : Spec.Derivation R.assumptions
+        [⟨[], lhsCode .addCommute⟩] [⟨[], rhsCode .addCommute⟩] := by
+      fp_prove [admitted R .addCommute (by decide)]
   trivial
 
-theorem output_cast_retained (B : Nat) (R : FloatDTypeAddFPEquiv.Rules B) : True := by
+theorem output_cast_retained (B : Nat) (R : FloatDTypeAddFPEquiv.Rules) : True := by
   fail_if_success
-    have : FloatDTypeAdd.Kernels.originalKernel B ≡[R] VectorAdd.Kernels.optimizedKernel B := by
+    have : FloatDTypeAddFPEquiv.original B ≡[R] VectorAddFPEquiv.optimized B := by
       equiv_decompose
       all_goals fp_prove
   trivial
 
-theorem active_mask_retained (n B : Nat) (R : FlatVectorAddFPEquiv.Rules B) : True := by
+theorem active_mask_retained (n B : Nat) (R : FlatVectorAddFPEquiv.Rules) : True := by
   fail_if_success
-    have : FlatVectorAdd.Kernels.originalKernel n B ≡[R]
-        FlatVectorAdd.Kernels.optimizedKernel (n + 1) B := by
+    have : FlatVectorAddFPEquiv.original n B ≡[R] FlatVectorAddFPEquiv.optimized (n + 1) B := by
       equiv_decompose
       all_goals fp_prove
   trivial

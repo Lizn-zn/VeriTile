@@ -40,7 +40,7 @@ class FPEquationalTests(unittest.TestCase):
     def test_current_admissions_do_not_silently_supply_missing_algebra(self):
         self.assertEqual(self.lean((ROOT / "bench/tests/FPAdmissionCoverage.lean").read_text()), "")
 
-    def test_kernel_proof_is_independent_and_reports_both_admitted_atoms(self):
+    def test_kernel_proof_is_independent_and_reports_used_admitted_atoms(self):
         source = (ROOT / "bench/examples/RowWiseSum/FPEquiv.lean").read_text() + '''
 open Lean Elab Command in
 run_cmd do
@@ -52,6 +52,7 @@ run_cmd do
         self.assertIn("\n  add_commute\n", output)
         self.assertNotIn("unresolved FP proof:", output)
         self.assertIn("\n  add_assoc\n", output)
+        self.assertIn("\n  add_zero\n", output)
 
     def test_same_original_source_and_symbolic_dimensions_including_zero(self):
         self.lean('''
@@ -64,10 +65,10 @@ example (nCol B : Nat) :
     (RowWiseSum.rowWiseSumIO nCol B).kernel =
       (RowWiseSumFPEquiv.originalIO nCol B).kernel := rfl
 example (nCol B : Nat) (R : RowWiseSumFPEquiv.Rules) :
-    RowWiseSumFPEquiv.originalIO nCol B ≡[R] RowWiseSumFPEquiv.reversedIO nCol B :=
+    RowWiseSumFPEquiv.original nCol B ≡[R] RowWiseSumFPEquiv.reversed nCol B :=
   RowWiseSumFPEquiv.rowwise_sum_equiv nCol B R
 example (nCol : Nat) (R : RowWiseSumFPEquiv.Rules) :
-    RowWiseSumFPEquiv.originalIO nCol 0 ≡[R] RowWiseSumFPEquiv.reversedIO nCol 0 :=
+    RowWiseSumFPEquiv.original nCol 0 ≡[R] RowWiseSumFPEquiv.reversed nCol 0 :=
   RowWiseSumFPEquiv.rowwise_sum_equiv nCol 0 R
 ''')
 

@@ -118,7 +118,7 @@ class LeanExampleTests(unittest.TestCase):
                                     text=True, capture_output=True, timeout=180)
         self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
         for text in ('rule ID: "ADD-COMMUTE"', 'bias gate: PASS', 'vars gate: PASS',
-                     'Atom 1:', 'fp32:ADD-COMMUTE', 'Rules.add_comm:', 'EvidenceValidated',
+                     'Atom 1:', 'fp32:ADD-COMMUTE', 'Rules.validated:', 'EvidenceValidated',
                      'summary.json#fp32/ADD-COMMUTE', 'Transitive axioms:',
                      'Project dependencies:', 'Trusted library boundary:'):
             self.assertIn(text, result.stdout)
@@ -130,14 +130,14 @@ open VeriTile.Bench.Examples.TritonBenchVectorAddition.Kernels
 open VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv
 open scoped VeriTile.Spec
 
-example (n block : Nat) (R : Rules block) :
-    originalKernel n block ≡[R] optimizedKernel n block :=
+example (n block : Nat) (R : Rules) :
+    original n block ≡[R] optimized n block :=
   vector_addition_equiv n block R
 
-example (R : Rules 64) : originalKernel 1001 64 ≡[R] optimizedKernel 1001 64 :=
+example (R : Rules) : original 1001 64 ≡[R] optimized 1001 64 :=
   vector_addition_equiv 1001 64 R
 
-example (R : Rules 256) : originalKernel 8192 256 ≡[R] optimizedKernel 8192 256 :=
+example (R : Rules) : original 8192 256 ≡[R] optimized 8192 256 :=
   vector_addition_equiv 8192 256 R
 
 open Lean Elab Command in
@@ -184,9 +184,11 @@ run_cmd do
         self.assertIn('axiom footprint ⊆ standard base', result.stdout)
 
     def test_atom_selection_preserves_operation_precision(self):
-        source = (exporter.ROOT / 'bench/examples/TritonBenchVectorAddition/FPEquiv.lean').read_text()
-        # Check selection against test-side precision and relation requirements.
-        source = source.split('abbrev body :=')[0]
+        source = """import VeriTile.Triton.Float.ScalarArithmetic
+namespace VeriTile.Bench.Examples.TritonBenchVectorAdditionFPEquiv
+open VeriTile Triton
+abbrev admitted := (FP.ScalarArithmetic.report .addCommute (by decide)).report
+"""
         checks = '''
 example :
     admitted.ruleID = "ADD-COMMUTE" ∧ admitted.input = "fp32" ∧

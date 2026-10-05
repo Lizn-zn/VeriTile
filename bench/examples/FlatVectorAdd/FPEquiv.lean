@@ -1,65 +1,46 @@
 import bench.examples.FlatVectorAdd.Kernels
-/-
-FlatVectorAdd: fp32 addition with symbolic kernel dimensions.
-The source kernel is specialized to typed fp32 regions; only x+y changes to y+x.
-Both implementations are defined in Kernels.lean and shared by the proofs.
-
-The experiment selects ADD-COMMUTE as an atomic assumption. The proof uses
-that assumption at the kernel's symbolic tile size, without matching it to
-the experiment's shape or launch configuration. No new global axiom.
--/
-import VeriTile.Triton.DSL
+import VeriTile.Triton.Float.GuardedRewrite
 import VeriTile.Meta.StatementAudit
-import VeriTile.Meta.FPProve
-import VeriTile.Triton.Float.Equivalence
-import VeriTile.Triton.Float.ScalarArithmetic
+
+/-! FlatVectorAdd: contextual FP equivalence from the admitted scalar add_commute.
+The loaded x/y operands must be finite, including masked undefined lanes
+whose arithmetic is evaluated; the store mask is preserved.
+The domain is evaluated at the actual rewrite site; experimental dimensions
+are not restrictions on these symbolic kernels. -/
 
 namespace VeriTile.Bench.Examples.FlatVectorAddFPEquiv
 open VeriTile.Bench.Examples.FlatVectorAdd.Kernels
-open VeriTile Triton
+open VeriTile Triton FP.Structural FP.GuardedRewrite
 open scoped VeriTile.Spec
 
-abbrev admitted := (FP.ScalarArithmetic.report .addCommute (by decide)).report
+abbrev Rules := FP.ScalarArithmetic.Rules
 
-/-- Parameterized local fp32 addition: register renaming is explicit. -/
-def addFragment (blockSize : Nat) (out x y : RegName) : List ComputeStmt :=
-  [.assign .real [blockSize] out
-    (.compute (.alg .fp32 (.add .real (.consSame .nil)
-      (.ref .real [blockSize] x) (.ref .real [blockSize] y))))]
+/-- Finite operands after the original common prefix. -/
+def additionSite (nElements blockSize : Nat) : Site where
+  before := (originalKernel nElements blockSize).surfaceBody.take 5
+  shape := [blockSize]
+  left := .ref .real [blockSize] "x"
+  right := .ref .real [blockSize] "y"
 
-def originalAdd (blockSize : Nat) := addFragment blockSize "output" "x" "y"
-def optimizedAdd (blockSize : Nat) := addFragment blockSize "output" "y" "x"
+def original (nElements blockSize : Nat) : Program :=
+  ⟨originalKernel nElements blockSize, [additionSite nElements blockSize]⟩
 
-/-- The candidate catalog selects the accepted fp32 relation before it is instantiated. -/
-def addCommute (blockSize : Nat) : Spec.RuleEntry ComputeStmt :=
-  admitted.bind (originalAdd blockSize) (optimizedAdd blockSize)
+def optimized (nElements blockSize : Nat) : Program :=
+  ⟨optimizedKernel nElements blockSize, [additionSite nElements blockSize]⟩
 
-/-- The experiment-selected atom, instantiated at a symbolic tile size.
-`blockSize` only indexes the typed syntax; no experiment-size condition remains.
-This is the atomic modeling assumption exposed by #print_fp_assumptions. -/
-structure Rules (blockSize : Nat) where
-  add_comm : Spec.EvidenceValidated (addCommute blockSize).rule (addCommute blockSize).evidence
-
-def Rules.assumptions {blockSize : Nat} (_ : Rules blockSize) :
-    Spec.Assumptions ComputeStmt := [addCommute blockSize]
-
-instance {blockSize : Nat} :
-    CoeOut (Rules blockSize) (Spec.Assumptions (Spec.ProgramSyntax.Statement ComputeKernel)) :=
-  ⟨Rules.assumptions⟩
-
-@[spec_rule] theorem admitted_add_commute {blockSize : Nat} (R : Rules blockSize) :
-    Spec.Derivation R.assumptions (originalAdd blockSize) (optimizedAdd blockSize) := by
-  exact .atom (addCommute blockSize) (by simp [Rules.assumptions])
-    (admitted.admit (originalAdd blockSize) (optimizedAdd blockSize) R.add_comm)
-
-/-- Public specification: a kernel equivalence derived from one accepted atom. -/
-specification add_kernel_masked_equiv (nElements blockSize : Nat) (R : Rules blockSize) :
-    originalKernel nElements blockSize ≡[R] optimizedKernel nElements blockSize := by
-  equiv_decompose
-  all_goals fp_prove
+/-- Under the finite-operand contract, every successful run is preserved,
+including all registers and memory; failed surrounding executions also agree. -/
+specification add_kernel_masked_equiv (nElements blockSize : Nat) (R : Rules) :
+    original nElements blockSize ≡[R] optimized nElements blockSize := by
+  apply Spec.FloatingPoint.ofNumerical
+    (lhs := original nElements blockSize) (rhs := optimized nElements blockSize)
+    (structural := fun _ _ => False) rfl rfl
+  intro α _ M D hM s hd
+  exact add_commute R M D hM s (additionSite nElements blockSize) "output"
+    ((originalKernel nElements blockSize).surfaceBody.drop 6)
+    (hd _ (by simp [original]))
 
 #print_fp_assumptions add_kernel_masked_equiv
--- Keep the proof audit active without adding its success log to the example.
 #guard_msgs (drop info) in
 #auditModuleAxioms
 

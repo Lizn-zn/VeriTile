@@ -32,7 +32,7 @@ required input/intermediate domains remain part of the FP statements.
 | [HyperConnectionsDepth](HyperConnectionsDepth/) | Depth connection, `S=T=D=1`, zero normalization iterations; commute the final addition. |
 | [HyperConnectionsWidth](HyperConnectionsWidth/) | Width connection, the same scalar slice; commute the selected multiplications. |
 | [RowWiseMax](RowWiseMax/) | Inline the maximum computation; structural FP equivalence without numerical assumptions. |
-| [RowWiseSum](RowWiseSum/) | Decompose observable outputs and prove reversed reduction lanes using admitted addition commutation and association. |
+| [RowWiseSum](RowWiseSum/) | Decompose observable outputs and prove reversed reduction lanes using guarded addition commutation, association and zero identities. |
 | [FusedSiLU](FusedSiLU/) | Fuse the pipeline; structural FP equivalence without numerical assumptions. |
 | [FusedSwiglu](FusedSwiglu/) | Fuse the masked pipeline while retaining casts; structural FP equivalence without numerical assumptions. |
 | [SoftmaxReciprocal](SoftmaxReciprocal/) | Replace per-lane division with reciprocal multiplication; unchanged tl.exp prefix, only div_mul_rcp assumed. |
@@ -52,14 +52,22 @@ row sum and Lion update; masked FlatVectorAdd and row max retain their stated
 positive-block-size conditions. OnlineSoftmax retains the batch/recurrence
 observation scope described above.
 
-The seven scalar-rewrite examples at the top derive equivalence of typed
-program bodies using `equiv_decompose` followed by `all_goals fp_prove`.
-The first exposes structural differences; the second composes the registered
-atomic lemmas. See [the tactic guide](../../documents/EquivalenceTactics.md)
-for inspecting intermediate goals, supplying hints and handling failed searches.
-RowWiseSum uses the same two tactics with the FP IO adapter: certified execution
-summaries expose the output relation, then a generic permutation lemma reduces
-it to scalar addition assumptions. Its row length and stride remain symbolic.
+The seven local-rewrite examples retain the finite operands of each actual
+rewrite in `GuardedRewrite.Program.domain`. The checked contextual lemmas
+preserve the whole execution result, including all registers and memory.
+They preserve successful runs and also agree on failure; they do not claim
+that every possible surrounding instruction can execute. Masked additions
+require finite evaluated operands even on inactive lanes, since these statements
+still compute the addition before the masked store.
+
+RowWiseSum uses successful execution summaries and explicit reduction trees.
+The domain lists the intermediate operands of both normalization paths; finite
+input leaves alone are insufficient. The proof uses add_commute, add_assoc and
+add_zero, including the zero steps introduced by normalization. Padding stays
+explicit in the original schedules, and row length/stride remain symbolic.
+The generic tactics remain available for syntax derivations and their existing
+IO adapter; see [the tactic guide](../../documents/EquivalenceTactics.md).
+These guarded examples use explicit domain-preserving composition lemmas.
 The other completed FP examples connect their transformations
 to execution or observable outputs. A proof of one stated slice or observation
 does not certify a larger kernel or a different precision/intrinsic variant.
