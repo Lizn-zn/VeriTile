@@ -32,136 +32,110 @@ U gate 的幅度阈值为 10/100：`U <= 10` 为 PASS，`10 < U <= 100` 为 WARN
 
 ## 直接运行
 
-### log 实现、expm1/log1p 与条件式乘积分解
+### Guarded log-exp elimination with a fixed reference
 
-[log_config.py](./log_config.py) 保留 `4096×4096`、独立 `Normal(1,1)`、
-fp32 输入/计算/输出及现有 two-gates 参数，只运行：
+`LOG-EXP-GUARDED` compares the unchanged libdevice composition against a conditional
+identity. The candidate is a simplification on its selected range:
 
-- `LOG-MUL`：`tl.log(a*b)` 与 `tl.log(a)+tl.log(b)`，跳过 `a<=0` 或 `b<=0` 的输入对。
-- `LOG-EXP-LIBDEVICE`：`tl.log(libdevice.exp(a))` 与 `a`，保留负的有限 `a`。
+```python
+reference = libdevice.log(libdevice.exp(a))
+if 0.5 < abs(a) <= 80.0:
+    candidate = a
+else:
+    candidate = libdevice.log(libdevice.exp(a))
+```
 
-第二条是新原子，不能复用旧 `LOG-EXP`（`tl.exp`）的实验结果。
-PR #12 的 `tl.exp` exp-sub 不满足当前偏差条件，因此相关例子使用 `libdevice.exp`。
-配对配置 [libdevice_log_config.py](./libdevice_log_config.py) 同时运行上述两项和
-`LOG-MUL-LIBDEVICE`、`LOG-EXP-FULL-LIBDEVICE`。后两项将 log 改为
-`libdevice.log`，分别复用对应原子的输入种子，其他设置相同；全部运算仍为 FP32。
-当前配置 [log_accuracy_config.py](./log_accuracy_config.py) 另加入 `LOG-EXP-EXPM1`：
-在 `abs(a) <= 0.5` 时计算 `libdevice.log1p(libdevice.expm1(a))`，范围外保留
-`libdevice.log(libdevice.exp(a))`，候选仍为 `a`。阈值在运行前固定。
-它保留所有有限输入，并复用 LOG-EXP-LIBDEVICE 的输入种子；不是只测试近零样本。
-`tl.where` 两侧均会求值，因此未选路径的输入先置零，避免无用分支溢出或产生 `log1p(-1)`。
-这是独立的新表达式，结果不能作为原 LOG-EXP 的准入证据。
-完整配置 [log_product_config.py](./log_product_config.py) 同时运行七项，其中新增两项：
+All operations remain FP32. The candidate eliminates both calls away from zero;
+near zero it preserves the reference's intermediate rounding. The upper bound
+retains the original overflow, underflow and subnormal-exp behavior on extreme
+inputs. These are implementation branches, not input filters. The reference,
+sampling distribution and two-gates thresholds remain unchanged.
 
-- `LOG-MUL-LOG1P`：参考侧在 `0.5 <= fp32(a*b) <= 1.5` 时用 `log1p(fma(a,b,-1))`；候选仍是两个 log 相加。
-- `LOG-MUL-GUARDED`：参考侧保留 `log(fp32(a*b))`；候选在 `0.5 <= fp32(a*b) <= 2` 时也保留该表达式，范围外才拆为两个 log 相加。
+The GPU skips exp/log when every active lane of a block selects the identity.
+Mixed blocks use zero-masked fallback arguments and select the result per lane.
+The Lean example represents this lane-wise expression; its proof does not verify
+the GPU compiler or the block-level scheduling optimization.
 
-两项均只使用 FP32，沿用同一正输入定义域、采样和 gate；分支范围在运行前固定。
-本配置已在 H200 完成，DLC 任务 `dlc1hczsayjv5apb`，任务名
-`traces_kernel_equivalence_testing`；独立 CPU 重放与 GPU 环境的表格完全一致。
-有效输入上出现非有限输出仍算失败，不会被过滤。
+[log_product_config.py](./log_product_config.py) runs seven paired FP32 relations
+on H200. The current DLC job is `dlc1713xu2g5t8e2`, named
+`traces_kernel_equivalence_testing`, using `scalar-supplement-13`.
+Each relation uses 4096 replicates, shape `[4096,4096]`, Normal(1,1),
+bias budget tau=0.05 local ULP and U thresholds 10/100.
+Independent CPU replay matches the GPU-environment JSON, CSV and Markdown tables.
 
-| Rule | R | z | B（local ULP） | U | Accept |
+| Rule | R | z | B (local ULP) | U | Accept |
 |---|---:|---:|---:|---:|---|
-| LOG-MUL / fp32 | 4096 | 2.924915168 | 0.1679352504 | 6.685560237 | 否：bias INCONCLUSIVE |
-| LOG-MUL-LIBDEVICE / fp32 | 4096 | 2.924915168 | 0.1679352504 | 6.685560237 | 否：bias INCONCLUSIVE |
-| LOG-EXP-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | 否：bias FAIL |
-| LOG-EXP-FULL-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | 否：bias FAIL |
-| LOG-EXP-EXPM1 / fp32 | 4096 | 25775.46400 | 0.0494428110 | 0 | 是 |
-| LOG-MUL-LOG1P / fp32 | 4096 | 2.061440595 | 0.1240315873 | 6.685560237 | 否：bias INCONCLUSIVE |
-| LOG-MUL-GUARDED / fp32 | 4096 | 296.6221498 | 0.0006248690 | 6.685560237 | 是：条件式 |
+| LOG-MUL / fp32 | 4096 | 2.924915168 | 0.1679352504 | 6.685560237 | No: bias INCONCLUSIVE |
+| LOG-MUL-LIBDEVICE / fp32 | 4096 | 2.924915168 | 0.1679352504 | 6.685560237 | No: bias INCONCLUSIVE |
+| LOG-EXP-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | No: bias FAIL |
+| LOG-EXP-FULL-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | No: bias FAIL |
+| LOG-EXP-GUARDED / fp32 | 4096 | 28014.76841 | 0.04578995059 | 0.625 | Yes |
+| LOG-MUL-LOG1P / fp32 | 4096 | 2.061440595 | 0.1240315873 | 6.685560237 | No: bias INCONCLUSIVE |
+| LOG-MUL-GUARDED / fp32 | 4096 | 296.6221498 | 0.0006248690033 | 6.685560237 | Yes |
 
-换成 `libdevice.log` 没有改变结果。在本次 Triton 3.7.1 / CUDA 13.0、sm_90
-和记录的编译设置下，两种 log 的 PTX 都包含 `__nv_logf` 实现；每对两侧的 PTX
-仅去掉 `.file` / `.loc` 调试指令后完全一致，没有 `lg2.approx`。
-每次 replicate 的 delta、两侧最大绝对误差和有效样本数也逐项相同。
-[comparison.json](./log_report/comparison.json) 保存配对种子、观测比较及 PTX 哈希。
-这只描述本次编译配置，不代表所有 Triton 版本或编译选项都如此。
+The independent seed 20261005 also passes the guarded log-exp rewrite:
 
-LOG-MUL 已完成有效统计，保留 48,643,849,868 个正输入对，跳过
-20,075,626,868 个定义域外输入对；bias 区间跨过 0.05 的预算边界。
-LOG-EXP-LIBDEVICE 的平均偏差为 -0.6804358853 local ULP，五个标准误区间
-完全落在容差范围外。它的 U=0 是因为候选 `a` 对 oracle 没有误差，
-并不表示参考 `tl.log(libdevice.exp(a))` 和候选相等。
+| Rule | R | z | B (local ULP) | U | Accept |
+|---|---:|---:|---:|---:|---|
+| LOG-MUL / fp32 | 4096 | 1.016401743 | 0.1629233926 | 7.418400148 | No: bias INCONCLUSIVE |
+| LOG-MUL-LOG1P / fp32 | 4096 | 1.79346894 | 0.1644764832 | 7.418400148 | No: bias INCONCLUSIVE |
+| LOG-MUL-GUARDED / fp32 | 4096 | 296.0360072 | 0.0006251552164 | 7.418400148 | Yes |
+| LOG-EXP-GUARDED / fp32 | 4096 | 28421.27843 | 0.04579159812 | 0.625 | Yes |
 
-七项的 U 都通过；LOG-EXP-EXPM1 和 LOG-MUL-GUARDED 满足 bias 预算。前者的平均偏差为
--0.04943322176 local ULP，SE=0.000001917840228，B=0.04944281096，
-距离 0.05 预算约 0.00055718904 ULP。z 很大表示偏差稳定可测，不等于超预算。
-这不是零偏差或所有输入上的精确恒等式，也没有准入原 LOG-EXP 表达式。
+The [boundary fixture](./log_report/boundaries.json) checks 25 inputs, including
+both signs of the branch endpoints and their neighboring FP32 values, signed
+zero, tiny inputs, and extreme tails. The reference matches the original baseline
+bit-for-bit. At `a=±2^-25`, both reference and candidate retain the reference's
+zero result; at `a=90` and `a=-120`, both retain the nonfinite result. The fixture
+checks these semantics explicitly; valid-input nonfinite events still fail the
+statistical runner rather than being filtered out. Both measured kernels contain
+no FP64 arithmetic. [comparison.json](./log_report/comparison.json) additionally
+checks unchanged reference PTX (ignoring only source locations), paired seeds,
+and reference-error observations.
 
-[GPU 边界检查](./log_report/boundaries.json) 验证 15 个输入：`a=±2^-25` 时
-原实现得到 0，新实现恢复 `a`；±0.5 的相邻 FP32 数检查分段边界，`a=-20`
-使用原路径，`a=90` 的溢出仍保留为非有限结果。PTX 确认新表达式没有 FP64 运算。
-条件式 LOG-MUL 的主实验均值为 -0.0006145105 local ULP。独立种子 20261005
-复核同样通过：z=296.0360072、B=0.0006251552、U=7.418400148。两次各有
-4096 个 replicate；两组完整表均经独立 CPU 回放核对。
-[独立种子配置](./log_product_validation_config.py) 与 [复核结果](./log_product_validation_report/summary.md)
-属于同一版本的独立验证，不是历史结果。FMA/log1p 方案在复核中仍为 INCONCLUSIVE。
+For LOG-EXP-GUARDED, U=0.625 is the empirical maximum fallback because a tail
+fit is unavailable; it is not an extrapolated confidence bound.
 
-[乘积诊断](./log_report/log_product_diagnostics.json) 包含 16 个 GPU 边界输入，
-以及最初 32 批采样的分支统计：43.6002% 的有效输入保留乘积路径，56.3998%
-仍使用两个 log 相加。原式在保留区间观察到 33,554,432 ULP 的单元素差值；
-区间外的观察最大值只有 4 ULP。这些诊断不代替正式准入实验。
-条件式不修改输入掩码，也不证明可以无条件拆分 log；Lean 中以独立原子
-`log_mul_split` 保留该条件表达式。
+Passing two gates does not establish a performance win. Preallocated standalone
+kernels were timed with Triton do_bench (100 ms warmup, 300 ms repeat, median):
 
-原 LOG-MUL 仍未准入，原 StableLogSumExp 实现的 log-exp 前提也未满足，
-因此 StableLogSumExp 仍未完成。
-完整当前结果见 [log_report/summary.md](./log_report/summary.md)，
-数值审核见 [log_report/warning_audit.json](./log_report/warning_audit.json)。
+| Workload (16,777,216 elements) | Reference (ms) | Candidate (ms) | Speedup |
+|---|---:|---:|---:|
+| all_simplify_uniform_1_2 | 0.036992 | 0.037280 | 0.9923× |
+| all_fallback_uniform_0_0.25 | 0.036768 | 0.039072 | 0.9410× |
+| mixed_normal_1_1 | 0.037952 | 0.039296 | 0.9658× |
 
-当前报告的 Lean 数据位于
-[`LogAdmission.lean`](../../../VeriTile/Triton/Float/LogAdmission.lean)，
-原子绑定位于 [`LogExp.lean`](../../../VeriTile/Triton/Float/LogExp.lean)。独立表包含
-`fp32_log_exp_expm1` 与 `fp32_log_mul_guarded` 两项；条件式乘积的数据保留正有限输入、
-FP32 精度和 `0.5 <= fp32(a*b) <= 2` 的分支表达式，绑定为 `Atom.log_mul_split`。
-默认假设打印也使用 `log_mul_split`，实验报告仍保留 `LOG-MUL-GUARDED` 标识。
-未选路径的 log 参数仍先置为 `1`。未准入的 FMA/log1p 候选尚未接入 Lean。
-已绑定的 `log_exp_expm1` 保留 fp32 精度、有限输入定义域、`abs(a) <= 0.5`
-及未选分支传零的源表达式。`libdevice.log`、`libdevice.expm1`、
-`libdevice.log1p` 都是独立的 FP 运算符，不会和 `tl.log` 混用。
-`log_exp_expm1_equiv` 使用原有 `≡[R]` 接口；打印的假设只有
-`log_exp_expm1`。`apply_rule` 从成功执行的标量片段导出该规则，比较运算
-也保留精度；未提供比较解释时，执行失败，不能据此推出数值恒等式。
+No speedup was measured for these workloads. Runtime guards and mixed-block
+fallbacks have a cost. A compiler may use the identity when the range is known,
+but any application-level speedup still needs a separate benchmark.
 
-[`LogExpCounterexample.lean`](../../../VeriTile/Triton/Float/LogExpCounterexample.lean)
-把反例范围分开写清：给定报告中的 `logExp(2^-25)=0`，可否定普通
-log-exp 的逐点精确恒等式；再给定 `logExp(0)=0`，单元素 LSE 的 direct
-和 stable 公式在 bf16 输出后分别为 `0` 与 `2^-25`，仍不相等。
-Lean 检查位模式、减法、加法及转换；libdevice 的两次复合求值显式作为
-实验前提。边界报告测的是 `libdevice.log(libdevice.exp(a))`，没有直接
-测完整 LSE kernel，也没有将 `tl.log` 与 `libdevice.log` 全局等同。
-这些反例否定精确恒等式，不否定原实数正确性，也不单独否定整个 LSE
-在某个分布下的 two-gates 准入。新分段表达式自身也不是精确恒等式：
-报告中的 `a=-0.4999999701976776` 得到 `-0.5`，但整体统计满足准入条件。
+`LOG-MUL-GUARDED` also passes both seeds and remains bound as Lean `log_mul_split`.
+`LOG-MUL-LOG1P` is a separate reference-changing diagnostic and remains
+bias-INCONCLUSIVE; it is not evidence for rewriting the unchanged product-log
+reference. Unconditional LOG-MUL and LOG-EXP remain unadmitted.
 
-按已提交报告重新生成新表（无需重放 GPU 实验）：
+The generated [LogAdmission.lean](../../../VeriTile/Triton/Float/LogAdmission.lean)
+contains the two accepted guarded relations. [LogExp.lean](../../../VeriTile/Triton/Float/LogExp.lean)
+and the shared [example kernels](../../../bench/examples/LogExp/Kernels.lean)
+retain the original reference and guarded candidate. The FP derivation uses the
+selected `log_exp_guarded` assumption; independent real-correctness proofs cover
+both kernels. Neither guarded rule supplies the unconditional premises missing
+from StableLogSumExp.
+
+Current full results: [summary.md](./log_report/summary.md),
+[confirmation](./log_product_validation_report/summary.md), and
+[warning_audit.json](./log_report/warning_audit.json).
+
+Reproduce the current implementation:
 
 ```bash
-python3 scripts/export_supplemental_rules.py --trust-report \
-  --report experiments/floating_point/supplement/log_report \
-  --namespace LogAdmission --output VeriTile/Triton/Float/LogAdmission.lean
-```
-
-在仓库根目录、安装下述依赖后执行：
-
-```bash
-python3 scripts/check_numerics_supplement.py check --profile experiments/floating_point/supplement/log_product_config.py
-python3 scripts/check_log_accuracy.py --output Logs/fp-log-accuracy-boundaries
+python3 scripts/check_log_accuracy.py --output Logs/fp-log-boundaries
 python3 scripts/check_log_product.py --output Logs/fp-log-product-diagnostics
-python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_product_config.py --smoke --output Logs/fp-log-accuracy-smoke
-python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_product_config.py --output Logs/fp-log-accuracy
-python3 scripts/check_numerics_supplement.py report Logs/fp-log-accuracy --output-dir Logs/fp-log-accuracy-report
-```
-
-复现时先确认 smoke 没有 `ERROR`，再运行正式实验并带回 `Logs/fp-log-accuracy-report/`。
-本轮使用 `scalar-supplement-11`，请用新目录；当前 log 报告维护这七项配对结果。
-
-独立种子复核：
-
-```bash
-python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_product_validation_config.py --output Logs/fp-log-product-validation
-python3 scripts/check_numerics_supplement.py report Logs/fp-log-product-validation --output-dir Logs/fp-log-product-validation-report
+python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_product_config.py --output Logs/fp-log
+python3 scripts/check_numerics_supplement.py report Logs/fp-log --output-dir Logs/fp-log-report
+python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/log_product_validation_config.py --output Logs/fp-log-validation
+python3 scripts/check_numerics_supplement.py report Logs/fp-log-validation --output-dir Logs/fp-log-validation-report
+python3 scripts/export_supplemental_rules.py --trust-report --report experiments/floating_point/supplement/log_report --namespace LogAdmission --output VeriTile/Triton/Float/LogAdmission.lean
 ```
 
 ### 全部补充实验
@@ -229,7 +203,7 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 | log-exp | `tl.log(tl.exp(a)) → a` | 原 intrinsic 组合 |
 | log-exp-libdevice | `tl.log(libdevice.exp(a)) → a` | 当前 fp32 实验因 bias 拒绝 |
 | log-exp-full-libdevice | `libdevice.log(libdevice.exp(a)) → a` | 两个函数都使用 libdevice，当前 fp32 实验因 bias 拒绝 |
-| log-exp-expm1 | `abs(a) <= 0.5` 时 `log1p(expm1(a))`，其余 `log(exp(a))`，与 `a` 比较 | 所有函数用 libdevice，独立 FP32 表达式 |
+| log-exp-guarded | Fixed `log(exp(a))` reference; candidate returns `a` for `0.5 < abs(a) <= 80`, otherwise the reference | FP32 libdevice fallback |
 | max-commute | `max(a,b) → max(b,a)` | max 标量换序 |
 | max-assoc | `max(max(a,b),c) → max(a,max(b,c))` | max 标量重组 |
 | max-idem | `max(a,a) → a` | 消去重复 max 项 |
@@ -242,7 +216,7 @@ tar -czf fp-supplement-results.tar.gz -C Logs fp-supplement fp-supplement-report
 
 目录现在包含 23 条关系。默认浮点 profile 有 **56 个可执行实例、112 个左右两侧 kernel 特化**，
 外加 1 个 fp64 残差 oracle；完整笛卡尔表有 92 行，其余组合明确标为 `UNSUPPORTED`。
-其中 EXP-SUB-INTRINSIC、LOG-EXP-EXPM1、LOG-MUL-LOG1P 和 LOG-MUL-GUARDED 只支持 fp32 输入、计算和输出。COUNT-ZERO、COUNT-SUCCESSOR
+其中 EXP-SUB-INTRINSIC、LOG-EXP-GUARDED、LOG-MUL-LOG1P 和 LOG-MUL-GUARDED 只支持 fp32 输入、计算和输出。COUNT-ZERO、COUNT-SUCCESSOR
 使用独立的 int32 输入配置，不能用正态浮点输入替代，见
 [三个新增 primitive 的配置与当前结果](../primitives/README.md)。
 
@@ -288,10 +262,10 @@ bias 的零值尺度使用最小 subnormal 间距；输出 dtype 无法表示的
 不使用输出峰值或跨 replicate 的最大 ULP 作为 bias 容差。
 
 `/` 是普通 Triton division，**不是**原 `DIV-RCP` 的 `tl.div_rn`。
-EXP-SUB、LOG-EXP-LIBDEVICE、LOG-EXP-FULL-LIBDEVICE 和 LOG-EXP-EXPM1 使用 `libdevice.exp`；
+EXP-SUB、LOG-EXP-LIBDEVICE、LOG-EXP-FULL-LIBDEVICE 和 LOG-EXP-GUARDED 使用 `libdevice.exp`；
 其他 exp 原子使用 `tl.exp`。LOG-MUL-LIBDEVICE 和 LOG-EXP-FULL-LIBDEVICE 使用
 `libdevice.log`，其他 log 原子使用 `tl.log`，max 使用 `tl.maximum`。
-LOG-EXP-EXPM1 使用 `libdevice.log` 及 `libdevice.log1p` / `libdevice.expm1` 分段路径。
+LOG-EXP-GUARDED uses libdevice.log/exp in the fixed reference and fallback; its fast path returns a.
 LOG-MUL-LOG1P 使用显式 `tl.fma` 和 `libdevice.log1p`；LOG-MUL-GUARDED 使用 `libdevice.log`。
 intrinsic 身份保存在每条规则的契约中；禁止隐式 FMA fusion。
 

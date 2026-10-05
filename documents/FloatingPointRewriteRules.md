@@ -40,7 +40,7 @@
 候选关系先在 Lean 中定义左右片段和条件，定义本身不依赖是否通过实验。
 [LogExp.lean](../VeriTile/Triton/Float/LogExp.lean) 预定义了七种 fp32 候选：
 `log_mul`、`log_mul_libdevice`、`log_mul_split`、`log_exp`、`log_exp_libdevice`、
-`log_exp_full_libdevice`、`log_exp_expm1`。不同 intrinsic 保留独立身份；
+`log_exp_full_libdevice`、`log_exp_guarded`。不同 intrinsic 保留独立身份；
 乘积规则要求输入 finite 且 positive，抵消规则允许任意 finite 输入。
 
 two-gates 结果生成 [LogAdmission.lean](../VeriTile/Triton/Float/LogAdmission.lean)，
@@ -55,14 +55,19 @@ open VeriTile.Triton.FP.LogExp
 open scoped VeriTile.Spec
 
 example (R : Rules) :
-    [Atom.log_exp_expm1.lhs] ≡[R] [Atom.log_exp_expm1.rhs] :=
-  VeriTile.Triton.FP.LogExp.rewrite R .log_exp_expm1 (by decide)
+    [Atom.log_exp_guarded.lhs] ≡[R] [Atom.log_exp_guarded.rhs] :=
+  VeriTile.Triton.FP.LogExp.rewrite R .log_exp_guarded (by decide)
 ```
 
 这里 `by decide` 只检查当前表是否选中了该候选；数值关系仍是 `R` 中的外部准入假设。
 刷新实验结果后，已定义候选的可用性随准入表更新，无须重写候选表达式。
+`LOG-EXP-GUARDED` keeps the reference `libdevice.log(libdevice.exp(a))` unchanged.
+Its candidate returns `a` for `0.5 < abs(a) <= 80` and retains that reference
+computation otherwise. Both seeds pass with FP32 arithmetic; this conditional
+relation cannot authorize unconditional log-exp cancellation.
+
 条件式乘积关系的 Lean 名称和默认打印名称为 `log_mul_split`；它对应已冻结的
-实验标识 `LOG-MUL-GUARDED`，报告标识和源码哈希保持原样。在
+实验标识 `LOG-MUL-GUARDED`。在
 `0.5 <= fp32(a*b) <= 2` 时保留 `libdevice.log` 的乘积形式，范围外才拆分。
 左右候选保留 fp32 精度、正有限输入以及未选分支传入 `1` 的处理。
 

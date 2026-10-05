@@ -19,9 +19,9 @@ KERNELS = DIRECTORY / "kernels.py"
 NumericEvent = original.NumericEvent
 COUNT_RULES = {"COUNT-ZERO", "COUNT-SUCCESSOR"}
 PAIRED_INPUTS = {"LOG-MUL-LIBDEVICE": "LOG-MUL", "LOG-EXP-FULL-LIBDEVICE": "LOG-EXP-LIBDEVICE",
-                 "LOG-EXP-EXPM1": "LOG-EXP-LIBDEVICE", "LOG-MUL-LOG1P": "LOG-MUL",
+                 "LOG-EXP-GUARDED": "LOG-EXP-LIBDEVICE", "LOG-MUL-LOG1P": "LOG-MUL",
                  "LOG-MUL-GUARDED": "LOG-MUL"}
-FP32_ONLY_RULES = {"EXP-SUB-INTRINSIC", "LOG-EXP-EXPM1", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}
+FP32_ONLY_RULES = {"EXP-SUB-INTRINSIC", "LOG-EXP-GUARDED", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}
 
 
 def seed_for(profile, fmt, rule):
@@ -113,20 +113,20 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
         node_formats={"arithmetic": fmt["compute"], "transcendental": fmt["compute"],
                       "details": "bf16 nodes execute in fp32 then explicitly round bf16; see bound source"},
         accumulator_formats={},  # Every expression is scalar; no reduction accumulator.
-        intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-EXPM1"} else "tl.exp",
+        intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-GUARDED"} else "tl.exp",
                     "log": "libdevice.log" if rule in PAIRED_INPUTS else "tl.log", "max": "tl.maximum",
                     "oracle": "torch fp64 mathematical reference on the same quantized operands"})
     config["probe"]["special_values"]["literals"] = "only explicit -inf literals in the relation"
     config["probe"]["active_operands"] = load_catalog()[rule]["operands"]
     if rule in PAIRED_INPUTS:
         config["probe"].update(seed=seed_for(profile, fmt, rule), paired_input_rule=PAIRED_INPUTS[rule])
-    if rule == "LOG-EXP-EXPM1":
-        config["numerics"]["intrinsics"].update(expm1="libdevice.expm1", log1p="libdevice.log1p")
+    if rule == "LOG-EXP-GUARDED":
         config["relation"]["branch"] = {
-            "condition": "abs(a) <= 0.5", "threshold": 0.5,
-            "inside": "fp32 log1p(fp32 expm1(a))",
-            "outside": "fp32 log(fp32 exp(a))",
+            "condition": "0.5 < abs(a) <= 80", "lower": 0.5, "upper": 80.0,
+            "side": "candidate", "reference": "fp32 log(fp32 exp(a))",
+            "inside": "a", "outside": "fp32 log(fp32 exp(a))",
             "inactive_arguments": "zero before evaluating unused tl.where arms",
+            "block_fast_path": "skip exp and log when every active lane selects a",
         }
     if rule == "LOG-MUL-LOG1P":
         config["numerics"]["intrinsics"].update(log1p="libdevice.log1p", fma="explicit fp32 tl.fma, round once")
@@ -205,7 +205,7 @@ def oracle(torch, rule, inputs):
     if rule in {"MAX-COMMUTE", "MAX-ASSOC"}:
         ab = torch.maximum(a, b)
         return torch.maximum(ab, c) if rule == "MAX-ASSOC" else ab
-    if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-EXPM1", "MAX-IDEM", "MAX-NEG-INF"}:
+    if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-GUARDED", "MAX-IDEM", "MAX-NEG-INF"}:
         return a
     raise ValueError("unknown supplemental oracle")
 

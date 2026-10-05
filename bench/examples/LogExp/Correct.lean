@@ -31,7 +31,7 @@ def originalIO (xReg yReg : RegionName) (B : Nat) : KernelIO₁ where
   read := fun pid => pid * B
   write := fun pid => pid * B
 
-/-- The copy uses the same interface and the same source as the FP proof. -/
+/-- The piecewise candidate shares its source with the FP proof. -/
 def optimizedIO (xReg yReg : RegionName) (B : Nat) : KernelIO₁ :=
   { originalIO xReg yReg B with kernel := optimizedKernel xReg yReg B, projection := by rfl }
 
@@ -60,7 +60,7 @@ private theorem original_traceSafe (xReg yReg : RegionName) (B : Nat)
     Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
     MemAccess.SafeAt, stepStmt, evalOp.eq_def, MemAccess.ActiveAddressSafe,
     memAccessActiveAddressSafe, MaskOpt.Active, BlockState.setReg,
-    Tile.bop, Tile.uop, Tile.cop, NumericDType.add, NumericDType.mul]
+    Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul]
   exact ⟨fun a => lt_of_lt_of_le (Nat.add_lt_add_left a.isLt _) hx,
     fun a => lt_of_lt_of_le (Nat.add_lt_add_left a.isLt _) hy⟩
 
@@ -75,7 +75,7 @@ private theorem optimized_traceSafe (xReg yReg : RegionName) (B : Nat)
     Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def, MaskOpt.SafeAt,
     MemAccess.SafeAt, stepStmt, evalOp.eq_def, MemAccess.ActiveAddressSafe,
     memAccessActiveAddressSafe, MaskOpt.Active, BlockState.setReg,
-    Tile.bop, NumericDType.add, NumericDType.mul]
+    Tile.bop, Tile.uop, Tile.cop, NumericDType.add, NumericDType.mul]
   exact ⟨fun a => lt_of_lt_of_le (Nat.add_lt_add_left a.isLt _) hx,
     fun a => lt_of_lt_of_le (Nat.add_lt_add_left a.isLt _) hy⟩
 
@@ -94,12 +94,10 @@ private theorem original_run (xReg yReg : RegionName) (B : Nat)
   simp [originalKernel, ComputeKernel.toAlgKernel, ComputeKernel.toAlgorithm?,
     ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?, ComputeDType.eraseDType, exec, stepStmts, stepStmt, evalOp.eq_def,
-    Tile.bop, Tile.uop, Tile.cop, NumericDType.add, NumericDType.mul]
+    Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul]
   refine ⟨fun i => ?_, fun r o hmiss => ?_⟩
   · rw [BlockState.scatter_readback_nd _ _ _ hinj (i, PUnit.unit)]
-    simp [hx, WithBot.realExp, WithBot.realLog, WithBot.realExpm1,
-      WithBot.realLog1p, FloatDType.cast]
-    split <;> simp_all
+    simp [hx, FloatDType.cast]
   · rcases hmiss with hr | ho
     · exact (BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _).trans rfl
     · by_cases hr : r = yReg
@@ -123,10 +121,11 @@ private theorem optimized_run (xReg yReg : RegionName) (B : Nat)
   simp [optimizedKernel, ComputeKernel.toAlgKernel, ComputeKernel.toAlgorithm?,
     ComputeStmt.listToAlgorithm?, ComputeStmt.toAlgorithm?, ComputeExpr.toAlgorithm?,
     ComputeOp.toAlgorithm?, ComputeDType.eraseDType, exec, stepStmts, stepStmt, evalOp.eq_def,
-    Tile.bop, NumericDType.add, NumericDType.mul]
+    Tile.bop, Tile.uop, Tile.cop, NumericDType.add, NumericDType.mul]
   refine ⟨fun i => ?_, fun r o hmiss => ?_⟩
   · rw [BlockState.scatter_readback_nd _ _ _ hinj (i, PUnit.unit)]
-    simp [hx, FloatDType.cast]
+    simp [hx, WithBot.realExp, WithBot.realLog, FloatDType.cast]
+    split <;> simp_all
   · rcases hmiss with hr | ho
     · exact (BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _).trans rfl
     · by_cases hr : r = yReg
@@ -135,7 +134,7 @@ private theorem optimized_run (xReg yReg : RegionName) (B : Nat)
           (fun k _ => Ne.symm (ho k.1)) _).trans rfl
       · exact (BlockState.foldl_writeMem_mem_preserve_other_region _ _ _ r hr o _).trans rfl
 
-/-- The piecewise log-exp source implements the identity function over ℝ. -/
+/-- The original log-exp source implements the identity function over ℝ. -/
 specification original_correct (xReg yReg : RegionName) (B : Nat) :
     Spec.Real (originalIO xReg yReg B ⊨ fun xs i => xs i) := by
   refine KernelIO₁.Implements.intro _ (original_flattenOk xReg yReg B) ?_ ?_
@@ -145,7 +144,7 @@ specification original_correct (xReg yReg : RegionName) (B : Nat) :
     obtain ⟨t, ht, hv, hf⟩ := original_run xReg yReg B s xs hx
     exact ⟨t, ht, hv, fun r o ho _ => hf r o ho⟩
 
-/-- The copy source implements the same identity function over ℝ. -/
+/-- The piecewise candidate implements the same identity function over ℝ. -/
 specification optimized_correct (xReg yReg : RegionName) (B : Nat) :
     Spec.Real (optimizedIO xReg yReg B ⊨ fun xs i => xs i) := by
   refine KernelIO₁.Implements.intro _ (optimized_flattenOk xReg yReg B) ?_ ?_

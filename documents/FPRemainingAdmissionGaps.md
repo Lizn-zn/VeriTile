@@ -44,78 +44,53 @@ return the same zero. Extracting the actual conversion equality requires
 so they cannot be accidentally imported without this integer-range-aware binding. See the [current report](../experiments/floating_point/primitives/report/summary.md)
 and [reproduction instructions](../experiments/floating_point/primitives/README.md).
 
-### Current log experiments: piecewise expm1/log1p and conditional product splitting pass
+### Current log experiments: guarded log-exp and product rewrites pass
 
-Seven paired fp32 cases completed on H200 in DLC job `dlc1hczsayjv5apb`, using
-`log_product_config.py`: 4096 replicates of shape `[4096, 4096]`, Normal(1,1),
-tau=0.05 local ULP and U thresholds 10/100. Independent CPU replay exactly
-matches the GPU-environment reports.
+The fixed-reference FP32 LOG-EXP-GUARDED candidate passes on H200 with both
+seeds. DLC job `dlc1713xu2g5t8e2` uses the existing sampling and gates; all primary
+and confirmation tables match independent CPU replay.
 
-| Primitive | z | B (local ULP) | U | Decision |
-|---|---:|---:|---:|---|
-| LOG-MUL: `tl.log(a*b)` vs `tl.log(a)+tl.log(b)` | 2.924915168 | 0.1679352504 | 6.685560237 | INCONCLUSIVE: bias |
-| LOG-MUL-LIBDEVICE: both sides use `libdevice.log` | 2.924915168 | 0.1679352504 | 6.685560237 | INCONCLUSIVE: bias |
-| LOG-EXP-LIBDEVICE: `tl.log(libdevice.exp(a))` vs `a` | 68.59740095 | 0.7300322166 | 0 | REJECT: bias |
-| LOG-EXP-FULL-LIBDEVICE: `libdevice.log(libdevice.exp(a))` vs `a` | 68.59740095 | 0.7300322166 | 0 | REJECT: bias |
-| LOG-EXP-EXPM1: `log1p(expm1(a))` for `abs(a)<=0.5`, otherwise `log(exp(a))`, vs `a` | 25775.46400 | 0.0494428110 | 0 | ACCEPT: new piecewise expression |
-| LOG-MUL-LOG1P: near-one FMA/log1p reference vs split logs | 2.061440595 | 0.1240315873 | 6.685560237 | INCONCLUSIVE: bias |
-| LOG-MUL-GUARDED: retain product log for `0.5<=fp32(a*b)<=2`, split elsewhere | 296.6221498 | 0.0006248690 | 6.685560237 | ACCEPT: conditional expression |
+```python
+reference = libdevice.log(libdevice.exp(a))
+if 0.5 < abs(a) <= 80.0:
+    candidate = a
+else:
+    candidate = libdevice.log(libdevice.exp(a))
+```
 
-The libdevice.log variants reuse their controls' input seeds. Under this run's
-Triton 3.7.1 / CUDA 13.0, sm_90 and compiler settings, both log interfaces
-lower to the same `__nv_logf` implementation. Removing only `.file` / `.loc`
-debug directives makes the paired reference and candidate PTX identical.
-All per-replicate observations are also exactly equal; changing the API
-therefore supplies no improvement here. This is specific to the recorded
-compiler and configuration. See the
-[paired comparison](../experiments/floating_point/supplement/log_report/comparison.json).
+All operations remain FP32. The candidate eliminates both calls away from zero;
+near zero it preserves the reference's intermediate rounding. The upper bound
+retains the original overflow, underflow and subnormal-exp behavior on extreme
+inputs. These are implementation branches, not input filters. The reference,
+sampling distribution and two-gates thresholds remain unchanged.
 
-LOG-MUL keeps only positive input pairs without resampling: 48,643,849,868
-valid tuples and 20,075,626,868 skipped tuples. It completes the numerical
-protocol; its signed bias interval `[-0.04397270, 0.16793525]` crosses the
-allowed `[-0.05, 0.05]` interval, so it is inconclusive rather than a bias FAIL.
+The GPU skips exp/log when every active lane of a block selects the identity.
+Mixed blocks use zero-masked fallback arguments and select the result per lane.
+The Lean example represents this lane-wise expression; its proof does not verify
+the GPU compiler or the block-level scheduling optimization.
 
-LOG-EXP-LIBDEVICE keeps all finite inputs, including negatives. Its mean bias
-is -0.6804358853 local ULP, with interval `[-0.73003222, -0.63083955]`, wholly
-outside tolerance. U=0 because the candidate `a` exactly matches the oracle;
-that does not make the two expressions equal. The magnitude gate passes for
-the four unmodified expressions, but none is admitted under `pass_only`.
+| Rule | R | z | B (local ULP) | U | Accept |
+|---|---:|---:|---:|---:|---|
+| LOG-MUL / fp32 | 4096 | 2.924915168 | 0.1679352504 | 6.685560237 | No: bias INCONCLUSIVE |
+| LOG-MUL-LIBDEVICE / fp32 | 4096 | 2.924915168 | 0.1679352504 | 6.685560237 | No: bias INCONCLUSIVE |
+| LOG-EXP-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | No: bias FAIL |
+| LOG-EXP-FULL-LIBDEVICE / fp32 | 4096 | 68.59740095 | 0.7300322166 | 0 | No: bias FAIL |
+| LOG-EXP-GUARDED / fp32 | 4096 | 28014.76841 | 0.04578995059 | 0.625 | Yes |
+| LOG-MUL-LOG1P / fp32 | 4096 | 2.061440595 | 0.1240315873 | 6.685560237 | No: bias INCONCLUSIVE |
+| LOG-MUL-GUARDED / fp32 | 4096 | 296.6221498 | 0.0006248690033 | 6.685560237 | Yes |
 
-LOG-EXP-EXPM1 uses only fp32 libdevice functions. The branch threshold 0.5 was
-fixed before sampling; all finite inputs remain in the domain and the random
-input seed matches LOG-EXP-LIBDEVICE. Its mean is -0.04943322176 local ULP,
-SE=0.000001917840228 and B=0.04944281096, just inside the 0.05 budget.
-The larger diagnostic z reflects lower variability, not a bias-budget failure.
-U=0 still comes from the exact candidate `a`. Fifteen GPU boundary fixtures
-check tiny values, branch neighbors, fallback behavior and retained overflow;
-PTX contains no fp64 operations. See the
-[boundary evidence](../experiments/floating_point/supplement/log_report/boundaries.json).
-Acceptance applies only to this new piecewise expression. It is not a binding
-for the original log-exp operation, and no Lean assumption was replaced.
+The independent seed 20261005 gives LOG-EXP-GUARDED z=28421.27843,
+B=0.04579159812, U=0.625; it also accepts LOG-MUL-GUARDED.
+The current table binds `log_exp_guarded` and `log_mul_split`, preserving their
+full conditional expressions. Neither admits unconditional log cancellation
+or product splitting, so the original StableLogSumExp remains incomplete.
+The separate FMA/log1p product-reference probe remains bias-INCONCLUSIVE.
 
-LOG-MUL-GUARDED preserves the original reference and changes only the candidate.
-All positive finite inputs are retained; the fixed branch selects which expression
-runs, rather than removing sensitive samples. Independent seed 20261005 also
-passes at z=296.0360072, B=0.0006251552 and U=7.418400148 after 4096 replicates.
-The FMA/log1p alternative remains inconclusive under both seeds. The
-[independent-seed report](../experiments/floating_point/supplement/log_product_validation_report/summary.md)
-and main report both match independent CPU replay.
-
-Sixteen GPU boundary cases verify branch endpoints, preserved sides, underflow
-and overflow; all tested kernels retain FP32 arithmetic. Diagnostics on the
-first 32 paired draws retain the product expression for 43.6002% of valid
-tuples and split logs for 56.3998%. Large local-ULP differences occur near a
-product of one. These diagnostics do not replace the full two-gates runs.
-The accepted conditional expression is bound as `FP.LogExp.Atom.log_mul_split`,
-with fp32 comparisons, both closed endpoints and inactive log arguments masked
-to one. Its scalar application theorem retains this branch. The report identity
-remains `LOG-MUL-GUARDED`; the concise assumption printer uses `log_mul_split`.
-Neither new rule supplies the unconditional log-product premise required by
-the existing proof. The FMA/log1p probe remains experiment-only and unadmitted.
-
-StableLogSumExp therefore remains incomplete. See the
-[current log report](../experiments/floating_point/supplement/log_report/summary.md)
-and the [input-domain masks](../scripts/numerical_domains.py).
+The 25-input GPU log-exp fixture checks fixed-reference bits, endpoint neighbors,
+near-zero rounding and extreme-tail fallback; 16 product boundary inputs also
+pass. The standalone timing check shows no speedup, so numerical acceptance is
+not presented as a performance result. See the [current experiments](../experiments/floating_point/supplement/README.md)
+for timing measurements, full tables and reproduction commands.
 
 ## Checked algebraic evidence
 
@@ -234,8 +209,8 @@ the existing shape, Normal(1,1) distribution and gates. Invalid inputs are skipp
 without resampling, and nonfinite outputs on valid inputs remain failures.
 The current H200 report is complete: LOG-MUL is bias-INCONCLUSIVE and
 LOG-EXP-LIBDEVICE is bias-REJECT. Neither supplies the required admission.
-The paired `log_accuracy_config.py` additionally accepts LOG-EXP-EXPM1, but its
-piecewise log1p/expm1 expression differs from the operation used in this proof.
+The paired `log_accuracy_config.py` additionally accepts LOG-EXP-GUARDED, but its
+conditional identity retains fallback behavior and cannot supply the unconditional identity needed by this proof.
 See the supplemental README for the reproduction commands and report.
 
 The regression shows that EXP-SUB and LOG-MUL can hold with the domain while

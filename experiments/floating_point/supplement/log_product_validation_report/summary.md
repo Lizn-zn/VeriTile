@@ -1,6 +1,6 @@
 # Numerical rule results
 
-3 instances; 3 replayed; 1 accepted.
+4 instances; 4 replayed; 2 accepted.
 
 Each nonempty replicate contributes one mean across its in-domain IID scalar instances; R counts these replicates.
 Out-of-domain input tuples are skipped without resampling; valid/skipped counts describe scalar tuples, not R.
@@ -21,3 +21,4 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 | LOG-MUL | fp32 | 4096 | 1.016402 | 0.1629234 | 0.05 | 7.4184 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643797954 | 20075678782 |
 | LOG-MUL-LOG1P | fp32 | 4096 | 1.793469 | 0.1644765 | 0.05 | 7.4184 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643797954 | 20075678782 |
 | LOG-MUL-GUARDED | fp32 | 4096 | 296.036 | 0.0006251552 | 0.05 | 7.4184 | pot_pwm | PASS | PASS | yes | COMPLETE | 48643797954 | 20075678782 |
+| LOG-EXP-GUARDED | fp32 | 4096 | 28421.28 | 0.0457916 | 0.05 | 0.625 | empirical_max | PASS | PASS | yes | COMPLETE | 68719476736 | 0 |

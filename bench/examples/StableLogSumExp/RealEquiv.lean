@@ -1,7 +1,7 @@
 import bench.examples.StableLogSumExp.Kernels
 /- Legacy equivalence under REAL intermediate arithmetic and final-store
 rounding (`execR`). This theorem remains valid in that semantics; it is not
-a two-gates FP-equivalence proof. The accepted piecewise LOG-EXP-EXPM1 rule
+a two-gates FP-equivalence proof. The accepted piecewise LOG-EXP-GUARDED rule
 does not supply the original kernels' plain LOG-EXP or LOG-MUL obligations.
 See `FP.LogExpCounterexample.singleton_lse_not_exact` for the conditional
 tiny-input counterexample to exact equality when intermediate arithmetic is

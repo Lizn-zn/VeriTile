@@ -34,13 +34,18 @@ example : fp32Rule HyperConnectionsWidthFPEquiv.admitted "MUL-COMMUTE" := by unf
 example : fp32Rule VectorAddFPEquiv.admitted "ADD-COMMUTE" := by unfold fp32Rule; decide
 example : fp32Rule FlatVectorAddFPEquiv.admitted "ADD-COMMUTE" := by unfold fp32Rule; decide
 
-theorem log_exp_report_matches :
-    LogAdmission.fp32_log_exp_expm1.report.ruleID = "LOG-EXP-EXPM1" ∧
-    LogAdmission.fp32_log_exp_expm1.report.input = "fp32" ∧
-    LogAdmission.fp32_log_exp_expm1.report.compute = "fp32" ∧
-    LogAdmission.fp32_log_exp_expm1.report.accumulator = "fp32" ∧
-    LogAdmission.fp32_log_exp_expm1.report.output = "fp32" ∧
-    LogAdmission.fp32_log_exp_expm1.guards = VeriTile.Triton.FP.LogExp.guards := by decide
+theorem guarded_log_exp_report_matches :
+    fp32Rule LogAdmission.fp32_log_exp_guarded.report "LOG-EXP-GUARDED" ∧
+    LogAdmission.fp32_log_exp_guarded.guards = VeriTile.Triton.FP.LogExp.guards := by
+  unfold fp32Rule
+  decide
+
+-- The conditional product report is distinct from every log-exp candidate.
+theorem guarded_product_report_matches :
+    fp32Rule LogAdmission.fp32_log_mul_guarded.report "LOG-MUL-GUARDED" ∧
+    LogAdmission.fp32_log_mul_guarded.guards = VeriTile.Triton.FP.LogExp.productGuards := by
+  unfold fp32Rule
+  decide
 
 theorem exponential_report_matches :
     SupplementalAdmission.fp32_exp_sub.report.ruleID = "EXP-SUB" ∧

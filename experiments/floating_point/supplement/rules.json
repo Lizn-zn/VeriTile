@@ -19,9 +19,9 @@
       "category": "two_gates_candidate"
     },
     {
-      "id": "LOG-EXP-EXPM1",
-      "reference": "if abs(a) <= 0.5 then fp32(libdevice.log1p(fp32(libdevice.expm1(a)))) else fp32(libdevice.log(fp32(libdevice.exp(a))))",
-      "candidate": "a",
+      "id": "LOG-EXP-GUARDED",
+      "reference": "fp32(libdevice.log(fp32(libdevice.exp(a))))",
+      "candidate": "if 0.5 < abs(a) <= 80 then a else fp32(libdevice.log(fp32(libdevice.exp(a))))",
       "domain": "finite fp32 a; branch threshold is an implementation choice, not an input filter",
       "operands": ["a"],
       "category": "two_gates_candidate"

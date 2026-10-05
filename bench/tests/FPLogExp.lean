@@ -34,7 +34,7 @@ theorem log_symbols_distinct : (Op.libdeviceLog (.const 1) : Op .real []) ≠ .l
   cases h
 
 private noncomputable def model : Algebra ℚ where
-  literal := fun _ _ r => if r = 0 then 0 else 1 / 2
+  literal := fun _ _ r => if r = 0 then 0 else if r = 80 then 80 else 1 / 2
   negInf := 0
   binary := fun _ _ _ a b => a - b
   unary := fun _ op a => match op with
@@ -64,25 +64,30 @@ set_option maxHeartbeats 1600000 in
 theorem piecewise_execution (a : ℚ) :
     (evalOp model (some .fp32) (FP.LogExp.expression FP.LogExp.input)
       (initial.setReg "a" .real [] (fun _ => a))).map (fun v => v PUnit.unit) =
-      some (if (if a < 0 then -a else a) ≤ 1 / 2 then a + 110 else a + 11000) := by
-  simp [evalOp_unfold, FP.LogExp.expression, FP.LogExp.nearZero,
+      some (if 1 / 2 < (if a < 0 then -a else a) ∧
+        (if a < 0 then -a else a) ≤ 80 then a else a + 11000) := by
+  norm_num [evalOp_unfold, FP.LogExp.expression, FP.LogExp.useIdentity, FP.LogExp.absolute,
     FP.LogExp.input, numeric, numericLt, numericLe,
     State.setReg, bop, model]
-  split <;> split <;> (try simp_all) <;> ring
+  split <;> simp_all <;> ring
 
--- Both signs of the threshold use the small path; exterior inputs use fallback.
+-- Both signs at 0.5 use fallback; moderate exterior inputs return a.
 theorem threshold_branches :
     FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
-        (-(1 / 2)) = 219 / 2 ∧
+        (-(1 / 2)) = 21999 / 2 ∧
     FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
-        (1 / 2) = 221 / 2 ∧
+        (1 / 2) = 22001 / 2 ∧
     FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
-        (-1) = 10999 := by
+        (-1) = -1 ∧
+    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+        80 = 80 ∧
+    FP.LogExp.value model (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
+        90 = 11090 := by
   norm_num [FP.LogExp.value, model]
 
 theorem missing_comparison_fails :
-    evalOp model none (FP.LogExp.nearZero (.const 0)) initial = none := by
-  simp [evalOp_unfold, FP.LogExp.nearZero,
+    evalOp model none (FP.LogExp.useIdentity (.const 0)) initial = none := by
+  simp [evalOp_unfold, FP.LogExp.useIdentity, FP.LogExp.absolute,
     numericLt, numericLe, model]
 
 theorem comparison_default_precision :
@@ -100,19 +105,19 @@ set_option maxHeartbeats 1600000 in
 theorem finite_input_domain (a : ℚ) (B : Nat) :
     (LogExp.FPEquiv.domain "x" B).Holds (LogExp.FPEquiv.engine model)
       (fun _ _ => True) (withInput a) := by
-  simp [FP.Guarded.Precondition.Holds, LogExp.FPEquiv.domain, LogExp.originalKernel,
+  simp [FP.Guarded.Precondition.Holds, LogExp.FPEquiv.domain, LogExp.optimizedKernel,
     ComputeKernel.surfaceBody, run, step, evalExpr, evalComputeOp, evalOp_unfold,
     ComputeDType.eraseDType, LogExp.FPEquiv.engine, Algebra.withDefaultPrecision,
     resolvePrecision, numericLt, numericLe, numeric, bop, model]
 
--- The actual source executes the negative fallback branch and supports in-place
+-- The actual source executes the negative identity branch and supports in-place
 -- writes. Memory outside this tile is preserved, even when input and output alias.
 theorem negative_in_place_kernel :
-    ∃ t, exec (LogExp.FPEquiv.engine model) (LogExp.originalKernel "x" "x" 4)
+    ∃ t, exec (LogExp.FPEquiv.engine model) (LogExp.optimizedKernel "x" "x" 4)
         (withInput (-1)) = some t ∧
-      (∀ i : Fin 4, t.mem "x" i.val = .mk .real 10999) ∧
+      (∀ i : Fin 4, t.mem "x" i.val = .mk .real (-1)) ∧
       t.mem "x" 4 = .mk .real (-1) := by
-  obtain ⟨t, ht, hv, hf⟩ := LogExp.FPEquiv.original_run model
+  obtain ⟨t, ht, hv, hf⟩ := LogExp.FPEquiv.optimized_run model
     (fun a b => decide (a < b)) (fun a b => decide (a ≤ b))
     (by simp [model]) (by simp [model]) "x" "x" 4
     (withInput (-1)) (fun _ => -1) (fun _ => rfl)
@@ -126,21 +131,26 @@ theorem negative_in_place_kernel :
       omega
     exact hf "x" 4 (Or.inr hmiss)
 
--- A real fp32 output conversion cannot disappear from the optimized copy.
-theorem copy_retains_output_cast (a : ℚ) :
+-- The fixed reference retains its fp32 output conversion.
+theorem reference_retains_output_cast (a : ℚ) :
     ∃ t, exec (LogExp.FPEquiv.engine { model with cast := fun _ _ _ x => x + 7 })
-        (LogExp.optimizedKernel "x" "y" 1) (withInput a) = some t ∧
-      t.mem "y" 0 = .mk .real (a + 7) := by
-  obtain ⟨t, ht, hv, _⟩ := LogExp.FPEquiv.optimized_run
+        (LogExp.originalKernel "x" "y" 1) (withInput a) = some t ∧
+      t.mem "y" 0 = .mk .real ((a + 11000) + 7) := by
+  obtain ⟨t, ht, hv, _⟩ := LogExp.FPEquiv.original_run
     { model with cast := fun _ _ _ x => x + 7 }
     "x" "y" 1 (withInput a) (fun _ => a) (fun _ => rfl)
-  exact ⟨t, ht, hv ⟨0, by decide⟩⟩
+  refine ⟨t, ht, ?_⟩
+  have h := hv ⟨0, by decide⟩
+  norm_num [withInput, initial, LogExp.FPEquiv.output, LogExp.FPEquiv.loaded,
+    FP.LogExp.referenceValue, model, add_assoc] at h ⊢
+  exact h
 
 -- The public proof is about both source kernels, with symbolic dimensions.
 open scoped VeriTile.Spec in
-theorem source_kernel_spec (R : FP.LogExp.Rules) (x y : RegionName) (B : Nat) :
+theorem source_kernel_spec (R : FP.LogExp.Rules)
+    (x y : RegionName) (B : Nat) :
     LogExp.FPEquiv.originalIO x y B ≡[R] LogExp.FPEquiv.optimizedIO x y B :=
-  LogExp.FPEquiv.log_exp_expm1_equiv R x y B
+  LogExp.FPEquiv.log_exp_guarded_equiv R x y B
 
 -- Changing the default precision changes the contract, even for identical code.
 theorem precision_is_in_signature (B : Nat) :
@@ -151,7 +161,7 @@ theorem precision_is_in_signature (B : Nat) :
   have hp := congrArg (fun s => s.2.2) h
   cases hp
 
-#axiomsClean LogExp.FPEquiv.log_exp_expm1_equiv
+#axiomsClean LogExp.FPEquiv.log_exp_guarded_equiv
 #axiomsClean FP.LogExp.apply_rule
 #axiomsClean FP.LogExpCounterexample.plain_log_exp_not_identity
 #axiomsClean FP.LogExpCounterexample.singleton_lse_not_exact

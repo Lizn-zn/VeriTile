@@ -14,7 +14,7 @@ SUPPORTED = {
     "MAX-ASSOC", "MAX-IDEM", "MAX-NEG-INF", "EXP-NEG-INF-SUB",
     "EXP-SUB-INTRINSIC", "COUNT-ZERO", "COUNT-SUCCESSOR", "LOG-EXP-LIBDEVICE",
     "LOG-MUL-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE",
-    "LOG-EXP-EXPM1",
+    "LOG-EXP-GUARDED",
     "LOG-MUL-LOG1P", "LOG-MUL-GUARDED",
 }
 
@@ -148,19 +148,20 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = rnd(libdevice.log(rnd(libdevice.exp(a), PRECISION)), PRECISION)
         else:
             out = a
-    elif RULE == "LOG-EXP-EXPM1":
-        tl.static_assert(PRECISION == "fp32", "expm1/log1p probe requires fp32")
+    elif RULE == "LOG-EXP-GUARDED":
+        tl.static_assert(PRECISION == "fp32", "guarded log-exp requires fp32")
         if SIDE == 0:
-            near_zero = tl.abs(a) <= 0.5
-            # tl.where evaluates both arms. Safe unused arguments keep expm1
-            # from saturating to -1 on large negative fallback inputs.
-            small_a = tl.where(near_zero, a, 0.0)
-            other_a = tl.where(near_zero, 0.0, a)
-            small = libdevice.log1p(libdevice.expm1(small_a))
-            other = libdevice.log(libdevice.exp(other_a))
-            out = tl.where(near_zero, small, other)
+            out = libdevice.log(libdevice.exp(a))
         else:
-            out = a
+            simplify = (tl.abs(a) > 0.5) & (tl.abs(a) <= 80.0)
+            # A whole safe block skips both transcendental calls. In mixed
+            # blocks, preserve the original computation on fallback lanes.
+            if tl.sum((mask & ~simplify).to(tl.int32), 0) == 0:
+                out = a
+            else:
+                fallback_a = tl.where(simplify, 0.0, a)
+                fallback = libdevice.log(libdevice.exp(fallback_a))
+                out = tl.where(simplify, a, fallback)
     elif RULE == "MAX-COMMUTE":
         if SIDE == 0:
             out = tl.maximum(a, b)

@@ -77,13 +77,13 @@
       "skipped_samples": 0
     },
     {
-      "rule": "LOG-EXP-EXPM1",
+      "rule": "LOG-EXP-GUARDED",
       "format": "fp32",
       "replicates": 4096,
-      "z": 25775.46399740243,
-      "B": 0.049442810957913065,
+      "z": 28014.76841111653,
+      "B": 0.04578995059123393,
       "tau": 0.05,
-      "U": 0.0,
+      "U": 0.625,
       "bias": "PASS",
       "vars": "PASS",
       "u_kind": "empirical_max",

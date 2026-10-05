@@ -70,27 +70,32 @@ theorem cancellation_allows_negative_finite_inputs :
     Atom.log_exp.lhs.guards = [⟨"a", .finite⟩] ∧
     Atom.log_exp_libdevice.lhs.guards = [⟨"a", .finite⟩] ∧
     Atom.log_exp_full_libdevice.lhs.guards = [⟨"a", .finite⟩] ∧
-    Atom.log_exp_expm1.lhs.guards = [⟨"a", .finite⟩] := ⟨rfl, rfl, rfl, rfl⟩
+    Atom.log_exp_guarded.lhs.guards = [⟨"a", .finite⟩] := ⟨rfl, rfl, rfl, rfl⟩
 
-private def row := LogAdmission.fp32_log_exp_expm1
+private def row := LogAdmission.fp32_log_exp_guarded
+
+theorem guarded_candidate_keeps_the_reference :
+    Atom.log_exp_guarded.lhs = Atom.log_exp_full_libdevice.lhs ∧
+    Atom.log_exp_guarded.lhs = originalLogExp ∧
+    Atom.log_exp_guarded.rhs = piecewiseLogExp := ⟨rfl, rfl, rfl⟩
 
 theorem wrong_precision_is_unavailable :
-    Atom.log_exp_expm1.matches { row with report := { row.report with input := "bf16" } } = Bool.false ∧
-    Atom.log_exp_expm1.matches { row with report := { row.report with compute := "fp64" } } = Bool.false ∧
-    Atom.log_exp_expm1.matches { row with report := { row.report with accumulator := "fp64" } } = Bool.false ∧
-    Atom.log_exp_expm1.matches { row with report := { row.report with output := "bf16" } } = Bool.false := by
+    Atom.log_exp_guarded.matches { row with report := { row.report with input := "bf16" } } = Bool.false ∧
+    Atom.log_exp_guarded.matches { row with report := { row.report with compute := "fp64" } } = Bool.false ∧
+    Atom.log_exp_guarded.matches { row with report := { row.report with accumulator := "fp64" } } = Bool.false ∧
+    Atom.log_exp_guarded.matches { row with report := { row.report with output := "bf16" } } = Bool.false := by
   decide
 
 theorem wrong_relation_or_domain_is_unavailable :
     Atom.log_exp.matches row = Bool.false ∧
     Atom.log_exp_libdevice.matches row = Bool.false ∧
     Atom.log_exp_full_libdevice.matches row = Bool.false ∧
-    Atom.log_exp_expm1.matches { row with guards := [⟨"a", .positive⟩] } = Bool.false := by
+    Atom.log_exp_guarded.matches { row with guards := [⟨"a", .positive⟩] } = Bool.false := by
   decide
 
 theorem selected_piecewise (R : Rules) :
-    [Atom.log_exp_expm1.lhs] ≡[R] [Atom.log_exp_expm1.rhs] :=
-  FP.LogExp.rewrite R .log_exp_expm1 (by decide)
+    [Atom.log_exp_guarded.lhs] ≡[R] [Atom.log_exp_guarded.rhs] :=
+  FP.LogExp.rewrite R .log_exp_guarded (by decide)
 
 #print_fp_assumptions selected_piecewise
 

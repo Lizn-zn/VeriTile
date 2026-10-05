@@ -72,13 +72,13 @@ run_cmd do
     def test_piecewise_branching_precision_and_exact_counterexamples(self):
         self.check_lean((ROOT / 'bench/tests/FPLogExp.lean').read_text())
 
-    def test_piecewise_prints_only_the_used_expression_atom(self):
+    def test_guarded_log_exp_prints_only_its_admitted_rule(self):
         output = self.check_lean('''
 import bench.examples.LogExp.FPEquiv
-#print_fp_assumptions VeriTile.Bench.Examples.LogExp.FPEquiv.log_exp_expm1_equiv
+#print_fp_assumptions VeriTile.Bench.Examples.LogExp.FPEquiv.log_exp_guarded_equiv
 ''')
-        self.assertEqual(output, 'FP assumptions used by log_exp_expm1_equiv:\n'
-                                 '  log_exp_expm1\n')
+        self.assertEqual(output, 'FP assumptions used by log_exp_guarded_equiv:\n'
+                                 '  log_exp_guarded\n')
 
     def test_log_exp_shared_sources_and_independent_proofs(self):
         self.check_lean('''
@@ -91,7 +91,7 @@ example (x y : RegionName) (B : Nat) :
     (Correct.optimizedIO x y B).kernel = (FPEquiv.optimizedIO x y B).io.kernel := rfl
 #axiomsClean Correct.original_correct
 #axiomsClean Correct.optimized_correct
-#axiomsClean FPEquiv.log_exp_expm1_equiv
+#axiomsClean FPEquiv.log_exp_guarded_equiv
 ''')
         for module, forbidden in [
             ('Kernels', ['Correct.originalIO', 'FPEquiv.originalIO']),

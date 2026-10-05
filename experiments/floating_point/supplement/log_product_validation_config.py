@@ -1,6 +1,6 @@
-"""Independent-seed confirmation of both fixed FP32 log-product alternatives.
+"""Independent-seed confirmation of fixed FP32 guarded log rewrites.
 
-The alternate seed and both branch formulas are fixed before inspecting results.
+The alternate seed and branch formulas are fixed before inspecting results.
 """
 PROFILE = {
     "shape": [4096, 4096],
@@ -12,7 +12,7 @@ PROFILE = {
     "formats": [
         {"name": "fp32", "input": "fp32", "compute": "fp32", "accumulator": "fp32", "output": "fp32"},
     ],
-    "rules": ["LOG-MUL", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"],
+    "rules": ["LOG-MUL", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED", "LOG-EXP-GUARDED"],
     "launch": {"block": 1024, "num_warps": 4},
     "gates": {
         "bias": {"tau": 0.05, "se_multiplier": 5.0},

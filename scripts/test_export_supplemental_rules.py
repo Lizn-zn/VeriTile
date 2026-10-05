@@ -103,12 +103,12 @@ class SupplementalExportTests(unittest.TestCase):
         self.assertNotEqual(result.returncode, 0)
         self.assertIn('--trust-report', result.stderr)
 
-    def test_log_report_only_admits_the_distinct_piecewise_expressions(self):
+    def test_log_report_only_admits_guarded_rewrites(self):
         report = exporter.REPORT.parent / 'log_report'
         _, _, rows, _, _ = exporter.load_report(report)
-        self.assertEqual([(r['rule'], r['format']) for r in rows],
-                         [('LOG-EXP-EXPM1', 'fp32'), ('LOG-MUL-GUARDED', 'fp32')])
-        self.assertEqual(exporter.domain('LOG-EXP-EXPM1'), [('a', 'finite')])
+        self.assertEqual({(r['rule'], r['format']) for r in rows},
+                         {('LOG-MUL-GUARDED', 'fp32'), ('LOG-EXP-GUARDED', 'fp32')})
+        self.assertEqual(exporter.domain('LOG-EXP-GUARDED'), [('a', 'finite')])
         self.assertEqual(exporter.domain('LOG-MUL-GUARDED'),
                          [('a', 'finite'), ('b', 'finite'), ('a', 'positive'), ('b', 'positive')])
         text = exporter.render(report, 'LogAdmission')
@@ -120,8 +120,8 @@ class SupplementalExportTests(unittest.TestCase):
 
         validation = exporter.REPORT.parent / 'log_product_validation_report'
         _, _, confirmed, _, _ = exporter.load_report(validation)
-        self.assertEqual([(r['rule'], r['format']) for r in confirmed],
-                         [('LOG-MUL-GUARDED', 'fp32')])
+        self.assertEqual({(r['rule'], r['format']) for r in confirmed},
+                         {('LOG-MUL-GUARDED', 'fp32'), ('LOG-EXP-GUARDED', 'fp32')})
 
     def test_invalid_namespace_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'identifier'):

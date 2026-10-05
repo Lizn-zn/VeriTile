@@ -35,7 +35,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | mHC width | `HyperConnectionsWidth/Correct.lean` — checked for original and optimized sources, original rank-one/zero-iteration scope | `HyperConnectionsWidth/FPEquiv.lean` — checked in the same scope; two multiplication commutations |
 | Adam-named Lion update | `AdamUpdateGridLaunch/Correct.lean` — checked for both sources per program; original grid proofs retained | `AdamUpdateGridLaunch/FPEquiv.lean` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStable/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxStable/FPEquiv.lean` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
-| Piecewise log-exp | `LogExp/Correct.lean` — checked for the original and copy kernels against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted masked libdevice log-exp/expm1 atom |
+| Guarded log-exp | `LogExp/Correct.lean` — checked for the fixed reference and guarded candidate against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted conditional log_exp_guarded atom |
 | Stable logsumexp | `StableLogSumExp/Correct.lean` — checked for both original kernels against logsumexp | Direct versus stable libdevice kernels: EXP-SUB connected; fp32 LOG-MUL and `tl.log(libdevice.exp(a)) = a` still need admission |
 | Softmax reciprocal | `SoftmaxReciprocal/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxReciprocal/FPEquiv.lean` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
 | Float dtype softmax | `FloatDTypeSoftmax/Correct.lean` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmax/FPEquiv.lean` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
@@ -114,10 +114,12 @@ variants in `experiments/floating_point/supplement/log_product_config.py`
 completed on H200: LOG-MUL is bias-INCONCLUSIVE and LOG-EXP-LIBDEVICE is
 bias-REJECT. Both variants have identical observations and PTX after removing
 source-location directives under the recorded Triton 3.7.1 configuration.
-None supplies the missing admission. The same profile also tests a new fp32
-piecewise expression: log1p(expm1(a)) for abs(a)<=0.5, otherwise log(exp(a)).
-It passes with B=0.0494428110 and U=0, but changes the operation and cannot
-justify the original log-exp premise. The conditional log-product candidate
+None supplies the missing unconditional admission. LOG-EXP-GUARDED keeps
+`libdevice.log(libdevice.exp(a))` as reference and returns `a` only for
+`0.5 < abs(a) <= 80`; its fallback is the original computation. Both seeds pass
+(B=0.04578995059 / 0.04579159812, U=0.625 / 0.625).
+The branch is retained in the Lean candidate and cannot justify unconditional
+log-exp cancellation. The conditional log-product candidate
 also passes under two seeds (B=0.0006248690 / 0.0006251552), retaining the
 product log when `0.5<=fp32(a*b)<=2` and splitting it elsewhere. This does
 not justify the unconditional log-product premise. It is available in the Lean
@@ -238,13 +240,14 @@ The checks cover:
   fourteen fp32 kernel specializations compile for sm_90. All seven cases completed
   4096 H200 replicates with identical independent CPU replay; LOG-MUL and its
   libdevice.log variant remain bias-INCONCLUSIVE, while LOG-EXP-LIBDEVICE and
-  its libdevice.log variant are bias-REJECT. The added piecewise expm1/log1p
-  expression passes, but does not admit the original operation. Fifteen GPU
-  boundary inputs check small values, branch neighbors, fallback and overflow.
-  Three product cases also completed 4096 replicates with an independent seed
-  and matching CPU replay. The conditional product candidate passes both seeds;
-  the FMA/log1p reference variant remains inconclusive. Sixteen additional GPU
-  fixtures check product branch boundaries and retained numerical events.
+  its libdevice.log variant are bias-REJECT. The guarded log-exp candidate
+  passes both seeds with its original reference unchanged. Twenty-five GPU
+  boundary inputs check branch endpoints, tiny values and extreme tails.
+  Four confirmation cases completed 4096 replicates with an independent seed
+  and matching CPU replay. The guarded product candidate also passes both seeds;
+  the FMA/log1p reference variant remains inconclusive. Sixteen product fixtures
+  check branch boundaries and retained numerical events. The standalone guarded
+  log-exp timings do not show a speedup.
   CPU tests retain negative log-exp inputs and reject
   nonfinite outputs on valid inputs, and existing admission tables remain
   byte-for-byte reproducible from their frozen reports.

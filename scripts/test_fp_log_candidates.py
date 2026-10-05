@@ -34,7 +34,7 @@ class LogCandidateTests(unittest.TestCase):
 
     def test_syntax_domains_precision_and_conditional_reuse(self):
         output = self.check((ROOT / 'bench/tests/FPLogCandidates.lean').read_text())
-        self.assertIn('FP assumptions used by selected_piecewise:\n  log_exp_expm1\n', output)
+        self.assertIn('FP assumptions used by selected_piecewise:\n  log_exp_guarded\n', output)
         self.assertIn('FP assumptions used by selected_product_split:\n  log_mul_split\n', output)
         self.assertNotIn('  log_mul_guarded\n', output)
         self.assertNotIn('unresolved FP proof', output)
@@ -57,7 +57,7 @@ open VeriTile.Triton.FP.LogExp
         accepted = {r['rule'] for r in report['rows'] if r['format'] == 'fp32' and r['accept']}
         self.assertEqual(set(selected), accepted - EXPERIMENT_ONLY)
         self.assertEqual(accepted & EXPERIMENT_ONLY, set())
-        self.assertEqual(set(selected), {'LOG-EXP-EXPM1', 'LOG-MUL-GUARDED'})
+        self.assertEqual(set(selected), {'LOG-EXP-GUARDED', 'LOG-MUL-GUARDED'})
 
     def test_product_execution_branches_and_domains(self):
         self.check((ROOT / 'bench/tests/FPLogProduct.lean').read_text())
