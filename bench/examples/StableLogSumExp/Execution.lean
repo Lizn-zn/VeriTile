@@ -5,6 +5,8 @@ That intrinsic relation failed admission; the libdevice EXP-SUB instance passed.
 /- Original direct and stable logsumexp execution under opaque FP operations.
 The source's scalar output address and bf16 conversion remain explicit. -/
 import bench.examples.SoftmaxStable.Execution
+import VeriTile.Triton.Float.ScheduledIO
+import VeriTile.Triton.Float.LogSumExpCandidate
 
 namespace VeriTile.Bench.Examples.StableLogSumExpFPExecution
 open VeriTile.Bench.Examples.StableLogSumExp.Kernels
@@ -63,5 +65,55 @@ def stableIO (x y : RegionName) (B : Nat) : KernelIO₁ :=
 
 theorem same_signature (x y : RegionName) (B : Nat) :
     io₁Signature (directIO x y B) = io₁Signature (stableIO x y B) := rfl
+
+/- Execution of the conditional candidate under the same fp32 reduction
+profile. Comparison support is explicit; neither branch outcome is assumed. -/
+noncomputable section Candidate
+open _root_.VeriTile.Triton.FP.Equational (Schedules)
+set_option maxHeartbeats 2400000
+set_option maxRecDepth 8000
+
+def candidateValue {α : Type} (M : Algebra α) (plans : Schedules)
+    (lt le : α → α → Bool) (xs : Fin B → α) : α :=
+  let engine := FP.Scheduled.fp32.algebra M plans
+  M.cast (some .fp32) .real .bf16 (FP.LogSumExpCandidate.finish M lt le
+    (rowSum engine (shifted engine xs)) (maximum engine xs))
+
+private theorem half_eq : (0.5 : ℝ) = 1 / 2 := by norm_num
+private theorem two_eq : (2.0 : ℝ) = 2 := by norm_num
+private theorem upper_eq : (80.0 : ℝ) = 80 := by norm_num
+private theorem zero_eq : (0.0 : ℝ) = 0 := by norm_num
+private theorem one_eq : (1.0 : ℝ) = 1 := by norm_num
+
+theorem candidate_run {α : Type} [Inhabited α] (M : Algebra α)
+    (plans : Schedules) (lt le : α → α → Bool)
+    (hlt : M.compareLt (some .fp32) .real = some lt)
+    (hle : M.compareLe (some .fp32) .real = some le)
+    (x y : RegionName) (B : Nat) (hB : 0 < B) (xs : Fin B → α) (s : State α)
+    (hx : ∀ i : Fin B, (s.mem x (s.pids 0 * B + i.val)).read .real = xs i) :
+    ∃ t, FP.Structural.exec (FP.Scheduled.fp32.algebra M plans) (candidateLSEKernel x y B) s = some t ∧
+      t.mem y (s.pids 0) = .mk .bf16 (candidateValue M plans lt le xs) ∧
+      (∀ r o, (r ≠ y ∨ o ≠ s.pids 0) → t.mem r o = s.mem r o) := by
+  let E := FP.Scheduled.fp32.algebra M plans
+  have hlt' : E.compareLt none .real = some lt := hlt
+  have hle' : E.compareLe none .real = some le := hle
+  change ∃ t, FP.Structural.exec E (candidateLSEKernel x y B) s = some t ∧ _
+  simp [candidateLSEKernel, FP.Structural.exec, run, step, evalExpr, evalOp_unfold,
+    numeric, numericLt, numericLe, FP.Structural.bop, store, State.write, TileShape.allIndices,
+    TileShape.axisDim, TileShape.eraseAxis, hB, Region.cast, ofFloat, toFloat,
+    hx, hlt', hle']
+  refine ⟨?_, ?_⟩
+  · simp [candidateValue, FP.LogSumExpCandidate.finish, FP.LogExp.value,
+      E, FP.Scheduled.Profile.algebra, FP.Scheduled.fp32, FP.ScalarReduction.algebra,
+      Algebra.withDefaultPrecision, resolvePrecision, shifted, maximum, rowSum,
+      FP.Structural.bop, Function.comp_def,
+      half_eq, two_eq, upper_eq, zero_eq, one_eq]
+  · intro r o hmiss hr ho
+    exact (hmiss.elim (fun h => h hr) (fun h => h ho)).elim
+
+def candidateIO (x y : RegionName) (B : Nat) : KernelIO₁ :=
+  { directIO x y B with kernel := candidateLSEKernel x y B, projection := by rfl }
+
+end Candidate
 
 end VeriTile.Bench.Examples.StableLogSumExpFPExecution

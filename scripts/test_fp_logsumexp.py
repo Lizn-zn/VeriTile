@@ -72,6 +72,9 @@ run_cmd do
     def test_piecewise_branching_precision_and_exact_counterexamples(self):
         self.check_lean((ROOT / 'bench/tests/FPLogExp.lean').read_text())
 
+    def test_logsumexp_candidate_branches_casts_and_source_binding(self):
+        self.check_lean((ROOT / 'bench/tests/FPLogSumExpCandidate.lean').read_text())
+
     def test_log_exp_prints_only_its_elimination_rule(self):
         output = self.check_lean('''
 import bench.examples.LogExp.FPEquiv

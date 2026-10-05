@@ -1,11 +1,19 @@
 # Remaining FP example prerequisites
 
-The migration has 18 real correctness files and 17 FP equivalence files.
+The migration has 19 real correctness files and 18 completed FP equivalence files.
 The current main and supplemental reports select numerical assumptions using
 a local-ULP mean-bias budget and a peak absolute-error ratio gate.
 The reciprocal softmax cases retain their explicit operand domains. RowWiseSum
 binds its conditional derivation to the admitted fp32 ADD-COMMUTE and ADD-ASSOC
 instances. StableLogSumExp is the remaining incomplete transformation.
+
+Its `candidateLSEKernel` now composes `log_mul_split` and `log_exp_elim`,
+including their product/center thresholds and inactive-argument masks. The
+candidate has an independent real correctness proof. The scalar composition
+is derived in `Float/LogSumExpCandidate.finish_eq`; it uses no unconditional
+log identity. The original direct reference uses `tl.log`, while these atoms
+use `libdevice.log`. Completing a source-pair FP certificate therefore still
+requires an admitted intrinsic bridge or an explicitly revised reference.
 
 ## Current primitive experiment results
 
