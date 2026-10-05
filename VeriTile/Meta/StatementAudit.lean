@@ -367,13 +367,20 @@ private def shortSpecName : Name → String
   | .str _ name => name
   | name => name.toString
 
+/-- Reader-facing names can differ from frozen experiment identifiers.
+This affects only the concise display; contracts and detailed reports retain
+their original identity. -/
+private def fpAtomName (id : String) : String :=
+  if id == "LOG-MUL-GUARDED" then "log_mul_split"
+  else id.toLower.replace "-" "_"
+
 private def printFPAtom (entry : Expr) (details : Bool := false) : MetaM Unit := do
   let rule ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.rule #[entry]
   let contract ← Meta.mkAppM ``VeriTile.Spec.AtomicRule.contract #[rule]
   let id ← specString? ``VeriTile.Spec.Contract.ruleID contract
   unless details do
     match id with
-    | some id => logInfo m!"  {id.toLower.replace "-" "_"}"
+    | some id => logInfo m!"  {fpAtomName id}"
     | none => logInfo m!"  {← Meta.ppExpr entry} [symbolic atom]"
     return
   let evidence ← Meta.mkAppM ``VeriTile.Spec.RuleEntry.evidence #[entry]

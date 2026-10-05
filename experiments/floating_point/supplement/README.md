@@ -102,7 +102,8 @@ LOG-EXP-LIBDEVICE 的平均偏差为 -0.6804358853 local ULP，五个标准误�
 以及最初 32 批采样的分支统计：43.6002% 的有效输入保留乘积路径，56.3998%
 仍使用两个 log 相加。原式在保留区间观察到 33,554,432 ULP 的单元素差值；
 区间外的观察最大值只有 4 ULP。这些诊断不代替正式准入实验。
-条件式不修改输入掩码，也不证明可以无条件拆分 log；未更改 Lean 原子绑定。
+条件式不修改输入掩码，也不证明可以无条件拆分 log；Lean 中以独立原子
+`log_mul_split` 保留该条件表达式。
 
 原 LOG-MUL 仍未准入，原 StableLogSumExp 实现的 log-exp 前提也未满足，
 因此 StableLogSumExp 仍未完成。
@@ -113,7 +114,9 @@ LOG-EXP-LIBDEVICE 的平均偏差为 -0.6804358853 local ULP，五个标准误�
 [`LogAdmission.lean`](../../../VeriTile/Triton/Float/LogAdmission.lean)，
 原子绑定位于 [`LogExp.lean`](../../../VeriTile/Triton/Float/LogExp.lean)。独立表包含
 `fp32_log_exp_expm1` 与 `fp32_log_mul_guarded` 两项；条件式乘积的数据保留正有限输入、
-FP32 精度和 `0.5 <= fp32(a*b) <= 2` 的分支表达式，尚未接入 Lean 原子绑定。
+FP32 精度和 `0.5 <= fp32(a*b) <= 2` 的分支表达式，绑定为 `Atom.log_mul_split`。
+默认假设打印也使用 `log_mul_split`，实验报告仍保留 `LOG-MUL-GUARDED` 标识。
+未选路径的 log 参数仍先置为 `1`。未准入的 FMA/log1p 候选尚未接入 Lean。
 已绑定的 `log_exp_expm1` 保留 fp32 精度、有限输入定义域、`abs(a) <= 0.5`
 及未选分支传零的源表达式。`libdevice.log`、`libdevice.expm1`、
 `libdevice.log1p` 都是独立的 FP 运算符，不会和 `tl.log` 混用。

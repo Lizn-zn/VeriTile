@@ -120,7 +120,10 @@ It passes with B=0.0494428110 and U=0, but changes the operation and cannot
 justify the original log-exp premise. The conditional log-product candidate
 also passes under two seeds (B=0.0006248690 / 0.0006251552), retaining the
 product log when `0.5<=fp32(a*b)<=2` and splitting it elsewhere. This does
-not justify the unconditional log-product premise. See the [current log report](../experiments/floating_point/supplement/log_report/summary.md).
+not justify the unconditional log-product premise. It is available in the Lean
+candidate catalog as `log_mul_split`, preserving the complete conditional
+expression and the original report identifier `LOG-MUL-GUARDED`. See the
+[current log report](../experiments/floating_point/supplement/log_report/summary.md).
 
 The current `Spec.Derivation` supports atoms, symmetry, transitivity and common
 sequential context. A `ProgramSyntax` view may additionally enable independently

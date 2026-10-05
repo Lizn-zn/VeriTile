@@ -106,8 +106,12 @@ and overflow; all tested kernels retain FP32 arithmetic. Diagnostics on the
 first 32 paired draws retain the product expression for 43.6002% of valid
 tuples and split logs for 56.3998%. Large local-ULP differences occur near a
 product of one. These diagnostics do not replace the full two-gates runs.
+The accepted conditional expression is bound as `FP.LogExp.Atom.log_mul_split`,
+with fp32 comparisons, both closed endpoints and inactive log arguments masked
+to one. Its scalar application theorem retains this branch. The report identity
+remains `LOG-MUL-GUARDED`; the concise assumption printer uses `log_mul_split`.
 Neither new rule supplies the unconditional log-product premise required by
-the existing proof; no Lean admission binding was changed.
+the existing proof. The FMA/log1p probe remains experiment-only and unadmitted.
 
 StableLogSumExp therefore remains incomplete. See the
 [current log report](../experiments/floating_point/supplement/log_report/summary.md)

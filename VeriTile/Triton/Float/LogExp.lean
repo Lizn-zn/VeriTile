@@ -8,8 +8,8 @@ Each candidate specifies its exact intrinsics, operand domain and two scalar
 fragments. Defining a candidate supplies no numerical equality.
 
 The generated LogAdmission table selects which candidates can be used as
-assumptions. The current log report selects only the masked LOG-EXP-EXPM1
-relation; the other candidates remain defined without being enabled. Refreshing
+assumptions. The current log report selects the masked log_exp_expm1 and
+conditional log_mul_split relations; other candidates remain disabled. Refreshing
 the report changes availability, not the candidate definitions. Kernel
 implementations and their separate specifications are in bench/examples/LogExp/.
 -/
@@ -22,7 +22,7 @@ open scoped VeriTile.Spec
 /-- Candidate names describe exact implementations, including rejected or
 inconclusive relations. All fragments in this catalog compute in fp32. -/
 inductive Atom where
-  | log_mul | log_mul_libdevice
+  | log_mul | log_mul_libdevice | log_mul_split
   | log_exp | log_exp_libdevice | log_exp_full_libdevice | log_exp_expm1
   deriving DecidableEq, Repr
 
@@ -34,6 +34,12 @@ def Atom.ruleID : Atom → String
   | .log_mul => "LOG-MUL"
   -- libdevice.log(a * b) → libdevice.log(a) + libdevice.log(b); same positive domain.
   | .log_mul_libdevice => "LOG-MUL-LIBDEVICE"
+  -- libdevice.log(p) → if 0.5 ≤ p ≤ 2 then libdevice.log(p)
+  -- else libdevice.log(a) + libdevice.log(b), where p = fp32(a*b).
+  -- Finite positive a,b; the interval chooses an implementation, not a domain.
+  -- Both branches evaluate with unused log arguments masked to one.
+  -- Keep the frozen experiment identifier when naming the Lean candidate.
+  | .log_mul_split => "LOG-MUL-GUARDED"
   -- tl.log(tl.exp(a)) → a; any finite a, including negative values.
   | .log_exp => "LOG-EXP"
   -- tl.log(libdevice.exp(a)) → a; any finite a. Only exp uses libdevice.
@@ -45,7 +51,7 @@ def Atom.ruleID : Atom → String
   -- Both branches evaluate, with the inactive branch's argument masked to zero.
   | .log_exp_expm1 => "LOG-EXP-EXPM1"
 
-def candidates : List Atom := [.log_mul, .log_mul_libdevice, .log_exp,
+def candidates : List Atom := [.log_mul, .log_mul_libdevice, .log_mul_split, .log_exp,
   .log_exp_libdevice, .log_exp_full_libdevice, .log_exp_expm1]
 
 /-- Both fragments require the same finite input register `a`. -/
@@ -67,6 +73,22 @@ def expression (a : Op .real []) : Op .real [] :=
   let other := .libdeviceLog (.libdeviceExp other_a)
   .where near small other
 
+/-- Test the rounded fp32 product, including both endpoints. -/
+def keepProduct (p : Op .real []) : Op .bool [] :=
+  .boolAnd .nil (.ge .real .nil p (.const (1 / 2))) (.le .real .nil p (.const 2))
+
+/-- The measured product-log candidate. Every log is libdevice.log. Keep the
+original product log near one; elsewhere split the two logs. Mask arguments
+before evaluating either arm, exactly as in the Triton experiment. -/
+def splitProduct (a b : Op .real []) : Op .real [] :=
+  let p := .mul .real .nil a b
+  let keep := keepProduct p
+  let direct := .libdeviceLog (.where keep p (.const 1))
+  let split := .add .real .nil
+    (.libdeviceLog (.where keep (.const 1) a))
+    (.libdeviceLog (.where keep (.const 1) b))
+  .where keep direct split
+
 /-- Read one scalar register. `[]` is the scalar tile shape. -/
 def input : Op .real [] := .ref .real [] "a"
 
@@ -87,7 +109,7 @@ def productGuards : List OperandGuard :=
   [⟨"a", .finite⟩, ⟨"b", .finite⟩, ⟨"a", .positive⟩, ⟨"b", .positive⟩]
 
 def Atom.guards : Atom → List OperandGuard
-  | .log_mul | .log_mul_libdevice => productGuards
+  | .log_mul | .log_mul_libdevice | .log_mul_split => productGuards
   | .log_exp | .log_exp_libdevice | .log_exp_full_libdevice | .log_exp_expm1 =>
       VeriTile.Triton.FP.LogExp.guards
 
@@ -98,17 +120,18 @@ The tl.exp variant remains a candidate; its identity cannot be substituted
 for libdevice.exp when selecting a report. -/
 def Atom.lhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a with
   | .log_mul => .log (.mul .real .nil input secondInput)
-  | .log_mul_libdevice => .libdeviceLog (.mul .real .nil input secondInput)
+  | .log_mul_libdevice | .log_mul_split => .libdeviceLog (.mul .real .nil input secondInput)
   | .log_exp => .log (.exp input)
   | .log_exp_libdevice => .log (.libdeviceExp input)
   | .log_exp_full_libdevice => .libdeviceLog (.libdeviceExp input)
   | .log_exp_expm1 => expression input)⟩
 
-/-- Product rules propose the sum of the corresponding logs; cancellation
-rules propose the original input. Operand guards are retained on both sides. -/
+/-- Product rules propose either unconditional or conditional splitting;
+cancellation rules propose the input. Both fragments retain their guards. -/
 def Atom.rhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a with
   | .log_mul => .add .real .nil (.log input) (.log secondInput)
   | .log_mul_libdevice => .add .real .nil (.libdeviceLog input) (.libdeviceLog secondInput)
+  | .log_mul_split => splitProduct input secondInput
   | .log_exp | .log_exp_libdevice | .log_exp_full_libdevice | .log_exp_expm1 => input)⟩
 
 /-- Match an accepted report to the candidate's exact fp32 profile and domain.
@@ -208,6 +231,48 @@ theorem apply_rule {α : Type} [Inhabited α] (R : Rules)
     ComputeDType.eraseDType, numeric, numericLt, numericLe, hlt, hle,
     State.setReg_same, t] at h
   simp [State.setReg, bop, value] at h ⊢
+  exact congrFun h PUnit.unit
+
+/-- Interpret the conditional product expression with exact fp32 operation
+labels. The masked, unused log arguments remain part of this definition. -/
+def splitProductValue {α : Type} (M : Algebra α) (le : α → α → Bool) (a b : α) : α :=
+  let p := M.binary (some .fp32) .real .mul a b
+  let one := M.literal (some .fp32) .real 1
+  let keep := le (M.literal (some .fp32) .real (1 / 2)) p &&
+    le p (M.literal (some .fp32) .real 2)
+  let direct := M.unary (some .fp32) .libdeviceLog (if keep then p else one)
+  let split := M.binary (some .fp32) .real .add
+    (M.unary (some .fp32) .libdeviceLog (if keep then one else a))
+    (M.unary (some .fp32) .libdeviceLog (if keep then one else b))
+  if keep then direct else split
+
+set_option maxHeartbeats 1600000 in
+/-- Apply the selected scalar relation to actual positive finite operands.
+The conclusion keeps the product-dependent branch; unconditional splitting
+does not follow. Successful fp32 comparisons are required explicitly. -/
+theorem apply_log_mul_split {α : Type} [Inhabited α] (R : Rules)
+    (selected : Atom.log_mul_split.Available)
+    (M : Algebra α) (D : Domain α) (hM : Models R.assumptions M D)
+    (s : State α) (le : α → α → Bool)
+    (hle : M.compareLe (some .fp32) .real = some le)
+    (a b : α) (ha : D .finite a) (hb : D .finite b)
+    (hpa : D .positive a) (hpb : D .positive b) :
+    M.unary (some .fp32) .libdeviceLog (M.binary (some .fp32) .real .mul a b) =
+      splitProductValue M le a b := by
+  let t := (s.setReg "a" .real [] (fun _ => a)).setReg "b" .real [] (fun _ => b)
+  have hg : ScalarDomain D productGuards t := by
+    intro g hg
+    simp [productGuards] at hg
+    rcases hg with rfl | rfl | rfl | rfl
+    · exact ⟨fun _ => a, by simp [t, State.setReg], ha⟩
+    · exact ⟨fun _ => b, by simp [t, State.setReg], hb⟩
+    · exact ⟨fun _ => a, by simp [t, State.setReg], hpa⟩
+    · exact ⟨fun _ => b, by simp [t, State.setReg], hpb⟩
+  have h := hM _ _ (derive R .log_mul_split selected) t hg hg
+  simp only [Atom.lhs, Atom.rhs, assignOutput, run, step, evalExpr,
+    evalComputeOp, evalOp_unfold, splitProduct, keepProduct, input, secondInput,
+    ComputeDType.eraseDType, numeric, numericLe, hle, t] at h
+  simp [State.setReg, bop, splitProductValue] at h ⊢
   exact congrFun h PUnit.unit
 
 end VeriTile.Triton.FP.LogExp

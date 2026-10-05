@@ -18,6 +18,10 @@ def expressions : ComputeKernel := triton {
   out := tl.log(libdevice.exp(a))
   out := libdevice.log(libdevice.exp(a))
   out := a
+  out := tl.where((a * b >= 0.5) & (a * b <= 2.0),
+    libdevice.log(tl.where((a * b >= 0.5) & (a * b <= 2.0), a * b, 1.0)),
+    libdevice.log(tl.where((a * b >= 0.5) & (a * b <= 2.0), 1.0, a)) +
+      libdevice.log(tl.where((a * b >= 0.5) & (a * b <= 2.0), 1.0, b)))
 }
 
 def fragmentAt (i : Nat) : List ComputeStmt := expressions.surfaceBody[i]?.toList
@@ -29,6 +33,20 @@ theorem intrinsic_product_syntax :
 theorem libdevice_product_syntax :
     Atom.log_mul_libdevice.lhs.code = fragmentAt 4 ∧
     Atom.log_mul_libdevice.rhs.code = fragmentAt 5 := ⟨rfl, rfl⟩
+
+-- The DSL leaves the outer where expression untagged. Its enclosing fp32
+-- profile is checked against the actual assignments in FPLogProduct.lean.
+theorem conditional_product_syntax :
+    Atom.log_mul_split.lhs.code = fragmentAt 4 ∧
+    [.assign .real [] "out" (.alg (splitProduct input secondInput))] = fragmentAt 10 := by
+  have half : (0.5 : ℝ) = 1 / 2 := by norm_num
+  have one : (1.0 : ℝ) = 1 := by norm_num
+  have two : (2.0 : ℝ) = 2 := by norm_num
+  constructor
+  · rfl
+  · simp only [splitProduct, keepProduct, input, secondInput,
+      fragmentAt, expressions, ComputeKernel.surfaceBody, half, one, two]
+    rfl
 
 theorem cancellation_intrinsics :
     Atom.log_exp.lhs.code = fragmentAt 6 ∧
@@ -45,7 +63,8 @@ theorem candidate_domains (a : Atom) : a.lhs.guards = a.rhs.guards := by
 theorem product_needs_positive_inputs :
     Atom.log_mul.lhs.guards =
       [⟨"a", .finite⟩, ⟨"b", .finite⟩, ⟨"a", .positive⟩, ⟨"b", .positive⟩] ∧
-    Atom.log_mul_libdevice.lhs.guards = Atom.log_mul.lhs.guards := ⟨rfl, rfl⟩
+    Atom.log_mul_libdevice.lhs.guards = Atom.log_mul.lhs.guards ∧
+    Atom.log_mul_split.lhs.guards = Atom.log_mul.lhs.guards := ⟨rfl, rfl, rfl⟩
 
 theorem cancellation_allows_negative_finite_inputs :
     Atom.log_exp.lhs.guards = [⟨"a", .finite⟩] ∧
@@ -75,6 +94,29 @@ theorem selected_piecewise (R : Rules) :
 
 #print_fp_assumptions selected_piecewise
 
+theorem selected_product_split (R : Rules) :
+    [Atom.log_mul_split.lhs] ≡[R] [Atom.log_mul_split.rhs] :=
+  FP.LogExp.rewrite R .log_mul_split (by decide)
+
+#print_fp_assumptions selected_product_split
+
+-- Renaming the public atom keeps the original experimental identity and all
+-- four precision fields. A conditional report cannot select a plain log rule.
+private def productRow := LogAdmission.fp32_log_mul_guarded
+
+theorem split_report_identity_and_selection :
+    Atom.log_mul_split.ruleID = "LOG-MUL-GUARDED" ∧
+    Atom.log_mul_split.matches productRow = Bool.true ∧
+    Atom.log_mul.matches productRow = Bool.false ∧
+    Atom.log_mul_libdevice.matches productRow = Bool.false := by decide
+
+theorem split_wrong_precision_or_domain :
+    Atom.log_mul_split.matches { productRow with report := { productRow.report with input := "bf16" } } = Bool.false ∧
+    Atom.log_mul_split.matches { productRow with report := { productRow.report with compute := "fp64" } } = Bool.false ∧
+    Atom.log_mul_split.matches { productRow with report := { productRow.report with accumulator := "fp64" } } = Bool.false ∧
+    Atom.log_mul_split.matches { productRow with report := { productRow.report with output := "bf16" } } = Bool.false ∧
+    Atom.log_mul_split.matches { productRow with guards := [] } = Bool.false := by decide
+
 -- A reusable conditional theorem can be written before this candidate passes.
 theorem log_mul_when_selected (R : Rules) (h : Atom.log_mul.Available) :
     [Atom.log_mul.lhs] ≡[R] [Atom.log_mul.rhs] :=
@@ -82,6 +124,8 @@ theorem log_mul_when_selected (R : Rules) (h : Atom.log_mul.Available) :
 
 #axiomsClean FP.LogExp.derive
 #axiomsClean FP.LogExp.rewrite
+#axiomsClean FP.LogExp.apply_log_mul_split
+#axiomsClean selected_product_split
 #axiomsClean log_mul_when_selected
 
 end FPLogCandidatesTests

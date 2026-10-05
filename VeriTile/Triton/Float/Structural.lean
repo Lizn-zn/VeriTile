@@ -354,6 +354,9 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .le h bc a b, s => do
       let f ← numericLe M p h
       return bop f bc (← evalOp M p a s) (← evalOp M p b s)
+  | .ge h bc a b, s => do
+      let f ← numericLe M p h
+      return bop (fun a b => f b a) bc (← evalOp M p a s) (← evalOp M p b s)
   | .ptrBase r, _ => some (fun _ => (Region.cast r, 0))
   | .ptrAdd bc a b, s => return bop (fun (a : RegionName × Nat) (b : Nat) => (a.1, a.2 + b)) bc (← evalOp M p a s) (← evalOp M p b s)
   | .where c a b, s => do
@@ -397,7 +400,6 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .shiftRight .., _ => none
   | .eq .., _ => none
   | .gt .., _ => none
-  | .ge .., _ => none
   | .ne .., _ => none
   | .reduceMaxNat .., _ => none
   | .scan .., _ => none
