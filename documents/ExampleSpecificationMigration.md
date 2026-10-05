@@ -122,13 +122,15 @@ None supplies the missing unconditional admission. LOG-EXP-GUARDED keeps
 The branch is retained in the Lean candidate and cannot justify unconditional
 log-exp cancellation. All ordinary-log relations now have independently measured
 tl.log and libdevice.log versions, with both exp implementations covered by the
-unconditional controls. The conditional log-product candidate
+unconditional and guarded candidates. The conditional log-product candidate
 also passes under two seeds (B=0.0006248690 / 0.0006251552), retaining the
 product log when `0.5<=fp32(a*b)<=2` and splitting it elsewhere. This does
 not justify the unconditional log-product premise. It is available in the Lean
 candidate catalog as `log_mul_split .libdevice` and `log_mul_split .tl`, each
 preserving its complete expression and frozen report identifier. The same
-backend parameter selects `log_exp_cancel`. The conditional logsumexp proof
+log parameter selects `log_exp_cancel log exp`, whose exp parameter defaults to
+`.libdevice`. The two guarded tl.exp candidates fail the bias budget under both
+seeds; the existing libdevice.exp candidates remain admitted. The conditional logsumexp proof
 uses the two tl.log variants without changing the direct reference.
 Its scheduled IO contract explicitly requires fp32 comparison support;
 this specifies available operations, not a branch outcome or numerical law. See the
@@ -243,19 +245,21 @@ The checks cover:
   and independent comparator checking of 43 theorem targets across its view,
   execution contract, public specification and boundary fixture. Regressions
   check its eleven printed scalar atoms, source independence, missing-register
-  failure, aliased readback and both memory frames. The paired log profile's
-  twenty-four fp32 kernel specializations compile for sm_90. All twelve log
+  failure, aliased readback and both memory frames. The paired log and exp profiles
+  compile forty fp32 kernel specializations for sm_90. All twenty log/exp
   implementation cases completed
   4096 H200 replicates with identical independent CPU replay; LOG-MUL and its
   libdevice.log variant remain bias-INCONCLUSIVE, while LOG-EXP-LIBDEVICE and
-  its libdevice.log variant are bias-REJECT. The guarded log-exp candidate
-  passes both seeds with its original reference unchanged. Twenty-five GPU
+  its libdevice.log variant are bias-REJECT. The guarded log-exp candidates using libdevice.exp
+  pass both seeds with their own references unchanged; both tl.exp variants
+  fail the bias budget. Twenty-five GPU
   boundary inputs check branch endpoints, tiny values and extreme tails.
-  Twelve confirmation cases completed 4096 replicates with an independent seed
+  Twenty confirmation cases completed 4096 replicates with an independent seed
   and matching CPU replay. The guarded product candidate also passes both seeds;
   the FMA/log1p reference variant remains inconclusive. Sixteen product fixtures
   check branch boundaries and retained numerical events. The standalone guarded
-  log-exp mixed-workload timings remain slower for both log implementations.
+  log-exp timings are reported separately for all four intrinsic combinations;
+  numerical acceptance is not a performance claim.
   CPU tests retain negative log-exp inputs and reject
   nonfinite outputs on valid inputs, and existing admission tables remain
   byte-for-byte reproducible from their frozen reports.

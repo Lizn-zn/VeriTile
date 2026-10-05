@@ -25,13 +25,17 @@ theorem reference_matrix :
 theorem each_guarded_reference_is_unchanged :
     (Atom.log_exp_cancel .tl).lhs = (Atom.log_exp .tl .libdevice).lhs ∧
     (Atom.log_exp_cancel .libdevice).lhs = (Atom.log_exp .libdevice .libdevice).lhs ∧
+    (Atom.log_exp_cancel .tl .tl).lhs = (Atom.log_exp .tl .tl).lhs ∧
+    (Atom.log_exp_cancel .libdevice .tl).lhs = (Atom.log_exp .libdevice .tl).lhs ∧
     (Atom.log_mul_split .tl).lhs = (Atom.log_mul .tl).lhs ∧
-    (Atom.log_mul_split .libdevice).lhs = (Atom.log_mul .libdevice).lhs := ⟨rfl, rfl, rfl, rfl⟩
+    (Atom.log_mul_split .libdevice).lhs = (Atom.log_mul .libdevice).lhs := ⟨rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 /-- Equal measured results must never let one backend's report select the other. -/
 theorem reports_cannot_cross_backends :
     (Atom.log_exp_cancel .tl).matches LogAdmission.fp32_log_exp_guarded = Bool.false ∧
     (Atom.log_exp_cancel .libdevice).matches LogAdmission.fp32_log_exp_guarded_intrinsic = Bool.false ∧
+    (Atom.log_exp_cancel .tl .tl).matches LogAdmission.fp32_log_exp_guarded_intrinsic = Bool.false ∧
+    (Atom.log_exp_cancel .libdevice .tl).matches LogAdmission.fp32_log_exp_guarded = Bool.false ∧
     (Atom.log_mul_split .tl).matches LogAdmission.fp32_log_mul_guarded = Bool.false ∧
     (Atom.log_mul_split .libdevice).matches LogAdmission.fp32_log_mul_guarded_intrinsic = Bool.false := by decide
 
@@ -45,8 +49,8 @@ theorem selected_intrinsic_product (R : Rules) :
 
 noncomputable section
 
-/-- A routing fixture, not a floating-point accuracy model. Distinct log values
-make accidental use of libdevice.log on the intrinsic path observable. -/
+/-- A routing fixture, not a floating-point accuracy model. Distinct log and
+exp values make accidental use of a different backend observable. -/
 private def model : Algebra ℚ where
   literal := fun _ _ r => if r = 0 then 0 else if r = 1 / 2 then 1 / 2
     else if r = 1 then 1 else if r = 2 then 2 else 80
@@ -84,8 +88,12 @@ set_option maxHeartbeats 1600000 in
 theorem intrinsic_elimination_routes :
     evaluate (expression .tl (.const 1)) = some 1 ∧
     evaluate (expression .tl (.const (1 / 2))) = some (2021 / 2) ∧
-    evaluate (expression .libdevice (.const (1 / 2))) = some (2201 / 2) := by
-  norm_num [evaluate, expression, Backend.log, useIdentity, absolute,
+    evaluate (expression .libdevice (.const (1 / 2))) = some (2201 / 2) ∧
+    evaluate (expression .tl (.const 1) .tl) = some 1 ∧
+    evaluate (expression .libdevice (.const 1) .tl) = some 1 ∧
+    evaluate (expression .tl (.const (1 / 2)) .tl) = some (4021 / 2) ∧
+    evaluate (expression .libdevice (.const (1 / 2)) .tl) = some (4201 / 2) := by
+  norm_num [evaluate, expression, Backend.log, Backend.exp, useIdentity, absolute,
     evalOp_unfold, numeric, numericLt, numericLe, bop, model]
 
 set_option maxHeartbeats 1600000 in

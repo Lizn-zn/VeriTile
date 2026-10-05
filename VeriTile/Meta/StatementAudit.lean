@@ -383,6 +383,8 @@ private def fpAtomName (id : String) : String :=
   | "LOG-EXP-FULL-LIBDEVICE" => "log_exp(libdevice.log, libdevice.exp)"
   | "LOG-EXP-GUARDED" => "log_exp_cancel(libdevice.log, libdevice.exp)"
   | "LOG-EXP-GUARDED-INTRINSIC" => "log_exp_cancel(tl.log, libdevice.exp)"
+  | "LOG-EXP-GUARDED-FULL-INTRINSIC" => "log_exp_cancel(tl.log, tl.exp)"
+  | "LOG-EXP-GUARDED-EXP-INTRINSIC" => "log_exp_cancel(libdevice.log, tl.exp)"
   | _ => id.toLower.replace "-" "_"
 
 private def printFPAtom (entry : Expr) (details : Bool := false) : MetaM Unit := do

@@ -8,8 +8,8 @@ Each candidate specifies its exact intrinsics, operand domain and two scalar
 fragments. Defining a candidate supplies no numerical equality.
 
 The generated LogAdmission table selects independently tested implementations.
-The tl.log and libdevice.log variants have distinct fragments and report IDs.
-Both guarded log-exp versions keep their original log(exp(a)) reference and
+The log and exp backends have distinct fragments and report IDs.
+All four guarded log-exp versions keep their original log(exp(a)) reference and
 change only the candidate to a guarded identity with the original fallback. Refreshing
 the report changes availability, not the candidate definitions. Kernel
 implementations and their separate specifications are in bench/examples/LogExp/.
@@ -32,7 +32,7 @@ inductive Atom where
   | log_mul (log : Backend)
   | log_mul_split (log : Backend)
   | log_exp (log exp : Backend)
-  | log_exp_cancel (log : Backend)
+  | log_exp_cancel (log : Backend) (exp : Backend := .libdevice)
   deriving DecidableEq, Repr
 
 /-- Candidate catalog, including relations not admitted by the current report.
@@ -51,16 +51,19 @@ def Atom.ruleID : Atom → String
   | .log_exp .libdevice .tl => "LOG-EXP-LOG-LIBDEVICE"
   | .log_exp .tl .libdevice => "LOG-EXP-LIBDEVICE"
   | .log_exp .libdevice .libdevice => "LOG-EXP-FULL-LIBDEVICE"
-  -- log(libdevice.exp(a)) → if 0.5 < |a| ≤ 80 then a else the original.
+  -- log(exp(a)) → if 0.5 < |a| ≤ 80 then a else the original.
   -- Finite a; the unused exp argument is masked to zero.
-  | .log_exp_cancel .tl => "LOG-EXP-GUARDED-INTRINSIC"
-  | .log_exp_cancel .libdevice => "LOG-EXP-GUARDED"
+  | .log_exp_cancel .tl .libdevice => "LOG-EXP-GUARDED-INTRINSIC"
+  | .log_exp_cancel .libdevice .libdevice => "LOG-EXP-GUARDED"
+  | .log_exp_cancel .tl .tl => "LOG-EXP-GUARDED-FULL-INTRINSIC"
+  | .log_exp_cancel .libdevice .tl => "LOG-EXP-GUARDED-EXP-INTRINSIC"
 
 def candidates : List Atom := [.log_mul .tl, .log_mul .libdevice,
   .log_mul_split .tl, .log_mul_split .libdevice,
   .log_exp .tl .tl, .log_exp .libdevice .tl,
   .log_exp .tl .libdevice, .log_exp .libdevice .libdevice,
-  .log_exp_cancel .tl, .log_exp_cancel .libdevice]
+  .log_exp_cancel .tl, .log_exp_cancel .libdevice,
+  .log_exp_cancel .tl .tl, .log_exp_cancel .libdevice .tl]
 
 /-- Exact operation labels used by the numerical interpreter. -/
 def Backend.logOp : Backend → Unary
@@ -93,10 +96,11 @@ def useIdentity (a : Op .real []) : Op .bool [] :=
 
 /-- Scalar semantics of the candidate. The GPU additionally skips both calls
 for whole tiles selecting the identity; mixed tiles mask unused arguments. -/
-def expression (backend : Backend) (a : Op .real []) : Op .real [] :=
+def expression (backend : Backend) (a : Op .real [])
+    (exp : Backend := .libdevice) : Op .real [] :=
   let simplify := useIdentity a
   let fallback_a := .where simplify (.const 0) a
-  let fallback := backend.log (.libdeviceExp fallback_a)
+  let fallback := backend.log (exp.exp fallback_a)
   .where simplify a fallback
 
 /-- Test the rounded fp32 product, including both endpoints. -/
@@ -136,7 +140,7 @@ def productGuards : List OperandGuard :=
 
 def Atom.guards : Atom → List OperandGuard
   | .log_mul _ | .log_mul_split _ => productGuards
-  | .log_exp _ _ | .log_exp_cancel _ => VeriTile.Triton.FP.LogExp.guards
+  | .log_exp _ _ | .log_exp_cancel _ _ => VeriTile.Triton.FP.LogExp.guards
 
 def secondInput : Op .real [] := .ref .real [] "b"
 
@@ -144,7 +148,7 @@ def secondInput : Op .real [] := .ref .real [] "b"
 def Atom.lhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a with
   | .log_mul log | .log_mul_split log => log.log (.mul .real .nil input secondInput)
   | .log_exp log exp => log.log (exp.exp input)
-  | .log_exp_cancel log => log.log (.libdeviceExp input))⟩
+  | .log_exp_cancel log exp => log.log (exp.exp input))⟩
 
 /-- The proposed expression. Conditional rewrites keep their fallbacks;
 unconditional rewrites require their own independent admission. -/
@@ -152,7 +156,7 @@ def Atom.rhs (a : Atom) : GuardedFragment := ⟨a.guards, assignOutput (match a 
   | .log_mul log => .add .real .nil (log.log input) (log.log secondInput)
   | .log_mul_split log => splitProduct log input secondInput
   | .log_exp _ _ => input
-  | .log_exp_cancel log => expression log input)⟩
+  | .log_exp_cancel log exp => expression log input exp)⟩
 
 /-- Match an accepted report to the candidate's exact fp32 profile and domain.
 Experimental shape and input distribution select the row; they do not become
@@ -193,7 +197,7 @@ theorem derive (R : Rules) (a : Atom) (h : a.Available) :
   apply Spec.Derivation.atom (a.entry h)
   · apply List.mem_filterMap.mpr
     refine ⟨a, ?_, ?_⟩
-    · rcases a with ⟨_ | _⟩ | ⟨_ | _⟩ | ⟨_ | _, _ | _⟩ | ⟨_ | _⟩ <;> simp [candidates]
+    · rcases a with ⟨_ | _⟩ | ⟨_ | _⟩ | ⟨_ | _, _ | _⟩ | ⟨_ | _, _ | _⟩ <;> simp [candidates]
     · have available : a.report?.isSome = true := h
       cases hr : a.report? with
       | none => simp [hr] at available
@@ -250,7 +254,7 @@ theorem apply_log_exp_cancel (backend : Backend) {α : Type} [Inhabited α] (R :
     exact ⟨fun _ => a, by simp [t], ha⟩
   have h := hM _ _ (derive R (.log_exp_cancel backend) selected) t hg hg
   cases backend <;> simp only [Atom.lhs, Atom.rhs, assignOutput, run, step, evalExpr,
-    evalComputeOp, expression, Backend.log, evalOp_unfold, useIdentity, absolute, input,
+    evalComputeOp, expression, Backend.log, Backend.exp, evalOp_unfold, useIdentity, absolute, input,
     ComputeDType.eraseDType, numeric, numericLt, numericLe, hlt, hle,
     State.setReg_same, t] at h
   all_goals

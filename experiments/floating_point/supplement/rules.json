@@ -75,14 +75,17 @@
     },
     {
       "id": "EXP-SUB-INTRINSIC",
-      "reference": "tl.exp(a - b)",
-      "candidate": "tl.exp(a) / tl.exp(b)",
-      "domain": "finite fp32 a,b; original tl.exp intrinsic",
+      "reference": "Q(tl.exp(Q(a - b)))",
+      "candidate": "Q(Q(tl.exp(a)) / Q(tl.exp(b)))",
+      "domain": "finite a,b",
       "operands": [
         "a",
         "b"
       ],
-      "category": "two_gates_candidate"
+      "category": "two_gates_candidate",
+      "intrinsics": {
+        "exp": "tl.exp"
+      }
     },
     {
       "id": "COUNT-ZERO",
@@ -162,7 +165,10 @@
         "a",
         "b"
       ],
-      "category": "two_gates_candidate"
+      "category": "two_gates_candidate",
+      "intrinsics": {
+        "exp": "libdevice.exp"
+      }
     },
     {
       "id": "EXP-ZERO",
@@ -170,7 +176,10 @@
       "candidate": "1",
       "domain": "no variable operands",
       "operands": [],
-      "category": "two_gates_candidate"
+      "category": "two_gates_candidate",
+      "intrinsics": {
+        "exp": "tl.exp"
+      }
     },
     {
       "id": "LOG-MUL",
@@ -265,7 +274,10 @@
       "operands": [
         "a"
       ],
-      "category": "two_gates_candidate"
+      "category": "two_gates_candidate",
+      "intrinsics": {
+        "exp": "tl.exp"
+      }
     },
     {
       "id": "LOG-MUL-LOG1P-INTRINSIC",
@@ -322,6 +334,58 @@
       "intrinsics": {
         "log": "libdevice.log",
         "exp": "tl.exp"
+      }
+    },
+    {
+      "id": "LOG-EXP-GUARDED-FULL-INTRINSIC",
+      "reference": "fp32(tl.log(fp32(tl.exp(a))))",
+      "candidate": "if 0.5 < abs(a) <= 80 then a else fp32(tl.log(fp32(tl.exp(a))))",
+      "domain": "finite fp32 a; branch threshold is an implementation choice, not an input filter",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate",
+      "intrinsics": {
+        "log": "tl.log",
+        "exp": "tl.exp"
+      }
+    },
+    {
+      "id": "LOG-EXP-GUARDED-EXP-INTRINSIC",
+      "reference": "fp32(libdevice.log(fp32(tl.exp(a))))",
+      "candidate": "if 0.5 < abs(a) <= 80 then a else fp32(libdevice.log(fp32(tl.exp(a))))",
+      "domain": "finite fp32 a; branch threshold is an implementation choice, not an input filter",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate",
+      "intrinsics": {
+        "log": "libdevice.log",
+        "exp": "tl.exp"
+      }
+    },
+    {
+      "id": "EXP-ZERO-LIBDEVICE",
+      "reference": "Q(libdevice.exp(0))",
+      "candidate": "1",
+      "domain": "no variable operands",
+      "operands": [],
+      "category": "two_gates_candidate",
+      "intrinsics": {
+        "exp": "libdevice.exp"
+      }
+    },
+    {
+      "id": "EXP-NEG-INF-SUB-LIBDEVICE",
+      "reference": "Q(libdevice.exp(Q(-inf - a)))",
+      "candidate": "0",
+      "domain": "finite a; -inf is a literal, not a sampled operand",
+      "operands": [
+        "a"
+      ],
+      "category": "two_gates_candidate",
+      "intrinsics": {
+        "exp": "libdevice.exp"
       }
     }
   ]

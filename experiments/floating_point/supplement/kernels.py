@@ -18,6 +18,8 @@ SUPPORTED = {
     "LOG-MUL-LOG1P", "LOG-MUL-GUARDED",
     "LOG-EXP-LOG-LIBDEVICE", "LOG-EXP-GUARDED-INTRINSIC",
     "LOG-MUL-GUARDED-INTRINSIC", "LOG-MUL-LOG1P-INTRINSIC",
+    "LOG-EXP-GUARDED-FULL-INTRINSIC", "LOG-EXP-GUARDED-EXP-INTRINSIC",
+    "EXP-ZERO-LIBDEVICE", "EXP-NEG-INF-SUB-LIBDEVICE",
 }
 
 
@@ -37,6 +39,14 @@ def logarithm(x, USE_LIBDEVICE: tl.constexpr):
         return libdevice.log(x)
     else:
         return tl.log(x)
+
+
+@triton.jit
+def exponential(x, USE_LIBDEVICE: tl.constexpr):
+    if USE_LIBDEVICE:
+        return libdevice.exp(x)
+    else:
+        return tl.exp(x)
 
 
 @triton.jit
@@ -98,12 +108,12 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = rnd(rnd(libdevice.exp(a), PRECISION) / rnd(libdevice.exp(b), PRECISION), PRECISION)
     elif RULE == "EXP-SUB-INTRINSIC":
         if SIDE == 0:
-            out = tl.exp(a - b)
+            out = rnd(tl.exp(rnd(a - b, PRECISION)), PRECISION)
         else:
-            out = tl.exp(a) / tl.exp(b)
-    elif RULE == "EXP-ZERO":
+            out = rnd(rnd(tl.exp(a), PRECISION) / rnd(tl.exp(b), PRECISION), PRECISION)
+    elif RULE == "EXP-ZERO" or RULE == "EXP-ZERO-LIBDEVICE":
         if SIDE == 0:
-            out = rnd(tl.exp(zero), PRECISION)
+            out = rnd(exponential(zero, RULE == "EXP-ZERO-LIBDEVICE"), PRECISION)
         else:
             out = one
     elif RULE == "LOG-MUL":
@@ -163,11 +173,13 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = rnd(libdevice.log(rnd(libdevice.exp(a), PRECISION)), PRECISION)
         else:
             out = a
-    elif RULE == "LOG-EXP-GUARDED" or RULE == "LOG-EXP-GUARDED-INTRINSIC":
-        USE_LIBDEVICE: tl.constexpr = RULE == "LOG-EXP-GUARDED"
+    elif (RULE == "LOG-EXP-GUARDED" or RULE == "LOG-EXP-GUARDED-INTRINSIC"
+          or RULE == "LOG-EXP-GUARDED-FULL-INTRINSIC" or RULE == "LOG-EXP-GUARDED-EXP-INTRINSIC"):
+        USE_LIBDEVICE: tl.constexpr = RULE == "LOG-EXP-GUARDED" or RULE == "LOG-EXP-GUARDED-EXP-INTRINSIC"
+        LIBDEVICE_EXP: tl.constexpr = RULE == "LOG-EXP-GUARDED" or RULE == "LOG-EXP-GUARDED-INTRINSIC"
         tl.static_assert(PRECISION == "fp32", "guarded log-exp requires fp32")
         if SIDE == 0:
-            out = logarithm(libdevice.exp(a), USE_LIBDEVICE)
+            out = logarithm(exponential(a, LIBDEVICE_EXP), USE_LIBDEVICE)
         else:
             simplify = (tl.abs(a) > 0.5) & (tl.abs(a) <= 80.0)
             # A whole safe block skips both transcendental calls. In mixed
@@ -176,7 +188,7 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
                 out = a
             else:
                 fallback_a = tl.where(simplify, 0.0, a)
-                fallback = logarithm(libdevice.exp(fallback_a), USE_LIBDEVICE)
+                fallback = logarithm(exponential(fallback_a, LIBDEVICE_EXP), USE_LIBDEVICE)
                 out = tl.where(simplify, a, fallback)
     elif RULE == "MAX-COMMUTE":
         if SIDE == 0:
@@ -198,9 +210,9 @@ def elementwise(A, B, C, O, N: tl.constexpr, RULE: tl.constexpr,
             out = tl.maximum(neginf, a)
         else:
             out = a
-    elif RULE == "EXP-NEG-INF-SUB":
+    elif RULE == "EXP-NEG-INF-SUB" or RULE == "EXP-NEG-INF-SUB-LIBDEVICE":
         if SIDE == 0:
-            out = rnd(tl.exp(rnd(neginf - a, PRECISION)), PRECISION)
+            out = rnd(exponential(rnd(neginf - a, PRECISION), RULE == "EXP-NEG-INF-SUB-LIBDEVICE"), PRECISION)
         else:
             out = zero
     else:

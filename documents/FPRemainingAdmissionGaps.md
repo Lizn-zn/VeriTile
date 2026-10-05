@@ -52,19 +52,19 @@ return the same zero. Extracting the actual conversion equality requires
 so they cannot be accidentally imported without this integer-range-aware binding. See the [current report](../experiments/floating_point/primitives/report/summary.md)
 and [reproduction instructions](../experiments/floating_point/primitives/README.md).
 
-### Current log experiments: both log implementations are measured separately
+### Current log and exp experiments: implementations are measured separately
 
-Six pairs cover tl.log and libdevice.log independently. The log-exp controls
-include both exp implementations; each individual pair holds exp fixed.
-H200 job `dlc1ysn7re29e9jd` runs all 12 variants under both seeds, with 4096 replicates
-and unchanged gates. Both reports match independent CPU replay exactly.
+Both unconditional and guarded log-exp cover all four ordinary log/exp
+combinations. EXP-SUB, EXP-ZERO and EXP-NEG-INF-SUB also have separate tl.exp and
+libdevice.exp variants. H200 job `dlczuyolms2zwn68` runs 20 cases under each seed,
+with unchanged gates and 4096 replicates. Independent CPU replay matches all tables.
 
 | Rule | log | exp | z | B (local ULP) | U | Accept |
 |---|---|---|---:|---:|---:|---|
 | LOG-MUL | tl.log | — | 2.924915168 | 0.1679352504 | 6.685560237 | No: INCONCLUSIVE |
 | LOG-MUL-LIBDEVICE | libdevice.log | — | 2.924915168 | 0.1679352504 | 6.685560237 | No: INCONCLUSIVE |
-| LOG-EXP | tl.log | tl.exp | 1.916658654 | 0.06895380711 | 0 | No: INCONCLUSIVE |
-| LOG-EXP-LOG-LIBDEVICE | libdevice.log | tl.exp | 1.916658654 | 0.06895380711 | 0 | No: INCONCLUSIVE |
+| LOG-EXP | tl.log | tl.exp | 3.905770501 | 0.08849077969 | 0 | No: INCONCLUSIVE |
+| LOG-EXP-LOG-LIBDEVICE | libdevice.log | tl.exp | 3.905770501 | 0.08849077969 | 0 | No: INCONCLUSIVE |
 | LOG-EXP-LIBDEVICE | tl.log | libdevice.exp | 68.59740095 | 0.7300322166 | 0 | No: FAIL |
 | LOG-EXP-FULL-LIBDEVICE | libdevice.log | libdevice.exp | 68.59740095 | 0.7300322166 | 0 | No: FAIL |
 | LOG-MUL-GUARDED-INTRINSIC | tl.log | — | 296.6221498 | 0.0006248690033 | 6.685560237 | Yes |
@@ -73,18 +73,30 @@ and unchanged gates. Both reports match independent CPU replay exactly.
 | LOG-EXP-GUARDED | libdevice.log | libdevice.exp | 28014.76841 | 0.04578995059 | 0.625 | Yes |
 | LOG-MUL-LOG1P-INTRINSIC | tl.log | — | 2.061440595 | 0.1240315873 | 6.685560237 | No: INCONCLUSIVE |
 | LOG-MUL-LOG1P | libdevice.log | — | 2.061440595 | 0.1240315873 | 6.685560237 | No: INCONCLUSIVE |
+| LOG-EXP-GUARDED-FULL-INTRINSIC | tl.log | tl.exp | 39092.26596 | 0.07841065488 | 0.3125 | No: FAIL |
+| LOG-EXP-GUARDED-EXP-INTRINSIC | libdevice.log | tl.exp | 39092.26596 | 0.07841065488 | 0.3125 | No: FAIL |
+| EXP-SUB-INTRINSIC | — | tl.exp | 32906.95855 | 0.1609050508 | 3.688724142 | No: FAIL |
+| EXP-SUB | — | libdevice.exp | 6284.440943 | 0.0251993381 | 2.644559637 | Yes |
+| EXP-ZERO | — | tl.exp | 0 | 0 | 0 | Yes |
+| EXP-ZERO-LIBDEVICE | — | libdevice.exp | 0 | 0 | 0 | Yes |
+| EXP-NEG-INF-SUB | — | tl.exp | 0 | 0 | 0 | Yes |
+| EXP-NEG-INF-SUB-LIBDEVICE | — | libdevice.exp | 0 | 0 | 0 | Yes |
 
-All six pairs have identical normalized PTX and observations under the recorded
-compiler configuration. Separate experiment IDs and typed Lean fragments prevent
-one API's report from selecting the other API. The four guarded variants pass
-both seeds and are bound as `log_mul_split .tl`, `log_mul_split .libdevice`,
-`log_exp_cancel .tl`, and `log_exp_cancel .libdevice`. Unconditional rewrites
-remain unadmitted; this limits the older shift, not the new conditional proof.
-Both LOG1P diagnostic variants keep libdevice.log1p and the same FMA; only ordinary
-log calls differ. They remain bias-INCONCLUSIVE and experiment-only.
+All seven log-backend pairs have identical executable PTX and observations
+under the recorded compiler configuration. Exp-backend pairs remain separately
+measured: guarded log-exp and EXP-SUB pass with libdevice.exp and fail the bias
+budget with tl.exp. Separate experiment IDs and typed Lean fragments prevent
+one API's report from selecting the other API. The four accepted guarded log
+variants are `log_mul_split .tl`, `log_mul_split .libdevice`,
+`log_exp_cancel .tl .libdevice`, and `log_exp_cancel .libdevice .libdevice`.
+The exp argument defaults to `.libdevice` for existing calls. Unconditional
+rewrites remain unadmitted; this limits the older shift, not the completed
+conditional logsumexp proof. Both LOG1P diagnostic variants keep libdevice.log1p
+and the same FMA; only ordinary log calls differ. They remain bias-INCONCLUSIVE
+and experiment-only.
 See the [paired experiments](../experiments/floating_point/supplement/README.md)
-for the exact implementation matrix, both full z/B/U/accept tables, boundary
-checks and separate descriptive timings. No application-level speedup is inferred.
+for exact intrinsic choices, both complete result tables, PTX comparisons,
+boundary checks and descriptive timings.
 
 ## Checked algebraic evidence
 

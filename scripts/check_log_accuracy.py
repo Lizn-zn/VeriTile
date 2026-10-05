@@ -39,7 +39,9 @@ def main():
         programs[rule] = compiled
     same_bits = lambda x, y: torch.equal(x.view(torch.int32), y.view(torch.int32))
     simplify = (a.abs() > 0.5) & (a.abs() <= 80.)
-    for baseline, guarded in [('LOG-EXP-LIBDEVICE', 'LOG-EXP-GUARDED-INTRINSIC'),
+    for baseline, guarded in [('LOG-EXP', 'LOG-EXP-GUARDED-FULL-INTRINSIC'),
+                              ('LOG-EXP-LOG-LIBDEVICE', 'LOG-EXP-GUARDED-EXP-INTRINSIC'),
+                              ('LOG-EXP-LIBDEVICE', 'LOG-EXP-GUARDED-INTRINSIC'),
                               ('LOG-EXP-FULL-LIBDEVICE', 'LOG-EXP-GUARDED')]:
         old, identity = outputs[baseline]
         reference, candidate = outputs[guarded]
@@ -76,7 +78,7 @@ def main():
         'mixed_normal_1_1': torch.randn(n, device='cuda', generator=generator) + 1.,
     }
     timings = []
-    for guarded in ['LOG-EXP-GUARDED-INTRINSIC', 'LOG-EXP-GUARDED']:
+    for guarded in sorted(runner.supplemental.GUARDED_LOG_EXP):
         for name, data in cases.items():
             ref_out, cand_out = torch.empty_like(data), torch.empty_like(data)
             def launch(side, out):

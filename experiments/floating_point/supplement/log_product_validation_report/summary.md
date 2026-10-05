@@ -1,6 +1,6 @@
 # Numerical rule results
 
-12 instances; 12 replayed; 4 accepted.
+14 instances; 14 replayed; 4 accepted.
 
 Each nonempty replicate contributes one mean across its in-domain IID scalar instances; R counts these replicates.
 Out-of-domain input tuples are skipped without resampling; valid/skipped counts describe scalar tuples, not R.
@@ -20,8 +20,8 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 |---|---|---:|---:|---:|---:|---:|---|---|---|---|---|---:|---:|
 | LOG-MUL | fp32 | 4096 | 1.016402 | 0.1629234 | 0.05 | 7.4184 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643797954 | 20075678782 |
 | LOG-MUL-LIBDEVICE | fp32 | 4096 | 1.016402 | 0.1629234 | 0.05 | 7.4184 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643797954 | 20075678782 |
-| LOG-EXP | fp32 | 4096 | 1.297136 | 0.06276389 | 0.05 | 0 | empirical_max | INCONCLUSIVE | PASS | no | COMPLETE | 68719476736 | 0 |
-| LOG-EXP-LOG-LIBDEVICE | fp32 | 4096 | 1.297136 | 0.06276389 | 0.05 | 0 | empirical_max | INCONCLUSIVE | PASS | no | COMPLETE | 68719476736 | 0 |
+| LOG-EXP | fp32 | 4096 | 4.597277 | 0.09486808 | 0.05 | 0 | empirical_max | INCONCLUSIVE | PASS | no | COMPLETE | 68719476736 | 0 |
+| LOG-EXP-LOG-LIBDEVICE | fp32 | 4096 | 4.597277 | 0.09486808 | 0.05 | 0 | empirical_max | INCONCLUSIVE | PASS | no | COMPLETE | 68719476736 | 0 |
 | LOG-EXP-LIBDEVICE | fp32 | 4096 | 68.23168 | 0.7236907 | 0.05 | 0 | empirical_max | FAIL | PASS | no | COMPLETE | 68719476736 | 0 |
 | LOG-EXP-FULL-LIBDEVICE | fp32 | 4096 | 68.23168 | 0.7236907 | 0.05 | 0 | empirical_max | FAIL | PASS | no | COMPLETE | 68719476736 | 0 |
 | LOG-MUL-GUARDED-INTRINSIC | fp32 | 4096 | 296.036 | 0.0006251552 | 0.05 | 7.4184 | pot_pwm | PASS | PASS | yes | COMPLETE | 48643797954 | 20075678782 |
@@ -30,3 +30,5 @@ Accept is pending until CPU replay. Missing statistics are shown as —, never z
 | LOG-EXP-GUARDED | fp32 | 4096 | 28421.28 | 0.0457916 | 0.05 | 0.625 | empirical_max | PASS | PASS | yes | COMPLETE | 68719476736 | 0 |
 | LOG-MUL-LOG1P-INTRINSIC | fp32 | 4096 | 1.793469 | 0.1644765 | 0.05 | 7.4184 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643797954 | 20075678782 |
 | LOG-MUL-LOG1P | fp32 | 4096 | 1.793469 | 0.1644765 | 0.05 | 7.4184 | pot_pwm | INCONCLUSIVE | PASS | no | COMPLETE | 48643797954 | 20075678782 |
+| LOG-EXP-GUARDED-FULL-INTRINSIC | fp32 | 4096 | 39224.66 | 0.07841038 | 0.05 | 0.3125 | empirical_max | FAIL | PASS | no | COMPLETE | 68719476736 | 0 |
+| LOG-EXP-GUARDED-EXP-INTRINSIC | fp32 | 4096 | 39224.66 | 0.07841038 | 0.05 | 0.3125 | empirical_max | FAIL | PASS | no | COMPLETE | 68719476736 | 0 |

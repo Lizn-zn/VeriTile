@@ -120,7 +120,8 @@ class SupplementalExportTests(unittest.TestCase):
             'VeriTile/Triton/Float/LogAdmission.lean').read_text())
         for name in ('fp32_log_mul', 'fp32_log_mul_libdevice', 'fp32_log_mul_log1p',
                      'fp32_log_exp_libdevice', 'fp32_log_exp_full_libdevice',
-                     'fp32_log_exp_log_libdevice', 'fp32_log_mul_log1p_intrinsic'):
+                     'fp32_log_exp_log_libdevice', 'fp32_log_mul_log1p_intrinsic',
+                     'fp32_log_exp_guarded_full_intrinsic', 'fp32_log_exp_guarded_exp_intrinsic'):
             self.assertNotIn(f'def {name} :', text)
 
         validation = exporter.REPORT.parent / 'log_product_validation_report'
@@ -128,6 +129,20 @@ class SupplementalExportTests(unittest.TestCase):
         self.assertEqual({(r['rule'], r['format']) for r in confirmed},
                          {('LOG-MUL-GUARDED', 'fp32'), ('LOG-EXP-GUARDED', 'fp32'),
                           ('LOG-MUL-GUARDED-INTRINSIC', 'fp32'), ('LOG-EXP-GUARDED-INTRINSIC', 'fp32')})
+
+    def test_exp_reports_cover_both_implementations_and_confirm_decisions(self):
+        from scripts import supplement_numerics as supplemental
+        reports = [exporter.REPORT.parent / name for name in ('exp_report', 'exp_validation_report')]
+        expected = {r for pair in supplemental.EXP_PAIRS for r in pair if not r.startswith('LOG-')}
+        accepted = []
+        for report in reports:
+            settings, profile, rows, _, _ = exporter.load_report(report)
+            self.assertEqual(set(profile['rules']), expected)
+            self.assertEqual(settings['execution']['independent_cpu_replay']['complete_rows'], 6)
+            accepted.append({row['rule'] for row in rows})
+        self.assertEqual(*accepted)
+        self.assertEqual(accepted[0], {'EXP-SUB', 'EXP-ZERO', 'EXP-ZERO-LIBDEVICE',
+                                       'EXP-NEG-INF-SUB', 'EXP-NEG-INF-SUB-LIBDEVICE'})
 
     def test_invalid_namespace_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'identifier'):

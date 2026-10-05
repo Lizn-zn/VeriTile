@@ -1,5 +1,6 @@
 """Lean candidates exist before admission and preserve their exact syntax."""
 import json
+import re
 from pathlib import Path
 import subprocess
 import tempfile
@@ -85,7 +86,7 @@ specification product_split (R : Rules) :
         self.check(source + '''
 open VeriTile.Triton.FP.LogExp
 example (a : Atom) : ¬ a.Available := by
-  rcases a with ⟨_ | _⟩ | ⟨_ | _⟩ | ⟨_ | _, _ | _⟩ | ⟨_ | _⟩ <;> decide
+  rcases a with ⟨_ | _⟩ | ⟨_ | _⟩ | ⟨_ | _, _ | _⟩ | ⟨_ | _, _ | _⟩ <;> decide
 example (R : Rules) : R.assumptions = [] := rfl
 ''')
 
@@ -99,6 +100,7 @@ import VeriTile.Triton.Float.LogExp
 open VeriTile.Triton.FP.LogExp
 open scoped VeriTile.Spec
 '''
+        source, expected_lines = prefix, []
         for rule in sorted(candidates - accepted - EXPERIMENT_ONLY):
             atom = {
                 'LOG-MUL': 'log_mul .tl',
@@ -107,14 +109,20 @@ open scoped VeriTile.Spec
                 'LOG-EXP-LOG-LIBDEVICE': 'log_exp .libdevice .tl',
                 'LOG-EXP-LIBDEVICE': 'log_exp .tl .libdevice',
                 'LOG-EXP-FULL-LIBDEVICE': 'log_exp .libdevice .libdevice',
+                'LOG-EXP-GUARDED-FULL-INTRINSIC': 'log_exp_cancel .tl .tl',
+                'LOG-EXP-GUARDED-EXP-INTRINSIC': 'log_exp_cancel .libdevice .tl',
             }[rule]
-            with self.subTest(atom=atom):
-                result = self.lean(prefix + f'''
-example (R : Rules) : [(Atom.{atom}).lhs] ≡[R] [(Atom.{atom}).rhs] :=
-  VeriTile.Triton.FP.LogExp.rewrite R (.{atom}) (by decide)
-''')
-                self.assertNotEqual(result.returncode, 0)
-                self.assertIn('decide', result.stdout)
+            source += f'\nexample (R : Rules) : [(Atom.{atom}).lhs] ≡[R] [(Atom.{atom}).rhs] :=\n'
+            expected_lines.append(source.count('\n') + 1)
+            source += f'  VeriTile.Triton.FP.LogExp.rewrite R (.{atom}) (by decide)\n'
+        # One Lean invocation checks every rejected candidate. Attribute each
+        # failure to its own decide line, so an unrelated error cannot pass.
+        result = self.lean(source)
+        self.assertNotEqual(result.returncode, 0)
+        errors = {int(line): message for line, message in re.findall(
+            r'Candidates\.lean:(\d+):\d+: error: ([^\n]*)', result.stdout)}
+        self.assertEqual(set(errors), set(expected_lines), result.stdout)
+        self.assertTrue(all('decide' in message for message in errors.values()), result.stdout)
 
 
 if __name__ == '__main__':

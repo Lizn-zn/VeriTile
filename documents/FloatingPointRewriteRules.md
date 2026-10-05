@@ -38,19 +38,22 @@
 以下公式是模式说明，正式检查必须实例化为完整的 typed Compute IR，明确每一步精度、转换和计算顺序。\(q_d\) 表示指定配置下转换到格式 \(d\)；数学规格会按其定义处理或投影这些转换。箭头标注数值检查的参考到候选方向；反向的实验结论需要另建记录。准入后的形式等价假设可以使用对称规则，但这不产生反向实验记录。
 
 候选关系先在 Lean 中定义左右片段和条件，定义本身不依赖是否通过实验。
-[LogExp.lean](../VeriTile/Triton/Float/LogExp.lean) 用实现参数定义十个 fp32 候选：
+[LogExp.lean](../VeriTile/Triton/Float/LogExp.lean) defines twelve FP32 candidates
+using independent backend parameters:
 
-| Lean 名称 | 改写 |
+| Lean constructor | Rewrite |
 |---|---|
-| `log_mul log` | 无条件拆分 `log(a*b)`；`log` 可选 `.tl` 或 `.libdevice` |
-| `log_mul_split log` | 乘积在 `[0.5, 2]` 内保留原计算，否则拆分；两种 log 分别准入 |
-| `log_exp log exp` | 无条件消去 `log(exp(a))`；log、exp 分别选择实现，共四种组合 |
-| `log_exp_cancel log` | `0.5 < abs(a) <= 80` 时消去，其余保留 fallback；exp 固定为 libdevice |
+| `log_mul log` | Unconditionally split `log(a*b)`; log selects `.tl` or `.libdevice` |
+| `log_mul_split log` | Keep the product log in `[0.5, 2]`, otherwise split; each log is independently admitted |
+| `log_exp log exp` | Unconditionally eliminate `log(exp(a))`; four log/exp combinations |
+| `log_exp_cancel log exp` | Eliminate only for `0.5 < abs(a) <= 80`, otherwise retain the reference; four combinations |
 
-乘积关系要求正有限输入；log-exp 允许有限负数。实现参数选择不同的 typed
-片段和报告，不提供两种 API 相等的假设。两种 FMA/log1p 诊断仍只在实验侧定义。
-默认打印如 `log_mul_split(tl.log)`、`log_exp_cancel(tl.log, libdevice.exp)`，
-只列实际使用的原子，不显示配置或 gate 状态。
+The exp argument of `log_exp_cancel` defaults to `.libdevice`. Product relations
+require finite positive inputs; log-exp accepts finite signed inputs. Each
+backend combination has separate typed fragments and report IDs; no API equality
+is assumed. Both FMA/log1p diagnostics remain experiment-only. The default
+assumption printer lists only used atoms, such as `log_mul_split(tl.log)` or
+`log_exp_cancel(tl.log, libdevice.exp)`.
 
 two-gates 结果生成 [LogAdmission.lean](../VeriTile/Triton/Float/LogAdmission.lean)，
 `Atom.report?` 按规则、精度和定义域选择已准入条目，`Rules.assumptions` 自动收集这些条目。

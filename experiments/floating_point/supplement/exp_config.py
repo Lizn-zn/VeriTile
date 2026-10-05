@@ -1,4 +1,4 @@
-"""Paired FP32 log/exp implementations; fixed bounds, domains and gates."""
+"""Paired FP32 exp implementations; identical draws and gates within each pair."""
 
 PROFILE = {
     "shape": [
@@ -10,7 +10,7 @@ PROFILE = {
         "mean": 1.0,
         "std": 1.0
     },
-    "seed": 20261005,
+    "seed": 20261003,
     "replicates": 4096,
     "replicates_max": 50000,
     "batch": 512,
@@ -24,20 +24,12 @@ PROFILE = {
         }
     ],
     "rules": [
-        "LOG-MUL",
-        "LOG-MUL-LIBDEVICE",
-        "LOG-EXP",
-        "LOG-EXP-LOG-LIBDEVICE",
-        "LOG-EXP-LIBDEVICE",
-        "LOG-EXP-FULL-LIBDEVICE",
-        "LOG-MUL-GUARDED-INTRINSIC",
-        "LOG-MUL-GUARDED",
-        "LOG-EXP-GUARDED-INTRINSIC",
-        "LOG-EXP-GUARDED",
-        "LOG-MUL-LOG1P-INTRINSIC",
-        "LOG-MUL-LOG1P",
-        "LOG-EXP-GUARDED-FULL-INTRINSIC",
-        "LOG-EXP-GUARDED-EXP-INTRINSIC"
+        "EXP-SUB-INTRINSIC",
+        "EXP-SUB",
+        "EXP-ZERO",
+        "EXP-ZERO-LIBDEVICE",
+        "EXP-NEG-INF-SUB",
+        "EXP-NEG-INF-SUB-LIBDEVICE"
     ],
     "launch": {
         "block": 1024,

@@ -66,7 +66,8 @@ theorem piecewise_execution (a : ℚ) :
       (initial.setReg "a" .real [] (fun _ => a))).map (fun v => v PUnit.unit) =
       some (if 1 / 2 < (if a < 0 then -a else a) ∧
         (if a < 0 then -a else a) ≤ 80 then a else a + 11000) := by
-  norm_num [evalOp_unfold, FP.LogExp.expression, FP.LogExp.Backend.log, FP.LogExp.useIdentity, FP.LogExp.absolute,
+  norm_num [evalOp_unfold, FP.LogExp.expression, FP.LogExp.Backend.log, FP.LogExp.Backend.exp,
+    FP.LogExp.useIdentity, FP.LogExp.absolute,
     FP.LogExp.input, numeric, numericLt, numericLe,
     State.setReg, bop, model]
   split <;> simp_all <;> ring

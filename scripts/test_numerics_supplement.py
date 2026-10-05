@@ -85,8 +85,8 @@ class ContractTests(unittest.TestCase):
 
     def test_supported_matrix_and_invalid_precision(self):
         p = profile()
-        self.assertEqual(len(p["rules"]), 27)
-        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 62)
+        self.assertEqual(len(p["rules"]), 31)
+        self.assertEqual(sum(supplement.unsupported(r, f) is None for r in p["rules"] for f in p["formats"]), 72)
         for field in ("input", "output", "accumulator"):
             bad = deepcopy(p)
             bad["formats"][-1][field] = "bf16"
@@ -137,8 +137,8 @@ class ContractTests(unittest.TestCase):
             self.assertEqual(configs[0]['probe']['seed'], seed)
             self.assertEqual(configs[0]['probe']['paired_input_rule'], base)
             for config, name in zip(configs, [variant, base]):
-                self.assertEqual(config['numerics']['intrinsics']['log'],
-                                 supplement.load_catalog()[name]['intrinsics']['log'])
+                for intrinsic, implementation in supplement.load_catalog()[name]['intrinsics'].items():
+                    self.assertEqual(config['numerics']['intrinsics'][intrinsic], implementation)
             self.assertNotEqual(*[supplement.instance_key(c) for c in configs])
             self.assertEqual(domain(variant), domain(base))
             self.assertEqual(runner.domains.policy(variant), runner.domains.policy(base))
@@ -164,6 +164,33 @@ class ContractTests(unittest.TestCase):
                 configs = [supplement.contract_for(p, fmt, rule, {}, runner.source_hashes(), lowerings)
                            for rule in (tl_rule, lib_rule)]
                 self.assertNotEqual(*[supplement.instance_key(c) for c in configs])
+
+    def test_exp_pairs_preserve_log_rounding_domains_and_input_draws(self):
+        p = profile()
+        fmt = p['formats'][2]
+        catalog = supplement.load_catalog()
+        lowerings = {k: ['0' * 64] for k in ('reference', 'candidate')}
+        for a, b in supplement.EXP_PAIRS:
+            with self.subTest(pair=(a, b)):
+                self.assertEqual(catalog[a]['intrinsics']['exp'], 'tl.exp')
+                self.assertEqual(catalog[b]['intrinsics']['exp'], 'libdevice.exp')
+                self.assertEqual(catalog[a]['intrinsics'].get('log'), catalog[b]['intrinsics'].get('log'))
+                normalize = lambda x: x.replace('libdevice.exp(', 'exp(').replace('tl.exp(', 'exp(').replace('tl.log(', 'log(')
+                for side in ('reference', 'candidate'):
+                    self.assertEqual(normalize(catalog[a][side]), normalize(catalog[b][side]))
+                self.assertEqual(runner.seed_for(p, fmt, a), runner.seed_for(p, fmt, b))
+                self.assertEqual(runner.domains.policy(a), runner.domains.policy(b))
+                configs = [supplement.contract_for(p, fmt, rule, {}, runner.source_hashes(), lowerings)
+                           for rule in (a, b)]
+                self.assertNotEqual(*[supplement.instance_key(c) for c in configs])
+                for precision in p['formats']:
+                    self.assertEqual(supplement.unsupported(a, precision), supplement.unsupported(b, precision))
+        primary = runner.load_module(supplement.DIRECTORY / 'exp_config.py').PROFILE
+        validation = runner.load_module(supplement.DIRECTORY / 'exp_validation_config.py').PROFILE
+        self.assertEqual({k: v for k, v in primary.items() if k != 'seed'},
+                         {k: v for k, v in validation.items() if k != 'seed'})
+        self.assertNotEqual(primary['seed'], validation['seed'])
+        self.assertEqual(set(primary['rules']), {r for pair in supplement.EXP_PAIRS for r in pair if not r.startswith('LOG-')})
 
     def test_guarded_log_exp_probe_keeps_profile_and_records_its_own_expression(self):
         p = runner.validate_profile(deepcopy(runner.load_module(
@@ -472,7 +499,8 @@ class InterpreterTests(unittest.TestCase):
                 if supplement.unsupported(rule, fmt):
                     continue
                 with self.subTest(rule=rule, fmt=fmt["name"]):
-                    if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-MUL-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-GUARDED", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED"}:
+                    if (any(v.startswith("libdevice.") for v in supplement.load_catalog()[rule].get("intrinsics", {}).values())
+                            or rule in supplement.GUARDED_LOG_EXP):
                         # CUDA extern_elementwise has no CPU interpreter
                         # implementation. Do not substitute tl.exp: offline
                         # compilation and the GPU run check these exact calls.

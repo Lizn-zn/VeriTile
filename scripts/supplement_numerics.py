@@ -26,14 +26,32 @@ LOG_PAIRS = [
     ("LOG-MUL-GUARDED-INTRINSIC", "LOG-MUL-GUARDED"),
     ("LOG-EXP-GUARDED-INTRINSIC", "LOG-EXP-GUARDED"),
     ("LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-LOG1P"),
+    ("LOG-EXP-GUARDED-FULL-INTRINSIC", "LOG-EXP-GUARDED-EXP-INTRINSIC"),
 ]
-PAIRED_INPUTS = {"LOG-MUL-LIBDEVICE": "LOG-MUL", "LOG-EXP-LOG-LIBDEVICE": "LOG-EXP",
+# Each pair changes only exp calls; ordinary log stays fixed.
+EXP_PAIRS = [
+    ("EXP-SUB-INTRINSIC", "EXP-SUB"),
+    ("EXP-ZERO", "EXP-ZERO-LIBDEVICE"),
+    ("EXP-NEG-INF-SUB", "EXP-NEG-INF-SUB-LIBDEVICE"),
+    ("LOG-EXP", "LOG-EXP-LIBDEVICE"),
+    ("LOG-EXP-LOG-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE"),
+    ("LOG-EXP-GUARDED-FULL-INTRINSIC", "LOG-EXP-GUARDED-INTRINSIC"),
+    ("LOG-EXP-GUARDED-EXP-INTRINSIC", "LOG-EXP-GUARDED"),
+]
+GUARDED_LOG_EXP = {"LOG-EXP-GUARDED", "LOG-EXP-GUARDED-INTRINSIC",
+                   "LOG-EXP-GUARDED-FULL-INTRINSIC", "LOG-EXP-GUARDED-EXP-INTRINSIC"}
+PAIRED_INPUTS = {"LOG-MUL-LIBDEVICE": "LOG-MUL", "LOG-EXP-LOG-LIBDEVICE": "LOG-EXP-LIBDEVICE",
+                 "LOG-EXP": "LOG-EXP-LIBDEVICE",
+                 "EXP-SUB-INTRINSIC": "EXP-SUB", "EXP-ZERO-LIBDEVICE": "EXP-ZERO",
+                 "EXP-NEG-INF-SUB-LIBDEVICE": "EXP-NEG-INF-SUB",
+                 "LOG-EXP-GUARDED-FULL-INTRINSIC": "LOG-EXP-LIBDEVICE",
+                 "LOG-EXP-GUARDED-EXP-INTRINSIC": "LOG-EXP-LIBDEVICE",
                  "LOG-EXP-FULL-LIBDEVICE": "LOG-EXP-LIBDEVICE",
                  "LOG-EXP-GUARDED": "LOG-EXP-LIBDEVICE", "LOG-EXP-GUARDED-INTRINSIC": "LOG-EXP-LIBDEVICE",
                  "LOG-MUL-LOG1P": "LOG-MUL", "LOG-MUL-LOG1P-INTRINSIC": "LOG-MUL",
                  "LOG-MUL-GUARDED": "LOG-MUL", "LOG-MUL-GUARDED-INTRINSIC": "LOG-MUL"}
-FP32_ONLY_RULES = {"EXP-SUB-INTRINSIC", "LOG-EXP-GUARDED", "LOG-MUL-LOG1P", "LOG-MUL-GUARDED",
-                   "LOG-EXP-GUARDED-INTRINSIC", "LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-GUARDED-INTRINSIC"}
+FP32_ONLY_RULES = GUARDED_LOG_EXP | {"LOG-MUL-LOG1P", "LOG-MUL-GUARDED",
+                                  "LOG-MUL-LOG1P-INTRINSIC", "LOG-MUL-GUARDED-INTRINSIC"}
 
 
 def seed_for(profile, fmt, rule):
@@ -126,7 +144,7 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
                       "details": "bf16 nodes execute in fp32 then explicitly round bf16; see bound source"},
         accumulator_formats={},  # Every expression is scalar; no reduction accumulator.
         intrinsics={"div": "ordinary Triton /", "exp": "libdevice.exp" if rule in {"EXP-SUB", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-GUARDED"} else "tl.exp",
-                    "log": "libdevice.log" if rule in PAIRED_INPUTS else "tl.log", "max": "tl.maximum",
+                    "log": "tl.log", "max": "tl.maximum",
                     "oracle": "torch fp64 mathematical reference on the same quantized operands"})
     config["numerics"]["intrinsics"].update(load_catalog()[rule].get("intrinsics", {}))
     log = config["numerics"]["intrinsics"]["log"]
@@ -134,7 +152,7 @@ def contract_for(profile, fmt, rule, backend, sources, lowerings):
     config["probe"]["active_operands"] = load_catalog()[rule]["operands"]
     if rule in PAIRED_INPUTS:
         config["probe"].update(seed=seed_for(profile, fmt, rule), paired_input_rule=PAIRED_INPUTS[rule])
-    if rule in {"LOG-EXP-GUARDED", "LOG-EXP-GUARDED-INTRINSIC"}:
+    if rule in GUARDED_LOG_EXP:
         config["relation"]["branch"] = {
             "condition": "0.5 < abs(a) <= 80", "lower": 0.5, "upper": 80.0,
             "side": "candidate", "reference": "fp32 log(fp32 exp(a))",
@@ -212,13 +230,15 @@ def oracle(torch, rule, inputs):
         return torch.zeros_like(a)
     if rule == "COUNT-SUCCESSOR":
         return a + 1
-    if rule == "EXP-ZERO":
+    if rule in {"EXP-ZERO", "EXP-ZERO-LIBDEVICE"}:
         return torch.ones_like(a)
-    if rule == "EXP-NEG-INF-SUB":
+    if rule in {"EXP-NEG-INF-SUB", "EXP-NEG-INF-SUB-LIBDEVICE"}:
         return torch.zeros_like(a)
     if rule in {"MAX-COMMUTE", "MAX-ASSOC"}:
         ab = torch.maximum(a, b)
         return torch.maximum(ab, c) if rule == "MAX-ASSOC" else ab
+    if rule in GUARDED_LOG_EXP:
+        return a
     if rule in {"ADD-ZERO", "MUL-ONE", "DIV-ONE", "LOG-EXP", "LOG-EXP-LIBDEVICE", "LOG-EXP-FULL-LIBDEVICE", "LOG-EXP-GUARDED", "LOG-EXP-GUARDED-INTRINSIC", "LOG-EXP-LOG-LIBDEVICE", "MAX-IDEM", "MAX-NEG-INF"}:
         return a
     raise ValueError("unknown supplemental oracle")
