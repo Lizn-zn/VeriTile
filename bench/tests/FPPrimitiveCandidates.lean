@@ -25,15 +25,34 @@ def expressions : ComputeKernel := triton {
   out := tl.maximum(a, a)
   out := tl.maximum(float("-inf"), a)
   out := a
+  out := libdevice.exp(float("-inf") - a)
 }
 
 def fragmentAt (i : Nat) := expressions.surfaceBody[i]?.toList
 
-example : Exponential.Atom.exp_sub.lhs.code = fragmentAt 3 ∧
-    Exponential.Atom.exp_sub.rhs.code = fragmentAt 4 ∧
-    Exponential.Atom.exp_sub_intrinsic.lhs.code = fragmentAt 5 ∧
-    Exponential.Atom.exp_sub_intrinsic.rhs.code = fragmentAt 6 ∧
+example : (Exponential.Atom.exp_sub .libdevice).lhs.code = fragmentAt 3 ∧
+    (Exponential.Atom.exp_sub .libdevice).rhs.code = fragmentAt 4 ∧
+    Exponential.Atom.exp_sub.lhs.code = fragmentAt 5 ∧
+    Exponential.Atom.exp_sub.rhs.code = fragmentAt 6 ∧
     Exponential.Atom.exp_neg_inf_sub.lhs.code = fragmentAt 7 := ⟨rfl, rfl, rfl, rfl, rfl⟩
+
+example : (Exponential.Atom.exp_neg_inf_sub .libdevice).lhs.code = fragmentAt 15 := rfl
+
+/-- Explicit fp32 constants, as in the numerical kernels. Scalar full has the
+same execution as the candidate literal without assuming any exp identity. -/
+private def zeroExpressions : ComputeKernel := triton {
+  out := tl.exp(tl.full([], 0, dtype=tl.float32))
+  out := libdevice.exp(tl.full([], 0, dtype=tl.float32))
+}
+
+open Structural Guarded in
+theorem zero_sources_match {α : Type} [Inhabited α] (M : Algebra α) (s : State α) :
+    run M Exponential.Atom.exp_zero.lhs.code s = run M zeroExpressions.surfaceBody[0]?.toList s ∧
+    run M (Exponential.Atom.exp_zero .libdevice).lhs.code s =
+      run M zeroExpressions.surfaceBody[1]?.toList s := by
+  simp [Exponential.Atom.lhs, Exponential.Backend.exp, ScalarArithmetic.fragment,
+    zeroExpressions, ComputeKernel.surfaceBody, run, step, evalExpr, evalComputeOp,
+    evalOp_unfold, ComputeDType.eraseDType]
 
 example : (Maximum.lhs .max_commute).code = fragmentAt 8 ∧
     (Maximum.rhs .max_commute).code = fragmentAt 9 ∧
@@ -45,10 +64,22 @@ example : (Maximum.lhs .max_commute).code = fragmentAt 8 ∧
     (Maximum.rhs .max_neg_inf).code = fragmentAt 14 := ⟨rfl, rfl, rfl, rfl, rfl, rfl, rfl, rfl⟩
 
 -- An admitted libdevice identity cannot enable the rejected tl.exp candidate.
-example : Exponential.Atom.exp_sub.Available := by decide
-example : ¬ Exponential.Atom.exp_sub_intrinsic.Available := by decide
-example : Exponential.Atom.exp_sub_intrinsic.matches SupplementalAdmission.fp32_exp_sub =
+example : (Exponential.Atom.exp_sub .libdevice).Available := by decide
+example : ¬ Exponential.Atom.exp_sub.Available := by decide
+example : Exponential.Atom.exp_sub.matches ExpAdmission.fp32_exp_sub =
     Bool.false := by decide
+
+-- Constants prefer tl.exp; both accepted backends remain independently usable.
+example (b : Exponential.Backend) :
+    (Exponential.Atom.exp_zero b).Available ∧
+    (Exponential.Atom.exp_neg_inf_sub b).Available := by cases b <;> decide
+
+example : Exponential.Atom.exp_zero.matches ExpAdmission.fp32_exp_zero_libdevice = Bool.false ∧
+    (Exponential.Atom.exp_zero .libdevice).matches ExpAdmission.fp32_exp_zero = Bool.false ∧
+    Exponential.Atom.exp_neg_inf_sub.matches ExpAdmission.fp32_exp_neg_inf_sub_libdevice = Bool.false ∧
+    (Exponential.Atom.exp_neg_inf_sub .libdevice).matches ExpAdmission.fp32_exp_neg_inf_sub = Bool.false := by decide
+
+example : (Exponential.candidates.filterMap Exponential.Atom.entry?).length = 5 := rfl
 
 example (a : Maximum.Atom) : (Maximum.lhs a).guards = (Maximum.rhs a).guards := by
   cases a <;> rfl
@@ -73,15 +104,37 @@ example : CountConversion.Atom.successor.matches { CountAdmission.successor with
 
 -- A conditional proof can be written before an experiment accepts its candidate.
 theorem intrinsic_when_selected (R : Exponential.Rules)
-    (h : Exponential.Atom.exp_sub_intrinsic.Available) :
-    [Exponential.Atom.exp_sub_intrinsic.lhs] ≡[R] [Exponential.Atom.exp_sub_intrinsic.rhs] :=
-  Exponential.rewrite R .exp_sub_intrinsic h
+    (h : Exponential.Atom.exp_sub.Available) :
+    [Exponential.Atom.exp_sub.lhs] ≡[R] [Exponential.Atom.exp_sub.rhs] :=
+  Exponential.rewrite R .exp_sub h
+
+theorem selected_exp_zero (R : Exponential.Rules) :
+    [Exponential.Atom.exp_zero.lhs] ≡[R] [Exponential.Atom.exp_zero.rhs] :=
+  Exponential.rewrite R .exp_zero (by decide)
+
+theorem selected_exp_zero_libdevice (R : Exponential.Rules) :
+    [(Exponential.Atom.exp_zero .libdevice).lhs] ≡[R]
+      [(Exponential.Atom.exp_zero .libdevice).rhs] :=
+  Exponential.rewrite R (.exp_zero .libdevice) (by decide)
+
+theorem selected_exp_neg_inf_sub (R : Exponential.Rules) :
+    [Exponential.Atom.exp_neg_inf_sub.lhs] ≡[R] [Exponential.Atom.exp_neg_inf_sub.rhs] :=
+  Exponential.rewrite R .exp_neg_inf_sub (by decide)
+
+theorem selected_exp_neg_inf_sub_libdevice (R : Exponential.Rules) :
+    [(Exponential.Atom.exp_neg_inf_sub .libdevice).lhs] ≡[R]
+      [(Exponential.Atom.exp_neg_inf_sub .libdevice).rhs] :=
+  Exponential.rewrite R (.exp_neg_inf_sub .libdevice) (by decide)
 
 theorem selected_maximum (R : Maximum.Rules) :
     [Maximum.lhs .max_commute] ≡[R] [Maximum.rhs .max_commute] :=
   Maximum.rewrite R .max_commute (by decide)
 
 #print_fp_assumptions selected_maximum
+#print_fp_assumptions selected_exp_zero
+#print_fp_assumptions selected_exp_zero_libdevice
+#print_fp_assumptions selected_exp_neg_inf_sub
+#print_fp_assumptions selected_exp_neg_inf_sub_libdevice
 #axiomsClean ScalarArithmetic.admitted
 #axiomsClean Reciprocal.admitted
 #axiomsClean Exponential.admitted

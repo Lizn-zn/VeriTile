@@ -143,6 +143,9 @@ class SupplementalExportTests(unittest.TestCase):
         self.assertEqual(*accepted)
         self.assertEqual(accepted[0], {'EXP-SUB', 'EXP-ZERO', 'EXP-ZERO-LIBDEVICE',
                                        'EXP-NEG-INF-SUB', 'EXP-NEG-INF-SUB-LIBDEVICE'})
+        text = exporter.render(reports[0], 'ExpAdmission')
+        self.assertEqual(text, (exporter.ROOT / 'VeriTile/Triton/Float/ExpAdmission.lean').read_text())
+        self.assertNotIn('def fp32_exp_sub_intrinsic :', text)
 
     def test_invalid_namespace_is_rejected(self):
         with self.assertRaisesRegex(ValueError, 'identifier'):

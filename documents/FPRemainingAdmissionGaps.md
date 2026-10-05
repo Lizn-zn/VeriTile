@@ -98,6 +98,14 @@ See the [paired experiments](../experiments/floating_point/supplement/README.md)
 for exact intrinsic choices, both complete result tables, PTX comparisons,
 boundary checks and descriptive timings.
 
+The pure-exp results are also connected to Lean through `ExpAdmission`.
+`Float/Exponential` defines both backends for exp-sub, exp-zero and exp-neg-inf-sub,
+then selects the five accepted fp32 instances from the current paired report.
+Constants default to tl.exp; the shift adapter explicitly selects libdevice.exp.
+SoftmaxReciprocal and FloatDTypeSoftmax use tl.exp in their unchanged prefixes:
+their FP proofs only require div_mul_rcp. All printed exp assumptions name their
+backend; accepting one implementation never admits the other.
+
 ## Checked algebraic evidence
 
 [FPAdmissionCoverage.lean](../bench/tests/FPAdmissionCoverage.lean) checks

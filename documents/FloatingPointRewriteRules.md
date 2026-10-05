@@ -104,11 +104,23 @@ intrinsic、精度与定义域，然后定义左右片段，最后按准入表�
 |---|---|
 | [ScalarArithmetic](../VeriTile/Triton/Float/ScalarArithmetic.lean) | fp32 加乘交换、结合、分配、消去，以及零、一和倒数相关的 11 条关系 |
 | [Reciprocal](../VeriTile/Triton/Float/Reciprocal.lean) | 普通 Triton 除法改写为乘倒数；分别保留 fp32 和 fp64 计算后转 fp32 的片段 |
-| [Exponential](../VeriTile/Triton/Float/Exponential.lean) | libdevice 与 intrinsic 的两种 exp-sub，以及 exp-zero、exp-neg-inf-sub |
+| [Exponential](../VeriTile/Triton/Float/Exponential.lean) | `exp_sub exp`、`exp_zero exp`、`exp_neg_inf_sub exp`；每条分别定义 `.tl` 和 `.libdevice` 两个候选 |
 | [Maximum](../VeriTile/Triton/Float/Maximum.lean) | fp32 maximum 的交换、结合、幂等和负无穷单位元 |
 | [CountConversion](../VeriTile/Triton/Float/CountConversion.lean) | int32 到 fp32 的零转换，以及 `0 ≤ i < 2^24` 上的后继转换 |
 
 `EXP-SUB-INTRINSIC` 仍是未准入候选，不能用已通过的 libdevice 结果启用它。
+这六个 fp32 候选读取由当前配对实验生成的
+[ExpAdmission.lean](../VeriTile/Triton/Float/ExpAdmission.lean)：接受五个，拒绝 `exp_sub .tl`。
+候选的 exp 参数默认 `.tl`；`exp_sub .libdevice` 必须显式选择。
+`#print_fp_assumptions` 显示 `exp_sub(libdevice.exp)`、`exp_zero(tl.exp)` 等名称，
+两种实现的准入不会合并，也不产生 `tl.exp = libdevice.exp` 的桥接假设。
+
+程序优先保留 `tl.exp`。SoftmaxReciprocal 和 FloatDTypeSoftmax 仅改写除法，
+共同前缀中的 exp 按原样解释，因此都使用 `tl.exp`，不依赖 exp 原子。
+SoftmaxStable、OnlineSoftmax、StableLogSumExp 的 exp-sub，以及 LogExp 的条件消去，
+需要当前仅由 libdevice 通过的原子，因此在相应代码和证明中显式使用 `libdevice.exp`。
+这按各个证明所需的关系选择实现，不把某一条关系失败推广为整个 API 不可用。
+
 计数后继规则的整数上界属于关系定义域；报告采用不同范围时，不能启用这里的固定范围候选。
 它与实验 shape 无关。库不会把 bf16 输出或 fp64 计算的条目当成裸 fp32 关系。
 

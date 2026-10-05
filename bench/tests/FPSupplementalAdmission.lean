@@ -102,6 +102,21 @@ example (B : Nat) :
       [none, none, some .fp32, some .fp64, some .fp64, some .fp64,
        some .fp64, some .fp64, some .fp64, some .fp32] := rfl
 
+-- Changing only division needs no exponential law. Both sources retain tl.exp,
+-- including fp64 work in the dtype example; a libdevice substitution would fail.
+private def expStep (f : Format) (B : Nat) : ComputeStmt :=
+  let e := Op.exp (.sub .real .scalarR (.ref .real [B] "x") (.ref .real [] "m"))
+  match f with
+  | .fp32 => .assign .real [B] "e" (.compute (.alg .fp32 e))
+  | .fp64_fp32 => .assign .real [B] "e" (.compute (.alg .fp64 e))
+
+example (B : Nat) :
+    (SoftmaxReciprocal.Kernels.originalKernel "x" "y" B).surfaceBody[4]? = some (expStep .fp32 B) ∧
+    (SoftmaxReciprocal.Kernels.reciprocalKernel "x" "y" B).surfaceBody[4]? = some (expStep .fp32 B) ∧
+    (FloatDTypeSoftmax.Kernels.originalKernel "x" "y" B).surfaceBody[5]? = some (expStep .fp64_fp32 B) ∧
+    (FloatDTypeSoftmax.Kernels.reciprocalKernel "x" "y" B).surfaceBody[5]? = some (expStep .fp64_fp32 B) :=
+  ⟨rfl, rfl, rfl, rfl⟩
+
 -- No correctness module supplies a real-valued numerical law to these FP proofs.
 open Lean Elab Command in
 run_cmd do

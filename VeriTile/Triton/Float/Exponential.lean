@@ -1,49 +1,61 @@
 import VeriTile.Triton.Float.ScalarArithmetic
+import VeriTile.Triton.Float.ExpAdmission
 
 /-! Exponential candidates retain the exact intrinsic used by the experiment.
-The measured tl.exp EXP-SUB-INTRINSIC relation fails the configured bias gate
-(B = 0.1608954387 ULP > 0.05). It remains a candidate but cannot supply the
-libdevice.exp assumption used by the stable-softmax derivation. -/
+Prefer tl.exp when the required relation is admitted. The paired fp32 report
+accepts both implementations of exp-zero and exp-neg-inf-sub, but only
+libdevice.exp for exp-sub. A report never equates the two implementations.
+Candidates remain available to describe even when their relations are rejected. -/
 namespace VeriTile.Triton.FP.Exponential
 open Structural Guarded ScalarArithmetic
 open scoped VeriTile.Spec
 
+inductive Backend where
+  | tl | libdevice
+  deriving DecidableEq, Repr
+
 inductive Atom where
-  | exp_sub | exp_sub_intrinsic | exp_zero | exp_neg_inf_sub
+  | exp_sub (exp : Backend := .tl)
+  | exp_zero (exp : Backend := .tl)
+  | exp_neg_inf_sub (exp : Backend := .tl)
   deriving DecidableEq, Repr
 
 /-- All operations compute in fp32. These are proposed rewrites, not facts. -/
 def Atom.ruleID : Atom → String
-  -- libdevice.exp(a - b) → libdevice.exp(a) / libdevice.exp(b); finite a,b.
-  | .exp_sub => "EXP-SUB"
-  -- tl.exp(a - b) → tl.exp(a) / tl.exp(b); finite a,b.
-  | .exp_sub_intrinsic => "EXP-SUB-INTRINSIC"
-  -- tl.exp(0) → 1; no variable operands.
-  | .exp_zero => "EXP-ZERO"
-  -- tl.exp(-inf - a) → 0; finite a. -inf is a literal, not a sampled input.
-  | .exp_neg_inf_sub => "EXP-NEG-INF-SUB"
+  -- exp(a - b) → exp(a) / exp(b); finite a,b; same backend on both sides.
+  | .exp_sub .tl => "EXP-SUB-INTRINSIC"
+  | .exp_sub .libdevice => "EXP-SUB"
+  -- exp(0) → 1; no variable operands.
+  | .exp_zero .tl => "EXP-ZERO"
+  | .exp_zero .libdevice => "EXP-ZERO-LIBDEVICE"
+  -- exp(-inf - a) → 0; finite a. -inf is a literal, not a sampled input.
+  | .exp_neg_inf_sub .tl => "EXP-NEG-INF-SUB"
+  | .exp_neg_inf_sub .libdevice => "EXP-NEG-INF-SUB-LIBDEVICE"
 
-def candidates : List Atom := [.exp_sub, .exp_sub_intrinsic, .exp_zero, .exp_neg_inf_sub]
+def candidates : List Atom := [.exp_sub .tl, .exp_sub .libdevice,
+  .exp_zero .tl, .exp_zero .libdevice, .exp_neg_inf_sub .tl, .exp_neg_inf_sub .libdevice]
+
+def Backend.exp : Backend → Op .real [] → Op .real []
+  | .tl => .exp
+  | .libdevice => .libdeviceExp
 
 def guards : List OperandGuard := [⟨"a", .finite⟩, ⟨"b", .finite⟩]
 def Atom.guards : Atom → List OperandGuard
-  | .exp_sub | .exp_sub_intrinsic => VeriTile.Triton.FP.Exponential.guards
-  | .exp_zero => []
-  | .exp_neg_inf_sub => [⟨"a", .finite⟩]
+  | .exp_sub _ => VeriTile.Triton.FP.Exponential.guards
+  | .exp_zero _ => []
+  | .exp_neg_inf_sub _ => [⟨"a", .finite⟩]
 
 def Atom.lhs : Atom → GuardedFragment
   | a => ⟨a.guards, fragment (match a with
-    | .exp_sub => .libdeviceExp (minus (ref "a") (ref "b"))
-    | .exp_sub_intrinsic => .exp (minus (ref "a") (ref "b"))
-    | .exp_zero => .exp (.const 0)
-    | .exp_neg_inf_sub => .exp (minus .negInf (ref "a")))⟩
+    | .exp_sub exp => exp.exp (minus (ref "a") (ref "b"))
+    | .exp_zero exp => exp.exp (.const 0)
+    | .exp_neg_inf_sub exp => exp.exp (minus .negInf (ref "a")))⟩
 
 def Atom.rhs : Atom → GuardedFragment
   | a => ⟨a.guards, fragment (match a with
-    | .exp_sub => divide (.libdeviceExp (ref "a")) (.libdeviceExp (ref "b"))
-    | .exp_sub_intrinsic => divide (.exp (ref "a")) (.exp (ref "b"))
-    | .exp_zero => .const 1
-    | .exp_neg_inf_sub => .const 0)⟩
+    | .exp_sub exp => divide (exp.exp (ref "a")) (exp.exp (ref "b"))
+    | .exp_zero _ => .const 1
+    | .exp_neg_inf_sub _ => .const 0)⟩
 
 /-- Match the exact relation, precision and operand domain before selecting a row. -/
 def Atom.matches (a : Atom) (row : ReportedScalarRule) : Bool :=
@@ -53,7 +65,7 @@ def Atom.matches (a : Atom) (row : ReportedScalarRule) : Bool :=
 
 /-- Only accepted rows in the generated table can activate a candidate. -/
 def Atom.report? (a : Atom) : Option ReportedScalarRule :=
-  SupplementalAdmission.all.find? a.matches
+  ExpAdmission.all.find? a.matches
 
 abbrev Atom.Available (a : Atom) : Prop := a.report?.isSome = true
 
@@ -83,7 +95,7 @@ theorem admitted (R : Rules) (a : Atom) (h : a.Available) :
   · apply List.mem_append_right
     apply List.mem_filterMap.mpr
     refine ⟨a, ?_, ?_⟩
-    · cases a <;> simp [candidates]
+    · rcases a with ⟨_ | _⟩ | ⟨_ | _⟩ | ⟨_ | _⟩ <;> simp [candidates]
     · have available : a.report?.isSome = true := h
       cases hr : a.report? with
       | none => simp [hr] at available
@@ -108,7 +120,8 @@ theorem arithmetic_models {α : Type} [Inhabited α] (R : Rules)
     Models R.arithmetic.assumptions M D :=
   fun lhs rhs h => hM lhs rhs (arithmetic_derivation R h)
 
-def lhs : GuardedFragment := Atom.lhs .exp_sub
-def rhs : GuardedFragment := Atom.rhs .exp_sub
+/-- The stable-softmax derivation specifically requires libdevice.exp. -/
+def lhs : GuardedFragment := Atom.lhs (.exp_sub .libdevice)
+def rhs : GuardedFragment := Atom.rhs (.exp_sub .libdevice)
 
 end VeriTile.Triton.FP.Exponential

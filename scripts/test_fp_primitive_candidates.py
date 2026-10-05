@@ -34,7 +34,7 @@ class PrimitiveCandidateTests(unittest.TestCase):
         return (ROOT / f'VeriTile/Triton/Float/{family}.lean').read_text()
 
     def empty(self, source):
-        for pool in ('ReportedAdmission.all', 'SupplementalAdmission.all', 'CountAdmission.all'):
+        for pool in ('ReportedAdmission.all', 'SupplementalAdmission.all', 'CountAdmission.all', 'ExpAdmission.all'):
             source = source.replace(pool, '[]')
         return source
 
@@ -43,6 +43,9 @@ class PrimitiveCandidateTests(unittest.TestCase):
         self.assertIn('FP assumptions used by selected_maximum:\n  max_commute\n', output)
         self.assertNotIn('unresolved FP proof', output)
         self.assertNotIn('\n  max_assoc\n', output)
+        for atom in ('exp_zero', 'exp_neg_inf_sub'):
+            self.assertIn(f'FP assumptions used by selected_{atom}:\n  {atom}(tl.exp)\n', output)
+            self.assertIn(f'FP assumptions used by selected_{atom}_libdevice:\n  {atom}(libdevice.exp)\n', output)
 
     def test_empty_tables_keep_candidates_and_conditional_proofs(self):
         for family in FAMILIES:
@@ -50,20 +53,22 @@ class PrimitiveCandidateTests(unittest.TestCase):
                 kind = 'Format' if family == 'Reciprocal' else 'Atom'
                 remaining = 'R.arithmetic.assumptions' if family in ('Exponential', 'CountConversion') else '[]'
                 rules = 'Rules .fp32' if family == 'Reciprocal' else 'Rules'
+                cases = ('rcases a with ⟨_ | _⟩ | ⟨_ | _⟩ | ⟨_ | _⟩' if family == 'Exponential'
+                         else 'cases a')
                 self.check(self.empty(self.source(family)) + f'''
 open VeriTile.Triton.FP.{family}
-example (a : {kind}) : ¬ a.Available := by cases a <;> decide
+example (a : {kind}) : ¬ a.Available := by {cases} <;> decide
 example (R : {rules}) : R.assumptions = {remaining} := rfl
 ''')
 
     def test_removed_rules_cannot_be_used(self):
         for family, atom in (
             ('ScalarArithmetic', 'addAssociate'), ('Reciprocal', 'fp32'),
-            ('Exponential', 'exp_sub'), ('CountConversion', 'successor'), ('Maximum', 'max_assoc')
+            ('Exponential', 'exp_sub .libdevice'), ('CountConversion', 'successor'), ('Maximum', 'max_assoc')
         ):
             with self.subTest(family=family):
                 rules = 'Rules .fp32' if family == 'Reciprocal' else 'Rules'
-                args = 'R' if family == 'Reciprocal' else f'R .{atom}'
+                args = 'R' if family == 'Reciprocal' else f'R (.{atom})'
                 result = self.lean(self.empty(self.source(family)) + f'''
 open VeriTile.Triton.FP.{family}
 example (R : {rules}) := VeriTile.Triton.FP.{family}.rewrite {args} (by decide)
@@ -75,7 +80,7 @@ example (R : {rules}) := VeriTile.Triton.FP.{family}.rewrite {args} (by decide)
         for family, pool, row, selected, absent in (
             ('ScalarArithmetic', 'ReportedAdmission.all', 'ReportedAdmission.fp32_add_commute',
              'addCommute', 'addAssociate'),
-            ('Exponential', 'SupplementalAdmission.all', 'SupplementalAdmission.fp32_exp_zero',
+            ('Exponential', 'ExpAdmission.all', 'ExpAdmission.fp32_exp_zero',
              'exp_zero', 'exp_sub'),
             ('CountConversion', 'CountAdmission.all', 'CountAdmission.zero', 'zero', 'successor'),
             ('Maximum', 'SupplementalAdmission.all', 'SupplementalAdmission.fp32_max_commute',
@@ -83,7 +88,7 @@ example (R : {rules}) := VeriTile.Triton.FP.{family}.rewrite {args} (by decide)
         ):
             with self.subTest(family=family):
                 source = self.source(family)
-                for other in ('ReportedAdmission.all', 'SupplementalAdmission.all', 'CountAdmission.all'):
+                for other in ('ReportedAdmission.all', 'SupplementalAdmission.all', 'CountAdmission.all', 'ExpAdmission.all'):
                     source = source.replace(other, f'[{row}]' if other == pool else '[]')
                 self.check(source + f'''
 open VeriTile.Triton.FP.{family}
@@ -107,6 +112,18 @@ example : Atom.zero.Available := by decide
 example : ¬ Atom.successor.Available := by decide
 ''')
 
+    def test_exp_backend_cannot_borrow_another_implementations_admission(self):
+        for atom in ('exp_sub', 'exp_zero', 'exp_neg_inf_sub'):
+            with self.subTest(atom=atom):
+                row = 'fp32_' + atom + ('' if atom == 'exp_sub' else '_libdevice')
+                source = self.source('Exponential').replace('ExpAdmission.all', f'[ExpAdmission.{row}]')
+                self.check(source + f'''
+open VeriTile.Triton.FP.Exponential
+example : (Atom.{atom} .libdevice).Available := by decide
+example : ¬ (Atom.{atom} .tl).Available := by decide
+example : (candidates.filterMap Atom.entry?).length = 1 := rfl
+''')
+
     def test_catalog_selection_matches_published_results(self):
         rows = []
         for path in ('report', 'supplement/report', 'primitives/report'):
@@ -126,7 +143,11 @@ open VeriTile.Triton.FP.{family}
                 if prefix:
                     self.assertEqual(set(catalog), {r['id'] for r in registry if r['id'].startswith(prefix)})
                 self.assertEqual(len(catalog), len(set(catalog)))
-                self.assertEqual(set(selected), accepted & set(catalog))
+                expected = accepted
+                if family == 'Exponential':
+                    current = json.loads((ROOT / 'experiments/floating_point/supplement/exp_report/summary.json').read_text())
+                    expected = {r['rule'] for r in current['rows'] if r['format'] == 'fp32' and r['accept']}
+                self.assertEqual(set(selected), expected & set(catalog))
 
 
 if __name__ == '__main__':

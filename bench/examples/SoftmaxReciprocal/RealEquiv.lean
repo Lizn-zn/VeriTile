@@ -1,8 +1,6 @@
 import bench.examples.SoftmaxReciprocal.Kernels
-/- Use the shared softmax libdevice.exp implementation. The measured
-fp32 tl.exp exp-sub relation failed admission under the configured probe
-(B = 0.1608954387 > 0.05).
-The reciprocal rewrite itself treats exp opaquely, at its stated precision. -/
+/- The shared prefix uses tl.exp, interpreted opaquely at its stated
+precision. Only division changes; no exponential rewrite is assumed. -/
 import VeriTile.Triton
 import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit

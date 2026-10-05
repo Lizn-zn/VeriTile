@@ -67,7 +67,7 @@ run_cmd do
         self.assertEqual(set(output.splitlines()[1:]), {
             '  add_commute', '  add_assoc', '  mul_commute', '  mul_assoc',
             '  mul_distrib', '  cancel', '  add_zero', '  mul_one',
-            '  div_mul_rcp', '  mul_rcp_cancel', '  exp_sub'})
+            '  div_mul_rcp', '  mul_rcp_cancel', '  exp_sub(libdevice.exp)'})
 
     def test_observation_requires_final_registers_and_preserves_source_effects(self):
         self.check_lean((ROOT / 'bench/tests/FPObservedRow.lean').read_text())

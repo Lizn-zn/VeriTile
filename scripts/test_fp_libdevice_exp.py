@@ -41,7 +41,7 @@ run_cmd do
         self.assertEqual(set(output.splitlines()[1:]), {
             '  add_commute', '  add_assoc', '  mul_commute', '  mul_assoc',
             '  mul_distrib', '  cancel', '  add_zero', '  mul_one',
-            '  div_mul_rcp', '  mul_rcp_cancel', '  exp_sub'})
+            '  div_mul_rcp', '  mul_rcp_cancel', '  exp_sub(libdevice.exp)'})
 
 
 if __name__ == '__main__':

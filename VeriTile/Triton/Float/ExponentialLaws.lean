@@ -19,8 +19,8 @@ theorem exp_sub {α : Type} [Inhabited α] (R : Rules)
     rcases hg with rfl | rfl
     · exact ⟨fun _ => a, by simp [t], ha⟩
     · exact ⟨fun _ => b, by simp [t], hb⟩
-  have h := hM lhs rhs (admitted R .exp_sub (by decide)) t hg hg
-  simp only [lhs, rhs, Atom.lhs, Atom.rhs, fragment, run, step, evalExpr,
+  have h := hM lhs rhs (admitted R (.exp_sub .libdevice) (by decide)) t hg hg
+  simp only [lhs, rhs, Atom.lhs, Atom.rhs, Backend.exp, fragment, run, step, evalExpr,
     evalComputeOp, evalOp_unfold, ref, minus, divide, ComputeDType.eraseDType,
     numeric, State.setReg_same, t] at h
   simp [State.setReg, SoftmaxShift.exp, sub, div] at h ⊢

@@ -49,7 +49,7 @@ private theorem floatStable_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
              (Op.reduceMax (shape := [N]) (0 : Fin (0 + 1)) Bool.false
                (Op.ref TileDType.real [N] "x")),
            Stmt.assign TileDType.real [N] "e"
-             (Op.libdeviceExp (Op.sub NumericDType.real Broadcast.scalarR
+             (Op.exp (Op.sub NumericDType.real Broadcast.scalarR
                (Op.ref TileDType.real [N] "x") (Op.ref TileDType.real [] "m"))),
            Stmt.assign TileDType.real [] "s"
              (Op.reduceSum (shape := [N]) (0 : Fin (0 + 1)) Bool.false
@@ -68,8 +68,7 @@ private theorem floatStable_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
   repeat' apply And.intro
   all_goals
     rw [Op.eraseDType.eq_def]
-    simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def,
-      Op.eraseDType.eq_def, VeriTile.Triton.eraseDType]
+    simp [Op.eraseDType.eq_def, VeriTile.Triton.eraseDType]
     try rfl
 
 /-- The erased fp32 reciprocal kernel's projected body, pinned to its literal
@@ -94,7 +93,7 @@ private theorem floatRecip_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
              (Op.reduceMax (shape := [N]) (0 : Fin (0 + 1)) Bool.false
                (Op.ref TileDType.real [N] "x")),
            Stmt.assign TileDType.real [N] "e"
-             (Op.libdeviceExp (Op.sub NumericDType.real Broadcast.scalarR
+             (Op.exp (Op.sub NumericDType.real Broadcast.scalarR
                (Op.ref TileDType.real [N] "x") (Op.ref TileDType.real [] "m"))),
            Stmt.assign TileDType.real [] "s"
              (Op.reduceSum (shape := [N]) (0 : Fin (0 + 1)) Bool.false
@@ -116,8 +115,7 @@ private theorem floatRecip_erased_toAlg (xReg yReg : RegionName) (N : Nat) :
   repeat' apply And.intro
   all_goals
     rw [Op.eraseDType.eq_def]
-    simp [MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def,
-      Op.eraseDType.eq_def, VeriTile.Triton.eraseDType]
+    simp [Op.eraseDType.eq_def, VeriTile.Triton.eraseDType]
     try rfl
 
 private theorem div_flattenOk (xReg yReg : RegionName) (B : Nat) :

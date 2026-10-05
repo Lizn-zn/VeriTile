@@ -1,8 +1,6 @@
 import bench.examples.FloatDTypeSoftmax.Kernels
-/- Use the shared softmax libdevice.exp implementation. The measured
-fp32 tl.exp exp-sub relation failed admission under the configured probe
-(B = 0.1608954387 > 0.05).
-The reciprocal rewrite itself treats exp opaquely, at its stated precision. -/
+/- The shared prefix uses tl.exp, interpreted opaquely at its stated
+precision. Only division changes; no exponential rewrite is assumed. -/
 /- Ordinary division versus one reciprocal shared by the output lanes.
 The common max/exp/sum prefix is opaque. The only numerical rewrite is the
 accepted scalar div_mul_rcp instance, with finite operands and a nonzero divisor.
@@ -22,7 +20,7 @@ set_option maxHeartbeats 1600000
 def loaded {α : Type} (M : Algebra α) (a : α) : α := M.cast (some .fp64) .real .real (M.fp32Load a)
 
 def exponentials {α : Type} (M : Algebra α) (B : Nat) (xs : Fin B → α) : Fin B → α :=
-  fun i => M.unary (some .fp64) .libdeviceExp
+  fun i => M.unary (some .fp64) .exp
     (M.binary (some .fp64) .real .sub (loaded M (xs i))
       (M.reduceMax (some .fp64) (shape := [B]) ⟨0, by simp⟩ Bool.false
         (fun j => loaded M (xs j.1)) PUnit.unit))

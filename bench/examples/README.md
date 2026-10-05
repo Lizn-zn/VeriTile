@@ -35,8 +35,8 @@ required input/intermediate domains remain part of the FP statements.
 | [RowWiseSum](RowWiseSum/) | Decompose observable outputs and prove reversed reduction lanes using admitted addition commutation and association. |
 | [FusedSiLU](FusedSiLU/) | Fuse the pipeline; structural FP equivalence without numerical assumptions. |
 | [FusedSwiglu](FusedSwiglu/) | Fuse the masked pipeline while retaining casts; structural FP equivalence without numerical assumptions. |
-| [SoftmaxReciprocal](SoftmaxReciprocal/) | Replace per-lane division with reciprocal multiplication. |
-| [FloatDTypeSoftmax](FloatDTypeSoftmax/) | The reciprocal rewrite with fp32 loads/stores and fp64 work. |
+| [SoftmaxReciprocal](SoftmaxReciprocal/) | Replace per-lane division with reciprocal multiplication; unchanged tl.exp prefix, only div_mul_rcp assumed. |
+| [FloatDTypeSoftmax](FloatDTypeSoftmax/) | The reciprocal rewrite with fp32 loads/stores and fp64 work; unchanged tl.exp prefix, only the casted div_mul_rcp atom assumed. |
 | [SoftmaxStable](SoftmaxStable/) | Naive versus max-shifted softmax, derived from scalar assumptions and reduction plans. |
 | [OnlineSoftmax](OnlineSoftmax/) | Batch output versus normalization recovered from the online kernel's final `m/l` registers; the online source has no output store. |
 | [Welford](Welford/) | Two-pass versus online mean/variance, with the stated count bound and reduction plan. |

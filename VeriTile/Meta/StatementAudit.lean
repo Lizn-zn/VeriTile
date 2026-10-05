@@ -373,6 +373,12 @@ This affects only the concise display; contracts and detailed reports retain
 their original identity. -/
 private def fpAtomName (id : String) : String :=
   match id with
+  | "EXP-SUB-INTRINSIC" => "exp_sub(tl.exp)"
+  | "EXP-SUB" => "exp_sub(libdevice.exp)"
+  | "EXP-ZERO" => "exp_zero(tl.exp)"
+  | "EXP-ZERO-LIBDEVICE" => "exp_zero(libdevice.exp)"
+  | "EXP-NEG-INF-SUB" => "exp_neg_inf_sub(tl.exp)"
+  | "EXP-NEG-INF-SUB-LIBDEVICE" => "exp_neg_inf_sub(libdevice.exp)"
   | "LOG-MUL" => "log_mul(tl.log)"
   | "LOG-MUL-LIBDEVICE" => "log_mul(libdevice.log)"
   | "LOG-MUL-GUARDED" => "log_mul_split(libdevice.log)"

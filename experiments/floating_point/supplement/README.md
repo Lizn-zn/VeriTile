@@ -151,9 +151,16 @@ Unconditional LOG-MUL/LOG-EXP and both LOG1P probes remain unadmitted. The LOG1P
 pair is experiment-only because its fused operation still needs a corresponding
 Lean execution model.
 
-The generated `LogAdmission` includes only accepted log relations. Pure-exp
-results and acceptance decisions are maintained in `exp_report` and
-`exp_validation_report`; no new pure-exp Lean fragment is inferred from a row.
+The generated `LogAdmission` includes only accepted log relations. `ExpAdmission`
+selects five of the six separately defined fp32 candidates in `Float/Exponential`
+from `exp_report`, with decisions confirmed by `exp_validation_report`.
+`exp_sub exp`, `exp_zero exp` and `exp_neg_inf_sub exp` default to `.tl`;
+exp-sub requires an explicit `.libdevice` selection under these results.
+The two constant relations admit either backend. Assumption output retains
+the API, for example `exp_zero(tl.exp)` or `exp_sub(libdevice.exp)`.
+An unchanged exp prefix needs no exp assumption: the reciprocal-softmax examples
+use tl.exp. Shift/cancellation examples retain libdevice.exp where their required
+relation fails with tl.exp. There is no equality assumed between the two APIs.
 Unaccepted variants cannot be selected through the typed Lean catalog. Numerical
 acceptance remains conditional on the recorded experiment and trust contract.
 
@@ -181,6 +188,7 @@ python3 scripts/check_numerics_supplement.py report Logs/fp-exp --output-dir Log
 python3 scripts/check_numerics_supplement.py run --profile experiments/floating_point/supplement/exp_validation_config.py --output Logs/fp-exp-validation
 python3 scripts/check_numerics_supplement.py report Logs/fp-exp-validation --output-dir Logs/fp-exp-validation-report
 python3 scripts/export_supplemental_rules.py --trust-report --report experiments/floating_point/supplement/log_report --namespace LogAdmission --output VeriTile/Triton/Float/LogAdmission.lean
+python3 scripts/export_supplemental_rules.py --trust-report --report experiments/floating_point/supplement/exp_report --namespace ExpAdmission --output VeriTile/Triton/Float/ExpAdmission.lean
 ```
 
 ### 全部补充实验
