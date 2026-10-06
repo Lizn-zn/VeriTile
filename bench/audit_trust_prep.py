@@ -74,8 +74,8 @@ def prepare_source(text, rel, manifest=MANIFEST):
         footer.append('#eval IO.println "Spec audit: negative-test fixture; guarded checks executed in source"')
     else:
         path = Path(rel)
-        source_module = '.'.join((*path.parent.parts, 'Kernels'))
-        if (path.parts[:2] == ('bench', 'examples') and len(path.parts) == 4
+        source_module = '.'.join((*path.parts[:3], 'Kernels'))
+        if (path.parts[:2] == ('bench', 'examples') and len(path.parts) >= 4
                 and f'import {source_module}' in lines):
             footer.append(f"#auditModuleSpecs from [{source_module}]")
         else:

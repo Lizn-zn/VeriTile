@@ -29,7 +29,7 @@ class OnlineSoftmaxFPTests(unittest.TestCase):
 
     def test_original_source_and_real_spec_independence(self):
         output = self.check_lean('''
-import bench.examples.OnlineSoftmax.Contract
+import bench.examples.OnlineSoftmax.Proofs.FP
 import bench.examples.OnlineSoftmax.Correct
 open VeriTile Triton VeriTile.Bench.Examples
 example (x y : RegionName) (N : Nat) :
@@ -54,7 +54,7 @@ example (N : Nat) :
 ''')
         self.assertEqual(output, '')
         self.check_lean('''
-import bench.examples.OnlineSoftmax.Contract
+import bench.examples.OnlineSoftmax.Proofs.FP
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv

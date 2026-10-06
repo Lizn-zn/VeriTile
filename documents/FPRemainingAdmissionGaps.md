@@ -2,7 +2,7 @@
 
 The migration has 19 real correctness files and 19 files with completed FP
 specifications. StableLogSumExp now proves its conditional candidate against
-the unchanged direct reference. The older unconditional shift is recorded separately in `StableLogSumExp/Unconditional.lean`.
+the unchanged direct reference. The older unconditional shift is recorded separately in `StableLogSumExp/Proofs/Unconditional.lean`.
 The current reports select numerical assumptions using a local-ULP mean-bias
 budget and a peak absolute-error ratio gate.
 
@@ -176,10 +176,10 @@ sum tree. `LibdeviceExpSub` is obtained from `Float/Exponential`
 and the accepted libdevice EXP-SUB row. No softmax or reduction equality is a premise.
 The shift may be any opaque finite value: the derivation needs no law for max.
 
-[SoftmaxStable/Execution.lean](../bench/examples/SoftmaxStable/Execution.lean)
+[SoftmaxStable/Proofs/FP.lean](../bench/examples/SoftmaxStable/Proofs/FP.lean)
 imports both libdevice kernels from the example's shared `Kernels.lean`.
 `original_runs_under_exp` in
-[SoftmaxStable/Contract.lean](../bench/examples/SoftmaxStable/Contract.lean)
+[SoftmaxStable/Proofs/FP.lean](../bench/examples/SoftmaxStable/Proofs/FP.lean)
 connects their successful runs,
 all bf16 output cells and memory frames to this conditional derivation. Row
 length remains symbolic and positive because the original max rejects an empty
@@ -204,11 +204,11 @@ experiment's operand-domain shape; none is a reduction or logsumexp identity.
 The checked domain includes actual partial sums, reciprocal intermediates and
 positive log-product operands, and contains no equality premise.
 
-[StableLogSumExp/Execution.lean](../bench/examples/StableLogSumExp/Execution.lean)
+[StableLogSumExp/Proofs/FP.lean](../bench/examples/StableLogSumExp/Proofs/FP.lean)
 uses the shared libdevice.exp sources from `Kernels.lean`, retaining
 their single bf16 output at `pid`, symbolic positive row length and unchanged
 memory outside that one cell.
-[StableLogSumExp/Contract.lean](../bench/examples/StableLogSumExp/Contract.lean) connects the scalar
+[StableLogSumExp/Proofs/FP.lean](../bench/examples/StableLogSumExp/Proofs/FP.lean) connects the scalar
 derivation to both successful executions under the scheduled fp32 profile.
 `original_runs_under_log` discharges exp-sub from the admitted table; the
 two log obligations remain explicit.
@@ -247,8 +247,8 @@ zero-step behavior matches the existing operational semantics. `Float/Control`
 provides successful-execution induction principles for both loop forms; it
 does not add arithmetic assumptions.
 
-The independent [Welford/Execution.lean](../bench/examples/Welford/Execution.lean)
-and [OnlineSoftmax/Execution.lean](../bench/examples/OnlineSoftmax/Execution.lean)
+The independent [Welford/Proofs/FP.lean](../bench/examples/Welford/Proofs/FP.lean)
+and [OnlineSoftmax/Proofs/FP.lean](../bench/examples/OnlineSoftmax/Proofs/FP.lean)
 modules import their original Triton sources from each example's `Kernels.lean`. Welford's
 online loop computes the opaque recurrence and writes both bf16 output cells;
 the two-pass execution retains both original sum operations. Their proofs
@@ -310,7 +310,7 @@ formula and a bounded flat-memory frame. The old observation lemmas remain auxil
 `(m + (x-m)/(n+1)) * (n+1) = m*n + x` from the accepted scalar arithmetic
 atoms. Every intermediate finite/nonzero requirement is explicit. The result
 is connected to the original loop update by `fp32_mean_step` in
-[Welford/Execution.lean](../bench/examples/Welford/Execution.lean).
+[Welford/Proofs/FP.lean](../bench/examples/Welford/Proofs/FP.lean).
 Here `n` remains the actual `fromNat(i)` value: identifying its successor with
 `fromNat(i+1)` is not part of the proof.
 
@@ -330,7 +330,7 @@ and the online mean is `2`. This is a proof-library coverage check, not a GPU
 failure or a model of the transcendental rule families.
 
 An integer-conversion relation consequently needs a matching primitive binding
-before the original count-based invariant can close. PR #12 now supplies accepted
+before the original count-based invariant can close. The bounded-count report supplies accepted
 integer probes, including successor conversion for `0 <= i < 2^24`. Their Lean
 binding must retain that range; no unrestricted conversion law has been added.
 
@@ -340,7 +340,7 @@ Let `q = (x-m)/(n+1)` and `m' = m+q`. `Float/Welford.residual_step`
 derives `x-m' = n*q`; `variance_step` then derives
 `(x-m)*(x-m') = (x-m')² + n*q²`. The original loop's variance update is
 connected to this identity by `fp32_variance_step` in
-[Welford/Execution.lean](../bench/examples/Welford/Execution.lean), retaining
+[Welford/Proofs/FP.lean](../bench/examples/Welford/Proofs/FP.lean), retaining
 the actual floating conversion of the loop index. These derivations use the
 same admitted scalar theory, with explicit guards for the new residual and
 other intermediate operands.
@@ -443,7 +443,7 @@ and each implementation must preserve cells outside its two output windows and
 declared private scratch. Scratch cannot alias the input or either output.
 
 `onlineIO` and `twopassIO` in
-[Welford/Execution.lean](../bench/examples/Welford/Execution.lean) expose the original kernels through
+[Welford/Proofs/FP.lean](../bench/examples/Welford/Proofs/FP.lean) expose the original kernels through
 this interface, retaining symbolic row length/stride and both bf16 stores.
 `online_io_run` and `twopass_io_run` prove the resulting execution and frame
 obligations. These are execution results, not the pending numerical equality
@@ -474,7 +474,7 @@ reduction-count equality, statistics invariant or whole-kernel equality.
 and every subsequent append; checking only the final iteration is insufficient.
 
 `fp32_recurrence_prefix` in
-[Welford/Execution.lean](../bench/examples/Welford/Execution.lean) identifies this recurrence with the
+[Welford/Proofs/FP.lean](../bench/examples/Welford/Proofs/FP.lean) identifies this recurrence with the
 original source's executed loop, including every converted index.
 `fp32_online_statistics_run` carries the conditional result through both
 original bf16 stores and retains the two-output memory frame.
@@ -515,7 +515,7 @@ ones and squared deviations. It derives both statistics, binds the batch count
 to the original integer conversion from the two primitive count premises,
 and transfers the loop induction to the batch schedule.
 
-`original_runs` in [Welford/Comparison.lean](../bench/examples/Welford/Comparison.lean) compares both
+`original_runs` in [Welford/Proofs/FP.lean](../bench/examples/Welford/Proofs/FP.lean) compares both
 original kernels under an explicit fp32 execution model. The model resolves
 default precision and expands each sum using its supplied valid schedule;
 casts, integer conversions and all non-sum operations remain unchanged. The
@@ -559,7 +559,7 @@ and interpretation lemmas establish exact correspondence with those records.
 All loop iterations and the intermediate operands on both normalization paths
 remain covered; checking only the input leaves or final output is insufficient.
 
-[Welford/Contract.lean](../bench/examples/Welford/Contract.lean) defines the original online and
+[Welford/Proofs/FP.lean](../bench/examples/Welford/Proofs/FP.lean) defines the original online and
 two-pass IO objects independently of the real-correctness file. It keeps row
 length and stride symbolic and uses the fp32 scheduled profile. The theorem
 `original_runs_under_count` connects the syntactic domain to the original
@@ -579,7 +579,7 @@ a structural store-reordering proof still prints `none`.
 
 ### LayerNorm execution and unrounded statistics
 
-`original_statistics` in [Welford/Comparison.lean](../bench/examples/Welford/Comparison.lean)
+`original_statistics` in [Welford/Proofs/FP.lean](../bench/examples/Welford/Proofs/FP.lean)
 exposes the mean and normalized
 variance before their bf16 stores. Equality only after a noninjective output
 cast would not justify substituting those statistics into another expression.
@@ -587,7 +587,7 @@ The LayerNorm fixture demonstrates this with an opaque cast that equates two
 means while their final affine outputs differ; it is a logical countermodel,
 not an IEEE claim or an experiment.
 
-[FusedLayerNorm/Execution.lean](../bench/examples/FusedLayerNorm/Execution.lean)
+[FusedLayerNorm/Proofs/FP.lean](../bench/examples/FusedLayerNorm/Proofs/FP.lean)
 imports both original Triton sources from its shared `Kernels.lean`.
 The fused version uses the same Welford loop proof, retaining
 its pid register and unchanged input memory for the second x read. Both
@@ -601,7 +601,7 @@ lists x twice in the fused source. The original statement bodies are identical.
 `Float/ScheduledIO.IO₃` retains all three input layouts, the output layout,
 execution profile and domain syntax in its signature and uses the existing
 `≡[R]` notation.
-[FusedLayerNorm/Contract.lean](../bench/examples/FusedLayerNorm/Contract.lean)
+[FusedLayerNorm/Proofs/FP.lean](../bench/examples/FusedLayerNorm/Proofs/FP.lean)
 supplies both original IO objects. Empty
 rows have a structural execution comparison with no domain checks or numerical
 laws. For nonempty rows, `original_runs_under_count` derives equality of the

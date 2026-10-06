@@ -1,7 +1,7 @@
 import bench.examples.OnlineSoftmax.Kernels
 /- Complete two-pass online softmax versus the batch output. Both use libdevice.exp: the measured tl.exp exp-sub relation
 failed the configured bias gate (0.1608954387 ULP > 0.05). -/
-import bench.examples.OnlineSoftmax.Contract
+import bench.examples.OnlineSoftmax.Proofs.FP
 import VeriTile.Meta.StatementAudit
 
 namespace VeriTile.Bench.Examples.OnlineSoftmaxFPEquiv

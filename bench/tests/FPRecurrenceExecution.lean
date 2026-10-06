@@ -1,7 +1,7 @@
 /- These checks concern execution, not the pending batch/online numerical
 equivalences. Neither source imports a Real correctness proof. -/
-import bench.examples.Welford.Execution
-import bench.examples.OnlineSoftmax.Execution
+import bench.examples.Welford.Proofs.FP
+import bench.examples.OnlineSoftmax.Proofs.FP
 import VeriTile.Meta.StatementAudit
 
 open VeriTile.Bench.Examples.OnlineSoftmax.Kernels

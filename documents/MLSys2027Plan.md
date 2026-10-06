@@ -78,7 +78,7 @@ structure RoundingModel where
 
 这一表述的范围是当前建模的 cast/store 舍入事件。它仍以事件之间的精确算术为基础，不涵盖自动建模每步硬件浮点误差的承诺。抽象函数这一手段本身是否足以构成新颖性，需要结合语义设计、可证明的变换和实际复用收益来判断。
 
-现有 [SwiGLU 案例](../bench/examples/FusedSwiglu/RealEquiv.lean) 是较直接的正例：fused 版本显式保留中间 bf16 cast，unfused 版本的同 dtype 重复舍入可用幂等性消去，因此两者在同一个 `R` 下输出相等。该结论不是允许任意删除中间量化，也不是依靠默认接受舍入后的结合律；其独立 launch 边界仍见下文。
+现有 [SwiGLU 案例](../bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean) 是较直接的正例：fused 版本显式保留中间 bf16 cast，unfused 版本的同 dtype 重复舍入可用幂等性消去，因此两者在同一个 `R` 下输出相等。该结论不是允许任意删除中间量化，也不是依靠默认接受舍入后的结合律；其独立 launch 边界仍见下文。
 
 ### P0 后续完成条件
 
@@ -150,7 +150,7 @@ structure RoundingModel where
 
 ### SwiGLU fusion
 
-当前 [FusedSwigluEquiv.lean](../bench/examples/FusedSwiglu/RealEquiv.lean) 的 headline 对比的是 fused kernel 与 `ComputeKernel.seq` 拼接的两个 body。拼接执行允许寄存器跨阶段保留，文件明确说明该结论针对 concatenated kernel。
+当前 [FusedSwigluEquiv.lean](../bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean) 的 headline 对比的是 fused kernel 与 `ComputeKernel.seq` 拼接的两个 body。拼接执行允许寄存器跨阶段保留，文件明确说明该结论针对 concatenated kernel。
 
 如果论文要展示两次独立 launch 到一次 fused launch 的重写，需要为该案例建立连接到 `execPipelineR` 的结论。[Pipeline.lean](../VeriTile/Triton/Float/Pipeline.lean) 已有 `ComputeKernel.execR_seq_rel_execPipelineR`，后续应检查并补齐成功投影、register-closedness 等前提。该连接仍然是模型内部的定理，不升级为 CUDA runtime 认证。
 
@@ -162,7 +162,7 @@ structure RoundingModel where
 
 ### LayerNorm 与 attention
 
-[FusedLayerNormEquiv.lean](../bench/examples/FusedLayerNorm/RealEquiv.lean) 已有 two-pass 与 Welford 版本的等价性案例，值得直接复用。其归约和 affine 算术运行在实数模型中，舍入位于输出 cast/store；不能据此声称硬件中间浮点运算逐位等价。
+[FusedLayerNormEquiv.lean](../bench/examples/FusedLayerNorm/Proofs/LegacyRealEquiv.lean) 已有 two-pass 与 Welford 版本的等价性案例，值得直接复用。其归约和 affine 算术运行在实数模型中，舍入位于输出 cast/store；不能据此声称硬件中间浮点运算逐位等价。
 
 Attention 案例应在 M2 中按完整计算范围、参数化程度和证明成本选择。现有 FlashAttention 相关证明包含不同布局、阶段和边界条件，不能将其中一个切片的结果概括为所有生产路径均已验证。
 

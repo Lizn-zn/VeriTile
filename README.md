@@ -43,7 +43,7 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   bridge `Realizes.toRealizes_without_Rounding` degenerates out to (as
   `ComputeCorrect.Realizes_without_Rounding`) at the trivial model. See the
   fused-vs-unfused SwiGLU showcase
-  [`bench/examples/FusedSwiglu/RealEquiv.lean`](./bench/examples/FusedSwiglu/RealEquiv.lean).
+  [`bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean`](./bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean).
 - **Examples**: 173 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
   see the [per-theorem coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)

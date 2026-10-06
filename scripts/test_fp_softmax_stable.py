@@ -11,7 +11,7 @@ class SoftmaxStableFPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ['lake', 'build', 'bench.examples.SoftmaxStable.Contract',
+            ['lake', 'build', 'bench.examples.SoftmaxStable.Proofs.FP',
              'bench.examples.SoftmaxStable.Correct', 'VeriTile.Meta.StatementAudit'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
@@ -29,7 +29,7 @@ class SoftmaxStableFPTests(unittest.TestCase):
 
     def test_original_sources_and_real_spec_independence(self):
         output = self.check_lean('''
-import bench.examples.SoftmaxStable.Contract
+import bench.examples.SoftmaxStable.Proofs.FP
 import bench.examples.SoftmaxStable.Correct
 open VeriTile Triton VeriTile.Bench.Examples
 example (B : Nat) :
@@ -45,7 +45,7 @@ example (x y : RegionName) (B : Nat) :
 ''')
         self.assertEqual(output, '')
         self.check_lean('''
-import bench.examples.SoftmaxStable.Contract
+import bench.examples.SoftmaxStable.Proofs.FP
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv

@@ -5,7 +5,7 @@ import VeriTile.Meta.StatementAudit
 
 /-!
 This file uses real intermediate arithmetic (with the stated cast semantics).
-The two-gates FP proof or pending target is in FPEquiv.lean.
+The two-gates FP specification is in ../FPEquiv.lean.
 
 # SwiGLU fused vs unfused — kernel equivalence `≡[R]` on the masked IO surface
 

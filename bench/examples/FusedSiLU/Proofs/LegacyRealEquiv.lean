@@ -6,7 +6,7 @@ import VeriTile.Meta.StatementAudit
 
 /-!
 This file uses real intermediate arithmetic (with the stated cast semantics).
-The two-gates FP proof or pending target is in FPEquiv.lean.
+The two-gates FP specification is in ../FPEquiv.lean.
 
 # Fused SiLU ≡ three-kernel pipeline — kernel equivalence `≡[R]` on the IO surface
 
@@ -23,7 +23,7 @@ kernel and the unfused pipeline compute the **same** per-lane ℝ output
 values identically at the shared bf16 output store — the writes agree outside
 the scratch temporaries.
 
-Contrast: `bench/examples/FusedSwiglu/RealEquiv.lean` rounds the materialized
+Contrast: `bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean` rounds the materialized
 **intermediate** too (bf16 scratch), needing idempotence; here the scratch is
 ℝ, so only the boundary store matters and no idempotence is used.
 

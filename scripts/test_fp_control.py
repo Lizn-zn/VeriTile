@@ -12,8 +12,8 @@ class FPControlTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ['lake', 'build', 'VeriTile.Triton.Float.Control',
-             'bench.examples.Welford.Execution',
-             'bench.examples.OnlineSoftmax.Execution',
+             'bench.examples.Welford.Proofs.FP',
+             'bench.examples.OnlineSoftmax.Proofs.FP',
              'bench.examples.Welford.Correct', 'bench.examples.OnlineSoftmax.Correct'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
@@ -36,8 +36,8 @@ class FPControlTests(unittest.TestCase):
 
     def test_exact_original_kernels_and_softmax_normalizer_helper(self):
         self.lean('''
-import bench.examples.Welford.Execution
-import bench.examples.OnlineSoftmax.Execution
+import bench.examples.Welford.Proofs.FP
+import bench.examples.OnlineSoftmax.Proofs.FP
 import bench.examples.Welford.Correct
 import bench.examples.OnlineSoftmax.Correct
 open VeriTile Triton VeriTile.Bench.Examples

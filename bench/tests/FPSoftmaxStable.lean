@@ -1,6 +1,6 @@
 /- Libdevice softmax execution and the boundary of its scalar law.
 The rational fixtures are logical models, not GPU evidence or FP admissions. -/
-import bench.examples.SoftmaxStable.Contract
+import bench.examples.SoftmaxStable.Proofs.FP
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
 

@@ -8,7 +8,7 @@ The correctness statement is `Spec.Real (io ⊨ mathematical_formula)`.
 The FP statement is `originalKernel … ≡[R] optimizedKernel …` (or the corresponding
 IO contracts for transformations with private scratch), with
 `#print_fp_assumptions` listing the numerical atoms used by its proof. Both proof files import the shared sources in `Kernels.lean`. FP execution
-and contract helpers live in the same directory and never import the
+and contract helpers live in the example's `Proofs/FP.lean` and never import the
 correctness counterpart. See the [example index](../bench/examples/README.md)
 for the shared implementations and precise observation scopes.
 
@@ -46,7 +46,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 
 There are 19 correctness modules and 19 modules with completed FP specifications.
 StableLogSumExp proves the conditional candidate; its older unconditional shift
-remains a separately recorded goal in `StableLogSumExp/Unconditional.lean`; the fallback version is the supported optimized source. The eight `RealEquiv.lean` modules
+remains a separately recorded goal in `StableLogSumExp/Proofs/Unconditional.lean`; the fallback version is the supported optimized source. The eight `Proofs/LegacyRealEquiv.lean` modules
 retain proofs with real intermediate arithmetic and their stated cast semantics.
 Their presence does not complete a pending FP transformation.
 
@@ -191,14 +191,14 @@ A concrete valid schedule exists even for empty rows.
 The one-input IO view can now use these term derivations to relate actual
 successful abstract executions, with the same typed-output and memory-frame
 obligations as its structural steps. Other primitives stay opaque. The public
-notation remains `lhs ≡[R] rhs`. The sum example prints `add_commute`
-and `add_assoc`, each bound to an accepted fp32 instance. This derives a theorem in the selected FP model; it neither
+notation remains `lhs ≡[R] rhs`. The sum example prints `add_commute`,
+`add_assoc` and `add_zero`, each bound to an accepted fp32 instance. This derives a theorem in the selected FP model; it neither
 replays the GPU report nor claims an IEEE or whole-kernel statistical guarantee.
 
 Unsupported syntax still fails explicitly. Counted loops and conditionals
 now have execution lemmas. Welford also has scalar-derived loop and schedule
 comparisons plus a scheduled IO contract with syntactic domain checks; its two
-integer-count conversion atoms are bound to the accepted PR #12 report. The
+integer-count conversion atoms are bound to the accepted bounded-count report. The
 public Welford FP theorem retains `0 < N <= 2^24`. LayerNorm reuses the
 unrounded statistics through its unchanged affine suffix and completes its
 three-input FP contract for `N <= 2^24`, including empty output rows. Real ring identities
@@ -219,12 +219,14 @@ The real output theorem proves the same two-pass source against the independent
 softmax formula, with a `KernelIO₁` specification for bounded flat memory. The old register observations are auxiliary
 lemmas, not the public equivalence scope.
 
-Stable logsumexp retains its single bf16 store at `pid` while replacing both
-exp implementations with libdevice.exp. Its exp-sub law is admitted; LOG-MUL
-and `tl.log(libdevice.exp(a)) = a` remain explicit obligations. The existing
-LOG-EXP experiment used tl.exp, so it does not cover the new composition.
-Pending log and integer-conversion premises remain visible to the assumption
-printer, including equations accessed through record fields.
+Stable logsumexp retains its single bf16 store at `pid` and uses libdevice.exp.
+The conditional candidate's log-product and log-exp atoms are admitted and
+bound, and its complete FP specification preserves both fallbacks. Only the
+historical unconditional shift still needs the unadmitted log equations; its
+goal is isolated in `StableLogSumExp/Proofs/Unconditional.lean`. Count-conversion
+atoms are admitted with their explicit integer bound. Any external unresolved
+FP premise remains visible to the assumption printer, including equations
+accessed through record fields.
 
 Legacy `KernelIO.Equiv` proofs quantify over a boundary-rounding model. They
 are not proofs under the new two-gates-selected atom calculus and do not count
@@ -309,7 +311,7 @@ The checks cover:
   windows, private scratch and successful-execution requirements.
 - Row-wise sum's original mathematical projection, its FP proof under the
   admitted scalar assumptions at arbitrary dimensions including empty rows,
-  and output identifying only add_commute and add_assoc.
+  and output identifying add_commute, add_assoc and add_zero.
   Reduction-tree countermodels reject removing a zero leaf, erasing precision
   or dropping repeated casts. Opaque sum interpretation does not permit input
   permutations; numerical IO steps still reject failed executions and dtype

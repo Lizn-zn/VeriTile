@@ -94,7 +94,7 @@ The commands:
 ## Add a self-audit to a file
 
 Put the checks at the end of the file (see the SwiGLU pilot,
-[`bench/examples/FusedSwiglu/RealEquiv.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FusedSwiglu/RealEquiv.lean),
+[`bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean),
 for the full pattern). They run at compile time, so the file stops compiling if
 any gate is violated:
 

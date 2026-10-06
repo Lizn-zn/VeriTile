@@ -1,5 +1,6 @@
 """Check shared example sources, mathematical specifications and independent FP proofs."""
 from pathlib import Path
+import re
 import subprocess
 import tempfile
 import unittest
@@ -33,6 +34,37 @@ REDUCTIONS = (
 )
 
 
+class ExampleLayoutTests(unittest.TestCase):
+    def test_reader_entries_and_transitive_proof_independence(self):
+        examples = ROOT / "bench/examples"
+
+        def dependencies(path, seen):
+            if path in seen:
+                return
+            seen.add(path)
+            for module in re.findall(r"^import ([\w.]+)", path.read_text(), re.M):
+                source = ROOT / (module.replace(".", "/") + ".lean")
+                if source.is_file():
+                    dependencies(source, seen)
+                elif module.startswith("bench.examples."):
+                    self.fail(f"Missing example dependency: {module}")
+
+        for folder in sorted(p for p in examples.iterdir() if p.is_dir()):
+            with self.subTest(example=folder.name):
+                self.assertEqual({p.name for p in folder.glob("*.lean")},
+                                 {"Kernels.lean", "Correct.lean", "FPEquiv.lean"})
+                for entry, forbidden in (
+                    ("FPEquiv", {"Correct.lean", "Real.lean", "LegacyRealEquiv.lean"}),
+                    ("Correct", {"FPEquiv.lean", "FP.lean"}),
+                    ("Kernels", {"Correct.lean", "FPEquiv.lean", "Real.lean", "FP.lean", "LegacyRealEquiv.lean"}),
+                ):
+                    reached = set()
+                    dependencies(folder / f"{entry}.lean", reached)
+                    bad = [str(p.relative_to(ROOT)) for p in reached
+                           if p.is_relative_to(examples) and p.name in forbidden]
+                    self.assertEqual(bad, [], f"{folder.name}/{entry} imports the opposite proof layer")
+
+
 class ExamplePairTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
@@ -44,7 +76,7 @@ class ExamplePairTests(unittest.TestCase):
                     for family in ("SoftmaxReciprocal", "FloatDTypeSoftmax")]
         targets += [f"bench.examples.{name}.{suffix}"
                     for name in ("FusedSiLU", "FusedSwiglu", "Welford", "FusedLayerNorm")
-                    for suffix in ("Correct", "RealEquiv")]
+                    for suffix in ("Correct", "Proofs.LegacyRealEquiv")]
         targets += [f"bench.examples.{family}.Correct"
                     for family in ("TritonBenchVectorAddition", "RowWiseSum", "RowWiseMax")]
         build = subprocess.run(["lake", "build", *targets], cwd=ROOT,
@@ -160,9 +192,9 @@ example (B : Nat) (hB : 0 < B) :
     def test_statistics_correctness_preserves_sources_and_formulas(self):
         self.lean('''
 import bench.examples.Welford.Correct
-import bench.examples.Welford.RealEquiv
+import bench.examples.Welford.Proofs.LegacyRealEquiv
 import bench.examples.FusedLayerNorm.Correct
-import bench.examples.FusedLayerNorm.RealEquiv
+import bench.examples.FusedLayerNorm.Proofs.LegacyRealEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 
@@ -275,9 +307,9 @@ example : VeriTile.Spec.Real (floatAddIO 0 ⊨ fun xs ys i => xs i + ys i) :=
     def test_fusion_correctness_preserves_both_sources_and_full_shape_scope(self):
         self.lean('''
 import bench.examples.FusedSiLU.Correct
-import bench.examples.FusedSiLU.RealEquiv
+import bench.examples.FusedSiLU.Proofs.LegacyRealEquiv
 import bench.examples.FusedSwiglu.Correct
-import bench.examples.FusedSwiglu.RealEquiv
+import bench.examples.FusedSwiglu.Proofs.LegacyRealEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
 

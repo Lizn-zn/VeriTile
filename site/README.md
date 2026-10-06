@@ -83,7 +83,7 @@ matched for readability and the aligned, unmasked scope stated in the caption.
 The interactive demo retains the exact verified kernel text.
 The View proof links open the full Lean contracts and proofs in
 `bench/tritonbench_g/logsumexp_fwd/LogsumexpFwd.lean` and
-`bench/examples/StableLogSumExp/RealEquiv.lean`.
+`bench/examples/StableLogSumExp/Proofs/LegacyRealEquiv.lean`.
 Both cards use log-sum-exp. The correctness formula is explicitly the unscaled,
 per-block active-lane case. The equivalence example compares direct and
 maximum-shifted LSE, with real intermediate arithmetic and a shared rounded bf16

@@ -1,5 +1,5 @@
 import bench.examples.HyperConnectionsDepth.Kernels
-import bench.examples.HyperConnectionsDepth.Memory
+import bench.examples.HyperConnectionsDepth.Proofs.Real
 import VeriTile.Triton.Math.Sinkhorn
 import VeriTile.Triton.Math.MatrixRewrite
 

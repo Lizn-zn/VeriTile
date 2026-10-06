@@ -48,7 +48,7 @@ export const homeStory = {
       formulaLabel: 'Direct log-sum-exp equals the maximum-shifted log-sum-exp',
       exampleCaption: 'The stable form subtracts m, the maximum input value in a nonempty block.',
       scope: 'Intermediate arithmetic is modeled over real numbers. Both kernels round only at the final bf16 store, using the same model R. For a nonempty block with input and output windows in bounds, both terminate from the same state, agree at y[pid], and leave every other memory cell unchanged.',
-      source: 'bench/examples/StableLogSumExp/RealEquiv.lean',
+      source: 'bench/examples/StableLogSumExp/Proofs/LegacyRealEquiv.lean',
     },
   ],
   tryLabel: 'VectorAdd example', tryText: 'Compare the original kernel and a subtraction variant using recorded Lean checks.',

@@ -5,7 +5,7 @@ import VeriTile.Meta.StatementAudit
 
 /-!
 This file uses real intermediate arithmetic (with the stated cast semantics).
-The two-gates FP proof or pending target is in FPEquiv.lean.
+The two-gates FP specification is in ../FPEquiv.lean.
 
 # Float dtype erasure — the float-facing *refinement* policy, on the `≡[R]` surface
 
@@ -63,7 +63,7 @@ keeps the surface uniform with the other seven equivalence showcases while
 the content is the exact-ℝ rewrite `e / S = e · S⁻¹`. The real correctness
 companion for addition is `bench/examples/FloatDTypeAdd/Correct.lean`;
 the rounding-model (bf16) sibling of this same rewrite is
-`bench/examples/SoftmaxReciprocal/RealEquiv.lean`.
+`bench/examples/SoftmaxReciprocal/Proofs/LegacyRealEquiv.lean`.
 
 The statement mentions only the two IO signatures and the library
 equivalence surface — **no spec** (the `#stmtSurfaceSubset` gate below

@@ -12,7 +12,7 @@ import VeriTile.Meta.StatementAudit
 
 /-!
 This file uses real intermediate arithmetic (with the stated cast semantics).
-The two-gates FP proof or pending target is in FPEquiv.lean.
+The two-gates FP specification is in ../FPEquiv.lean.
 
 # Welford variance: two-pass vs online — kernel equivalence `≡[R]`
 
@@ -67,7 +67,7 @@ on the headline's proof path; it is kept (and audited) as the named
 `ComputeRefine.Refines` region-level story. The headline carries **no
 positivity hypothesis**: at `blockSize = 0` both recurrences degenerate to
 `0` (`welford_eq_two_pass_total`). The compositional pattern is
-`bench/examples/FusedSwiglu/RealEquiv.lean` (the `≡[R]` pilot).
+`bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean` (the `≡[R]` pilot).
 
 ## The exact-ℝ surface
 

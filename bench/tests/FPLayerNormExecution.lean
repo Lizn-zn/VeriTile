@@ -1,6 +1,6 @@
 /- Boundaries of the original LayerNorm execution and scheduled contract.
 These fixtures do not supply experimental evidence or admit count relations. -/
-import bench.examples.FusedLayerNorm.Contract
+import bench.examples.FusedLayerNorm.Proofs.FP
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
 

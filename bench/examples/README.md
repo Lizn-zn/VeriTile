@@ -8,8 +8,16 @@ Triton programs, then choose the specification you want to inspect:
 | `Kernels.lean` | Original, optimized and intermediate source programs, including precision, casts, masks and stores. |
 | `Correct.lean` | Real mathematical correctness of both original and optimized implementations against the stated formula, using their real projections. |
 | `FPEquiv.lean` | FP equivalence under the selected atomic assumptions, with `#print_fp_assumptions` on completed specifications. |
-| `Execution.lean`, `Contract.lean`, `Comparison.lean`, `Batch.lean` | Example-specific execution and composition lemmas, when needed. |
-| `RealEquiv.lean` | Retained proofs using real intermediate arithmetic and their stated cast semantics. These are separate from the two-gates FP specifications. |
+| `Proofs/Real.lean` | Supporting real execution and memory-bound lemmas, when needed. |
+| `Proofs/FP.lean` | Supporting FP execution, operand-domain and composition lemmas, when needed. |
+| `Proofs/LegacyRealEquiv.lean` | Retained proofs using real intermediate arithmetic and their stated cast semantics. These are separate from the two-gates FP specifications. |
+| `Proofs/Unconditional.lean` | The historical, unproved StableLogSumExp target without fallbacks. |
+
+Only `Kernels.lean`, `Correct.lean` and `FPEquiv.lean` live at an example's
+top level. Read these three files first; `Proofs/` contains supporting detail
+and is omitted when no separate helpers are needed. FP execution, recurrence
+comparison and IO contracts share one `Proofs/FP.lean`, ordered by dependency.
+Real and FP helpers remain independent of the opposite specification.
 
 `Correct.lean` and `FPEquiv.lean` reference the same typed source definitions
 without importing one another. Names such as `originalKernel` only specialize
@@ -42,7 +50,7 @@ required input/intermediate domains remain part of the FP statements.
 | [Welford](Welford/) | Two-pass versus online mean/variance, with the stated count bound and reduction plan. |
 | [FusedLayerNorm](FusedLayerNorm/) | Two-pass versus Welford-based LayerNorm, with the stated count bound and domains. |
 | [LogExp](LogExp/) | Eliminate the masked, piecewise libdevice log-exp expression using its admitted atom. |
-| [StableLogSumExp](StableLogSumExp/) | Fallback-preserving optimized source versus the unchanged direct tl.log reference, proved using `log_mul_split .tl`, `log_exp_cancel .tl`, libdevice exp-sub and arithmetic. Symbolic row size, reduction schedule, bf16 output and frame retained. The historical unconditional target is isolated in `Unconditional.lean` and remains unadmitted. |
+| [StableLogSumExp](StableLogSumExp/) | Fallback-preserving optimized source versus the unchanged direct tl.log reference, proved using `log_mul_split .tl`, `log_exp_cancel .tl`, libdevice exp-sub and arithmetic. Symbolic row size, reduction schedule, bf16 output and frame retained. The historical unconditional target is isolated in `Proofs/Unconditional.lean` and remains unadmitted. |
 
 Both versions now have real correctness specifications for vector addition,
 the Lion update, general mHC matrices and their scalar specializations, reversed row sum and inlined row max.

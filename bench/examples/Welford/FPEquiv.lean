@@ -2,7 +2,7 @@ import bench.examples.Welford.Kernels
 /- Original online versus two-pass Welford, under admitted scalar FP atoms.
 The count bound is the integer conversion rule's domain, not the GPU probe's
 shape. Empty Welford rows divide by zero and are outside this FP contract. -/
-import bench.examples.Welford.Contract
+import bench.examples.Welford.Proofs.FP
 import VeriTile.Triton.Float.CountConversionLaws
 import VeriTile.Meta.StatementAudit
 

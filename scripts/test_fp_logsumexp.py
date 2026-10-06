@@ -31,7 +31,7 @@ class LogSumExpFPTests(unittest.TestCase):
 
     def test_original_sources_and_real_spec_independence(self):
         output = self.check_lean('''
-import bench.examples.StableLogSumExp.Contract
+import bench.examples.StableLogSumExp.Proofs.FP
 import bench.examples.StableLogSumExp.Correct
 open VeriTile Triton VeriTile.Bench.Examples
 example (B : Nat) :
@@ -47,7 +47,7 @@ example (x y : RegionName) (B : Nat) :
 ''')
         self.assertEqual(output, '')
         self.check_lean('''
-import bench.examples.StableLogSumExp.Contract
+import bench.examples.StableLogSumExp.Proofs.FP
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv

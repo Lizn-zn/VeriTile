@@ -1,13 +1,14 @@
 import bench.examples.SoftmaxReciprocal.Kernels
-/- The shared prefix uses tl.exp, interpreted opaquely at its stated
-precision. Only division changes; no exponential rewrite is assumed. -/
 import VeriTile.Triton
 import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
 
+/- The shared prefix uses tl.exp, interpreted opaquely at its stated
+precision. Only division changes; no exponential rewrite is assumed. -/
+
 /-!
 This file uses real intermediate arithmetic (with the stated cast semantics).
-The two-gates FP proof or pending target is in FPEquiv.lean.
+The two-gates FP specification is in ../FPEquiv.lean.
 
 # Softmax: per-element-divide vs precomputed-reciprocal — kernel equivalence `≡[R]`
 
@@ -20,7 +21,7 @@ Both stable-softmax kernels compute `y = exp(x − m) / Σ exp(x − m)` per row
 precomputes `1 / Σ` once and multiplies. The reductions run in ℝ, so both
 produce the **same** per-lane ℝ value (`e / S = e · S⁻¹`), and the only rounding
 is the shared bf16 output store, which quantizes equal values identically — no
-idempotence argument is even needed (contrast `bench/examples/FusedSwiglu/RealEquiv.lean`,
+idempotence argument is even needed (contrast `bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean`,
 where the two sides' rounding sites differ by a redundant re-round).
 
 ## The public result (bottom of the rounding layer)

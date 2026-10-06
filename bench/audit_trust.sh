@@ -106,8 +106,9 @@ launcher_status=0
 results="$(printf '%s\n' "${target_list}" | xargs -P "${JOBS}" -I{} bash -c '
   src="{}"
   rel="${src#'"${PROJECT_ROOT}"'/}"
-  # a unique temp name: <parent-dir>__<basename>
-  tag="$(basename "$(dirname "${src}")")__$(basename "${src}")"
+  # Nested examples share names such as Proofs/FP.lean. Use the full path
+  # so concurrent workers cannot overwrite another example audit log.
+  tag="$(printf "%s" "${rel}" | sha256sum | cut -d " " -f 1)"
   tmp="${TMPDIR_AUDIT}/${tag}"
   if python3 "${PROJECT_ROOT}/scripts/check_comparator.py" --file "${src}" --trust \
       --workspace "${TMPDIR_AUDIT}/judge" > "${tmp}.log" 2>&1; then

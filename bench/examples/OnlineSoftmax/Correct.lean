@@ -1,5 +1,5 @@
 import bench.examples.OnlineSoftmax.Kernels
-import bench.examples.OnlineSoftmax.Memory
+import bench.examples.OnlineSoftmax.Proofs.Real
 /- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
 has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
 That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/

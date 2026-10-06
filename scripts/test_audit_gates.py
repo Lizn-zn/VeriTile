@@ -193,18 +193,22 @@ class AuditGateTests(unittest.TestCase):
                   'open VeriTile.Bench.Examples.VectorAdd.Kernels\n'
                   'def localKernel : ComputeKernel := .mk [] [] []\n')
         cases = [
-            ('def expectedSpec : Nat := 42\n', True, 'localKernel'),
-            ('def sourceAliasForAudit := addKernel "x" "y" "out" 1\n'
+            ('Correct.lean', 'def expectedSpec : Nat := 42\n', True, 'localKernel'),
+            ('Correct.lean', 'def sourceAliasForAudit := addKernel "x" "y" "out" 1\n'
              'def expectedSpec := sourceAliasForAudit.toAlgKernel.inputs.length\n', False,
              'SELF-REFERENTIAL'),
-            ('def expectedSpec := localKernel.toAlgKernel.inputs.length\n', False,
+            ('Correct.lean', 'def expectedSpec := localKernel.toAlgKernel.inputs.length\n', False,
+             'SELF-REFERENTIAL'),
+            ('Proofs/Real.lean', 'def expectedSpec : Nat := 42\n', True, 'localKernel'),
+            ('Proofs/Real.lean', 'def sourceAliasForAudit := addKernel "x" "y" "out" 1\n'
+             'def expectedSpec := sourceAliasForAudit.toAlgKernel.inputs.length\n', False,
              'SELF-REFERENTIAL'),
         ]
-        for declaration, accepted, marker in cases:
-            with self.subTest(declaration=declaration), tempfile.TemporaryDirectory() as temp:
+        for relative, declaration, accepted, marker in cases:
+            with self.subTest(relative=relative, declaration=declaration), tempfile.TemporaryDirectory() as temp:
                 path = Path(temp) / 'SplitAudit.lean'
                 path.write_text(prep.prepare_source(
-                    prefix + declaration, 'bench/examples/VectorAdd/Correct.lean',
+                    prefix + declaration, 'bench/examples/VectorAdd/' + relative,
                     manifest=Path(temp) / 'absent.tsv'))
                 result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=ROOT,
                                         text=True, capture_output=True, timeout=90)

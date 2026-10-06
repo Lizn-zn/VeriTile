@@ -1,18 +1,19 @@
 import bench.examples.SoftmaxStable.Kernels
-/- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
-has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
-That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
 import VeriTile.Triton
 import VeriTile.Examples.Common
 import VeriTile.Meta.StatementAudit
 
+/- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
+has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
+That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
+
 /-!
 This file uses real intermediate arithmetic (with the stated cast semantics).
-The two-gates FP proof or pending target is in FPEquiv.lean.
+The two-gates FP specification is in ../FPEquiv.lean.
 
 # Softmax: naive vs stable — kernel equivalence `≡[R]` on the shared IO surface
 
-The shared sources are in Kernels.lean. This file contains the
+The shared sources are in ../Kernels.lean. This file contains the
 **supporting lemma** in the middle (`private` plumbing — bf16-scatter
 congruence), the region-level refinement core next
 (`softmax_kernels_refinement_view`), the **termination/frame lemmas**, the
@@ -29,7 +30,7 @@ row max first. The reductions run in ℝ (no intermediate rounding), so both
 kernels produce the **same** per-lane ℝ value — the shift-cancellation of
 softmax (`naive_eq_stable`) — and the only rounding is the shared bf16 output
 store, which quantizes equal values identically. No idempotence is needed
-(contrast `bench/examples/FusedSwiglu/RealEquiv.lean`, where a re-round must collapse):
+(contrast `bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean`, where a re-round must collapse):
 here the rounding *sites* already coincide one-for-one.
 
 ## The public result (bottom of file)

@@ -1,6 +1,6 @@
 /- Logsumexp scalar obligations, original output layout and domain boundaries.
 The rational models below are logical fixtures, not numerical admissions. -/
-import bench.examples.StableLogSumExp.Contract
+import bench.examples.StableLogSumExp.Proofs.FP
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
 

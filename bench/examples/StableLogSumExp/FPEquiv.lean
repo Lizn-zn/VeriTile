@@ -1,4 +1,4 @@
-import bench.examples.StableLogSumExp.Contract
+import bench.examples.StableLogSumExp.Proofs.FP
 import VeriTile.Meta.StatementAudit
 
 /-!
@@ -13,7 +13,7 @@ for fp32 comparisons. Branch outcomes are unrestricted. The row length is
 symbolic. The specification includes successful execution and a memory frame.
 
 The older stableLSEKernel omits both fallbacks. Its unconditional log_mul and
-log_exp candidates are not admitted; Unconditional.lean records that separate goal.
+log_exp candidates are not admitted; Proofs/Unconditional.lean records that separate goal.
 -/
 
 noncomputable section

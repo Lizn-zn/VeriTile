@@ -12,7 +12,7 @@ import VeriTile.Meta.StatementAudit
 
 /-!
 This file uses real intermediate arithmetic (with the stated cast semantics).
-The two-gates FP proof or pending target is in FPEquiv.lean.
+The two-gates FP specification is in ../FPEquiv.lean.
 
 # LayerNorm: two-pass vs fused single-pass — kernel equivalence `≡[R]`
 
@@ -63,7 +63,7 @@ and the region-level refinement `layernorm_kernels_refinement_view`
 definitions**: the expected per-lane output never appears as a named function,
 so a self-referential spec is impossible by construction (and there is no
 `#specNonCircular` gate to run). The masked-IO pilot of this conversion is
-`bench/examples/FusedSwiglu/RealEquiv.lean`.
+`bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean`.
 -/
 
 namespace VeriTile.Bench.Examples.LayerNorm

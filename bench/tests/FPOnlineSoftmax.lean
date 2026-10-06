@@ -1,6 +1,6 @@
 /- Online softmax's scalar invariant, initialization and per-iteration domains.
 Logical rational fixtures below are not GPU results or rule admissions. -/
-import bench.examples.OnlineSoftmax.Contract
+import bench.examples.OnlineSoftmax.Proofs.FP
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
 

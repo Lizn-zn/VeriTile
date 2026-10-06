@@ -9,8 +9,7 @@ import VeriTile.Triton.Float.WelfordInit
 import VeriTile.Triton.Float.WelfordInduction
 import VeriTile.Triton.Float.WelfordSchedule
 import VeriTile.Triton.Float.ScalarReduction
-import bench.examples.Welford.Execution
-import bench.examples.Welford.Contract
+import bench.examples.Welford.Proofs.FP
 import VeriTile.Meta.StatementAudit
 import Mathlib.Tactic.NormNum
 import Mathlib.Tactic.Ring

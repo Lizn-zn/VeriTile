@@ -2,7 +2,7 @@
 boundaries. These integer countermodels are not IEEE or GPU observations. -/
 import VeriTile.Triton.Float.ReductionSchedule
 import VeriTile.Triton.Float.WelfordConditions
-import bench.examples.Welford.Comparison
+import bench.examples.Welford.Proofs.FP
 import VeriTile.Meta.StatementAudit
 
 open VeriTile.Bench.Examples.Welford.Kernels

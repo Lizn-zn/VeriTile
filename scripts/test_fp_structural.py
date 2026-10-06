@@ -12,8 +12,8 @@ class FPStructuralTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ["lake", "build", "VeriTile.Triton.Float.StructuralIO",
-             "bench.examples.FusedSiLU.FPEquiv", "bench.examples.FusedSiLU.RealEquiv",
-             "bench.examples.FusedSwiglu.FPEquiv", "bench.examples.FusedSwiglu.RealEquiv",
+             "bench.examples.FusedSiLU.FPEquiv", "bench.examples.FusedSiLU.Proofs.LegacyRealEquiv",
+             "bench.examples.FusedSwiglu.FPEquiv", "bench.examples.FusedSwiglu.Proofs.LegacyRealEquiv",
              "bench.examples.RowWiseMax.FPEquiv", "bench.examples.RowWiseMax.Correct"], cwd=ROOT,
             text=True, capture_output=True, timeout=300)
         if result.returncode:
@@ -45,7 +45,7 @@ run_cmd do
 
     def test_silu_preserves_both_original_kernels_and_symbolic_shape(self):
         result = self.lean('''
-import bench.examples.FusedSiLU.RealEquiv
+import bench.examples.FusedSiLU.Proofs.LegacyRealEquiv
 import bench.examples.FusedSiLU.FPEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples
@@ -75,7 +75,7 @@ run_cmd do
 
     def test_swiglu_preserves_original_kernels_casts_masks_and_symbolic_shape(self):
         result = self.lean('''
-import bench.examples.FusedSwiglu.RealEquiv
+import bench.examples.FusedSwiglu.Proofs.LegacyRealEquiv
 import bench.examples.FusedSwiglu.FPEquiv
 open VeriTile Triton
 open VeriTile.Bench.Examples

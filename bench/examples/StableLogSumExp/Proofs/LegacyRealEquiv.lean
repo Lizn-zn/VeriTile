@@ -1,4 +1,8 @@
 import bench.examples.StableLogSumExp.Kernels
+import VeriTile.Triton
+import VeriTile.Examples.Common
+import VeriTile.Meta.StatementAudit
+
 /- Legacy equivalence under REAL intermediate arithmetic and final-store
 rounding (`execR`). This theorem remains valid in that semantics; it is not
 a two-gates FP-equivalence proof. The accepted piecewise LOG-EXP-GUARDED rule
@@ -9,13 +13,10 @@ fp32, including the final bf16 cast. -/
 /- Use libdevice.exp for exp-sub rewrites: the measured fp32 tl.exp relation
 has B = 0.1608954387 ULP > 0.05 under the configured Normal(1,1) probe.
 That intrinsic relation failed admission; the libdevice EXP-SUB instance passed. -/
-import VeriTile.Triton
-import VeriTile.Examples.Common
-import VeriTile.Meta.StatementAudit
 
 /-!
 This file uses real intermediate arithmetic (with the stated cast semantics).
-The two-gates FP proof or pending target is in FPEquiv.lean.
+The two-gates FP specification is in ../FPEquiv.lean.
 
 # Log-sum-exp: direct vs shift-trick — kernel equivalence `≡[R]`
 
@@ -62,7 +63,7 @@ gate below enforces this). The region-level refinement
 surface) is the mathematical core the headline's region-model obligation
 repackages — unpacked at each execution pair by the library's
 `ComputeRefine.Refines.out`. The compositional-rounding sibling (matched
-intermediate casts, scratch staging) is `bench/examples/FusedSwiglu/RealEquiv.lean`.
+intermediate casts, scratch staging) is `bench/examples/FusedSwiglu/Proofs/LegacyRealEquiv.lean`.
 
 There is no separate exact layer: the headline quantifies over **every**
 rounding model, and at `R := .triv` the `castTo` store is inert

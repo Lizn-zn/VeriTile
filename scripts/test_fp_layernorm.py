@@ -11,7 +11,7 @@ class LayerNormFPTests(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         result = subprocess.run(
-            ['lake', 'build', 'bench.examples.FusedLayerNorm.Contract',
+            ['lake', 'build', 'bench.examples.FusedLayerNorm.Proofs.FP',
              'bench.examples.FusedLayerNorm.Correct', 'VeriTile.Meta.StatementAudit'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
         if result.returncode:
@@ -29,7 +29,7 @@ class LayerNormFPTests(unittest.TestCase):
 
     def test_original_sources_and_real_spec_independence(self):
         output = self.check_lean('''
-import bench.examples.FusedLayerNorm.Contract
+import bench.examples.FusedLayerNorm.Proofs.FP
 import bench.examples.FusedLayerNorm.Correct
 open VeriTile Triton VeriTile.Bench.Examples
 example (N stride : Nat) (ε : ℝ) :
@@ -44,7 +44,7 @@ example (x g b y : RegionName) (N stride : Nat) (ε : ℝ) :
 ''')
         self.assertEqual(output, '')
         self.check_lean('''
-import bench.examples.FusedLayerNorm.Contract
+import bench.examples.FusedLayerNorm.Proofs.FP
 open Lean Elab Command in
 run_cmd do
   let env ← getEnv

@@ -1,11 +1,19 @@
 import bench.examples.Welford.Kernels
-/- FP execution of the original Welford sources, before the numerical
-comparison with the two-pass kernel. Operations, count conversion and output
-casts remain opaque. The admitted FP headline is defined independently in WelfordFPEquiv. -/
 import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.Control
 import VeriTile.Triton.Float.ExecutionProfile
 import VeriTile.Triton.Float.WelfordInduction
+import VeriTile.Triton.Float.WelfordSchedule
+import VeriTile.Triton.Float.WelfordConditions
+import VeriTile.Triton.Float.ScheduledIO
+
+/-! FP proof support for Welford. The public specification and atomic
+assumption report are in ../FPEquiv.lean; the shared sources are in ../Kernels.lean.
+Execution, intermediate-value domains and their composition are kept together. -/
+
+/- FP execution of the original Welford sources, before the numerical
+comparison with the two-pass kernel. Operations, count conversion and output
+casts remain opaque. The admitted FP headline is defined independently in WelfordFPEquiv. -/
 
 namespace VeriTile.Bench.Examples.WelfordFPExecution
 open VeriTile.Bench.Examples.Welford.Kernels
@@ -336,3 +344,205 @@ theorem fp32_online_statistics_run {α : Type} [Inhabited α]
     simpa only [hs, hn] using hv
 
 end VeriTile.Bench.Examples.WelfordFPExecution
+
+/- Conditional comparison of the two original Welford kernels under explicit
+fp32 reduction schedules. The scalar count-conversion premises remain explicit here;
+WelfordFPEquiv supplies them from the admitted bounded count atoms. -/
+
+namespace VeriTile.Bench.Examples.WelfordFPComparison
+open VeriTile.Bench.Examples.Welford.Kernels
+open VeriTile Triton FP.Structural FP.Guarded FP.ScalarArithmetic FP.ScalarReduction
+open FP.WelfordReduction FP.WelfordInduction FP.WelfordSchedule
+open _root_.VeriTile.Triton.FP.Equational (ReductionPlan Schedules)
+open WelfordFPExecution
+
+/-- Resolve the original default compute precision and expose its sum trees.
+All casts, index conversions and non-sum operations retain their meanings. -/
+def engine {α : Type} (M : Algebra α) (plans : Schedules) : Algebra α :=
+  (FP.ScalarReduction.algebra M plans).withDefaultPrecision .fp32
+
+def rowPlan (plans : Schedules) (N : Nat) : ReductionPlan N :=
+  plans (some .fp32) [N] ⟨0, by simp⟩ Bool.false PUnit.unit
+
+theorem sum_value {α : Type} (M : Algebra α) (plans : Schedules) (xs : Fin N → α) :
+    sumValue (engine M plans) xs = value M xs (zero M) (rowPlan plans N).tree := by
+  rfl
+
+theorem recurrence_value {α : Type} (M : Algebra α) (plans : Schedules) (xs : Nat → α)
+    (N k : Nat) (hk : k ≤ N) :
+    recurrence (engine M plans) (rowPrefix xs N) k = state M xs k := by
+  induction k with
+  | zero => rfl
+  | succ k ih =>
+    rw [recurrence, dif_pos (by omega), ih (by omega)]
+    rfl
+
+theorem twopass_mean {α : Type} (M : Algebra α) (plans : Schedules) (xs : Fin N → α) :
+    twopassMean (engine M plans) xs =
+      div M (value M xs (zero M) (rowPlan plans N).tree) (M.fromNat (some .fp32) N) := by
+  change div M (sumValue (engine M plans) xs) (M.fromNat (some .fp32) N) = _
+  rw [sum_value]
+
+theorem twopass_variance {α : Type} (M : Algebra α) (plans : Schedules) (xs : Fin N → α) :
+    twopassVariance (engine M plans) xs =
+      div M (value M (FP.Welford.deviationSquares M xs (twopassMean (engine M plans) xs))
+        (zero M) (rowPlan plans N).tree) (M.fromNat (some .fp32) N) := by
+  change div M (sumValue (engine M plans)
+    (FP.Welford.deviationSquares M xs (twopassMean (engine M plans) xs)))
+      (M.fromNat (some .fp32) N) = _
+  rw [sum_value]
+
+/-- Equality of the statistics before any output cast. A consumer such as
+LayerNorm needs these values, not merely equality after bf16 rounding. -/
+theorem original_statistics {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
+    (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
+    (xs : Nat → α) (empty : ReductionPlan 0) (N : Nat) (hN : 0 < N)
+    (hc : CountConversion M N) (hi : IterationDomain M D xs empty.tree N)
+    (hs : StatisticsDomain M D (rowPrefix xs N) (plan empty N) (rowPlan plans N)) :
+    ((recurrence (engine M plans) (rowPrefix xs N) N).1,
+      (engine M plans).binary none .real .div
+        (recurrence (engine M plans) (rowPrefix xs N) N).2 ((engine M plans).fromNat none N)) =
+      (twopassMean (engine M plans) (rowPrefix xs N),
+        twopassVariance (engine M plans) (rowPrefix xs N)) := by
+  have ht := state_batch_statistics R M D hM s xs empty (rowPlan plans N) hN hc hi hs
+  have hn := converted_batch_count R M D hM s empty (rowPlan plans N) hc hi.initial.zero hs.counts
+  have hm : twopassMean (engine M plans) (rowPrefix xs N) =
+      FP.WelfordReduction.mean M (rowPrefix xs N) (rowPlan plans N).tree := by
+    rw [twopass_mean, hn]
+    rfl
+  have hv : twopassVariance (engine M plans) (rowPrefix xs N) =
+      div M (statistics M (rowPrefix xs N) (rowPlan plans N).tree).2
+        (count M (rowPlan plans N).tree) := by
+    rw [twopass_variance, hm, hn]
+    rfl
+  change ((recurrence (engine M plans) (rowPrefix xs N) N).1,
+      div M (recurrence (engine M plans) (rowPrefix xs N) N).2 (M.fromNat (some .fp32) N)) = _
+  rw [recurrence_value M plans xs N N le_rfl, ht, hn, hm, hv]
+  rfl
+
+/-- Both original bf16 output values agree after deriving the recurrence,
+count binding and all three schedule changes. No output equality is a premise. -/
+theorem original_values {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
+    (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
+    (xs : Nat → α) (empty : ReductionPlan 0) (N : Nat) (hN : 0 < N)
+    (hc : CountConversion M N) (hi : IterationDomain M D xs empty.tree N)
+    (hs : StatisticsDomain M D (rowPrefix xs N) (plan empty N) (rowPlan plans N)) :
+    (meanValue (engine M plans) (rowPrefix xs N), varianceValue (engine M plans) (rowPrefix xs N)) =
+      ((engine M plans).cast none .real .bf16 (twopassMean (engine M plans) (rowPrefix xs N)),
+        (engine M plans).cast none .real .bf16 (twopassVariance (engine M plans) (rowPrefix xs N))) := by
+  exact congrArg (fun values : α × α =>
+    ((engine M plans).cast none .real .bf16 values.1,
+      (engine M plans).cast none .real .bf16 values.2))
+    (original_statistics R M D hM s plans xs empty N hN hc hi hs)
+
+/-- Successful executions of both original kernels, both complete output
+windows, and both memory frames. This remains conditional on count admission
+and rewrite domains; it is not a new whole-kernel numerical assumption. -/
+theorem original_runs {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
+    (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
+    (x mean variance : RegionName) (N stride : Nat) (hN : 0 < N) (hdistinct : mean ≠ variance)
+    (xs : Nat → α) (empty : ReductionPlan 0)
+    (hx : ∀ i : Fin N, (s.mem x (s.pids 0 * stride + i.val)).read .real = xs i.val)
+    (hc : CountConversion M N) (hi : IterationDomain M D xs empty.tree N)
+    (hs : StatisticsDomain M D (rowPrefix xs N) (plan empty N) (rowPlan plans N)) :
+    IO₁ₓ₂PrivateScratch (onlineIO x mean variance N stride) ∧
+    IO₁ₓ₂PrivateScratch (twopassIO x mean variance N stride) ∧
+    ∃ a b, FP.Structural.exec (engine M plans) (onlineIO x mean variance N stride).kernel s = some a ∧
+      FP.Structural.exec (engine M plans) (twopassIO x mean variance N stride).kernel s = some b ∧
+      IO₁ₓ₂Outputs (onlineIO x mean variance N stride) (twopassIO x mean variance N stride) s a b ∧
+      IO₁ₓ₂Frame (onlineIO x mean variance N stride) s a ∧
+      IO₁ₓ₂Frame (twopassIO x mean variance N stride) s b := by
+  obtain ⟨hpa, a, ha, hma, hva, hfa⟩ := online_io_run (engine M plans)
+    x mean variance stride (rowPrefix xs N) s hdistinct hx
+  obtain ⟨hpb, b, hb, hmb, hvb, hfb⟩ := twopass_io_run (engine M plans)
+    x mean variance stride (rowPrefix xs N) s hdistinct hx
+  have hv := original_values R M D hM s plans xs empty N hN hc hi hs
+  refine ⟨hpa, hpb, a, b, ha, hb, ⟨?_, ?_⟩, hfa, hfb⟩
+  · intro i
+    have hi : i.val = 0 := by have := i.isLt; change i.val < 1 at this; omega
+    simpa only [onlineIO, twopassIO, hi, Nat.add_zero] using
+      hma.trans ((congrArg (Cell.mk .bf16) (congrArg Prod.fst hv)).trans hmb.symm)
+  · intro i
+    have hi : i.val = 0 := by have := i.isLt; change i.val < 1 at this; omega
+    simpa only [onlineIO, twopassIO, hi, Nat.add_zero] using
+      hva.trans ((congrArg (Cell.mk .bf16) (congrArg Prod.snd hv)).trans hvb.symm)
+
+end VeriTile.Bench.Examples.WelfordFPComparison
+
+/- Scheduled public IO objects for the original Welford pair. Their domain
+is computed syntax containing only value checks. The run comparison remains
+conditional on scalar count conversion; WelfordFPEquiv discharges those
+premises from the accepted bounded atoms. -/
+
+namespace VeriTile.Bench.Examples.WelfordFPContract
+open VeriTile.Bench.Examples.Welford.Kernels
+open VeriTile Triton FP.Structural FP.Guarded FP.ScalarArithmetic
+open FP.GuardExpression
+open _root_.VeriTile.Triton.FP.Equational (ReductionPlan Schedules)
+open WelfordFPExecution WelfordFPComparison
+
+def rowExpressions (x : RegionName) (stride : Nat) (i : Nat) : Expr MemoryInput :=
+  .input ⟨x, fun pid => pid * stride + i, .real⟩
+
+def rowValues {α : Type} [Inhabited α] (s : State α) (x : RegionName)
+    (stride i : Nat) : α := (s.mem x (s.pids 0 * stride + i)).read .real
+
+@[simp] theorem eval_row {α : Type} [Inhabited α] (M : Algebra α)
+    (s : State α) (x : RegionName) (stride i : Nat) :
+    (rowExpressions x stride i).eval M (MemoryInput.read s) = rowValues s x stride i := rfl
+
+/-- The numerical proof domain contains initialization, each iteration, and
+both normalization paths for all three statistics. Dimensions stay symbolic. -/
+def requirements (x : RegionName) (N stride : Nat) (empty : ReductionPlan 0)
+    (plans : Schedules) : Condition :=
+  FP.WelfordConditions.complete (FP.GuardExpression.algebra MemoryInput)
+    (rowExpressions x stride) empty (rowPlan plans N)
+
+/-- Reification neither drops a guard nor introduces an equation premise. -/
+theorem requirements_holds {α : Type} [Inhabited α] (M : Algebra α) (D : Domain α)
+    (s : State α) (x : RegionName) (N stride : Nat) (empty : ReductionPlan 0) (plans : Schedules) :
+    (requirements x N stride empty plans).Holds M D s ↔
+      FP.WelfordInduction.IterationDomain M D (rowValues s x stride) empty.tree N ∧
+      FP.WelfordSchedule.StatisticsDomain M D
+        (FP.WelfordInduction.rowPrefix (rowValues s x stride) N)
+        (FP.WelfordInduction.plan empty N) (rowPlan plans N) := by
+  unfold requirements Condition.Holds
+  rw [← Requirements.holds_map]
+  simp only [FP.WelfordConditions.map_complete, eval_row, FP.WelfordConditions.complete_holds]
+
+def online (x mean variance : RegionName) (N stride : Nat) (empty : ReductionPlan 0) :
+    FP.Scheduled.IO₁ₓ₂ :=
+  ⟨onlineIO x mean variance N stride, FP.Scheduled.fp32, requirements x N stride empty⟩
+
+def twopass (x mean variance : RegionName) (N stride : Nat) (empty : ReductionPlan 0) :
+    FP.Scheduled.IO₁ₓ₂ :=
+  ⟨twopassIO x mean variance N stride, FP.Scheduled.fp32, requirements x N stride empty⟩
+
+theorem same_signature (x mean variance : RegionName) (N stride : Nat) (empty : ReductionPlan 0) :
+    Spec.ProgramSyntax.signature (online x mean variance N stride empty) =
+      Spec.ProgramSyntax.signature (twopass x mean variance N stride empty) := rfl
+
+/-- Both original runs, both typed output cells, and both memory frames under
+the syntactic contract. This is a support theorem, not a completed `≡[R]`
+specification: CountConversion is supplied by the admitted public theorem within its bound. -/
+theorem original_runs_under_count {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
+    (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
+    (x mean variance : RegionName) (N stride : Nat) (hN : 0 < N) (hdistinct : mean ≠ variance)
+    (empty : ReductionPlan 0) (hc : FP.WelfordInduction.CountConversion M N)
+    (hd : (requirements x N stride empty plans).Holds M D s) :
+    IO₁ₓ₂PrivateScratch (online x mean variance N stride empty).io ∧
+    IO₁ₓ₂PrivateScratch (twopass x mean variance N stride empty).io ∧
+    ∃ a b,
+      FP.Structural.exec ((online x mean variance N stride empty).profile.algebra M plans)
+        (online x mean variance N stride empty).io.kernel s = some a ∧
+      FP.Structural.exec ((twopass x mean variance N stride empty).profile.algebra M plans)
+        (twopass x mean variance N stride empty).io.kernel s = some b ∧
+      IO₁ₓ₂Outputs (online x mean variance N stride empty).io
+        (twopass x mean variance N stride empty).io s a b ∧
+      IO₁ₓ₂Frame (online x mean variance N stride empty).io s a ∧
+      IO₁ₓ₂Frame (twopass x mean variance N stride empty).io s b := by
+  obtain ⟨hi, hs⟩ := (requirements_holds M D s x N stride empty plans).mp hd
+  exact original_runs R M D hM s plans x mean variance N stride hN hdistinct
+    (rowValues s x stride) empty (fun _ => rfl) hc hi hs
+
+end VeriTile.Bench.Examples.WelfordFPContract
