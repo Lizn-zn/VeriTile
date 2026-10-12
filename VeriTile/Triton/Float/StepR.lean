@@ -169,6 +169,12 @@ noncomputable def stepStmtR (R : RoundingModel) : Stmt → BlockState → Option
       let step' ← evalOpR R step s
       stepForRangeAuxR R idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
         (step'.data PUnit.unit) body s
+  | .forRangeInt idx start stop step body, s => do
+      let start' ← evalOpR R start s
+      let stop' ← evalOpR R stop s
+      let step' ← evalOpR R step s
+      stepForRangeIntAuxR R idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
+        (step'.data PUnit.unit) body s
   | .ifThen cond body, s => do
       let c ← evalOpR R cond s
       if c.data PUnit.unit then stepStmtsR R body s else some s
@@ -214,6 +220,19 @@ noncomputable def stepForRangeAuxR (R : RoundingModel)
         | none => none
       else some s
 termination_by _ => (sizeOf body + 1, stop - cur)
+decreasing_by all_goals omega
+
+noncomputable def stepForRangeIntAuxR (R : RoundingModel)
+    (idx : RegName) (cur stop : Int) (step : Nat) (body : List Stmt) :
+    BlockState → Option BlockState
+  | s =>
+      if step = 0 then some s
+      else if cur < stop then
+        match stepStmtsR R body (s.setReg idx .int [] (Tile.scalar cur)) with
+        | some s' => stepForRangeIntAuxR R idx (cur + step) stop step body s'
+        | none => none
+      else some s
+termination_by _ => (sizeOf body + 1, (stop - cur).toNat)
 decreasing_by all_goals omega
 
 end
@@ -265,6 +284,20 @@ theorem stepStmtR_triv : ∀ (st : Stmt) (s : BlockState),
           | none => rfl
           | some step' =>
             exact stepForRangeAuxR_triv idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
+              (step'.data PUnit.unit) body s
+  | .forRangeInt idx start stop step body, s => by
+      simp only [stepStmtR, stepStmt, evalOpR_triv start s, evalOpR_triv stop s,
+        evalOpR_triv step s]
+      cases evalOp start s with
+      | none => rfl
+      | some start' =>
+        cases evalOp stop s with
+        | none => rfl
+        | some stop' =>
+          cases evalOp step s with
+          | none => rfl
+          | some step' =>
+            exact stepForRangeIntAuxR_triv idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
               (step'.data PUnit.unit) body s
   | .ifThen cond body, s => by
       simp only [stepStmtR, stepStmt, evalOpR_triv cond s, stepStmtsR_triv body s]
@@ -323,6 +356,23 @@ theorem stepForRangeAuxR_triv : ∀ (idx : RegName) (cur stop step : Nat) (body 
 termination_by _ cur stop _ body _ => (sizeOf body + 1, stop - cur)
 decreasing_by all_goals omega
 
+theorem stepForRangeIntAuxR_triv : ∀ (idx : RegName) (cur stop : Int) (step : Nat) (body : List Stmt)
+    (s : BlockState),
+    stepForRangeIntAuxR RoundingModel.triv idx cur stop step body s =
+      stepForRangeIntAux idx cur stop step body s
+  | idx, cur, stop, step, body, s => by
+      rw [stepForRangeIntAuxR, stepForRangeIntAux]
+      simp only [stepStmtsR_triv body (s.setReg idx .int [] (Tile.scalar cur))]
+      split
+      · rfl
+      · split
+        · cases stepStmts body (s.setReg idx .int [] (Tile.scalar cur)) with
+          | none => rfl
+          | some s' => exact stepForRangeIntAuxR_triv idx (cur + step) stop step body s'
+        · rfl
+termination_by _ cur stop _ body _ => (sizeOf body + 1, (stop - cur).toNat)
+decreasing_by all_goals omega
+
 end
 
 /-- Kernel-execution degeneration: `execR .triv` *is* `exec`. -/
@@ -374,6 +424,24 @@ theorem stepForRangeAuxR_castFree (R : RoundingModel) (body : List Stmt)
               exact stepForRangeAuxR_castFree R body hbody idx (cur + step) stop step s'
         · rfl
   termination_by cur stop _ _ => stop - cur
+  decreasing_by omega
+
+theorem stepForRangeIntAuxR_castFree (R : RoundingModel) (body : List Stmt)
+    (hbody : ∀ t : BlockState, stepStmtsR R body t = stepStmts body t) (idx : RegName) :
+    ∀ (cur stop : Int) (step : Nat) (s : BlockState),
+      stepForRangeIntAuxR R idx cur stop step body s = stepForRangeIntAux idx cur stop step body s
+  | cur, stop, step, s => by
+      rw [stepForRangeIntAuxR, stepForRangeIntAux]
+      simp only [hbody (s.setReg idx .int [] (Tile.scalar cur))]
+      split
+      · rfl
+      · split
+        · cases stepStmts body (s.setReg idx .int [] (Tile.scalar cur)) with
+          | none => rfl
+          | some s' =>
+              exact stepForRangeIntAuxR_castFree R body hbody idx (cur + step) stop step s'
+        · rfl
+  termination_by cur stop _ _ => (stop - cur).toNat
   decreasing_by omega
 
 /-! ## Stepping walk basics

@@ -1,0 +1,26 @@
+{
+  "lean_sha256": "ec2e8c4f16b95cadf996cbf4135facaffb70faa71ea8e69d942a9761c4fcb740",
+  "python_sha256": "3879b6fb82f9f47763e3c0f059e17597f973dcf85ec1150227adbaaf1c756c0a",
+  "checks": [
+    {
+      "kernel": "fifth_order_fwd",
+      "complete_statement_ast": true,
+      "all_load_masks": true,
+      "all_store_values_and_destination_casts": true,
+      "ordinary_fp32_constant_assignments": true,
+      "constants": 30
+    },
+    {
+      "kernel": "fifth_order_bwd",
+      "complete_statement_ast": true,
+      "all_load_masks": true,
+      "all_store_values_and_destination_casts": true,
+      "ordinary_fp32_constant_assignments": true,
+      "constants": 54
+    }
+  ],
+  "normalizations": [
+    "Lean syntax and Nat/real antiquotation",
+    "Explicit destination cast checked independently for every store"
+  ]
+}

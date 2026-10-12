@@ -6,10 +6,22 @@ Typed expression, statement, and kernel AST definitions for the Triton core.
 
 import Mathlib.Data.Rat.Defs
 import VeriTile.Triton.Core.Shape
+import VeriTile.Triton.Core.Float8
 
 namespace VeriTile.Triton
 
 set_option linter.unusedVariables false
+
+/-- Source options selecting a dot implementation. The real interpreter ignores
+these precision choices; the floating interpreter must pass them to its opaque
+dot backend. `none` preserves a source default, rather than guessing a backend
+or equating it with an explicitly selected mode. -/
+structure DotOptions where
+  outDType : Option TileDType := none
+  allowTF32 : Option Bool := none
+  inputPrecision : Option String := none
+  maxNumImpreciseAcc : Option Nat := none
+  deriving DecidableEq, Repr, Inhabited
 
 /-
 P1 Triton expressions.
@@ -54,11 +66,13 @@ Notes on individual constructors:
   typed constructors; mixed-channel comparison rejects at elaboration time.
   Shape semantics follow Triton: `()×()→()`, `(n)×()→(n)`, `()×(n)→(n)`,
   `(n)×(n)→(n)` (length match required for tile×tile).
-* `load dtype mem mask` reads from a `MemAccess`: named-region plus `.nat`
+* `load dtype mem mask padding` reads from a `MemAccess`: named-region plus `.nat`
   offsets, first-class pointer values, or block pointers with checked axes.
   Scalar offset = single-cell read; tile offset = gather. With `MaskOpt.mask`,
   masked-off lanes use the state's `undef` oracle; with `MaskOpt.maskOther`,
-  masked-off lanes use the supplied `other` value.
+  masked-off lanes use the supplied `other` value. For checked block pointers,
+  `padding` distinguishes explicit zero from an unspecified value. The raw AST
+  constructor keeps its historical zero default; this is not Triton's default.
 -/
 inductive ScanOp where
   | sum
@@ -108,6 +122,10 @@ inductive Op : TileDType → TileShape → Type where
   | castNatToInt : Op .nat shape → Op .int shape
   | castIntToNat : Op .int shape → Op .nat shape
   | castRealToInt8 : Op .real shape → Op .int shape
+  /-- Interpret signed int8 byte payloads as E5M2 values. The source frontend
+  uses `.f8e5`; precision erasure uses `.real`. This is a representation
+  operation, not an integer-to-float numerical conversion. -/
+  | decodeFloat8E5 : (dst : FloatDType) → Op .int shape → Op dst.toTileDType shape
   | add       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | sub       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
   | mul       : NumericDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op dtype out
@@ -126,6 +144,8 @@ inductive Op : TileDType → TileShape → Type where
   | libdeviceLog : Op .real shape → Op .real shape
   | libdeviceExpm1 : Op .real shape → Op .real shape
   | libdeviceLog1p : Op .real shape → Op .real shape
+  /-- Device-library tanh remains distinct from the intrinsic FP backend. -/
+  | libdeviceTanh : Op .real shape → Op .real shape
   | exp2      : Op .real shape → Op .real shape
   | log       : Op .real shape → Op .real shape
   | log2      : Op .real shape → Op .real shape
@@ -140,6 +160,9 @@ inductive Op : TileDType → TileShape → Type where
   | cosh      : Op .real shape → Op .real shape
   | sinh      : Op .real shape → Op .real shape
   | erf       : Op .real shape → Op .real shape
+  /-- The complete operation `tl.minimum(a, +∞)`. The real projection is
+  identity; the FP interpretation remains a distinct opaque operation. -/
+  | minPosInf : Op .real shape → Op .real shape
   | lt        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | le        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
   | eq        : ComparableDType dtype → Broadcast a b out → Op dtype a → Op dtype b → Op .bool out
@@ -185,10 +208,21 @@ inductive Op : TileDType → TileShape → Type where
   | reduceMaxNat : (axis : Fin shape.length) → (keepDims : Bool) →
                 Op .nat shape →
                 Op .nat (TileShape.reduceShape shape axis keepDims)
+  /-- Signed integer reduce-max along an arbitrary axis. Empty axes fail in execution. -/
+  | reduceMaxInt : (axis : Fin shape.length) → (keepDims : Bool) →
+                Op .int shape →
+                Op .int (TileShape.reduceShape shape axis keepDims)
   /-- Block-level reduce-sum along an arbitrary axis. -/
   | reduceSum : (axis : Fin shape.length) → (keepDims : Bool) →
                 Op .real shape →
                 Op .real (TileShape.reduceShape shape axis keepDims)
+  /-- A floating sum that retains its input/accumulator/output channel.
+  Unlike an explicit cast followed by a real/fp32 sum, a half-precision sum
+  selects its own opaque FP reduction. Precision erasure still yields the
+  ordinary real sum used by mathematical correctness proofs. -/
+  | reduceSumTyped : (dtype : FloatDType) → (axis : Fin shape.length) → (keepDims : Bool) →
+                Op dtype.toTileDType shape →
+                Op dtype.toTileDType (TileShape.reduceShape shape axis keepDims)
   /-- Directed scan along an axis: prefix fold when `dir = .forward`, suffix
   fold when `dir = .reverse` (`reverse=True`). `tl.cumsum` and `tl.cumprod`
   lower to this node with `.sum` / `.prod`; `tl.associative_scan` accepts the
@@ -215,11 +249,30 @@ inductive Op : TileDType → TileShape → Type where
   kernels use a non-empty batch prefix.
 
   Both operands must agree on the batch prefix and on the shared inner
-  dim `K`. The accumulator form `tl.dot(a, b, acc)` desugars at the DSL
-  level to `acc + tl.dot(a, b)`, so the AST has only the binary node. -/
+  dim `K`. The explicit floating accumulator form uses `Op.dotAcc`. -/
   | dot       : {batch : TileShape} → {M K N : Nat} →
                 Op .real (batch ++ [M, K]) → Op .real (batch ++ [K, N]) →
-                Op .real (batch ++ [M, N])
+                (options : optParam DotOptions ({} : DotOptions)) → Op .real (batch ++ [M, N])
+  /-- A floating dot with explicit operand and result channels. The result is
+  produced by this operation in `out`; it is not a default dot followed by a
+  numeric cast. Keeping operand channels also distinguishes fp16/bf16 products
+  from fp32 input-precision modes. -/
+  | dotTyped  : (left right out : FloatDType) →
+                {batch : TileShape} → {M K N : Nat} →
+                Op left.toTileDType (batch ++ [M, K]) →
+                Op right.toTileDType (batch ++ [K, N]) →
+                (options : optParam DotOptions ({} : DotOptions)) →
+                Op out.toTileDType (batch ++ [M, N])
+  /-- Dot with an explicit accumulator. The FP interpreter treats this as one
+  opaque operation; it does not assume equality with a separately rounded dot
+  followed by addition. All three input channels and dot options are retained. -/
+  | dotAcc : (left right out : FloatDType) →
+                {batch : TileShape} → {M K N : Nat} →
+                Op left.toTileDType (batch ++ [M, K]) →
+                Op right.toTileDType (batch ++ [K, N]) →
+                Op out.toTileDType (batch ++ [M, N]) →
+                (options : optParam DotOptions ({} : DotOptions)) →
+                Op out.toTileDType (batch ++ [M, N])
   /--
   Integer matrix multiply: Triton's `tl.dot` on two int8/int32 tiles
   accumulates in int32 (`acc = tl.zeros(..., dtype=tl.int32);
@@ -229,7 +282,7 @@ inductive Op : TileDType → TileShape → Type where
   rounding obligations. Batch/shape discipline is identical to `Op.dot`. -/
   | dotInt    : {batch : TileShape} → {M K N : Nat} →
                 Op .int (batch ++ [M, K]) → Op .int (batch ++ [K, N]) →
-                Op .int (batch ++ [M, N])
+                (options : optParam DotOptions ({} : DotOptions)) → Op .int (batch ++ [M, N])
   /--
   Trailing-two-axes transpose (`x.T` in Triton, mirrors how `Op.dot`
   treats the trailing two dims as the matrix and any leading dims as a
@@ -286,8 +339,10 @@ inductive Op : TileDType → TileShape → Type where
                 (strides : List Nat) → (offsets : List (Op .nat [])) →
                 Op .blockPtr blockShape
   | advanceBlockPtr : Op .blockPtr shape → (offsetDeltas : List Int) → Op .blockPtr shape
+  /-- Runtime signed offsets for `tl.advance`; all coordinates must evaluate. -/
+  | advanceBlockPtrDyn : Op .blockPtr shape → List (Op .int []) → Op .blockPtr shape
   | load      : (dtype : TileDType) → MemAccess dtype shape →
-                MaskOpt dtype shape → Op dtype shape
+                MaskOpt dtype shape → (padding : PaddingOption := .zero) → Op dtype shape
   | natToReal : Op .nat shape → Op .real shape
   | intToReal : Op .int shape → Op .real shape
 
@@ -360,6 +415,10 @@ inductive Stmt : Type where
   | forLoop : (idx : RegName) → (n : Nat) → (body : List Stmt) → Stmt
   | forRange : (idx : RegName) → (start stop step : Nat) → (body : List Stmt) → Stmt
   | forRangeDyn : (idx : RegName) → (start stop step : Op .nat []) → (body : List Stmt) → Stmt
+  /-- Signed bounds and index, with a nonnegative stride evaluated once on entry.
+  A zero stride executes no iterations, as in `forRangeDyn`. -/
+  | forRangeInt : (idx : RegName) → (start stop : Op .int []) →
+      (step : Op .nat []) → (body : List Stmt) → Stmt
   | ifThen  : (cond : Op .bool []) → (body : List Stmt) → Stmt
   | ifThenElse : (cond : Op .bool []) → (thenBody elseBody : List Stmt) → Stmt
 
@@ -537,6 +596,7 @@ inductive ComputeOp : ComputeDType → TileShape → Type where
       (dtype : ComputeDType) →
       MemAccess dtype.eraseDType shape →
       MaskOpt dtype.eraseDType shape →
+      (padding : PaddingOption := .zero) →
       ComputeOp dtype shape
   | bitcast :
       (src dst : ComputeDType) →
@@ -565,7 +625,7 @@ def constPayload? : ComputeOp dtype [] → Option (ComputeCarrier dtype)
   | .alg _ _ => none
   | .const value => some value
   | .full _ _ => none
-  | .load _ _ _ => none
+  | .load _ _ _ padding => none
   | .bitcast src dst _ e =>
       match constPayload? e with
       | some value => bitcastPayload src dst value
@@ -600,7 +660,7 @@ def toAlgorithm? : (op : ComputeOp dtype shape) →
       match toAlgorithm? value with
       | Except.ok value' => Except.ok (Op.full shape value')
       | Except.error err => Except.error err
-  | .load dtype mem mask => Except.ok (Op.load dtype.eraseDType mem mask)
+  | .load dtype mem mask padding => Except.ok (Op.load dtype.eraseDType mem mask padding)
   | .bitcast src dst h e =>
       match shape with
       | [] => constOpToAlgorithm? (.bitcast src dst h e)
@@ -615,9 +675,9 @@ def toAlgorithm? : (op : ComputeOp dtype shape) →
 
 @[simp] theorem toAlgorithm?_load
     (dtype : ComputeDType) (mem : MemAccess dtype.eraseDType shape)
-    (mask : MaskOpt dtype.eraseDType shape) :
-    ComputeOp.toAlgorithm? (ComputeOp.load dtype mem mask) =
-      Except.ok (Op.load dtype.eraseDType mem mask) := rfl
+    (mask : MaskOpt dtype.eraseDType shape) (padding : PaddingOption := .zero) :
+    ComputeOp.toAlgorithm? (ComputeOp.load dtype mem mask padding) =
+      Except.ok (Op.load dtype.eraseDType mem mask padding) := rfl
 
 end ComputeOp
 
@@ -753,6 +813,9 @@ inductive ComputeStmt : Type where
   | forRange : (idx : RegName) → (start stop step : Nat) → (body : List ComputeStmt) → ComputeStmt
   | forRangeDyn : (idx : RegName) → (start stop step : Op .nat []) →
       (body : List ComputeStmt) → ComputeStmt
+  /-- Signed range; floating operations inside the body retain their precision. -/
+  | forRangeInt : (idx : RegName) → (start stop : Op .int []) →
+      (step : Op .nat []) → (body : List ComputeStmt) → ComputeStmt
   | ifThen : (cond : Op .bool []) → (body : List ComputeStmt) → ComputeStmt
   | ifThenElse : (cond : Op .bool []) →
       (thenBody elseBody : List ComputeStmt) → ComputeStmt
@@ -793,6 +856,8 @@ def toAlgorithm? : ComputeStmt → Except EraseDTypeError Stmt
       Except.ok (.forRange idx start stop step (← listToAlgorithm? body))
   | .forRangeDyn idx start stop step body => do
       Except.ok (.forRangeDyn idx start stop step (← listToAlgorithm? body))
+  | .forRangeInt idx start stop step body => do
+      Except.ok (.forRangeInt idx start stop step (← listToAlgorithm? body))
   | .ifThen cond body => do
       Except.ok (.ifThen cond (← listToAlgorithm? body))
   | .ifThenElse cond thenBody elseBody => do

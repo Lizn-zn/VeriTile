@@ -19,6 +19,9 @@ inductive DInfo where
   | f8e4
   | f8e5
   | int
+  /-- Known signed-byte storage width. Arithmetic uses the existing Int channel
+  and deliberately drops this provenance before any later bitcast. -/
+  | int8
   | nat
   | bool
   | ptr
@@ -70,7 +73,7 @@ def DInfo.term : DInfo → MacroM (TSyntax `term)
   | .bf16 => `(TileDType.bf16)
   | .f8e4 => `(TileDType.f8e4)
   | .f8e5 => `(TileDType.f8e5)
-  | .int => `(TileDType.int)
+  | .int | .int8 => `(TileDType.int)
   | .nat => `(TileDType.nat)
   | .bool => `(TileDType.bool)
   | .ptr => `(TileDType.ptr)
@@ -86,7 +89,7 @@ def DInfo.floatProof : DInfo → MacroM (TSyntax `term)
   | .bf16 => `(FloatDType.bf16)
   | .f8e4 => `(FloatDType.f8e4)
   | .f8e5 => `(FloatDType.f8e5)
-  | .int => Macro.throwError "tl.cast: signed integer casts are not modeled yet"
+  | .int | .int8 => Macro.throwError "tl.cast: signed integer casts are not modeled yet"
   | .nat => Macro.throwError "tl.cast: Nat casts are not modeled yet; use tl.toReal for Nat to real"
   | .bool => Macro.throwError "tl.cast: Bool casts are not supported"
   | .ptr => Macro.throwError "tl.cast: pointer casts are not supported"
@@ -110,6 +113,7 @@ def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
   | .f8e4 => `(NumericDType.f8e4)
   | .f8e5 => `(NumericDType.f8e5)
   | .int => `(NumericDType.int)
+  | .int8 => Macro.throwError "arithmetic: int8 storage width must be erased before integer arithmetic"
   | .nat => `(NumericDType.nat)
   | .bool => Macro.throwError "arithmetic on Bool values is not supported"
   | .ptr => Macro.throwError "arithmetic on pointer values is not supported; use pointer + Nat offset"
@@ -120,6 +124,7 @@ def DInfo.numericProof : DInfo → MacroM (TSyntax `term)
 
 def DInfo.integralProof : DInfo → MacroM (TSyntax `term)
   | .int => `(IntegralDType.int)
+  | .int8 => Macro.throwError "integer arithmetic: int8 storage width must be erased first"
   | .nat => `(IntegralDType.nat)
   | .real => Macro.throwError "integer division/remainder on Real values is not supported"
   | .fp32 => Macro.throwError "integer division/remainder on floating values is not supported"
@@ -139,7 +144,7 @@ def DInfo.comparableProof : DInfo → MacroM (TSyntax `term)
   | .bf16 => `(ComparableDType.bf16)
   | .f8e4 => `(ComparableDType.f8e4)
   | .f8e5 => `(ComparableDType.f8e5)
-  | .int => `(ComparableDType.int)
+  | .int | .int8 => `(ComparableDType.int)
   | .nat => `(ComparableDType.nat)
   | .bool => Macro.throwError "comparison on Bool values is not supported"
   | .ptr => Macro.throwError "comparison on pointer values is not supported"
@@ -190,6 +195,19 @@ def expandDTypeIdent (name : Name) : MacroM DInfo :=
 def expandDTypeExpr : TSyntax `tritonExpr → MacroM DInfo
   | `(tritonExpr| $name:ident) => expandDTypeIdent name.getId
   | _ => Macro.throwUnsupported
+
+/-- Numerical casts retain the existing mathematical integer model. Only a
+storage declaration/load supplies byte-width provenance for reinterpretation. -/
+def expandStorageDType (dt : TSyntax `tritonDType) : MacroM DInfo :=
+  match dt with
+  | `(tritonDType| tl.int8) => pure .int8
+  | _ => expandDType dt
+
+def expandStorageDTypeExpr (dt : TSyntax `tritonExpr) : MacroM DInfo :=
+  match dt with
+  | `(tritonExpr| $name:ident) =>
+      if name.getId.toString == "tl.int8" then pure .int8 else expandDTypeExpr dt
+  | _ => expandDTypeExpr dt
 
 def lookupEnv (env : Env) (name : String) : MacroM (DInfo × SInfo) := do
   match env.find? (fun entry => entry.1 == name) with

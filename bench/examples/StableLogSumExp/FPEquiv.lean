@@ -1,4 +1,6 @@
+import bench.examples.StableLogSumExp.Kernels
 import bench.examples.StableLogSumExp.Proofs.FP
+import VeriTile.Triton.Float.Kernel
 import VeriTile.Meta.StatementAudit
 
 /-!
@@ -13,38 +15,62 @@ for fp32 comparisons. Branch outcomes are unrestricted. The row length is
 symbolic. The specification includes successful execution and a memory frame.
 
 The older stableLSEKernel omits both fallbacks. Its unconditional log_mul and
-log_exp candidates are not admitted; Proofs/Unconditional.lean records that separate goal.
+log_exp candidates are not admitted. Proofs/Unconditional.lean refutes the old
+general FP specification with a logical countermodel of the selected atoms.
 -/
 
 noncomputable section
 namespace VeriTile.Bench.Examples.StableLogSumExpFPEquiv
-open VeriTile Triton FP.Structural FP.Guarded
-open StableLogSumExpFPContract StableLogSumExpFPExecution
+open VeriTile.Bench.Examples.StableLogSumExp.Kernels
+open VeriTile Triton
+open StableLogSumExpFPContract
 open scoped VeriTile.Spec
+open StableLogSumExpFPExecution
+open SoftmaxStableFPContract (rowExpressions center rowPlan)
+open _root_.VeriTile.Triton.FP.Equational (Schedules)
+open FP.GuardExpression
+
+def directIO (x y : RegionName) (B : Nat) : KernelIO₁ where
+  kernel := directLSEKernel x y B
+  inp := x
+  out := y
+  Bin := B
+  Bout := 1
+  read := fun pid => pid * B
+  write := fun pid => pid
+
+def optimizedIO (x y : RegionName) (B : Nat) : KernelIO₁ :=
+  (directIO x y B).withKernel (optimizedLSEKernel x y B)
+
+/-- Finite inputs, row maximum, exponentials and sum-tree intermediates;
+exp(max) is positive and nonzero, its reciprocal is finite, and the shifted
+sum is finite and positive with a finite logarithm. Checks also cover the
+zero intermediates used by the scalar derivation. `plans` chooses the shared
+addition tree; input values themselves need not be positive. -/
+def requirements (x : RegionName) (B : Nat) (plans : Schedules) : Condition :=
+  let M := FP.GuardExpression.algebra MemoryInput
+  let xs := rowExpressions x B
+  FP.LogSumExpShift.checks M xs (center M xs) (rowPlan plans B).tree
+
+/-- Reference kernel under the common FP contract. Both programs use these
+numerical-domain checks and comparison requirements; only the optimized
+source uses the comparisons, and either Boolean result is allowed. -/
+def original (x y : RegionName) (B : Nat) : FP.Kernel₁ where
+  io := directIO x y B
+  profile := FP.fp32
+  domain := requirements x B
+  comparisons := [.lt .fp32 .real, .le .fp32 .real]
+
+/-- Same IO layout, precision and preconditions, with the optimized source. -/
+def optimized (x y : RegionName) (B : Nat) : FP.Kernel₁ :=
+  { original x y B with io := optimizedIO x y B }
 
 /-- Actual source-to-source equivalence from admitted scalar atoms. -/
 specification logsumexp_equiv (B : Nat) (hB : 0 < B) (R : FP.LogSumExp.Rules) :
     optimized "x" "y" B ≡[R] original "x" "y" B := by
   apply Spec.FloatingPoint.ofNumerical (lhs := optimized "x" "y" B)
     (rhs := original "x" "y" B) (structural := fun _ _ => False) rfl rfl
-  refine ⟨by simp [optimized, IO₁PrivateScratch, optimizedIO, directIO],
-    by simp [original, optimized, IO₁PrivateScratch, directIO], ?_⟩
-  intro α _ M D hM comparisons plans s hd
-  obtain ⟨lt, hlt⟩ : ∃ lt, M.compareLt (some .fp32) .real = some lt := by
-    have h := comparisons (.lt .fp32 .real) (by simp [optimized])
-    cases he : M.compareLt (some .fp32) .real with
-    | none => simp [FP.Scheduled.Comparison.Supported, he] at h
-    | some lt => exact ⟨lt, rfl⟩
-  obtain ⟨le, hle⟩ : ∃ le, M.compareLe (some .fp32) .real = some le := by
-    have h := comparisons (.le .fp32 .real) (by simp [optimized])
-    cases he : M.compareLe (some .fp32) .real with
-    | none => simp [FP.Scheduled.Comparison.Supported, he] at h
-    | some le => exact ⟨le, rfl⟩
-  obtain ⟨a, b, ha, hb, hout, hfa, hfb⟩ :=
-    candidate_runs R M D hM s plans lt le hlt hle "x" "y" B hB hd
-  refine ⟨a, b, ha, hb, ?_, hfa, hfb⟩
-  intro i
-  simpa only [optimized, original, optimizedIO, directIO, Fin.val_eq_zero, Nat.add_zero] using hout
+  exact candidate_equivalent B hB R
 
 #print_fp_assumptions logsumexp_equiv
 #guard_msgs (drop info) in

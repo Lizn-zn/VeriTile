@@ -20,15 +20,15 @@ run_cmd liftTermElabM do
     for (name, expected) in cases do
       let term : TSyntax `term := ⟨mkIdent name⟩
       let value ← if expected == .bool then `(tritonExpr| true) else `(tritonExpr| 7)
-      let full ← expandFullDTypeTerm expandExpr [] #[] value term
-      unless full.dtype == expected do
+      let fullExpr ← expandFullDTypeTerm expandExpr [] #[] value term
+      unless fullExpr.dtype == expected do
         Macro.throwError s!"Wrong tl.full dtype for {name}"
-      unless full.computeDType? == (if name == `tl.float32 then some .fp32 else none) do
+      unless fullExpr.computeDType? == (if name == `tl.float32 then some .fp32 else none) do
         Macro.throwError s!"Wrong compute projection for {name}"
       -- Numeric zero construction must use the same dtype dispatch as full.
       if expected != .bool then
         let zeros ← expandZerosDTypeTerm expandExpr [] #[] term
-        unless zeros.dtype == expected && zeros.computeDType? == full.computeDType? do
+        unless zeros.dtype == expected && zeros.computeDType? == fullExpr.computeDType? do
           Macro.throwError s!"Wrong tl.zeros dtype for {name}"
 
 run_cmd liftTermElabM do
@@ -38,9 +38,9 @@ run_cmd liftTermElabM do
       let some (.pointerElement name) ← resolveDTypeTerm? term
         | Macro.throwError "Expected a pointer-element dtype"
       unless name == `out do Macro.throwError "Wrong pointer name"
-      let full ← expandFullDTypeTerm expandExpr [] #[] (← `(tritonExpr| 7)) term
+      let fullExpr ← expandFullDTypeTerm expandExpr [] #[] (← `(tritonExpr| 7)) term
       let zeros ← expandZerosDTypeTerm expandExpr [] #[] term
-      unless full.dtype == .real && zeros.dtype == .real do
+      unless fullExpr.dtype == .real && zeros.dtype == .real do
         Macro.throwError "Pointer-element constructor inference changed"
 
     let invalid : Array (TSyntax `term) := #[

@@ -4,7 +4,7 @@ VeriTile.Triton.Semantics.EvalOp
 Expression evaluation for the typed Triton AST.
 -/
 
-import VeriTile.Triton.Semantics.TileOps
+import VeriTile.Triton.Semantics.Float8
 import Batteries.Data.Nat.Bitwise
 
 namespace VeriTile.Triton
@@ -46,6 +46,8 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .castRealToInt8 a, s => do
       let va ← evalOp a s
       some ⟨fun i => WithBot.realToInt8 (va.data i)⟩
+  | .decodeFloat8E5 dst a, s => do
+      Float8E5Bits.decodeTile dst (← evalOp a s)
   | .add h bc a b, s => do
       let va ← evalOp a s
       let vb ← evalOp b s
@@ -79,6 +81,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .libdeviceExp a, s => return Tile.uop WithBot.realExp (← evalOp a s)
   | .libdeviceLog a, s => return Tile.uop WithBot.realLog (← evalOp a s)
   | .libdeviceExpm1 a, s => return Tile.uop WithBot.realExpm1 (← evalOp a s)
+  | .libdeviceTanh a, s => return Tile.uop WithBot.realTanh (← evalOp a s)
   | .libdeviceLog1p a, s => return Tile.uop WithBot.realLog1p (← evalOp a s)
   | .exp2 a, s => return Tile.uop WithBot.realExp2 (← evalOp a s)
   | .log a, s => return Tile.uop WithBot.realLog (← evalOp a s)
@@ -94,6 +97,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .cosh a, s => return Tile.uop WithBot.realCosh (← evalOp a s)
   | .sinh a, s => return Tile.uop WithBot.realSinh (← evalOp a s)
   | .erf a, s => return Tile.uop WithBot.realErf (← evalOp a s)
+  | .minPosInf a, s => return Tile.uop id (← evalOp a s)
   | .lt h bc a b, s => return Tile.cop h.lt bc (← evalOp a s) (← evalOp b s)
   | .le h bc a b, s => return Tile.cop h.le bc (← evalOp a s) (← evalOp b s)
   | .eq h bc a b, s => return Tile.cop h.eq bc (← evalOp a s) (← evalOp b s)
@@ -125,16 +129,37 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .reduceMaxNat axis keepDims a, s => do
       let va ← evalOp a s
       Tile.reduceMaxNat axis keepDims va
+  | .reduceMaxInt axis keepDims a, s => do
+      let va ← evalOp a s
+      Tile.reduceMaxInt axis keepDims va
   | .reduceSum axis keepDims a, s => return Tile.reduceSum axis keepDims (← evalOp a s)
+  | .reduceSumTyped dtype axis keepDims a, s =>
+      return Tile.reduceSumTyped dtype axis keepDims (← evalOp a s)
   | .scan op axis dir a, s => return Tile.scan op axis dir (← evalOp a s)
   | .argMax axis a, s => return Tile.argMaxDrop axis (← evalOp a s)
   | .argMin axis a, s => return Tile.argMinDrop axis (← evalOp a s)
   | .sort axis a, s => return Tile.sortAxis axis (← evalOp a s)
-  | .dot (batch := batch) a b, s => do
+  | .dot (batch := batch) a b _, s => do
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.dot batch va vb)
-  | .dotInt (batch := batch) a b, s => do
+  | .dotTyped left right out (batch := batch) (M := m) (K := k) (N := n) a b _, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      let product := Tile.dot batch (M := m) (K := k) (N := n)
+        ⟨fun i => FloatDType.cast left .real (va.data i)⟩
+        ⟨fun i => FloatDType.cast right .real (vb.data i)⟩
+      some ⟨fun i => FloatDType.cast .real out (product.data i)⟩
+  | .dotAcc left right out (batch := batch) (M := m) (K := k) (N := n) a b acc _, s => do
+      let va ← evalOp a s
+      let vb ← evalOp b s
+      let vc ← evalOp acc s
+      let product := Tile.dot batch (M := m) (K := k) (N := n)
+        ⟨fun i => FloatDType.cast left .real (va.data i)⟩
+        ⟨fun i => FloatDType.cast right .real (vb.data i)⟩
+      some ⟨fun i => FloatDType.cast .real out
+        (WithBot.realAdd (product.data i) (FloatDType.cast out .real (vc.data i)))⟩
+  | .dotInt (batch := batch) a b _, s => do
       let va ← evalOp a s
       let vb ← evalOp b s
       some (Tile.dotInt batch va vb)
@@ -195,7 +220,13 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .advanceBlockPtr ptr deltas, s => do
       let p ← evalOp ptr s
       some ⟨fun i => (p.data i).advance deltas⟩
-  | .load dtype mem mask, s => do
+  | .advanceBlockPtrDyn ptr deltas, s => do
+      let p ← evalOp ptr s
+      let ds ← deltas.mapM (fun delta => do
+        let v ← evalOp delta s
+        some (v.data PUnit.unit))
+      some ⟨fun i => (p.data i).advance ds⟩
+  | .load dtype mem mask padding, s => do
       let addr : TileIndex shape → RegionName × Nat × Bool ←
         match mem with
         | .region region off => do
@@ -214,7 +245,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
               (bp.region, bp.address idx, bp.inBounds idx boundaryCheck)
       let read := fun i =>
         let (region, offset, ok) := addr i
-        if ok then s.readMemValue dtype region offset else BlockState.defaultCarrier dtype
+        if ok then s.readMemValue dtype region offset else s.paddingValue dtype padding region offset
       match mask with
       | .none => some ⟨read⟩
       | .mask mask => do
@@ -222,15 +253,15 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
           some ⟨fun i =>
             let (region, offset, ok) := addr i
             if masks.data i then
-              if ok then s.readMemValue dtype region offset else BlockState.defaultCarrier dtype
+              if ok then s.readMemValue dtype region offset else s.paddingValue dtype padding region offset
             else
               match dtype with
-              | .real => if ok then some (s.undef region offset) else some 0
-              | .fp32 => if ok then FloatDType.fp32.ofReal (s.undef region offset) else FloatDType.fp32.ofReal 0
-              | .fp16 => if ok then FloatDType.fp16.ofReal (s.undef region offset) else FloatDType.fp16.ofReal 0
-              | .bf16 => if ok then FloatDType.bf16.ofReal (s.undef region offset) else FloatDType.bf16.ofReal 0
-              | .f8e4 => if ok then FloatDType.f8e4.ofReal (s.undef region offset) else FloatDType.f8e4.ofReal 0
-              | .f8e5 => if ok then FloatDType.f8e5.ofReal (s.undef region offset) else FloatDType.f8e5.ofReal 0
+              | .real => if ok then some (s.undef region offset) else s.paddingValue .real padding region offset
+              | .fp32 => if ok then FloatDType.fp32.ofReal (s.undef region offset) else s.paddingValue .fp32 padding region offset
+              | .fp16 => if ok then FloatDType.fp16.ofReal (s.undef region offset) else s.paddingValue .fp16 padding region offset
+              | .bf16 => if ok then FloatDType.bf16.ofReal (s.undef region offset) else s.paddingValue .bf16 padding region offset
+              | .f8e4 => if ok then FloatDType.f8e4.ofReal (s.undef region offset) else s.paddingValue .f8e4 padding region offset
+              | .f8e5 => if ok then FloatDType.f8e5.ofReal (s.undef region offset) else s.paddingValue .f8e5 padding region offset
               | dtype => BlockState.defaultCarrier dtype⟩
       | .maskOther mask other => do
           let masks ← evalOp mask s
@@ -433,18 +464,34 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   simp [evalOp]
 
 @[simp] theorem evalOp_dot
+    {options : optParam DotOptions ({} : DotOptions)}
     (batch : TileShape) (x : Op .real (batch ++ [M, K]))
     (y : Op .real (batch ++ [K, N])) (s : BlockState) :
-    evalOp (.dot (batch := batch) x y) s = (do
+    evalOp (.dot (options := options) (batch := batch) x y) s = (do
       let vx ← evalOp x s
       let vy ← evalOp y s
       some (Tile.dot batch vx vy)) := by
   simp [evalOp]
 
+@[simp] theorem evalOp_dotTyped
+    (left right out : FloatDType) (batch : TileShape)
+    (x : Op left.toTileDType (batch ++ [M, K]))
+    (y : Op right.toTileDType (batch ++ [K, N])) (s : BlockState)
+    (options : DotOptions := {}) :
+    evalOp (.dotTyped left right out (batch := batch) x y options) s = (do
+      let vx ← evalOp x s
+      let vy ← evalOp y s
+      let product := Tile.dot batch (M := M) (K := K) (N := N)
+        ⟨fun i => FloatDType.cast left .real (vx.data i)⟩
+        ⟨fun i => FloatDType.cast right .real (vy.data i)⟩
+      some ⟨fun i => FloatDType.cast .real out (product.data i)⟩) := by
+  simp [evalOp]
+
 @[simp] theorem evalOp_dotInt
+    {options : optParam DotOptions ({} : DotOptions)}
     (batch : TileShape) (x : Op .int (batch ++ [M, K]))
     (y : Op .int (batch ++ [K, N])) (s : BlockState) :
-    evalOp (.dotInt (batch := batch) x y) s = (do
+    evalOp (.dotInt (options := options) (batch := batch) x y) s = (do
       let vx ← evalOp x s
       let vy ← evalOp y s
       some (Tile.dotInt batch vx vy)) := by

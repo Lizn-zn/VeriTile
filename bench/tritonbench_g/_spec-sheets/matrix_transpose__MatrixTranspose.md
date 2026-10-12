@@ -88,13 +88,6 @@ def transposeIO (M Out : RegionName)
   write := fun _ _ j =>
     outAddr out_stridex out_stridey (Lane2D.decode j)
   mask := fun _ _ _ => True
-
-/-- **The headline**: `kernel` implements the matrix transpose on its IO
-signature — for every disjoint flat placement of `M`/`Out`, every program id
-whose lanes are in bounds, and every launch state whose transposed source
-window holds the tile `xs`, the translated pointer kernel terminates, output
-lane `j` holds `xs j` (i.e. the output cell `(d, m)` holds the source cell
-`(m, d)` — the transposition lives in the signature's windows, which this
 ```
 </details>
 

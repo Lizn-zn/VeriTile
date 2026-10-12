@@ -6,18 +6,43 @@ Triton programs, then choose the specification you want to inspect:
 | File | Purpose |
 | --- | --- |
 | `Kernels.lean` | Original, optimized and intermediate source programs, including precision, casts, masks and stores. |
-| `Correct.lean` | Real mathematical correctness of both original and optimized implementations against the stated formula, using their real projections. |
-| `FPEquiv.lean` | FP equivalence under the selected atomic assumptions, with `#print_fp_assumptions` on completed specifications. |
+| `Correct.lean` | Public IO, necessary conditions, independent mathematical formulas and real correctness specifications, with short composition proofs. |
+| `FPEquiv.lean` | Public IO, precision, numerical domains and FP equivalence specifications, with short composition proofs and `#print_fp_assumptions`. |
 | `Proofs/Real.lean` | Supporting real execution and memory-bound lemmas, when needed. |
 | `Proofs/FP.lean` | Supporting FP execution, operand-domain and composition lemmas, when needed. |
+| `Proofs/LegacyCorrect.lean` | Real correctness of StableLogSumExp's historical unconditional source; the current pair stays in `Correct.lean`. |
 | `Proofs/LegacyRealEquiv.lean` | Retained proofs using real intermediate arithmetic and their stated cast semantics. These are separate from the two-gates FP specifications. |
-| `Proofs/Unconditional.lean` | The historical, unproved StableLogSumExp target without fallbacks. |
+| `Proofs/Unconditional.lean` | Lean-checked disproof of StableLogSumExp's historical FP target without fallbacks; `UnconditionalModel.lean` supplies the logical countermodel. |
 
 Only `Kernels.lean`, `Correct.lean` and `FPEquiv.lean` live at an example's
 top level. Read these three files first; `Proofs/` contains supporting detail
-and is omitted when no separate helpers are needed. FP execution, recurrence
-comparison and IO contracts share one `Proofs/FP.lean`, ordered by dependency.
-Real and FP helpers remain independent of the opposite specification.
+and is omitted when no separate helpers are needed. Projection, execution,
+memory bounds and real arithmetic belong in `Proofs/Real.lean`; FP execution,
+recurrences and scalar derivations belong in `Proofs/FP.lean`.
+Helper modules do not import reader entries, and real and FP layers remain
+independent. Cross-example proof reuse imports the corresponding helper module.
+
+IO windows, masks, scratch regions, precision profiles and numerical domains
+remain visible in the entry files: these determine the statement itself.
+Scheduled examples explicitly assemble their public contracts there. Lean checks
+that those contracts match the internal execution interfaces used by the proofs.
+
+Reduction examples use `FP.Kernel₁`, `FP.Kernel₁ₓ₂` or `FP.Kernel₃` from
+`VeriTile.Triton.Float.Kernel`, according to the number of input/output regions.
+Declare the reference with named `io`, `profile` and `domain` fields, then reuse
+that configuration for the other source. `FP.Kernel₁` also lists `comparisons`:
+`[]` means no comparison support is required; StableLogSumExp lists the two
+operations used by its fallback. `FP.Kernel₁.ofExecution` reuses existing
+reduction proofs, preserving their execution and memory-frame obligations.
+`FP.fp32` names the default precision and sum-tree profile, preserving source casts.
+
+LogExp and the reciprocal examples use `FP.PrefixKernel₁`: their domain checks
+the actual registers after an explicit prefix, with `defaultPrecision` stated
+in the entry. Pure structural proofs retain `KernelIO…`; local rewrites retain
+their `Program` and its named `kernel`/`domain` fields. Their broader execution
+scope is preserved. For IO contracts, `withKernel` replaces the source while
+Lean checks its projection automatically; changes to scratch or masks remain
+explicit. These helpers do not establish numerical equivalence.
 
 `Correct.lean` and `FPEquiv.lean` reference the same typed source definitions
 without importing one another. Names such as `originalKernel` only specialize
@@ -50,7 +75,7 @@ required input/intermediate domains remain part of the FP statements.
 | [Welford](Welford/) | Two-pass versus online mean/variance, with the stated count bound and reduction plan. |
 | [FusedLayerNorm](FusedLayerNorm/) | Two-pass versus Welford-based LayerNorm, with the stated count bound and domains. |
 | [LogExp](LogExp/) | Eliminate the masked, piecewise libdevice log-exp expression using its admitted atom. |
-| [StableLogSumExp](StableLogSumExp/) | Fallback-preserving optimized source versus the unchanged direct tl.log reference, proved using `log_mul_split .tl`, `log_exp_cancel .tl`, libdevice exp-sub and arithmetic. Symbolic row size, reduction schedule, bf16 output and frame retained. The historical unconditional target is isolated in `Proofs/Unconditional.lean` and remains unadmitted. |
+| [StableLogSumExp](StableLogSumExp/) | Fallback-preserving optimized source versus the unchanged direct tl.log reference, proved using `log_mul_split .tl`, `log_exp_cancel .tl`, libdevice exp-sub and arithmetic. Symbolic row size, reduction schedule, bf16 output and frame retained. `Proofs/Unconditional.lean` refutes the historical general FP target: a singleton logical countermodel satisfies all selected rules but stores different results. This does not assert a GPU or two-gates failure. |
 
 Both versions now have real correctness specifications for vector addition,
 the Lion update, general mHC matrices and their scalar specializations, reversed row sum and inlined row max.
@@ -73,7 +98,12 @@ add_zero, including the zero steps introduced by normalization. Padding stays
 explicit in the original schedules, and row length/stride remain symbolic.
 The generic tactics remain available for syntax derivations and their existing
 IO adapter; see [the tactic guide](../../documents/EquivalenceTactics.md).
-The general matrix examples use `equiv_decompose` and `fp_prove` through the `ProfiledRewrite` adapter. It retains actual-prefix domain checks and composes checked contextual lemmas; scalar examples retain their explicit bridges.
+Both scalar and matrix local rewrites use `equiv_decompose` and `fp_prove`.
+The `GuardedRewrite` and `ProfiledRewrite` adapters retain each actual execution
+prefix and compose checked contextual lemmas. Domains locate assignments with
+`Source.prefixBefore`, using a zero-based occurrence for repeated writes to the
+same register. The proof checks that the selected prefix matches the source;
+inserting an unrelated common statement does not require new statement offsets.
 The other completed FP examples connect their transformations
 to execution or observable outputs. A proof of one stated slice or observation
 does not certify a larger kernel or a different precision/intrinsic variant.

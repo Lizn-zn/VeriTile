@@ -282,5 +282,29 @@ theorem candidate_runs {α : Type} [Inhabited α] (R : FP.LogSumExp.Rules)
     apply hfb r o
     simpa only [directIO, Fin.forall_fin_one, Fin.val_zero, Nat.add_zero] using ho
 
+/-- Compose successful execution, output agreement and the memory frame
+into the public IO equivalence contract under the same scalar assumptions. -/
+theorem candidate_equivalent (B : Nat) (hB : 0 < B) (R : FP.LogSumExp.Rules) :
+    FP.Scheduled.ConditionalEquivalent₁ R.assumptions
+      (optimized "x" "y" B) (original "x" "y" B) := by
+  refine ⟨by simp [optimized, IO₁PrivateScratch, optimizedIO, directIO],
+    by simp [original, optimized, IO₁PrivateScratch, directIO], ?_⟩
+  intro α _ M D hM comparisons plans s hd
+  obtain ⟨lt, hlt⟩ : ∃ lt, M.compareLt (some .fp32) .real = some lt := by
+    have h := comparisons (.lt .fp32 .real) (by simp [optimized])
+    cases he : M.compareLt (some .fp32) .real with
+    | none => simp [FP.Scheduled.Comparison.Supported, he] at h
+    | some lt => exact ⟨lt, rfl⟩
+  obtain ⟨le, hle⟩ : ∃ le, M.compareLe (some .fp32) .real = some le := by
+    have h := comparisons (.le .fp32 .real) (by simp [optimized])
+    cases he : M.compareLe (some .fp32) .real with
+    | none => simp [FP.Scheduled.Comparison.Supported, he] at h
+    | some le => exact ⟨le, rfl⟩
+  obtain ⟨a, b, ha, hb, hout, hfa, hfb⟩ :=
+    candidate_runs R M D hM s plans lt le hlt hle "x" "y" B hB hd
+  refine ⟨a, b, ha, hb, ?_, hfa, hfb⟩
+  intro i
+  simpa only [optimized, original, optimizedIO, directIO, Fin.val_eq_zero, Nat.add_zero] using hout
+
 end Candidate
 end VeriTile.Bench.Examples.StableLogSumExpFPContract

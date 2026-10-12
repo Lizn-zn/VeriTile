@@ -24,6 +24,11 @@ def Algebra.withDefaultPrecision {α : Type} (M : Algebra α) (p : ComputeDType)
     fromInt := fun q => M.fromInt (resolvePrecision p q)
     reduceMax := fun q => M.reduceMax (resolvePrecision p q)
     reduceSum := fun q => M.reduceSum (resolvePrecision p q)
-    dot := fun q => M.dot (resolvePrecision p q) }
+    reduceSumTyped := fun q => M.reduceSumTyped (resolvePrecision p q)
+    scan := fun q => M.scan (resolvePrecision p q)
+    dot := fun q => M.dot (resolvePrecision p q)
+    dotWithOptions := fun q => M.dotWithOptions (resolvePrecision p q)
+    dotTyped := fun q => M.dotTyped (resolvePrecision p q)
+    dotAcc := fun q => M.dotAcc (resolvePrecision p q) }
 
 end VeriTile.Triton.FP.Structural

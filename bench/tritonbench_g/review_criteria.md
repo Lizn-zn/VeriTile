@@ -6,7 +6,7 @@ What gaps are tolerable, and what must be fixed, when reviewing
 
 ## Gold standard
 
-`bench/tritonbench_g/add_example/AddExample.lean` is the canonical reference.
+`bench/tritonbench_g/add_example/Kernels.lean` is the canonical reference.
 
 A faithful translation has two parts:
 

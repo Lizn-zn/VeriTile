@@ -1,0 +1,214 @@
+{
+  "created_utc": "2026-10-12T14:04:10.948936+00:00",
+  "accepted_count": 59,
+  "pending_count": 125,
+  "reason": "User requested stopping proof work and pushing the current checkpoint. Drafts are not integrated or accepted.",
+  "drafts": {
+    "fifth-sph-work": {
+      "namespace": "FifthSphDraft",
+      "modules": {
+        "BackwardBase": {
+          "sha256": "b1a55c07bb00bed271a76c40a74a31829b88e8eb27c31029fb40d1a926e885de",
+          "status": "local check passed"
+        },
+        "BackwardIO": {
+          "sha256": "aa3963aeb76f499444c5c1971f001bcade49e2ba0e20866fd136967ae0355c60",
+          "status": "local check passed"
+        },
+        "BackwardReadback": {
+          "sha256": "a545094145d4bf14b34379e5dac4bde2c5868d83b7869996e285c3ed1ef52882",
+          "status": "local check passed"
+        },
+        "BackwardReadback0": {
+          "sha256": "bb6fa2b48f27e4b16657c2feb3db82e514dc08ddea7677b69c8637ff476eaef2",
+          "status": "local check passed"
+        },
+        "BackwardReadback1": {
+          "sha256": "7b78bad09338f298ddb5e48981fec2b121c99105294572954bad0dade3a555a5",
+          "status": "local check passed"
+        },
+        "BackwardReadback2": {
+          "sha256": "aa19733a3f46cec9a0fe85bfeedf7411bb06b9b78c49522baaea4ab3c444443e",
+          "status": "local check passed"
+        },
+        "BackwardReadbackCommon": {
+          "sha256": "d1da78cdf72dd4ef8059c303e9c149a2cc249ed717168b39bc8220d0ad07db6d",
+          "status": "local check passed"
+        },
+        "BackwardSupport": {
+          "sha256": "92b99c7fa3a31371610d9f4e388bcaef32b9b94439c952cb736687aab9c97d30",
+          "status": "local check passed"
+        },
+        "Candidate": {
+          "sha256": "6d84eed2baa129defe72413d2c9167b08dca706ffc54b6006ae15f7d91ae4c7a",
+          "status": "local check passed"
+        },
+        "Correct": {
+          "sha256": "c65141eefeac7af3289d9286fa724d7f8ddd54d81578b919e344294d7eefee2e",
+          "status": "local check passed"
+        },
+        "Erasure": {
+          "sha256": "83c0fea10b11d6347adcbfc561c10c202b14cead9cd0c8c75443c740f19fae9c",
+          "status": "local check passed"
+        },
+        "Execution": {
+          "sha256": "bfb5483928886d3702132d29b78da1261c77cb9aae8216e6bccd377be2e72900",
+          "status": "local check passed"
+        },
+        "FP": {
+          "sha256": "0116fa95c04c8c9df9694ec055c72c03f0d236232f1aeb33b8ca24079d5884d0",
+          "status": "local check passed"
+        },
+        "FPEquiv": {
+          "sha256": "d3eb2598ae6e2a5bf519015e1ad939dad9ab0c9d6484e6cfdeda2bbe2994570b",
+          "status": "local check passed"
+        },
+        "ForwardIO": {
+          "sha256": "1e53c49aefd6093747f6c6aea647c29b13803fe87ad67f5fd9b4ab9dcea5d2f5",
+          "status": "local check passed"
+        },
+        "ForwardReal": {
+          "sha256": "5c6749f3f6dd97688b4b7f03108e849215075f93851490c8a47607fee57d6d9e",
+          "status": "local check passed"
+        },
+        "Kernels": {
+          "sha256": "ec2e8c4f16b95cadf996cbf4135facaffb70faa71ea8e69d942a9761c4fcb740",
+          "status": "local check passed"
+        },
+        "NormalizedSource": {
+          "sha256": "74a29fec4956f22981cb05030d9117423817981aa6f298e85793d39396b66d96",
+          "status": "local check passed"
+        },
+        "RealMath": {
+          "sha256": "94a0d9abd7d3dd87ad85e5e64c744f55192c7ff9bd12d18788b26b7572232457",
+          "status": "local check passed"
+        },
+        "SourceChecks": {
+          "sha256": "aa6e5c0f8519152d466afac0aa920bc16a96af427362b55476b6812a72709cab",
+          "status": "local check passed"
+        },
+        "TypedBackwardExecution": {
+          "sha256": "248ebec925c7635a37afb14d1803bc4f114f033b2478b7d3c40c802596e03ada",
+          "status": "no completed current-source check"
+        },
+        "TypedExecution": {
+          "sha256": "d1c598b51e3da9e640616817c2e8de4025301aa15ed2b21f6da50508f30119ee",
+          "status": "no completed current-source check"
+        },
+        "TypedForwardExecution": {
+          "sha256": "be1648af4bfd447f6057cdd93ae2cb2008ed8e67f277c5fc560d19a6308c1edd",
+          "status": "local check passed"
+        },
+        "TypedModel": {
+          "sha256": "d7d2414b3fef52f2fba77a748c73f72485fd700e7419cb70c534ef6ff7dacba5",
+          "status": "local check passed"
+        }
+      },
+      "integrated": false,
+      "accepted": false
+    },
+    "flash-attn-work": {
+      "namespace": "FlashAttnDraft",
+      "modules": {
+        "Candidate": {
+          "sha256": "d39d302998044f0a1b38c1e8f740a0ea3c45a2a832e09adf741aee3077a3fd3c",
+          "status": "local check passed"
+        },
+        "Erasure": {
+          "sha256": "b50f4de3de01cf38750decef6a331813a43daa841190a9807170a86bfeeb7e0c",
+          "status": "local check passed"
+        },
+        "FP": {
+          "sha256": "2d28e2cdb2e47344216ba2ee6e99041a8107072bcdc42f1fe74d7c37aa39f36f",
+          "status": "local check passed"
+        },
+        "FPEquiv": {
+          "sha256": "fb2d72cfc6ef4b59d66cc65206cf01134d07fd5bffbc91eda8076ada814b5b6c",
+          "status": "local check passed"
+        },
+        "Formula": {
+          "sha256": "7004dcbd18c2e45746c02186b4df9a09487d796fb9a4b27e9a205d96e8ee1e90",
+          "status": "local check passed"
+        },
+        "Geometry": {
+          "sha256": "c88d6a91dd333a7d916b37bd547ffeab3e969220ab0cda2951e6b077b0915266",
+          "status": "local check passed"
+        },
+        "Kernels": {
+          "sha256": "807cf6b024fb57a6bd4e7a1fd7569afb6b44cfb5adbcbb1f35224f14e4799e36",
+          "status": "local check passed"
+        },
+        "NormalizedSource": {
+          "sha256": "dc4ec769289e1e3cc754f489621505f9b7851a21bf5789ea2c2526d929c11ac0",
+          "status": "local check passed"
+        },
+        "RealEntry": {
+          "sha256": "eed36aec399f410446dd40a59ecfc6050913aace8e987d3a718df124a6f24ea4",
+          "status": "local check passed"
+        },
+        "RealEntryFacts": {
+          "sha256": "aa247a1c067e4ee69803c9ff054826d31a6ac17b157d8da7d95a2f2cb85ee7bd",
+          "status": "receipt belongs to an earlier source revision; current source unverified"
+        },
+        "RealLoop": {
+          "sha256": "dd68fbba13898606b9fc2a962ac504a6d66fa7e2082947025e2f058898dee043",
+          "status": "local check passed"
+        },
+        "RealLoopFacts": {
+          "sha256": "09a9f87c252507dfe08a19ecfc321dcf9bb49524fd93370b38a1f036d8c2ecc6",
+          "status": "local check passed"
+        },
+        "RealMath": {
+          "sha256": "022d86049448d4a477909490902cad3d74ff0f05582f6ad2da9836dede2bfbf7",
+          "status": "local check passed"
+        },
+        "RealPointers": {
+          "sha256": "252001b98a07997ede2c5e8e8c21cc0ddfe59e750f98c53581156c1b63bb59f8",
+          "status": "local check failed"
+        },
+        "RealPost": {
+          "sha256": "fe91f053f012209c4486c94b60051ef102baaed1848bbeddacf220dbdee23add",
+          "status": "local check passed"
+        },
+        "RealStructural": {
+          "sha256": "df7caf679dc7075d917427f4b69292daa3955bb1b3a39e3b40bde7cea6582aa3",
+          "status": "local check passed"
+        },
+        "SourceChecks": {
+          "sha256": "f5a1afde96cdc12e0dc994a19a7057b2fbd8ef77cad1c1ddff9b3ec2ed86d5d0",
+          "status": "local check passed"
+        },
+        "TypedEntry": {
+          "sha256": "61c39c370453ded1365b56a6c9db95566dbf1429cd7415e553b6223fbd119b99",
+          "status": "local check passed"
+        },
+        "TypedExecution": {
+          "sha256": "09afb98018f1f7a8467607719c74f99035fbaa674b491f1e33df73e710f3ea04",
+          "status": "local check passed"
+        },
+        "TypedFirst": {
+          "sha256": "023c7facb516161aeb7772fd5cd92f17554110bc1cc74bdbd5c29d9c0010690a",
+          "status": "local check passed"
+        },
+        "TypedModel": {
+          "sha256": "a31e4192ac60514f2872f4e5bc3ca9651b8cff7f185fd4d976d20734badf3213",
+          "status": "local check passed"
+        },
+        "TypedPost": {
+          "sha256": "8ae8175e2ac843840f5a572d627a280d23e2b3f9f6efe2785c5dff1563077f5d",
+          "status": "local check passed"
+        },
+        "TypedSecond": {
+          "sha256": "7b61bcad10d1bd894c2bcd7128a4856ff8c1e4b722a54376889c27e414adb26d",
+          "status": "local check passed"
+        },
+        "WitnessData": {
+          "sha256": "3c011b3bfdfe9b8746dd674820a615718816836a0837506f913fd158a940b19d",
+          "status": "local check passed"
+        }
+      },
+      "integrated": false,
+      "accepted": false
+    }
+  }
+}

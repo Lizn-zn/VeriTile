@@ -152,7 +152,7 @@ private theorem online_welford_step
   · -- Reduce loop body via simp; remaining goal is structural equality of
     -- WithBot ℝ arithmetic terms (↑a + ↑b vs ↑(a + b) etc.) which matches via
     -- WithBot.coe_add / coe_mul in reverse, plus rfl on the outer setReg shell.
-    simp [onlineWelfordLoopBody, stepStmts, stepStmt, evalOp, Tile.bop,
+    simp [onlineWelfordLoopBody, stepStmts, stepStmt, Tile.bop,
       Tile.natToReal, NumericDType.add, NumericDType.mul, NumericDType.sub,
       NumericDType.div, BlockState.readMem, hM, hS, hpidReg,
       xi, m, ssum, delta, m', delta2, ssum', s',

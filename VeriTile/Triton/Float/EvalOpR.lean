@@ -53,6 +53,8 @@ noncomputable def evalOpR (R : RoundingModel) :
   | .castRealToInt8 a, s => do
       let va ← evalOpR R a s
       some ⟨fun i => WithBot.realToInt8 (va.data i)⟩
+  | .decodeFloat8E5 dst a, s => do
+      Float8E5Bits.decodeTile dst (← evalOpR R a s)
   | .add h bc a b, s => do
       let va ← evalOpR R a s
       let vb ← evalOpR R b s
@@ -86,6 +88,7 @@ noncomputable def evalOpR (R : RoundingModel) :
   | .libdeviceExp a, s => return Tile.uop WithBot.realExp (← evalOpR R a s)
   | .libdeviceLog a, s => return Tile.uop WithBot.realLog (← evalOpR R a s)
   | .libdeviceExpm1 a, s => return Tile.uop WithBot.realExpm1 (← evalOpR R a s)
+  | .libdeviceTanh a, s => return Tile.uop WithBot.realTanh (← evalOpR R a s)
   | .libdeviceLog1p a, s => return Tile.uop WithBot.realLog1p (← evalOpR R a s)
   | .exp2 a, s => return Tile.uop WithBot.realExp2 (← evalOpR R a s)
   | .log a, s => return Tile.uop WithBot.realLog (← evalOpR R a s)
@@ -101,6 +104,7 @@ noncomputable def evalOpR (R : RoundingModel) :
   | .cosh a, s => return Tile.uop WithBot.realCosh (← evalOpR R a s)
   | .sinh a, s => return Tile.uop WithBot.realSinh (← evalOpR R a s)
   | .erf a, s => return Tile.uop WithBot.realErf (← evalOpR R a s)
+  | .minPosInf a, s => return Tile.uop id (← evalOpR R a s)
   | .lt h bc a b, s => return Tile.cop h.lt bc (← evalOpR R a s) (← evalOpR R b s)
   | .le h bc a b, s => return Tile.cop h.le bc (← evalOpR R a s) (← evalOpR R b s)
   | .eq h bc a b, s => return Tile.cop h.eq bc (← evalOpR R a s) (← evalOpR R b s)
@@ -132,16 +136,37 @@ noncomputable def evalOpR (R : RoundingModel) :
   | .reduceMaxNat axis keepDims a, s => do
       let va ← evalOpR R a s
       Tile.reduceMaxNat axis keepDims va
+  | .reduceMaxInt axis keepDims a, s => do
+      let va ← evalOpR R a s
+      Tile.reduceMaxInt axis keepDims va
   | .reduceSum axis keepDims a, s => return Tile.reduceSum axis keepDims (← evalOpR R a s)
+  | .reduceSumTyped dtype axis keepDims a, s =>
+      return Tile.reduceSumTyped dtype axis keepDims (← evalOpR R a s)
   | .scan op axis dir a, s => return Tile.scan op axis dir (← evalOpR R a s)
   | .argMax axis a, s => return Tile.argMaxDrop axis (← evalOpR R a s)
   | .argMin axis a, s => return Tile.argMinDrop axis (← evalOpR R a s)
   | .sort axis a, s => return Tile.sortAxis axis (← evalOpR R a s)
-  | .dot (batch := batch) a b, s => do
+  | .dot (batch := batch) a b _, s => do
       let va ← evalOpR R a s
       let vb ← evalOpR R b s
       some (Tile.dot batch va vb)
-  | .dotInt (batch := batch) a b, s => do
+  | .dotTyped left right out (batch := batch) (M := m) (K := k) (N := n) a b _, s => do
+      let va ← evalOpR R a s
+      let vb ← evalOpR R b s
+      let product := Tile.dot batch (M := m) (K := k) (N := n)
+        ⟨fun i => FloatDType.cast left .real (va.data i)⟩
+        ⟨fun i => FloatDType.cast right .real (vb.data i)⟩
+      some ⟨fun i => FloatDType.cast .real out (product.data i)⟩
+  | .dotAcc left right out (batch := batch) (M := m) (K := k) (N := n) a b acc _, s => do
+      let va ← evalOpR R a s
+      let vb ← evalOpR R b s
+      let vc ← evalOpR R acc s
+      let product := Tile.dot batch (M := m) (K := k) (N := n)
+        ⟨fun i => FloatDType.cast left .real (va.data i)⟩
+        ⟨fun i => FloatDType.cast right .real (vb.data i)⟩
+      some ⟨fun i => FloatDType.cast .real out
+        (WithBot.realAdd (product.data i) (FloatDType.cast out .real (vc.data i)))⟩
+  | .dotInt (batch := batch) a b _, s => do
       let va ← evalOpR R a s
       let vb ← evalOpR R b s
       some (Tile.dotInt batch va vb)
@@ -202,7 +227,13 @@ noncomputable def evalOpR (R : RoundingModel) :
   | .advanceBlockPtr ptr deltas, s => do
       let p ← evalOpR R ptr s
       some ⟨fun i => (p.data i).advance deltas⟩
-  | .load dtype mem mask, s => do
+  | .advanceBlockPtrDyn ptr deltas, s => do
+      let p ← evalOpR R ptr s
+      let ds ← deltas.mapM (fun delta => do
+        let v ← evalOpR R delta s
+        some (v.data PUnit.unit))
+      some ⟨fun i => (p.data i).advance ds⟩
+  | .load dtype mem mask padding, s => do
       let addr : TileIndex shape → RegionName × Nat × Bool ←
         match mem with
         | .region region off => do
@@ -221,7 +252,7 @@ noncomputable def evalOpR (R : RoundingModel) :
               (bp.region, bp.address idx, bp.inBounds idx boundaryCheck)
       let read := fun i =>
         let (region, offset, ok) := addr i
-        if ok then s.readMemValue dtype region offset else BlockState.defaultCarrier dtype
+        if ok then s.readMemValue dtype region offset else s.paddingValue dtype padding region offset
       match mask with
       | .none => some ⟨read⟩
       | .mask mask => do
@@ -229,15 +260,15 @@ noncomputable def evalOpR (R : RoundingModel) :
           some ⟨fun i =>
             let (region, offset, ok) := addr i
             if masks.data i then
-              if ok then s.readMemValue dtype region offset else BlockState.defaultCarrier dtype
+              if ok then s.readMemValue dtype region offset else s.paddingValue dtype padding region offset
             else
               match dtype with
-              | .real => if ok then some (s.undef region offset) else some 0
-              | .fp32 => if ok then FloatDType.fp32.ofReal (s.undef region offset) else FloatDType.fp32.ofReal 0
-              | .fp16 => if ok then FloatDType.fp16.ofReal (s.undef region offset) else FloatDType.fp16.ofReal 0
-              | .bf16 => if ok then FloatDType.bf16.ofReal (s.undef region offset) else FloatDType.bf16.ofReal 0
-              | .f8e4 => if ok then FloatDType.f8e4.ofReal (s.undef region offset) else FloatDType.f8e4.ofReal 0
-              | .f8e5 => if ok then FloatDType.f8e5.ofReal (s.undef region offset) else FloatDType.f8e5.ofReal 0
+              | .real => if ok then some (s.undef region offset) else s.paddingValue .real padding region offset
+              | .fp32 => if ok then FloatDType.fp32.ofReal (s.undef region offset) else s.paddingValue .fp32 padding region offset
+              | .fp16 => if ok then FloatDType.fp16.ofReal (s.undef region offset) else s.paddingValue .fp16 padding region offset
+              | .bf16 => if ok then FloatDType.bf16.ofReal (s.undef region offset) else s.paddingValue .bf16 padding region offset
+              | .f8e4 => if ok then FloatDType.f8e4.ofReal (s.undef region offset) else s.paddingValue .f8e4 padding region offset
+              | .f8e5 => if ok then FloatDType.f8e5.ofReal (s.undef region offset) else s.paddingValue .f8e5 padding region offset
               | dtype => BlockState.defaultCarrier dtype⟩
       | .maskOther mask other => do
           let masks ← evalOpR R mask s
@@ -281,6 +312,7 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
   | _, _, .castNatToInt a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .castIntToNat a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .castRealToInt8 a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .decodeFloat8E5 dst a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .add _ _ a b, s => by
       simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
   | _, _, .sub _ _ a b, s => by
@@ -307,6 +339,7 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
   | _, _, .libdeviceExp a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .libdeviceLog a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .libdeviceExpm1 a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .libdeviceTanh a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .libdeviceLog1p a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .exp2 a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .log a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
@@ -322,6 +355,7 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
   | _, _, .cosh a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .sinh a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .erf a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .minPosInf a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .lt _ _ a b, s => by
       simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
   | _, _, .le _ _ a b, s => by
@@ -345,14 +379,20 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
       simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
   | _, _, .reduceMax _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .reduceMaxNat _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .reduceMaxInt _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .reduceSum _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .reduceSumTyped _ _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .scan _ _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .argMax _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .argMin _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .sort _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
-  | _, _, .dot a b, s => by
+  | _, _, .dot a b _, s => by
       simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
-  | _, _, .dotInt a b, s => by
+  | _, _, .dotTyped _ _ _ a b _, s => by
+      simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
+  | _, _, .dotAcc _ _ _ a b acc _, s => by
+      simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s, evalOpR_triv acc s]
+  | _, _, .dotInt a b _, s => by
       simp only [evalOpR, evalOp, evalOpR_triv a s, evalOpR_triv b s]
   | _, _, .expandDim _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .where c a b, s => by
@@ -376,23 +416,25 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
   | _, _, .makeBlockPtrDynOffsets _ base _ _ _ offsets, s => by
       simp only [evalOpR, evalOp, evalOpR_triv base s, evalOpR_triv_offsets offsets s]
   | _, _, .advanceBlockPtr p _, s => by simp only [evalOpR, evalOp, evalOpR_triv p s]
-  | _, _, .load _ (.region region off) .none, s => by
+  | _, _, .advanceBlockPtrDyn p ds, s => by
+      simp only [evalOpR, evalOp, evalOpR_triv p s, evalOpR_triv_offsets ds s]
+  | _, _, .load _ (.region region off) .none padding, s => by
       simp only [evalOpR, evalOp, evalOpR_triv off s]
-  | _, _, .load dt (.region region off) (.mask m), s => by
+  | _, _, .load dt (.region region off) (.mask m) padding, s => by
       cases dt <;> simp only [evalOpR, evalOp, evalOpR_triv off s, evalOpR_triv m s]
-  | _, _, .load _ (.region region off) (.maskOther m other), s => by
+  | _, _, .load _ (.region region off) (.maskOther m other) padding, s => by
       simp only [evalOpR, evalOp, evalOpR_triv off s, evalOpR_triv m s, evalOpR_triv other s]
-  | _, _, .load _ (.ptr p) .none, s => by
+  | _, _, .load _ (.ptr p) .none padding, s => by
       simp only [evalOpR, evalOp, evalOpR_triv p s]
-  | _, _, .load dt (.ptr p) (.mask m), s => by
+  | _, _, .load dt (.ptr p) (.mask m) padding, s => by
       cases dt <;> simp only [evalOpR, evalOp, evalOpR_triv p s, evalOpR_triv m s]
-  | _, _, .load _ (.ptr p) (.maskOther m other), s => by
+  | _, _, .load _ (.ptr p) (.maskOther m other) padding, s => by
       simp only [evalOpR, evalOp, evalOpR_triv p s, evalOpR_triv m s, evalOpR_triv other s]
-  | _, _, .load _ (.blockPtr p _) .none, s => by
+  | _, _, .load _ (.blockPtr p _) .none padding, s => by
       simp only [evalOpR, evalOp, evalOpR_triv p s]
-  | _, _, .load dt (.blockPtr p _) (.mask m), s => by
+  | _, _, .load dt (.blockPtr p _) (.mask m) padding, s => by
       cases dt <;> simp only [evalOpR, evalOp, evalOpR_triv p s, evalOpR_triv m s]
-  | _, _, .load _ (.blockPtr p _) (.maskOther m other), s => by
+  | _, _, .load _ (.blockPtr p _) (.maskOther m other) padding, s => by
       simp only [evalOpR, evalOp, evalOpR_triv p s, evalOpR_triv m s, evalOpR_triv other s]
   | _, _, .natToReal a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .intToReal a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
@@ -401,7 +443,8 @@ decreasing_by all_goals (simp_wf <;> omega)
 
 /-- Pointwise `evalOpR_triv` congruence across the `List.mapM` in the
 `Op.makeBlockPtrDynOffsets` case (the nested-list recursion of `Op`). -/
-private theorem evalOpR_triv_offsets : ∀ (offsets : List (Op .nat [])) (s : BlockState),
+private theorem evalOpR_triv_offsets {dtype : TileDType} :
+    ∀ (offsets : List (Op dtype [])) (s : BlockState),
     offsets.mapM (fun off => do
       let v ← evalOpR RoundingModel.triv off s
       some (v.data PUnit.unit)) =

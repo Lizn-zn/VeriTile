@@ -1,5 +1,5 @@
 import VeriTile.Meta.FPProve
-import VeriTile.Triton.Float.ProfiledRewrite
+import VeriTile.Triton.Float.BranchRewrite
 
 /-! Optional semantic adapter for contextual program rewrites. Decomposition
 only compares source statements and retains their prefixes. Numerical steps
@@ -24,7 +24,8 @@ private def domainFacts (goal : MVarId) (domain hypothesis : Expr) : MetaM MVarI
       return (← next.intro1P).2
   return goal
 
-private def differences (goal : MVarId) (model state lhs rhs : Expr) : MetaM (List MVarId) := goal.withContext do
+private def differences (goal : MVarId) (contextual : Name) (model state lhs rhs : Expr)
+    (reverse : Bool := false) : MetaM (List MVarId) := goal.withContext do
   let some left ← listItems? lhs | throwError "the source statement list is symbolic"
   let some right ← listItems? rhs | throwError "the target statement list is symbolic"
   unless left.size == right.size do
@@ -33,11 +34,12 @@ private def differences (goal : MVarId) (model state lhs rhs : Expr) : MetaM (Li
   let mut current := left
   let mut proof : Option Expr := none
   let mut remaining := []
-  for i in [:left.size] do
+  for offset in [:left.size] do
+    let i := if reverse then left.size - 1 - offset else offset
     if ← same current[i]! right[i]! then continue
     let before ← mkListLit statement (current.extract 0 i).toList
     let after ← mkListLit statement (current.extract (i + 1) current.size).toList
-    let target ← mkAppM ``ProfiledRewrite.Contextual #[model, state, before, after, current[i]!, right[i]!]
+    let target ← mkAppM contextual #[model, state, before, after, current[i]!, right[i]!]
     let hole ← mkFreshExprSyntheticOpaqueMVar target
       (tag := (← goal.getTag).appendAfter s!"diff_{remaining.length + 1}")
     remaining := remaining ++ [hole.mvarId!]
@@ -50,13 +52,79 @@ private def differences (goal : MVarId) (model state lhs rhs : Expr) : MetaM (Li
   | some complete => goal.assign complete
   return remaining
 
-private def decompose (goal : MVarId) : MetaM (List MVarId) := goal.withContext do
+private def contextPlan (lhs rhs : Expr) : MetaM (Option (Name × Nat)) := do
+  let left := lhs.getAppArgs
+  let right := rhs.getAppArgs
+  if lhs.isAppOfArity ``ComputeStmt.forRange 5 &&
+      rhs.isAppOfArity ``ComputeStmt.forRange 5 then
+    for i in [:4] do
+      unless ← same left[i]! right[i]! do return none
+    return some (``ProfiledRewrite.contextual_static_range, 4)
+  if lhs.isAppOfArity ``ComputeStmt.forRangeDyn 5 &&
+      rhs.isAppOfArity ``ComputeStmt.forRangeDyn 5 then
+    for i in [:4] do
+      unless ← same left[i]! right[i]! do return none
+    return some (``ProfiledRewrite.contextual_range, 4)
+  if lhs.isAppOfArity ``ComputeStmt.forRangeInt 5 &&
+      rhs.isAppOfArity ``ComputeStmt.forRangeInt 5 then
+    for i in [:4] do
+      unless ← same left[i]! right[i]! do return none
+    return some (``ProfiledRewrite.contextual_int_range, 4)
+  if lhs.isAppOfArity ``ComputeStmt.ifThen 2 &&
+      rhs.isAppOfArity ``ComputeStmt.ifThen 2 then
+    unless ← same left[0]! right[0]! do return none
+    return some (``ProfiledRewrite.contextual_if_then, 1)
+  if lhs.isAppOfArity ``ComputeStmt.ifThenElse 3 &&
+      rhs.isAppOfArity ``ComputeStmt.ifThenElse 3 then
+    unless ← same left[0]! right[0]! do return none
+    if ← same left[2]! right[2]! then
+      return some (``ProfiledRewrite.contextual_then, 1)
+    if ← same left[1]! right[1]! then
+      return some (``ProfiledRewrite.contextual_else, 2)
+  return none
+
+/-- Descend through ranges and matching conditional arms only when the declared
+site supplies that execution context's guard. Numerical obligations remain for
+fp_prove; this traversal does not manufacture conditions or rewrite a test. -/
+private partial def contexts (goal : MVarId) (reverse : Bool := false) : MetaM (List MVarId) := goal.withContext do
+  let target ← instantiateMVars (← goal.getType)
+  unless target.isAppOfArity ``ProfiledRewrite.Contextual 8 do return [goal]
+  let args := target.getAppArgs
+  let lhs ← whnf args[6]!
+  let rhs ← whnf args[7]!
+  let left := lhs.getAppArgs
+  let right := rhs.getAppArgs
+  let some (ruleName, bodyIndex) ← contextPlan lhs rhs | return [goal]
+  let saved ← saveState
+  try
+    let children ← goal.apply (← mkConstWithFreshMVarLevels ruleName)
+    -- Resolve the actual site first: it supplies the inner domain after the
+    -- original prefix and only in reachable iterations/selected arms.
+    for child in children do
+      unless ← child.isAssigned do
+        try child.assumption catch _ => pure ()
+    let mut remaining := []
+    for child in children do
+      if ← child.isAssigned then continue
+      let type ← whnf (← child.getType)
+      unless type.isForall do throwError "execution-context domain was not supplied"
+      let (vars, body) ← child.introNP 2
+      let nested ← differences body ``ProfiledRewrite.Contextual args[2]!
+        (mkFVar vars[0]!) left[bodyIndex]! right[bodyIndex]! reverse
+      for difference in nested do remaining := remaining ++ (← contexts difference reverse)
+    return remaining
+  catch _ =>
+    saved.restore
+    return [goal]
+
+private def decompose (kernelField domainField contextual : Name) (goal : MVarId)
+    (reverse : Bool := false) : MetaM (List MVarId) := goal.withContext do
   let target ← whnf (← goal.getType)
   let lhs := target.getAppArgs[3]!
   let rhs := target.getAppArgs[4]!
-  let left ← mkAppM ``ComputeKernel.surfaceBody #[← mkAppM ``ProfiledRewrite.Program.kernel #[lhs]]
-  let right ← mkAppM ``ComputeKernel.surfaceBody #[← mkAppM ``ProfiledRewrite.Program.kernel #[rhs]]
-  let domain ← mkAppM ``ProfiledRewrite.Program.domain #[lhs]
+  let left ← mkAppM ``ComputeKernel.surfaceBody #[← mkAppM kernelField #[lhs]]
+  let right ← mkAppM ``ComputeKernel.surfaceBody #[← mkAppM kernelField #[rhs]]
+  let domain ← mkAppM domainField #[lhs]
   let children ← goal.apply (← mkConstWithFreshMVarLevels ``Spec.FloatingPoint.ofNumerical)
   for child in children do
     unless ← child.isAssigned do discard <| trivial? child
@@ -69,17 +137,41 @@ private def decompose (goal : MVarId) : MetaM (List MVarId) := goal.withContext 
       continue
     let (vars, body) ← child.introNP 7
     let body ← domainFacts body domain (mkFVar vars[6]!)
-    remaining := remaining ++ (← differences body (mkFVar vars[2]!) (mkFVar vars[5]!) left right)
+    let nested ← differences body contextual (mkFVar vars[2]!) (mkFVar vars[5]!) left right reverse
+    for difference in nested do remaining := remaining ++ (← contexts difference reverse)
   return remaining
+
+/-- Prove later differences first, so each numerical guard still refers to
+the original program prefix. This changes proof composition order only;
+source execution order, suffixes and all domain obligations are preserved. -/
+syntax "equiv_decompose" " (" "reverse" " := " &"true" ")" : tactic
+
+elab_rules : tactic
+  | `(tactic| equiv_decompose (reverse := true)) => do
+    let goal ← getMainGoal
+    goal.withContext do
+      let target ← whnf (← goal.getType)
+      unless target.isAppOfArity ``Spec.FloatingPoint 5 do throwUnsupportedSyntax
+      if ← same target.getAppArgs[0]! (mkConst ``ProfiledRewrite.Program) then
+        liftMetaTactic fun goal => decompose ``ProfiledRewrite.Program.kernel
+          ``ProfiledRewrite.Program.domain ``ProfiledRewrite.Contextual goal Bool.true
+      else if ← same target.getAppArgs[0]! (mkConst ``GuardedRewrite.Program) then
+        liftMetaTactic fun goal => decompose ``GuardedRewrite.Program.kernel
+          ``GuardedRewrite.Program.domain ``GuardedRewrite.Contextual goal Bool.true
+      else throwUnsupportedSyntax
 
 elab_rules : tactic
   | `(tactic| equiv_decompose) => do
     let goal ← getMainGoal
     goal.withContext do
       let target ← whnf (← goal.getType)
-      unless target.isAppOfArity ``Spec.FloatingPoint 5 &&
-          (← same target.getAppArgs[0]! (mkConst ``ProfiledRewrite.Program)) do
-        throwUnsupportedSyntax
-      liftMetaTactic decompose
+      unless target.isAppOfArity ``Spec.FloatingPoint 5 do throwUnsupportedSyntax
+      if ← same target.getAppArgs[0]! (mkConst ``ProfiledRewrite.Program) then
+        liftMetaTactic (decompose ``ProfiledRewrite.Program.kernel
+          ``ProfiledRewrite.Program.domain ``ProfiledRewrite.Contextual)
+      else if ← same target.getAppArgs[0]! (mkConst ``GuardedRewrite.Program) then
+        liftMetaTactic (decompose ``GuardedRewrite.Program.kernel
+          ``GuardedRewrite.Program.domain ``GuardedRewrite.Contextual)
+      else throwUnsupportedSyntax
 
 end VeriTile.Triton.FP.RewriteTactics

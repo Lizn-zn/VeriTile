@@ -61,6 +61,8 @@ def Op.BlockPointerRegionHasDType (Γ : RegionTyping) (dtype : TileDType) :
       Γ region = dtype ∧ base.RespectsRegionTyping Γ ∧
         ∀ off ∈ offsets, off.RespectsRegionTyping Γ
   | .advanceBlockPtr ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
+  | .advanceBlockPtrDyn ptr deltas =>
+      ptr.BlockPointerRegionHasDType Γ dtype ∧ ∀ d ∈ deltas, d.RespectsRegionTyping Γ
   | .broadcast ptr _ => ptr.BlockPointerRegionHasDType Γ dtype
   | .full _ ptr => ptr.BlockPointerRegionHasDType Γ dtype
   | .where c a b =>
@@ -80,8 +82,7 @@ decreasing_by
     simp_wf
     try omega
     try
-      have hmem : off ∈ offsets := by assumption
-      have hs := List.sizeOf_lt_of_mem hmem
+      have hs := List.sizeOf_lt_of_mem (by assumption)
       omega
 
 /-- Memory-region dtype contract for memory address forms. -/
@@ -121,6 +122,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .castNatToInt e => e.RespectsRegionTyping Γ
   | .castIntToNat e => e.RespectsRegionTyping Γ
   | .castRealToInt8 e => e.RespectsRegionTyping Γ
+  | .decodeFloat8E5 _ e => e.RespectsRegionTyping Γ
   | .add _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .sub _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .mul _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
@@ -136,6 +138,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .libdeviceExp a => a.RespectsRegionTyping Γ
   | .libdeviceLog a => a.RespectsRegionTyping Γ
   | .libdeviceExpm1 a => a.RespectsRegionTyping Γ
+  | .libdeviceTanh a => a.RespectsRegionTyping Γ
   | .libdeviceLog1p a => a.RespectsRegionTyping Γ
   | .exp2 a => a.RespectsRegionTyping Γ
   | .log a => a.RespectsRegionTyping Γ
@@ -151,6 +154,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .cosh a => a.RespectsRegionTyping Γ
   | .sinh a => a.RespectsRegionTyping Γ
   | .erf a => a.RespectsRegionTyping Γ
+  | .minPosInf a => a.RespectsRegionTyping Γ
   | .lt _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .le _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .eq _ _ a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
@@ -168,13 +172,17 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
       c.RespectsRegionTyping Γ ∧ a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .reduceMax _ _ a => a.RespectsRegionTyping Γ
   | .reduceMaxNat _ _ a => a.RespectsRegionTyping Γ
+  | .reduceMaxInt _ _ a => a.RespectsRegionTyping Γ
   | .reduceSum _ _ a => a.RespectsRegionTyping Γ
+  | .reduceSumTyped _ _ _ a => a.RespectsRegionTyping Γ
   | .scan _ _ _ a => a.RespectsRegionTyping Γ
   | .argMax _ a => a.RespectsRegionTyping Γ
   | .argMin _ a => a.RespectsRegionTyping Γ
   | .sort _ a => a.RespectsRegionTyping Γ
-  | .dot a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
-  | .dotInt a b => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .dot a b _ => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .dotAcc _ _ _ a b acc _ => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ ∧ acc.RespectsRegionTyping Γ
+  | .dotTyped _ _ _ a b _ => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
+  | .dotInt a b _ => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ
   | .transpose a => a.RespectsRegionTyping Γ
   | .reshape _ a => a.RespectsRegionTyping Γ
   | .remap _ _ a => a.RespectsRegionTyping Γ
@@ -191,7 +199,9 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .makeBlockPtrDynOffsets _ base _ _ _ offsets =>
       base.RespectsRegionTyping Γ ∧ ∀ off ∈ offsets, off.RespectsRegionTyping Γ
   | .advanceBlockPtr ptr _ => ptr.RespectsRegionTyping Γ
-  | .load dtype mem mask =>
+  | .advanceBlockPtrDyn ptr deltas =>
+      ptr.RespectsRegionTyping Γ ∧ ∀ d ∈ deltas, d.RespectsRegionTyping Γ
+  | .load dtype mem mask padding =>
       mem.RespectsRegionTyping Γ dtype ∧ mask.RespectsRegionTyping Γ
   | .natToReal a => a.RespectsRegionTyping Γ
   | .intToReal a => a.RespectsRegionTyping Γ
@@ -201,8 +211,7 @@ decreasing_by
     simp_wf
     try omega
     try
-      have hmem : off ∈ offsets := by assumption
-      have hs := List.sizeOf_lt_of_mem hmem
+      have hs := List.sizeOf_lt_of_mem (by assumption)
       omega
 
 end
@@ -228,6 +237,9 @@ def Stmt.RespectsRegionTyping (Γ : RegionTyping) : Stmt → Prop
   | .forLoop _ _ body => StmtList.RespectsRegionTyping Γ body
   | .forRange _ _ _ _ body => StmtList.RespectsRegionTyping Γ body
   | .forRangeDyn _ start stop step body =>
+      start.RespectsRegionTyping Γ ∧ stop.RespectsRegionTyping Γ ∧
+        step.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body
+  | .forRangeInt _ start stop step body =>
       start.RespectsRegionTyping Γ ∧ stop.RespectsRegionTyping Γ ∧
         step.RespectsRegionTyping Γ ∧ StmtList.RespectsRegionTyping Γ body
   | .ifThen cond body =>

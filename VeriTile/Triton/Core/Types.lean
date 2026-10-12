@@ -15,6 +15,8 @@ abbrev RegName := String
 /-- Padding behavior for out-of-bounds block-pointer loads. -/
 inductive PaddingOption where
   | zero
+  /-- An omitted or empty Triton padding option uses unspecified values. -/
+  | unspecified
   deriving DecidableEq, Repr
 
 /--

@@ -40,6 +40,11 @@ structure EOut where
   computeDType? : Option DInfo := none
   deriving Inhabited
 
+/-- Forget storage width when entering the mathematical integer arithmetic
+channel. In particular, its results cannot later impersonate byte loads. -/
+def EOut.forgetStorageWidth (e : EOut) : EOut :=
+  if e.dtype == .int8 then { e with dtype := .int } else e
+
 def expandLeanAntiquoteAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
     MacroM (Option EOut) := do
   match e with
@@ -77,7 +82,16 @@ def realMathTerm (ctx : String) (e : EOut) : MacroM (TSyntax `term) := do
       ensureDType .real e.dtype ctx
       pure e.term
 
+/-- Numerical widening for explicitly typed floating operands. -/
+def coerceFloatOperand (dst : DInfo) (e : EOut) : MacroM EOut := do
+  if e.dtype == dst then return e
+  let srcProof ← e.dtype.floatProof
+  let dstProof ← dst.floatProof
+  return { e with term := ← `(Op.castFloat $srcProof $dstProof $e.term), dtype := dst }
+
 def coerceRealArithOperands (ctx : String) (a b : EOut) : MacroM (EOut × EOut) := do
+  let a := a.forgetStorageWidth
+  let b := b.forgetStorageWidth
   match a.dtype, b.dtype with
   | .real, .nat =>
       pure (a, { b with term := ← `(Op.natToReal $b.term), dtype := .real })
@@ -91,10 +105,24 @@ def coerceRealArithOperands (ctx : String) (a b : EOut) : MacroM (EOut × EOut) 
       pure (a, { b with term := ← realMathTerm (ctx ++ " rhs") b, dtype := .real })
   | .fp32, .real | .fp16, .real | .bf16, .real | .f8e4, .real | .f8e5, .real | .floatVar _, .real =>
       pure ({ a with term := ← realMathTerm (ctx ++ " lhs") a, dtype := .real }, b)
+  | .fp32, .fp16 | .fp32, .bf16 | .fp32, .f8e4 | .fp32, .f8e5 =>
+      pure (a, ← coerceFloatOperand .fp32 b)
+  | .fp16, .fp32 | .bf16, .fp32 | .f8e4, .fp32 | .f8e5, .fp32 =>
+      pure (← coerceFloatOperand .fp32 a, b)
+  | .fp16, .bf16 | .fp16, .f8e4 | .fp16, .f8e5 =>
+      pure (a, ← coerceFloatOperand .fp16 b)
+  | .bf16, .fp16 | .f8e4, .fp16 | .f8e5, .fp16 =>
+      pure (← coerceFloatOperand .fp16 a, b)
+  | .bf16, .f8e4 | .bf16, .f8e5 | .f8e4, .bf16 | .f8e5, .bf16 =>
+      pure (← coerceFloatOperand .fp32 a, ← coerceFloatOperand .fp32 b)
+  | .f8e4, .f8e5 | .f8e5, .f8e4 =>
+      pure (← coerceFloatOperand .fp16 a, ← coerceFloatOperand .fp16 b)
   | _, _ =>
       pure (a, b)
 
 def coerceNatIntOperands (_ctx : String) (a b : EOut) : MacroM (EOut × EOut) := do
+  let a := a.forgetStorageWidth
+  let b := b.forgetStorageWidth
   match a.dtype, b.dtype with
   | .nat, .int =>
       pure ({ a with term := ← `(Op.castNatToInt $a.term), dtype := .int }, b)
@@ -134,6 +162,22 @@ def dottedToBaseIdent? (i : TSyntax `ident) : Option (TSyntax `tritonExpr) :=
   | some base =>
     some ⟨mkIdentFrom i (Name.mkSimple base)⟩
   | none => none
+
+/-- The final four children are dtype, comma, bitcast=True, close.
+Using this suffix handles both the dotted identifier and expression forms. -/
+def methodBitcast? (stx : TSyntax `tritonExpr) :
+    Option (TSyntax `tritonExpr × TSyntax `tritonDType) :=
+  let k := stx.raw.getKind
+  if k == ``tritonMethodBitcast || k == ``tritonIdentMethodBitcast ||
+      k == ``tritonIdentMethodBitcastSpaced || k == ``tritonDottedIdentMethodBitcast then
+    let args := stx.raw.getArgs
+    if h : 4 ≤ args.size then
+      let dt : TSyntax `tritonDType := ⟨args[args.size - 4]⟩
+      if k == ``tritonDottedIdentMethodBitcast then
+        (dottedToBaseIdent? ⟨args[0]⟩).map (fun e => (e, dt))
+      else some (⟨args[0]⟩, dt)
+    else none
+  else none
 
 def methodCast? (stx : TSyntax `tritonExpr) :
     Option (TSyntax `tritonExpr × TSyntax `tritonDType) :=
@@ -225,8 +269,9 @@ def intCoeListTerm (ctx : String) (dims : Array (TSyntax `tritonExpr)) :
 
 def paddingOptionTerm (s : String) : MacroM (TSyntax `term) := do
   match s with
+  | "" => `(PaddingOption.unspecified)
   | "zero" => `(PaddingOption.zero)
-  | other => Macro.throwError ("padding_option: unsupported value `" ++ other ++ "`; only \"zero\" is modeled")
+  | other => Macro.throwError ("padding_option: unsupported value `" ++ other ++ "`; only empty or zero padding is modeled")
 
 def uint32BitsTerm (bits : Nat) : MacroM (TSyntax `term) := do
   let bitsNat : TSyntax `term := ⟨Syntax.mkNumLit (toString bits)⟩
@@ -284,8 +329,8 @@ def fp32ComputeExpr (term : TSyntax `term) : MacroM (TSyntax `term) :=
 def fp64ComputeExpr (term : TSyntax `term) : MacroM (TSyntax `term) :=
   `(ComputeExpr.compute (ComputeOp.alg ComputeDType.fp64 $term))
 
-def fp32ComputeLoadExpr (mem mask : TSyntax `term) : MacroM (TSyntax `term) :=
-  `(ComputeExpr.compute (ComputeOp.load ComputeDType.fp32 $mem $mask))
+def fp32ComputeLoadExpr (mem mask padding : TSyntax `term) : MacroM (TSyntax `term) :=
+  `(ComputeExpr.compute (ComputeOp.load ComputeDType.fp32 $mem $mask $padding))
 
 def computeAnnotated? (dtype : DInfo) (term : TSyntax `term) :
     MacroM (Option (TSyntax `term) × Option DInfo) := do

@@ -37,6 +37,7 @@ Design notes:
 
 import VeriTile.Triton.Core
 import VeriTile.Triton.Semantics
+import VeriTile.Triton.Semantics.BlockPadding
 import VeriTile.Triton.Memory.Bounds
 
 namespace VeriTile.Triton
@@ -192,6 +193,7 @@ def flattenOp (A : FlatAlloc) :
   | _, _, .castNatToInt a => .castNatToInt (A.flattenOp a)
   | _, _, .castIntToNat a => .castIntToNat (A.flattenOp a)
   | _, _, .castRealToInt8 a => .castRealToInt8 (A.flattenOp a)
+  | _, _, .decodeFloat8E5 dst a => .decodeFloat8E5 dst (A.flattenOp a)
   | _, _, .add nd bc a b => .add nd bc (A.flattenOp a) (A.flattenOp b)
   | _, _, .sub nd bc a b => .sub nd bc (A.flattenOp a) (A.flattenOp b)
   | _, _, .mul nd bc a b => .mul nd bc (A.flattenOp a) (A.flattenOp b)
@@ -207,6 +209,7 @@ def flattenOp (A : FlatAlloc) :
   | _, _, .libdeviceExp a => .libdeviceExp (A.flattenOp a)
   | _, _, .libdeviceLog a => .libdeviceLog (A.flattenOp a)
   | _, _, .libdeviceExpm1 a => .libdeviceExpm1 (A.flattenOp a)
+  | _, _, .libdeviceTanh a => .libdeviceTanh (A.flattenOp a)
   | _, _, .libdeviceLog1p a => .libdeviceLog1p (A.flattenOp a)
   | _, _, .exp2 a => .exp2 (A.flattenOp a)
   | _, _, .log a => .log (A.flattenOp a)
@@ -222,6 +225,7 @@ def flattenOp (A : FlatAlloc) :
   | _, _, .cosh a => .cosh (A.flattenOp a)
   | _, _, .sinh a => .sinh (A.flattenOp a)
   | _, _, .erf a => .erf (A.flattenOp a)
+  | _, _, .minPosInf a => .minPosInf (A.flattenOp a)
   | _, _, .lt cd bc a b => .lt cd bc (A.flattenOp a) (A.flattenOp b)
   | _, _, .le cd bc a b => .le cd bc (A.flattenOp a) (A.flattenOp b)
   | _, _, .eq cd bc a b => .eq cd bc (A.flattenOp a) (A.flattenOp b)
@@ -237,13 +241,21 @@ def flattenOp (A : FlatAlloc) :
   | _, _, .ite c a b => .ite (A.flattenOp c) (A.flattenOp a) (A.flattenOp b)
   | _, _, .reduceMax ax kd a => .reduceMax ax kd (A.flattenOp a)
   | _, _, .reduceMaxNat ax kd a => .reduceMaxNat ax kd (A.flattenOp a)
+  | _, _, .reduceMaxInt ax kd a => .reduceMaxInt ax kd (A.flattenOp a)
   | _, _, .reduceSum ax kd a => .reduceSum ax kd (A.flattenOp a)
+  | _, _, .reduceSumTyped dtype ax kd a => .reduceSumTyped dtype ax kd (A.flattenOp a)
   | _, _, .scan op ax dir a => .scan op ax dir (A.flattenOp a)
   | _, _, .argMax ax a => .argMax ax (A.flattenOp a)
   | _, _, .argMin ax a => .argMin ax (A.flattenOp a)
   | _, _, .sort ax a => .sort ax (A.flattenOp a)
-  | _, _, .dot a b => .dot (A.flattenOp a) (A.flattenOp b)
-  | _, _, .dotInt a b => .dotInt (A.flattenOp a) (A.flattenOp b)
+  | _, _, .dot (options := options) a b =>
+      .dot (options := options) (A.flattenOp a) (A.flattenOp b)
+  | _, _, .dotTyped left right out a b options =>
+      .dotTyped left right out (A.flattenOp a) (A.flattenOp b) options
+  | _, _, .dotAcc left right out a b acc options =>
+      .dotAcc left right out (A.flattenOp a) (A.flattenOp b) (A.flattenOp acc) options
+  | _, _, .dotInt (options := options) a b =>
+      .dotInt (options := options) (A.flattenOp a) (A.flattenOp b)
   | _, _, .transpose a => .transpose (A.flattenOp a)
   | _, _, .reshape outSh a => .reshape outSh (A.flattenOp a)
   | _, _, .remap outSh f a => .remap outSh f (A.flattenOp a)
@@ -264,7 +276,9 @@ def flattenOp (A : FlatAlloc) :
         (.add .nat .nil (.constNat (A.base r)) (A.flattenOp bo)) ps bs strides
         (offs.attach.map fun ⟨o, _⟩ => A.flattenOp o)
   | _, _, .advanceBlockPtr p ds => .advanceBlockPtr (A.flattenOp p) ds
-  | _, _, .load d mem mask =>
+  | _, _, .advanceBlockPtrDyn p ds =>
+      .advanceBlockPtrDyn (A.flattenOp p) (ds.map A.flattenOp)
+  | _, _, .load d mem mask padding =>
       .load d
         (match mem with
          | .region r off =>
@@ -276,9 +290,17 @@ def flattenOp (A : FlatAlloc) :
         (match mask with
          | .none => .none
          | .mask m => .mask (A.flattenOp m)
-         | .maskOther m o => .maskOther (A.flattenOp m) (A.flattenOp o))
+         | .maskOther m o => .maskOther (A.flattenOp m) (A.flattenOp o)) padding
   | _, _, .natToReal a => .natToReal (A.flattenOp a)
   | _, _, .intToReal a => .intToReal (A.flattenOp a)
+termination_by _ _ op => sizeOf op
+decreasing_by
+  all_goals
+    simp_wf
+    try omega
+    try
+      have hs := List.sizeOf_lt_of_mem (by assumption)
+      omega
 
 /-- Translate a memory access (the named form of the `.load` case above,
 shared with the store/atomic statements). -/
@@ -301,9 +323,10 @@ def flattenMask (A : FlatAlloc) :
 /-- The `.load` case of `flattenOp` in terms of the named access/mask
 translations. -/
 @[simp] theorem flattenOp_load (A : FlatAlloc) {d : TileDType}
-    {sh : TileShape} (mem : MemAccess d sh) (mask : MaskOpt d sh) :
-    A.flattenOp (.load d mem mask)
-      = .load d (A.flattenAccess mem) (A.flattenMask mask) := by
+    {sh : TileShape} (mem : MemAccess d sh) (mask : MaskOpt d sh)
+    (padding : PaddingOption := .zero) :
+    A.flattenOp (.load d mem mask padding)
+      = .load d (A.flattenAccess mem) (A.flattenMask mask) padding := by
   cases mem <;> cases mask <;>
     simp only [flattenOp, flattenAccess, flattenMask]
 
@@ -326,6 +349,9 @@ def flattenStmt (A : FlatAlloc) : Stmt → Stmt
       .forRange idx start stop step (A.flattenStmts body)
   | .forRangeDyn idx start stop step body =>
       .forRangeDyn idx (A.flattenOp start) (A.flattenOp stop) (A.flattenOp step)
+        (A.flattenStmts body)
+  | .forRangeInt idx start stop step body =>
+      .forRangeInt idx (A.flattenOp start) (A.flattenOp stop) (A.flattenOp step)
         (A.flattenStmts body)
   | .ifThen c body => .ifThen (A.flattenOp c) (A.flattenStmts body)
   | .ifThenElse c tb eb =>
@@ -472,6 +498,7 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .castNatToInt e => e.FlattenOk
   | .castIntToNat e => e.FlattenOk
   | .castRealToInt8 e => e.FlattenOk
+  | .decodeFloat8E5 _ e => e.FlattenOk
   | .add _ _ a b => a.FlattenOk ∧ b.FlattenOk
   | .sub _ _ a b => a.FlattenOk ∧ b.FlattenOk
   | .mul _ _ a b => a.FlattenOk ∧ b.FlattenOk
@@ -487,6 +514,7 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .libdeviceExp a => a.FlattenOk
   | .libdeviceLog a => a.FlattenOk
   | .libdeviceExpm1 a => a.FlattenOk
+  | .libdeviceTanh a => a.FlattenOk
   | .libdeviceLog1p a => a.FlattenOk
   | .exp2 a => a.FlattenOk
   | .log a => a.FlattenOk
@@ -502,6 +530,7 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .cosh a => a.FlattenOk
   | .sinh a => a.FlattenOk
   | .erf a => a.FlattenOk
+  | .minPosInf a => a.FlattenOk
   | .lt _ _ a b => a.FlattenOk ∧ b.FlattenOk
   | .le _ _ a b => a.FlattenOk ∧ b.FlattenOk
   | .eq _ _ a b => a.FlattenOk ∧ b.FlattenOk
@@ -517,13 +546,17 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .ite c a b => c.FlattenOk ∧ a.FlattenOk ∧ b.FlattenOk
   | .reduceMax _ _ a => a.FlattenOk
   | .reduceMaxNat _ _ a => a.FlattenOk
+  | .reduceMaxInt _ _ a => a.FlattenOk
   | .reduceSum _ _ a => a.FlattenOk
+  | .reduceSumTyped _ _ _ a => a.FlattenOk
   | .scan _ _ _ a => a.FlattenOk
   | .argMax _ a => a.FlattenOk
   | .argMin _ a => a.FlattenOk
   | .sort _ a => a.FlattenOk
-  | .dot a b => a.FlattenOk ∧ b.FlattenOk
-  | .dotInt a b => a.FlattenOk ∧ b.FlattenOk
+  | .dot a b _ => a.FlattenOk ∧ b.FlattenOk
+  | .dotAcc _ _ _ a b acc _ => a.FlattenOk ∧ b.FlattenOk ∧ acc.FlattenOk
+  | .dotTyped _ _ _ a b _ => a.FlattenOk ∧ b.FlattenOk
+  | .dotInt a b _ => a.FlattenOk ∧ b.FlattenOk
   | .transpose a => a.FlattenOk
   | .reshape _ a => (dtype ≠ .ptr ∧ dtype ≠ .blockPtr) ∧ a.FlattenOk
   | .remap _ _ a => a.FlattenOk
@@ -540,7 +573,9 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .makeBlockPtrDynOffsets _ base _ _ _ offsets =>
       base.FlattenOk ∧ ∀ off ∈ offsets, off.FlattenOk
   | .advanceBlockPtr ptr _ => ptr.FlattenOk
-  | .load d mem mask =>
+  | .advanceBlockPtrDyn ptr deltas =>
+      ptr.FlattenOk ∧ ∀ delta ∈ deltas, delta.FlattenOk
+  | .load d mem mask padding =>
       (d ≠ .ptr ∧ d ≠ .blockPtr) ∧
       (match mem with
         | .region _ off => off.FlattenOk
@@ -578,6 +613,7 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .castNatToInt e => e.FlattenOkR
   | .castIntToNat e => e.FlattenOkR
   | .castRealToInt8 e => e.FlattenOkR
+  | .decodeFloat8E5 _ e => e.FlattenOkR
   | .add _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
   | .sub _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
   | .mul _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
@@ -593,6 +629,7 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .libdeviceExp a => a.FlattenOkR
   | .libdeviceLog a => a.FlattenOkR
   | .libdeviceExpm1 a => a.FlattenOkR
+  | .libdeviceTanh a => a.FlattenOkR
   | .libdeviceLog1p a => a.FlattenOkR
   | .exp2 a => a.FlattenOkR
   | .log a => a.FlattenOkR
@@ -608,6 +645,7 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .cosh a => a.FlattenOkR
   | .sinh a => a.FlattenOkR
   | .erf a => a.FlattenOkR
+  | .minPosInf a => a.FlattenOkR
   | .lt _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
   | .le _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
   | .eq _ _ a b => a.FlattenOkR ∧ b.FlattenOkR
@@ -623,13 +661,17 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .ite c a b => c.FlattenOkR ∧ a.FlattenOkR ∧ b.FlattenOkR
   | .reduceMax _ _ a => a.FlattenOkR
   | .reduceMaxNat _ _ a => a.FlattenOkR
+  | .reduceMaxInt _ _ a => a.FlattenOkR
   | .reduceSum _ _ a => a.FlattenOkR
+  | .reduceSumTyped _ _ _ a => a.FlattenOkR
   | .scan _ _ _ a => a.FlattenOkR
   | .argMax _ a => a.FlattenOkR
   | .argMin _ a => a.FlattenOkR
   | .sort _ a => a.FlattenOkR
-  | .dot a b => a.FlattenOkR ∧ b.FlattenOkR
-  | .dotInt a b => a.FlattenOkR ∧ b.FlattenOkR
+  | .dot a b _ => a.FlattenOkR ∧ b.FlattenOkR
+  | .dotAcc _ _ _ a b acc _ => a.FlattenOkR ∧ b.FlattenOkR ∧ acc.FlattenOkR
+  | .dotTyped _ _ _ a b _ => a.FlattenOkR ∧ b.FlattenOkR
+  | .dotInt a b _ => a.FlattenOkR ∧ b.FlattenOkR
   | .transpose a => a.FlattenOkR
   | .reshape _ a => (dtype ≠ .ptr ∧ dtype ≠ .blockPtr) ∧ a.FlattenOkR
   | .remap _ _ a => a.FlattenOkR
@@ -644,7 +686,9 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .makeBlockPtrDynOffsets _ base _ _ _ offsets =>
       base.FlattenOkR ∧ ∀ off ∈ offsets, off.FlattenOkR
   | .advanceBlockPtr ptr _ => ptr.FlattenOkR
-  | .load d mem mask =>
+  | .advanceBlockPtrDyn ptr deltas =>
+      ptr.FlattenOkR ∧ ∀ delta ∈ deltas, delta.FlattenOkR
+  | .load d mem mask padding =>
       (d ≠ .ptr ∧ d ≠ .blockPtr) ∧
       (match mem with
         | .region _ off => off.FlattenOkR
@@ -668,7 +712,7 @@ theorem Op.FlattenOk.toR {dtype : TileDType} {shape : TileShape}
   all_goals try first | trivial | simp_all
   -- the `.load` arm: its nested matches on `mem`/`mask` only unfold once the
   -- constructors are exposed
-  next sh d mem mask ih2 ih1 =>
+  next sh d mem mask padding ih2 ih1 =>
     cases mem <;> cases mask <;> simp_all [Op.FlattenOk, Op.FlattenOkR]
 
 /-! ## Tile-level commutation of the value translation -/
@@ -835,6 +879,7 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .castNatToInt e => e.SafeAt bounds s
   | .castIntToNat e => e.SafeAt bounds s
   | .castRealToInt8 e => e.SafeAt bounds s
+  | .decodeFloat8E5 _ e => e.SafeAt bounds s
   | .add _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .sub _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .mul _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
@@ -850,6 +895,7 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .libdeviceExp a => a.SafeAt bounds s
   | .libdeviceLog a => a.SafeAt bounds s
   | .libdeviceExpm1 a => a.SafeAt bounds s
+  | .libdeviceTanh a => a.SafeAt bounds s
   | .libdeviceLog1p a => a.SafeAt bounds s
   | .exp2 a => a.SafeAt bounds s
   | .log a => a.SafeAt bounds s
@@ -865,6 +911,7 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .cosh a => a.SafeAt bounds s
   | .sinh a => a.SafeAt bounds s
   | .erf a => a.SafeAt bounds s
+  | .minPosInf a => a.SafeAt bounds s
   | .lt _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .le _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .eq _ _ a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
@@ -880,13 +927,17 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .ite c a b => c.SafeAt bounds s ∧ a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .reduceMax _ _ a => a.SafeAt bounds s
   | .reduceMaxNat _ _ a => a.SafeAt bounds s
+  | .reduceMaxInt _ _ a => a.SafeAt bounds s
   | .reduceSum _ _ a => a.SafeAt bounds s
+  | .reduceSumTyped _ _ _ a => a.SafeAt bounds s
   | .scan _ _ _ a => a.SafeAt bounds s
   | .argMax _ a => a.SafeAt bounds s
   | .argMin _ a => a.SafeAt bounds s
   | .sort _ a => a.SafeAt bounds s
-  | .dot a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
-  | .dotInt a b => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .dot a b _ => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .dotAcc _ _ _ a b acc _ => a.SafeAt bounds s ∧ b.SafeAt bounds s ∧ acc.SafeAt bounds s
+  | .dotTyped _ _ _ a b _ => a.SafeAt bounds s ∧ b.SafeAt bounds s
+  | .dotInt a b _ => a.SafeAt bounds s ∧ b.SafeAt bounds s
   | .transpose a => a.SafeAt bounds s
   | .reshape _ a => a.SafeAt bounds s
   | .remap _ _ a => a.SafeAt bounds s
@@ -901,7 +952,9 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .makeBlockPtrDynOffsets _ base _ _ _ offsets =>
       base.SafeAt bounds s ∧ ∀ off ∈ offsets, off.SafeAt bounds s
   | .advanceBlockPtr ptr _ => ptr.SafeAt bounds s
-  | .load _ mem mask =>
+  | .advanceBlockPtrDyn ptr deltas =>
+      ptr.SafeAt bounds s ∧ ∀ delta ∈ deltas, delta.SafeAt bounds s
+  | .load _ mem mask padding =>
       (match mem with
         | .region _ off => off.SafeAt bounds s
         | .ptr ptr => ptr.SafeAt bounds s
@@ -918,8 +971,8 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
 /-- `mapM`-level commutation for dynamic block-pointer offset lists: if every
 member op evaluates identically after translation, so does the scalar-offset
 `mapM`. -/
-private theorem mapM_data_flatten (A : FlatAlloc) (s' s : BlockState) :
-    ∀ (l : List (Op TileDType.nat [])),
+private theorem mapM_data_flatten {dtype : TileDType} (A : FlatAlloc) (s' s : BlockState) :
+    ∀ (l : List (Op dtype [])),
       (∀ off ∈ l, evalOp (A.flattenOp off) s' = evalOp off s) →
       (l.map A.flattenOp).mapM (fun off => do
           let v ← evalOp off s'
@@ -1198,7 +1251,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
-  | _, _, .dot a b, s, hms, hok, hu => by
+  | _, _, .dot a b _, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
@@ -1208,7 +1261,32 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         evalOp_flatten A hd hcov b s hmb hkb hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
-  | _, _, .dotInt a b, s, hms, hok, hu => by
+  | _, _, .dotTyped left right out a b _, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      obtain ⟨hma, hmb⟩ := hms
+      obtain ⟨hka, hkb⟩ := hok
+      simp only [flattenOp, evalOp,
+        evalOp_flatten A hd hcov a s hma hka hu,
+        evalOp_flatten A hd hcov b s hmb hkb hu,
+        A.trTileFun_data left.toTileDType_ne_ptr left.toTileDType_ne_blockPtr,
+        A.trTileFun_data right.toTileDType_ne_ptr right.toTileDType_ne_blockPtr,
+        A.trTileFun_data out.toTileDType_ne_ptr out.toTileDType_ne_blockPtr,
+        Option.map_id, id_eq]
+  | _, _, .dotAcc left right out a b acc _, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      obtain ⟨hma, hmb, hmc⟩ := hms
+      obtain ⟨hka, hkb, hkc⟩ := hok
+      simp only [flattenOp, evalOp,
+        evalOp_flatten A hd hcov a s hma hka hu,
+        evalOp_flatten A hd hcov b s hmb hkb hu,
+        evalOp_flatten A hd hcov acc s hmc hkc hu,
+        A.trTileFun_data left.toTileDType_ne_ptr left.toTileDType_ne_blockPtr,
+        A.trTileFun_data right.toTileDType_ne_ptr right.toTileDType_ne_blockPtr,
+        A.trTileFun_data out.toTileDType_ne_ptr out.toTileDType_ne_blockPtr,
+        Option.map_id, id_eq]
+  | _, _, .dotInt a b _, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       obtain ⟨hma, hmb⟩ := hms
@@ -1237,6 +1315,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .libdeviceExpm1 a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .libdeviceTanh a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
@@ -1332,6 +1416,12 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
+  | _, _, .minPosInf a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
   | _, _, .boolNot a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
@@ -1373,6 +1463,13 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         A.trTileFun_data (d := .int) (by decide) (by decide),
         Option.map_id, id_eq]
+  | _, _, .decodeFloat8E5 dst a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .int) (by decide) (by decide),
+        A.trTileFun_data dst.toTileDType_ne_ptr dst.toTileDType_ne_blockPtr,
+        Option.map_id, id_eq]
   | _, _, .sort ax a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
@@ -1411,11 +1508,23 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
+  | _, _, .reduceMaxInt ax kd a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data (d := .int) (by decide) (by decide),
+        Option.map_id, id_eq]
   | _, _, .reduceSum ax kd a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
         A.trTileFun_data (d := .real) (by decide) (by decide),
+        Option.map_id, id_eq]
+  | _, _, .reduceSumTyped dtype ax kd a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data dtype.toTileDType_ne_ptr dtype.toTileDType_ne_blockPtr,
         Option.map_id, id_eq]
   | _, _, .where c a b, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
@@ -1577,8 +1686,31 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov p s hms hok hu]
       cases evalOp p s <;>
         simp [FlatAlloc.trTile, FlatAlloc.trCarrier_advance]
-  | _, _, .load d mem mask, s, hms, hok, hu => by
-      rw [FlatAlloc.flattenOp_load]
+  | _, _, .advanceBlockPtrDyn p ds, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      obtain ⟨hmp, hmd⟩ := hms
+      obtain ⟨hkp, hkd⟩ := hok
+      have hmem : ∀ d ∈ ds,
+          evalOp (A.flattenOp d) (A.flattenState s) = evalOp d s :=
+        fun d hd' => by
+          rw [evalOp_flatten A hd hcov d s (hmd d hd') (hkd d hd') hu,
+            A.trTileFun_data (d := .int) (by decide) (by decide),
+            Option.map_id, id_eq]
+      simp only [flattenOp, evalOp,
+        evalOp_flatten A hd hcov p s hmp hkp hu]
+      cases hp : evalOp p s with
+      | none => rfl
+      | some ptrs =>
+          rw [mapM_data_flatten A (A.flattenState s) s ds hmem]
+          cases ds.mapM (fun d => do
+              let v ← evalOp d s
+              some (v.data PUnit.unit)) <;>
+            simp [FlatAlloc.trTile, FlatAlloc.trCarrier_advance]
+  | _, _, .load d mem mask padding, s, hms, hok, hu => by
+      rw [FlatAlloc.flattenOp_load (padding := padding),
+        evalOp_load_padding_of_undef_zero _ _ _ _ _ (show (A.flattenState s).undef = fun _ _ => 0 from rfl),
+        evalOp_load_padding_of_undef_zero _ _ _ _ _ hu]
       cases mem with
       | region r off =>
           cases mask with
@@ -1887,7 +2019,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                     rw [A.flattenState_readMemValue hd s hreg hbound d hdt,
                       A.trCarrier_data hdt.1 hdt.2]
                   · simp only [Bool.not_eq_true] at hib
-                    simp only [hib, Bool.false_eq_true, if_false]
+                    simp only [hib, Bool.false_eq_true, if_false, BlockState.paddingValue_zero]
                     rw [A.trCarrier_data hdt.1 hdt.2]
           | mask m =>
               simp only [Op.SafeAt] at hms
@@ -1937,7 +2069,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                           rw [A.flattenState_readMemValue hd s hreg hbound d hdt,
                             A.trCarrier_data hdt.1 hdt.2]
                         · simp only [Bool.not_eq_true] at hib
-                          simp only [hib, Bool.false_eq_true, if_false]
+                          simp only [hib, Bool.false_eq_true, if_false, BlockState.paddingValue_zero]
                           rw [A.trCarrier_data hdt.1 hdt.2]
                       · simp only [Bool.not_eq_true] at hact
                         simp only [hact, Bool.false_eq_true, if_false]
@@ -2007,7 +2139,7 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
                                   d hdt,
                                 A.trCarrier_data hdt.1 hdt.2]
                             · simp only [Bool.not_eq_true] at hib
-                              simp only [hib, Bool.false_eq_true, if_false]
+                              simp only [hib, Bool.false_eq_true, if_false, BlockState.paddingValue_zero]
                               rw [A.trCarrier_data hdt.1 hdt.2]
                           · simp only [Bool.not_eq_true] at hact
                             simp only [hact, Bool.false_eq_true, if_false]
@@ -2187,6 +2319,13 @@ def Stmt.TraceSafe (bounds : RegionBounds) : Stmt → BlockState → Prop
             Stmt.forRangeTraceSafe bounds idx (a.data PUnit.unit)
               (b.data PUnit.unit) (c.data PUnit.unit) body s
         | _, _, _ => True)
+  | .forRangeInt idx start stop step body, s =>
+      start.SafeAt bounds s ∧ stop.SafeAt bounds s ∧ step.SafeAt bounds s ∧
+      (match evalOp start s, evalOp stop s, evalOp step s with
+        | some a, some b, some c =>
+            Stmt.forRangeIntTraceSafe bounds idx (a.data PUnit.unit)
+              (b.data PUnit.unit) (c.data PUnit.unit) body s
+        | _, _, _ => True)
   | .ifThen c body, s =>
       c.SafeAt bounds s ∧
       (match evalOp c s with
@@ -2241,6 +2380,19 @@ def Stmt.forRangeTraceSafe (bounds : RegionBounds) (idx : RegName)
       | none => True)
   else True
   termination_by (sizeOf body + 1, stop - cur)
+  decreasing_by all_goals (simp_wf; omega)
+
+def Stmt.forRangeIntTraceSafe (bounds : RegionBounds) (idx : RegName)
+    (cur stop : Int) (step : Nat) (body : List Stmt) (s : BlockState) : Prop :=
+  if step = 0 then True
+  else if cur < stop then
+    Stmt.TraceSafeList bounds body (s.setReg idx .int [] (Tile.scalar cur)) ∧
+    (match stepStmts body (s.setReg idx .int [] (Tile.scalar cur)) with
+      | some s' =>
+          Stmt.forRangeIntTraceSafe bounds idx (cur + step) stop step body s'
+      | none => True)
+  else True
+  termination_by (sizeOf body + 1, (stop - cur).toNat)
   decreasing_by all_goals (simp_wf; omega)
 
 end
@@ -2873,6 +3025,9 @@ def Stmt.FlattenOk : Stmt → Prop
   | .forRangeDyn _ start stop step body =>
       start.FlattenOk ∧ stop.FlattenOk ∧ step.FlattenOk
         ∧ StmtList.FlattenOk body
+  | .forRangeInt _ start stop step body =>
+      start.FlattenOk ∧ stop.FlattenOk ∧ step.FlattenOk
+        ∧ StmtList.FlattenOk body
   | .ifThen c body => c.FlattenOk ∧ StmtList.FlattenOk body
   | .ifThenElse c tb eb =>
       c.FlattenOk ∧ StmtList.FlattenOk tb ∧ StmtList.FlattenOk eb
@@ -2924,6 +3079,9 @@ def Stmt.FlattenOkR : Stmt → Prop
   | .forLoop _ _ body => StmtList.FlattenOkR body
   | .forRange _ _ _ _ body => StmtList.FlattenOkR body
   | .forRangeDyn _ start stop step body =>
+      start.FlattenOkR ∧ stop.FlattenOkR ∧ step.FlattenOkR
+        ∧ StmtList.FlattenOkR body
+  | .forRangeInt _ start stop step body =>
       start.FlattenOkR ∧ stop.FlattenOkR ∧ step.FlattenOkR
         ∧ StmtList.FlattenOkR body
   | .ifThen c body => c.FlattenOkR ∧ StmtList.FlattenOkR body
@@ -2981,6 +3139,10 @@ theorem Stmt.FlattenOk.toR : ∀ (st : Stmt), st.FlattenOk → st.FlattenOkR
       simp only [Stmt.FlattenOkR]
       exact StmtList.FlattenOk.toR body h
   | .forRangeDyn _ start stop step body, h => by
+      simp only [Stmt.FlattenOk] at h
+      simp only [Stmt.FlattenOkR]
+      exact ⟨h.1.toR, h.2.1.toR, h.2.2.1.toR, StmtList.FlattenOk.toR body h.2.2.2⟩
+  | .forRangeInt _ start stop step body, h => by
       simp only [Stmt.FlattenOk] at h
       simp only [Stmt.FlattenOkR]
       exact ⟨h.1.toR, h.2.1.toR, h.2.2.1.toR, StmtList.FlattenOk.toR body h.2.2.2⟩
@@ -3442,6 +3604,25 @@ theorem stepStmt_undef : ∀ (st : Stmt) (s s' : BlockState),
                       (b.data PUnit.unit) (c.data PUnit.unit) body s
                       = some s' := h
                   exact stepForRangeAux_undef idx _ _ _ body s s' hok.2.2.2 h
+  | .forRangeInt idx start stop step body, s, s', hok, h => by
+      simp only [Stmt.FlattenOk] at hok
+      simp only [stepStmt] at h
+      cases h1 : evalOp start s with
+      | none => rw [h1] at h; exact absurd h (by simp)
+      | some a =>
+          rw [h1] at h
+          cases h2 : evalOp stop s with
+          | none => rw [h2] at h; exact absurd h (by simp)
+          | some b =>
+              rw [h2] at h
+              cases h3 : evalOp step s with
+              | none => rw [h3] at h; exact absurd h (by simp)
+              | some c =>
+                  rw [h3] at h
+                  replace h : stepForRangeIntAux idx (a.data PUnit.unit)
+                      (b.data PUnit.unit) (c.data PUnit.unit) body s
+                      = some s' := h
+                  exact stepForRangeIntAux_undef idx _ _ _ body s s' hok.2.2.2 h
   | .ifThen c body, s, s', hok, h => by
       simp only [Stmt.FlattenOk] at hok
       simp only [stepStmt] at h
@@ -3543,6 +3724,31 @@ theorem stepForRangeAux_undef : ∀ (idx : RegName) (cur stop step : Nat)
         · obtain rfl := Option.some_inj.mp h
           rfl
   termination_by _ cur stop step body _ _ _ _ => (sizeOf body + 1, stop - cur)
+  decreasing_by all_goals (simp_wf; omega)
+
+theorem stepForRangeIntAux_undef : ∀ (idx : RegName) (cur stop : Int) (step : Nat)
+    (body : List Stmt) (s s' : BlockState),
+    StmtList.FlattenOk body →
+    stepForRangeIntAux idx cur stop step body s = some s' → s'.undef = s.undef
+  | idx, cur, stop, step, body, s, s', hok, h => by
+      rw [stepForRangeIntAux] at h
+      split at h
+      · obtain rfl := Option.some_inj.mp h
+        rfl
+      · split at h
+        · cases h1 : stepStmts body (s.setReg idx .int [] (Tile.scalar cur)) with
+          | none => rw [h1] at h; exact absurd h (by simp)
+          | some s1 =>
+              rw [h1] at h
+              replace h : stepForRangeIntAux idx (cur + step) stop step body s1
+                  = some s' := h
+              rw [stepForRangeIntAux_undef idx (cur + step) stop step body s1 s'
+                  hok h,
+                stepStmts_undef body _ s1 hok h1]
+              rfl
+        · obtain rfl := Option.some_inj.mp h
+          rfl
+  termination_by _ cur stop step body _ _ _ _ => (sizeOf body + 1, (stop - cur).toNat)
   decreasing_by all_goals (simp_wf; omega)
 
 end
@@ -4296,6 +4502,40 @@ theorem FlatAlloc.stepStmt_flatten (A : FlatAlloc) (hd : A.Disjoint)
                       (c.data PUnit.unit) body s := hmsb
                   exact A.stepForRangeAux_flatten hd hcov idx _ _ _ body s
                     hmsb hokb hu
+  | .forRangeInt idx start stop step body, s, hms, hok, hu => by
+      simp only [Stmt.TraceSafe] at hms
+      simp only [Stmt.FlattenOk] at hok
+      obtain ⟨hms1, hms2, hms3, hmsb⟩ := hms
+      obtain ⟨hok1, hok2, hok3, hokb⟩ := hok
+      simp only [FlatAlloc.flattenStmt, stepStmt]
+      rw [show evalOp (A.flattenOp start) (A.flattenState s) = evalOp start s from by
+          rw [A.evalOp_flatten hd hcov start s hms1 hok1 hu,
+            A.trTileFun_data (d := .int) (by decide) (by decide),
+            Option.map_id, id_eq]]
+      cases h1 : evalOp start s with
+      | none => rfl
+      | some a =>
+          rw [show evalOp (A.flattenOp stop) (A.flattenState s) = evalOp stop s from by
+              rw [A.evalOp_flatten hd hcov stop s hms2 hok2 hu,
+                A.trTileFun_data (d := .int) (by decide) (by decide),
+                Option.map_id, id_eq]]
+          cases h2 : evalOp stop s with
+          | none => rfl
+          | some b =>
+              rw [show evalOp (A.flattenOp step) (A.flattenState s)
+                  = evalOp step s from by
+                  rw [A.evalOp_flatten hd hcov step s hms3 hok3 hu,
+                    A.trTileFun_data (d := .nat) (by decide) (by decide),
+                    Option.map_id, id_eq]]
+              cases h3 : evalOp step s with
+              | none => rfl
+              | some c =>
+                  rw [h1, h2, h3] at hmsb
+                  replace hmsb : Stmt.forRangeIntTraceSafe A.extent idx
+                      (a.data PUnit.unit) (b.data PUnit.unit)
+                      (c.data PUnit.unit) body s := hmsb
+                  exact A.stepForRangeIntAux_flatten hd hcov idx _ _ _ body s
+                    hmsb hokb hu
   | .ifThen c body, s, hms, hok, hu => by
       simp only [Stmt.TraceSafe] at hms
       simp only [Stmt.FlattenOk] at hok
@@ -4458,6 +4698,46 @@ theorem FlatAlloc.stepForRangeAux_flatten (A : FlatAlloc) (hd : A.Disjoint)
                 body s1 hnext hok hu1
         next => rfl
   termination_by _ cur stop step body _ _ _ _ => (sizeOf body + 1, stop - cur)
+  decreasing_by all_goals (simp_wf; omega)
+
+theorem FlatAlloc.stepForRangeIntAux_flatten (A : FlatAlloc) (hd : A.Disjoint)
+    (hcov : ∀ r, r ∉ A.regions → A.extent r = 0) :
+    ∀ (idx : RegName) (cur stop : Int) (step : Nat) (body : List Stmt)
+      (s : BlockState),
+      Stmt.forRangeIntTraceSafe A.extent idx cur stop step body s →
+      StmtList.FlattenOk body → s.undef = (fun _ _ => 0) →
+      stepForRangeIntAux idx cur stop step (A.flattenStmts body)
+          (A.flattenState s)
+        = (stepForRangeIntAux idx cur stop step body s).map A.flattenState
+  | idx, cur, stop, step, body, s, hms, hok, hu => by
+      rw [stepForRangeIntAux, stepForRangeIntAux]
+      rw [Stmt.forRangeIntTraceSafe] at hms
+      split
+      next => rfl
+      next hz =>
+        rw [if_neg hz] at hms
+        split
+        next hlt =>
+          rw [if_pos hlt] at hms
+          obtain ⟨hbody, hnext⟩ := hms
+          have hset : (A.flattenState s).setReg idx .int [] (Tile.scalar cur)
+              = A.flattenState (s.setReg idx .int [] (Tile.scalar cur)) :=
+            (A.flattenState_setReg s idx .int [] (Tile.scalar cur)).symm
+          rw [hset, A.stepStmts_flatten hd hcov body
+            (s.setReg idx .int [] (Tile.scalar cur)) hbody hok hu]
+          cases h1 : stepStmts body (s.setReg idx .int [] (Tile.scalar cur)) with
+          | none => rfl
+          | some s1 =>
+              have hu1 : s1.undef = (fun _ _ => 0) := by
+                rw [stepStmts_undef body _ s1 hok h1]
+                exact hu
+              rw [h1] at hnext
+              replace hnext : Stmt.forRangeIntTraceSafe A.extent idx (cur + step)
+                  stop step body s1 := hnext
+              exact A.stepForRangeIntAux_flatten hd hcov idx (cur + step) stop step
+                body s1 hnext hok hu1
+        next => rfl
+  termination_by _ cur stop step body _ _ _ _ => (sizeOf body + 1, (stop - cur).toNat)
   decreasing_by all_goals (simp_wf; omega)
 
 end

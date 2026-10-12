@@ -3,6 +3,7 @@ import VeriTile.Triton.DSL
 import VeriTile.Triton.Float.StructuralIO
 import VeriTile.Triton.Float.SoftmaxShift
 import VeriTile.Triton.Float.ScheduledIO
+import VeriTile.Triton.Float.ExponentialLaws
 
 /-! FP proof support for SoftmaxStable. The public specification and atomic
 assumption report are in ../FPEquiv.lean; the shared sources are in ../Kernels.lean.
@@ -176,7 +177,7 @@ theorem original_values {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
 
 /-- The original programs succeed, agree in every bf16 output lane and frame
 all other memory under the selected arithmetic theory, syntactic domain and
-matching scalar EXP-SUB law. SoftmaxStableFPEquiv binds that law to admission. -/
+matching scalar EXP-SUB law. The final composition below binds that law to admission. -/
 theorem original_runs_under_exp {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
     (x y : RegionName) (B : Nat) (hB : 0 < B)
@@ -197,5 +198,15 @@ theorem original_runs_under_exp {α : Type} [Inhabited α] (R : Rules) (M : Alge
   intro i
   exact (hva i).trans ((congrArg (Cell.mk .bf16)
     (original_values R M D hM s plans hExp xs hd' i)).trans (hvb i).symm)
+
+/-- Bind the admitted exponential and arithmetic atoms to both complete
+executions, retaining the numerical domain, bf16 outputs and memory frames. -/
+theorem equivalent (B : Nat) (hB : 0 < B) (R : FP.Exponential.Rules) :
+    FP.Scheduled.Equivalent₁ R.assumptions (stable "x" "y" B) (naive "x" "y" B) := by
+  refine ⟨by simp [stable, IO₁PrivateScratch, stableIO, naiveIO],
+    by simp [naive, IO₁PrivateScratch, naiveIO], ?_⟩
+  intro α _ M D hM plans s hd
+  exact (original_runs_under_exp R.arithmetic M D (FP.Exponential.arithmetic_models R M D hM)
+    s plans "x" "y" B hB (FP.Exponential.exp_sub R M D hM s) hd).2.2
 
 end VeriTile.Bench.Examples.SoftmaxStableFPContract

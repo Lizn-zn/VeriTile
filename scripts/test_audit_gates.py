@@ -39,19 +39,28 @@ class AuditGateTests(unittest.TestCase):
 
     def test_worker_failures_and_result_accounting(self):
         for script, variable, targets in [
-            ('bench/check_ports.sh', 'CHECK_PORTS_JOBS', ['vector_addition', 'mean_reduction']),
+            ('bench/check_ports.sh', 'CHECK_PORTS_JOBS', [
+                'vector_addition/Correct.lean', 'vector_addition/FPEquiv.lean',
+                'vector_addition/Kernels.lean', 'vector_addition/Proofs/Real.lean',
+                'mean_reduction/MeanReduction.lean']),
             ('bench/audit_trust.sh', 'AUDIT_TRUST_JOBS', [
-                'bench/tritonbench_g/vector_addition/VectorAddition.lean',
+                'bench/tritonbench_g/vector_addition/Correct.lean',
+                'bench/tritonbench_g/vector_addition/FPEquiv.lean',
+                'bench/tritonbench_g/vector_addition/Kernels.lean',
+                'bench/tritonbench_g/vector_addition/Proofs/Real.lean',
                 'bench/tritonbench_g/mean_reduction/MeanReduction.lean'])]:
             first = f'  ok    {targets[0]}\n'
-            both = first + f'  ok    {targets[1]}\n'
+            complete = ''.join(f'  ok    {target}\n' for target in targets)
+            without_helper = ''.join(f'  ok    {target}\n' for target in targets
+                                     if not target.endswith('/Proofs/Real.lean'))
             fixtures = [('launch-failure', '', 'exit 127', False),
                         ('killed-worker', '', 'kill -TERM $$', False),
                         ('no-results', '', 'exit 0', False),
                         ('partial-results', first, 'exit 0', False),
+                        ('missing-nested-proof', without_helper, 'exit 0', False),
                         ('duplicate-results', first * 2, 'exit 0', False),
                         ('unexpected-result', first + '  ok    surprise\n', 'exit 0', False),
-                        ('all-results', both, 'exit 0', True)]
+                        ('all-results', complete, 'exit 0', True)]
             for name, output, ending, success in fixtures:
                 with self.subTest(script=script, fault=name), tempfile.TemporaryDirectory() as temp:
                     launcher = Path(temp) / 'xargs'
@@ -225,6 +234,27 @@ class AuditGateTests(unittest.TestCase):
                                     text=True, capture_output=True, timeout=90)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn('kernel module is not imported', result.stdout)
+
+    def test_split_benchmark_audit_checks_actual_imported_source(self):
+        prep = load('split_benchmark_audit_prep', 'bench/audit_trust_prep.py')
+        prefix = ('import bench.tritonbench_g.softmax_triton1.Kernels\n'
+                  'open VeriTile.Bench.TritonBenchG.SoftmaxTriton1\n')
+        for relative in ['Correct.lean', 'Proofs/Real.lean']:
+            for circular in [False, True]:
+                with self.subTest(relative=relative, circular=circular), tempfile.TemporaryDirectory() as temp:
+                    body = ('(softmax_kernel "y" "x" 4 4 4 4).toAlgKernel.inputs.length'
+                            if circular else '42')
+                    path = Path(temp) / 'SplitBenchmarkAudit.lean'
+                    path.write_text(prep.prepare_source(
+                        prefix + f'def expectedSpec : Nat := {body}\n',
+                        'bench/tritonbench_g/softmax_triton1/' + relative,
+                        manifest=Path(temp) / 'absent.tsv'))
+                    result = subprocess.run(['lake', 'env', 'lean', str(path)], cwd=ROOT,
+                                            text=True, capture_output=True, timeout=90)
+                    self.assertEqual(result.returncode == 0, not circular, result.stdout + result.stderr)
+                    self.assertIn('SoftmaxTriton1.softmax_kernel', result.stdout)
+                    if circular:
+                        self.assertIn('SELF-REFERENTIAL', result.stdout)
 
     def test_spec_sheet_collisions_are_port_qualified_and_preflighted(self):
         paths = ['rms_norm_triton/RmsNormTriton.lean', 'rmsnorm_triton/RmsnormTriton.lean']

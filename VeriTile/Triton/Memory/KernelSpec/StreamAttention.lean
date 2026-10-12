@@ -753,6 +753,9 @@ structure StreamMasked3DKernelIO₃ where
   terminal boundary store (an fp16-storing attention `O` sets `.fp16`;
   `.real`, the default, is exact under `execR R`). -/
   outDType : FloatDType := .real
+  /-- Conditions on the program IDs for which this contract applies.
+  These constrain the launch, independently of the access masks. -/
+  pre : Nat → Nat → Nat → Prop := fun _ _ _ => True
   /-- Step `t`, lane `j`'s `inp1` read address for program
   `(pid₀, pid₁, pid₂)`. -/
   read1 : Nat → Nat → Nat → Fin T → Fin B1 → Nat
@@ -796,6 +799,7 @@ def ImplementsR (io : StreamMasked3DKernelIO₃) (R : RoundingModel)
   ∀ pid₀ pid₁ pid₂ : Nat,
   ∀ (xs : Fin io.T → Fin io.B1 → ℝ) (ys : Fin io.T → Fin io.B2 → ℝ)
     (zs : Fin io.T → Fin io.B3 → ℝ) (s₀ : BlockState),
+    io.pre pid₀ pid₁ pid₂ →
     s₀.pids 0 = pid₀ →
     s₀.pids 1 = pid₁ →
     s₀.pids 2 = pid₂ →
@@ -850,6 +854,7 @@ theorem ImplementsR.intro (io : StreamMasked3DKernelIO₃)
     (hts : ∀ (bounds : RegionBounds) (s : BlockState)
         (xs : Fin io.T → Fin io.B1 → ℝ) (ys : Fin io.T → Fin io.B2 → ℝ)
         (zs : Fin io.T → Fin io.B3 → ℝ),
+      io.pre (s.pids 0) (s.pids 1) (s.pids 2) →
       (∀ (t : Fin io.T) (j : Fin io.B1),
         io.mask1 (s.pids 0) (s.pids 1) (s.pids 2) t j →
         s.readMem io.inp1
@@ -877,6 +882,7 @@ theorem ImplementsR.intro (io : StreamMasked3DKernelIO₃)
       (io.kernel.toAlgKernel).TraceSafeR R bounds s)
     (hrun : ∀ (s₀ : BlockState) (xs : Fin io.T → Fin io.B1 → ℝ)
         (ys : Fin io.T → Fin io.B2 → ℝ) (zs : Fin io.T → Fin io.B3 → ℝ),
+      io.pre (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) →
       s₀.undef = (fun _ _ => 0) →
       (∀ (t : Fin io.T) (j : Fin io.B1),
         io.mask1 (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) t j →
@@ -908,14 +914,14 @@ theorem ImplementsR.intro (io : StreamMasked3DKernelIO₃)
                 o ≠ io.write (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
             s1.mem r o = s₀.mem r o)) :
     io.ImplementsR R f := by
-  intro A hd hregs hcov pid₀ pid₁ pid₂ xs ys zs s₀ hpid₀ hpid₁ hpid₂ hu
+  intro A hd hregs hcov pid₀ pid₁ pid₂ xs ys zs s₀ hpre hpid₀ hpid₁ hpid₂ hu
     hbr1 hbr2 hbr3 hbw hx hy hz
   subst hpid₀
   subst hpid₁
   subst hpid₂
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys zs hu hx hy hz
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ xs ys zs hpre hu hx hy hz
   have hts' : (io.kernel.toAlgKernel).TraceSafeR R A.extent s₀ :=
-    hts A.extent s₀ xs ys zs hx hy hz hbr1 hbr2 hbr3 hbw
+    hts A.extent s₀ xs ys zs hpre hx hy hz hbr1 hbr2 hbr3 hbw
   have hbridge := A.execR_flatten hd hcov R _ s₀ hts' hok hu
   have hmem : io.out ∈ A.regions := by rw [hregs]; simp
   refine ⟨A.flattenState s1, ?_, ?_, ?_⟩

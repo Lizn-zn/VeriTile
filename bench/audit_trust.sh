@@ -45,13 +45,13 @@ TESTS_ROOT="bench/tests"
 
 select_targets() {
   if [ "$#" -eq 0 ]; then
-    find "${PORTS_ROOT}" -mindepth 2 -maxdepth 2 -type f -name '*.lean' | sort
+    python3 bench/port_layout.py all-proofs "${PORTS_ROOT}" || return $?
     find "${EXAMPLES_ROOT}" -type f -name '*.lean' | sort
     find "${TESTS_ROOT}" -maxdepth 1 -type f -name '*.lean' | sort
   else
     for name in "$@"; do
       local lean
-      lean=$(find "${PORTS_ROOT}/${name}/" -maxdepth 1 -type f -name '*.lean' 2>/dev/null | head -n 1)
+      lean=$(python3 bench/port_layout.py proofs "${PORTS_ROOT}/${name}/") || return $?
       if [ -n "${lean}" ]; then
         printf '%s\n' "${lean}"
       else

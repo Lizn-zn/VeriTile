@@ -27,24 +27,12 @@ def scalarCopyKernel (xReg yReg : RegionName) : ComputeKernel := triton {
   tl.store($(yReg), x)
 }
 
-/-- The public DSL surface is compute-facing. Pure algorithm statements are
-represented internally as `ComputeStmt.alg` entries in a `ComputeKernel`. -/
-def scalarCopyComputeKernel (xReg yReg : RegionName) : ComputeKernel := triton {
-  x := tl.load($(xReg))
-  tl.store($(yReg), x)
-}
-
+-- The compute-facing DSL retains both accesses in its algorithm projection.
 example (xReg yReg : RegionName) :
-    (scalarCopyComputeKernel xReg yReg).toAlgorithm? =
-      Except.ok (scalarCopyKernel xReg yReg) := by
-  rfl
-
-example (xReg yReg : RegionName)
-    (post : BlockState → BlockState → Prop)
-    (h : ComputeCorrect.General (scalarCopyKernel xReg yReg) post) :
-    ComputeCorrect.General (scalarCopyComputeKernel xReg yReg) post :=
-  by
-    simpa [scalarCopyComputeKernel, scalarCopyKernel] using h
+    (scalarCopyKernel xReg yReg).toAlgorithm? = .ok
+      { inputs := [xReg], outputs := [yReg], body :=
+        [ Stmt.assign .real [] "x" (.load .real (.region xReg (.constNat 0)) .none),
+          Stmt.store .real [] (.region yReg (.constNat 0)) (.ref .real [] "x") .none ] } := rfl
 
 def atomicAddSmoke (outReg : RegionName) : ComputeKernel := triton {
   x := 1
@@ -345,7 +333,7 @@ def reverseScanOpsSmoke (xReg outReg : RegionName) (N : Nat) : ComputeKernel := 
 /-- The reverse-scan surface lowers to the algorithm layer. -/
 example (xReg outReg : RegionName) (N : Nat) :
     ∃ alg, (reverseScanOpsSmoke xReg outReg N).toAlgorithm? = Except.ok alg := by
-  simp [reverseScanOpsSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  simp [reverseScanOpsSmoke, ComputeExpr.toAlgorithm?]
 
 /-- Launch-grid query smoke (#92): `tl.num_programs(axis)` in offset
 arithmetic — the canonical grid-stride pattern `base = pid + i·num_programs`.
@@ -362,7 +350,7 @@ def numProgramsSmoke (xReg outReg : RegionName) (N : Nat) : ComputeKernel := tri
 /-- The num_programs surface lowers to the algorithm layer. -/
 example (xReg outReg : RegionName) (N : Nat) :
     ∃ alg, (numProgramsSmoke xReg outReg N).toAlgorithm? = Except.ok alg := by
-  simp [numProgramsSmoke, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?]
+  simp [numProgramsSmoke, ComputeExpr.toAlgorithm?]
 
 /-- Semantics smoke: `tl.num_programs(axis)` reads the launch-grid dimension
 field, and an unlaunched (default) state answers `1` on every axis. (`ax`
@@ -907,7 +895,7 @@ theorem argmax2_index_store_exec_correct
     result.map (fun s' => s'.readMemTyped .nat outReg 0) =
       some (some (argmax2ExpectedIndex s xReg)) := by
   classical
-  simp [argmax2IndexStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
+  simp [argmax2IndexStoreCoreKernel, exec, stepStmts, stepStmt,
     argmax2ExpectedIndex, BlockState.writeMemTyped, BlockState.readMemTyped,
     ComparableDType.lt, Tile.cop, Tile.select, Option.bind, Option.map,
     MemCell.readAs_of_same, WithBot.some_eq_coe, WithBot.coe_lt_coe]
@@ -931,7 +919,7 @@ theorem nat_load_store_exec_correct
     let result := exec (natLoadStoreCoreKernel idxReg outReg) s
     result.map (fun s' => s'.readMemTyped .nat outReg 0) =
       some (some (s.readMemValue .nat idxReg 0)) := by
-  simp [natLoadStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
+  simp [natLoadStoreCoreKernel, exec, stepStmts, stepStmt,
     BlockState.readMemValue, BlockState.readMemTyped, BlockState.writeMemTyped,
     Option.bind, Option.map, MemCell.readAs_of_same]
 
@@ -955,7 +943,7 @@ theorem int_load_store_correct
     let result := exec (intLoadStoreCoreKernel idxReg outReg) s
     result.map (fun s' => s'.readMemTyped .int outReg 0) =
       some (some (s.readMemValue .int idxReg 0)) := by
-  simp [intLoadStoreCoreKernel, exec, stepStmts, stepStmt, evalOp,
+  simp [intLoadStoreCoreKernel, exec, stepStmts, stepStmt,
     BlockState.readMemValue, BlockState.readMemTyped, BlockState.writeMemTyped,
     Option.bind, Option.map, MemCell.readAs_of_same]
 
@@ -1778,9 +1766,6 @@ def mulAssignKernel (xReg : RegionName) (scale N : Nat) :
   tl.store(xReg + pid * $(N), x)
 }
 
-#check rangeAccumKernel
-#check mulAssignKernel
-
 /-! ### `dtype=tl.float32` on `tl.zeros` / `tl.full` smoke tests -/
 
 def fp32ZerosKernel (xReg : RegionName) (_N BLOCK_SIZE : Nat) :
@@ -1798,9 +1783,6 @@ def fp32FullKernel (outReg : RegionName) (N : Nat) :
   v = tl.full([$(N)], 1.0, dtype=tl.float32)
   tl.store(outReg + pid * $(N) + tl.arange(0, $(N)), v)
 }
-
-#check fp32ZerosKernel
-#check fp32FullKernel
 
 /-! ### Casted Nat loads used as pointer offsets -/
 
@@ -1827,9 +1809,6 @@ def castedNatLoadWhereKernel
   tl.store(dataReg + cols, out, mask=cols < $(BLOCK_SIZE))
 }
 
-#check castedNatLoadOffsetKernel
-#check castedNatLoadWhereKernel
-
 /-! ### Scalar `e[None]` dimension insertion -/
 
 def scalarNoneKernel (outReg : RegionName) (N : Nat) : ComputeKernel := triton {
@@ -1839,8 +1818,6 @@ def scalarNoneKernel (outReg : RegionName) (N : Nat) : ComputeKernel := triton {
   vals = z[None]
   tl.store(outReg + pid * $(N) + offs, vals)
 }
-
-#check scalarNoneKernel
 
 /-! ### Rank-3 `None` dimension insertion -/
 
@@ -1852,8 +1829,6 @@ def rank3NoneKernel (outReg : RegionName) (M N K : Nat) : ComputeKernel := trito
   tl.store(outReg + tile, tile)
 }
 
-#check rank3NoneKernel
-
 def rank2MiddleNoneKernel (outReg : RegionName) (M K : Nat) : ComputeKernel := triton {
   offs_m = tl.arange(0, $(M))
   offs_k = tl.arange(0, $(K))
@@ -1862,8 +1837,6 @@ def rank2MiddleNoneKernel (outReg : RegionName) (M K : Nat) : ComputeKernel := t
   out_ptrs = outReg + offs_m[:, None, None] * $(K) + offs_k[None, None, :]
   tl.store(out_ptrs, tile3)
 }
-
-#check rank2MiddleNoneKernel
 
 /-! ### Python two-argument dynamic `range(start, stop)` -/
 
@@ -1880,8 +1853,6 @@ def dynRange2Kernel (outReg : RegionName) (bounds : Region .nat) : ComputeKernel
   tl.store(outReg + pid, acc)
 }
 
-#check dynRange2Kernel
-
 /-! ### Bool antiquote for constexpr conditions -/
 
 def boolAntiquoteKernel (outReg : RegionName) (N : Nat) : ComputeKernel := triton {
@@ -1893,8 +1864,6 @@ def boolAntiquoteKernel (outReg : RegionName) (N : Nat) : ComputeKernel := trito
   }
 }
 
-#check boolAntiquoteKernel
-
 /-! ### Python helper surface expressions -/
 
 def helperExprKernel (outReg : RegionName) (N BLOCK : Nat) : ComputeKernel := triton {
@@ -1902,8 +1871,6 @@ def helperExprKernel (outReg : RegionName) (N BLOCK : Nat) : ComputeKernel := tr
   n = min(_div_up($(N), $(BLOCK)), $(N))
   tl.store(outReg + pid, n)
 }
-
-#check helperExprKernel
 
 /-! ### Int antiquote and signed sentinels -/
 
@@ -1919,8 +1886,6 @@ def intSentinelKernel (outReg : RegionName) (labels : Region .int) (ignored : In
   }
 }
 
-#check intSentinelKernel
-
 /-! ### Pointer decrement -/
 
 def pointerDecrementKernel (outReg : Region .real) (N : Nat) : ComputeKernel := triton {
@@ -1930,8 +1895,6 @@ def pointerDecrementKernel (outReg : Region .real) (N : Nat) : ComputeKernel := 
   tl.store(outReg, x)
 }
 
-#check pointerDecrementKernel
-
 def reverseRangeKernel (outReg : Region .nat) (N : Nat) : ComputeKernel := triton {
   ptr = outReg + ($(N) - $(1))
   for i in range($(N) - $(1), -$(1), -$(1)) {
@@ -1939,8 +1902,6 @@ def reverseRangeKernel (outReg : Region .nat) (N : Nat) : ComputeKernel := trito
     ptr -= $(1)
   }
 }
-
-#check reverseRangeKernel
 
 /-! ### libdevice.pow: general elementwise power (`Op.pow` / `Real.rpow`) -/
 
@@ -1955,16 +1916,12 @@ def powScalarTensorSmoke (xReg outReg : RegionName) (theta : ℝ) (N : Nat) :
   tl.store($(outReg) + offs, freqs)
 }
 
-#check powScalarTensorSmoke
-
 /-- The literal-2 exponent keeps its historical `x * x` (`Op.mul`) lowering. -/
 def powSquareSmoke (xReg outReg : RegionName) : ComputeKernel := triton {
   x := tl.load($(xReg))
   y := tl.extra.cuda.libdevice.pow(x, 2)
   tl.store($(outReg), y)
 }
-
-#check powSquareSmoke
 
 /-- `evalOp` unfolds `Op.pow` to `Real.rpow` on finite lanes. -/
 example (a b : ℝ) (s : BlockState) :
@@ -2005,8 +1962,6 @@ def intPromoteSmoke (sReg outReg : RegionName) (B : Nat) : ComputeKernel :=
     tl.store($(outReg) + offs, v)
   }
 
-#check intPromoteSmoke
-
 /-- The int-promotion surface lowers to the algorithm layer. -/
 example (sReg outReg : RegionName) (B : Nat) :
     ∃ alg, (intPromoteSmoke sReg outReg B).toAlgorithm? = Except.ok alg := by
@@ -2038,8 +1993,6 @@ def dotIntSmoke (aReg bReg : Region .int) (outReg : RegionName) :
   out = acc * $((0.5 : ℝ))
   tl.store($(outReg) + offs, out)
 }
-
-#check dotIntSmoke
 
 /-- The integer-dot surface lowers to the algorithm layer. -/
 example (aReg bReg : Region .int) (outReg : RegionName) :
@@ -2090,8 +2043,6 @@ def broadcastToSmoke (sReg outReg : RegionName) (B : Nat) : ComputeKernel :=
     tl.store($(outReg) + (tl.broadcast_to(xindex, [$(B), $(B)])), tmp0, mask)
   }
 
-#check broadcastToSmoke
-
 /-- The broadcast_to surface lowers to the algorithm layer. -/
 example (sReg outReg : RegionName) (B : Nat) :
     ∃ alg, (broadcastToSmoke sReg outReg B).toAlgorithm? = Except.ok alg := by
@@ -2108,7 +2059,7 @@ example (s : BlockState) (x : Op .nat [2, 1]) (v : Tile .nat [2, 1])
           (Broadcast.consSame (Broadcast.consL Broadcast.nil))) x) s).map
       (fun t => t.data (i, j, PUnit.unit))
       = some (v.data (i, (0 : Fin 1), PUnit.unit)) := by
-  simp only [evalOp, hx, Option.bind_some, Option.map_some]
+  simp only [evalOp, hx]
   rfl
 
 /-! ## Trust gates -/

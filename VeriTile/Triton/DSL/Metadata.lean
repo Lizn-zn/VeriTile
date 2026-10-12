@@ -114,6 +114,9 @@ private partial def exprRegions (assigned : List String) :
   | `(tritonExpr| tl.math.rsqrt($e:tritonExpr)) => exprRegions assigned e
   | `(tritonExpr| tl.rsqrt($e:tritonExpr))      => exprRegions assigned e
   | `(tritonExpr| tl.tanh($e:tritonExpr))        => exprRegions assigned e
+  | `(tritonExpr| triton_tanh($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| libdevice.tanh($e:tritonExpr)) => exprRegions assigned e
+  | `(tritonExpr| tl.extra.cuda.libdevice.tanh($e:tritonExpr)) => exprRegions assigned e
   | `(tritonExpr| tanh($e:tritonExpr))           => exprRegions assigned e
   | `(tritonExpr| tl.sin($e:tritonExpr))         => exprRegions assigned e
   | `(tritonExpr| tl.math.sin($e:tritonExpr))    => exprRegions assigned e

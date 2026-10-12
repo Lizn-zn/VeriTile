@@ -3,6 +3,7 @@ import bench.examples.FlatVectorAdd.FPEquiv
 import bench.examples.FloatDTypeAdd.FPEquiv
 import bench.examples.TritonBenchVectorAddition.FPEquiv
 import bench.examples.AdamUpdateGridLaunch.FPEquiv
+import bench.tritonbench_g.adam_update_triton.FPEquiv
 import bench.examples.HyperConnectionsDepth.FPEquiv
 import bench.examples.HyperConnectionsWidth.FPEquiv
 import bench.examples.RowWiseSum.FPEquiv
@@ -80,16 +81,44 @@ example : ∃ t, FP.Structural.exec model (HyperConnectionsWidth.Kernels.origina
     ComputeDType.eraseDType, numeric, numericEq, numericLt, natLt, bop, store,
     State.setReg, TileShape.allIndices, List.finRange_succ]
 
+-- The corpus source uses an implicit fp32 profile and general region names.
+-- Its comparisons, boolean promotion and two stores must also execute.
+theorem corpus_lion_executes : ∃ t, FP.Structural.exec (FP.ProfiledRewrite.engine model)
+    (VeriTile.Bench.TritonBenchG.AdamUpdateTriton.update_fn_kernel
+      "p" "grad" "momentum" 0 0 0 0 1 1) initial = some t := by
+  simp [VeriTile.Bench.TritonBenchG.AdamUpdateTriton.update_fn_kernel,
+    FP.Structural.exec, run, step, FP.Structural.evalExpr, evalComputeOp,
+    evalOp_unfold, FP.ProfiledRewrite.engine, Algebra.withDefaultPrecision,
+    model, initial, ComputeDType.eraseDType, numeric, numericEq, numericLt,
+    natLt, bop, store, State.setReg, TileShape.allIndices, List.finRange_succ]
+
 -- The conditions are satisfiable under the same execution interpretation.
 private def finite : Domain Nat := fun _ n => n = 0
 example : (VectorAddFPEquiv.additionSite 1).Holds model finite initial := by
   intro t ht a b ha hb
-  simp [VectorAddFPEquiv.additionSite, VectorAdd.Kernels.originalKernel,
+  simp [VectorAddFPEquiv.additionSite, Source.prefixBefore, VectorAdd.Kernels.originalKernel,
     VectorAdd.Kernels.addKernel, ComputeKernel.surfaceBody, run, step,
     FP.Structural.evalExpr, evalComputeOp, evalOp_unfold, model, initial,
     ComputeDType.eraseDType, numeric, bop] at ht
   subst t
   simp [VectorAddFPEquiv.additionSite, evalOp_unfold, State.setReg] at ha hb
+  subst a
+  subst b
+  exact ⟨fun _ => rfl, fun _ => rfl⟩
+
+-- The actual corpus rewrite's domain is inhabited at the same successful run.
+theorem corpus_lion_domain_inhabited : (VeriTile.Bench.TritonBenchG.AdamUpdateTriton.FPEquiv.additionSite
+    "p" "grad" "momentum" 0 0 0 0 1 1).Holds model finite initial := by
+  intro t ht a b ha hb
+  simp [VeriTile.Bench.TritonBenchG.AdamUpdateTriton.FPEquiv.additionSite,
+    Source.prefixBefore, VeriTile.Bench.TritonBenchG.AdamUpdateTriton.update_fn_kernel,
+    ComputeKernel.surfaceBody, run, step, FP.Structural.evalExpr, evalComputeOp,
+    evalOp_unfold, FP.ProfiledRewrite.engine, Algebra.withDefaultPrecision,
+    model, initial, ComputeDType.eraseDType, numeric, numericEq, numericLt,
+    natLt, bop, State.setReg] at ht
+  subst t
+  simp [evalOp_unfold, FP.ProfiledRewrite.engine, Algebra.withDefaultPrecision,
+    State.setReg, numeric, bop, model] at ha hb
   subst a
   subst b
   exact ⟨fun _ => rfl, fun _ => rfl⟩

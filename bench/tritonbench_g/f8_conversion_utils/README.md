@@ -1,37 +1,39 @@
 # f8_conversion_utils
 
-- Source file: `f8_conversion_utils.py` (upstream `data/TritonBench_G_v1/f8_conversion_utils.py`)
-- Corpus: TritonBench-G v1
-- Size: 68 lines, 2 `@triton.jit` kernels
-- Status: **PORTED** — `F8ConversionUtils.lean`, main theorems
-  `f16_to_f8_io_correctness` + `f8_to_f16_io_correctness`
-  (`⊨[R, ·]` io faces, dimension-general, 0 `sorry`).
+`Kernels.lean` retains both complete conversion kernels and their integer-index
+commuted candidates. `kernel_f8_to_f16` loads fp8 e4nv/e5 and performs both
+original fp16 stores. `kernel_f16_to_f8` converts fp16/fp32 input to the chosen
+fp8 format. Region declarations retain input/output precision; explicit casts
+represent Triton's implicit conversion to destination storage. All masks and
+omitted load defaults remain.
 
-The upstream file implements fp8 ↔ fp16 buffer conversion: each kernel is a
-masked 1-D copy (`offs = pid·BLOCK_SIZE + arange`, `mask = offs < N`), and
-the fp8-ness lives entirely in the host's `triton.reinterpret(x,
-tl.float8e5)` pointer — the stores cast **implicitly** to the destination
-element type. `kernel_f8_to_f16` stores twice (verbatim duplicate in the
-upstream body).
+`Correct.lean` displays four real specifications with the independent formula
+`output[i] = initial_input[i]` after precision erasure. They include finite
+allocation/coverage, actual-access bounds, successful full execution, every
+active output and the complete tagged-cell frame. N, block size and program
+index remain symbolic. Logical input/output regions may alias because the
+load precedes both stores. Zero unspecified values remain an explicit premise
+of the flat-memory adapter.
 
-**First consumer of the fp8 dtype channel** (`.f8e4`/`.f8e5` added to
-`TileDType`/`FloatDType` alongside this port): the f16→f8 headline is the
-corpus's first fp8 boundary quantization —
+`FPEquiv.lean` proves both complete typed original/candidate equivalences. The
+only edit commutes the natural-number product used in offsets; every floating
+conversion and store remains. No numerical atom or cast-idempotence assumption
+is used. This does not claim fp8 conversion is lossless or a round-trip identity.
 
-> `f16ToF8IO Y X N BLOCK_SIZE ⊨[R, .f8e5] fun xs i => xs i`
+`bench/tests/FPF8ConversionSource.lean` checks the actual typed loads/stores,
+casts, masks, omitted defaults and duplicate store. The public finite witnesses
+in `bench/tests/F8ConversionExecution.lean` copy -3 and 2 on a partial tile,
+preserve an integer-tagged tail and run fully masked cases with empty
+allocations for every precision/candidate variant. `Proofs/TypedExecution.lean`
+inhabits all six precision-direction combinations from empty registers in the
+abstract model, with the masked tail and original/candidate conversions.
 
-for **every** rounding model `R`: every active output lane reads back as an
-`.f8e5`-typed cell holding `R.round .f8e5 (xs j)`, the input value
-quantized once onto the e5m2 grid (cast site + typed store site collapse by
-`R.round_idem`). The reverse direction states the same contract at `.fp16`
-(the duplicate store is idempotent). No hypotheses beyond the io skin's:
-window bounds and exact-ℝ input lanes.
+Scope is one program. Host reinterpret/launches, grid races, fixed-width index
+overflow, physical IEEE quantization and rounding certification are excluded.
 
-Translation-surface blocker (registered in `proof_blockers.md`): the
-upstream stores carry no cast text — Triton casts implicitly at the typed
-pointer — while the DSL types a store by its value, so the implicit casts
-are spelled `(x).to(tl.float16)` / `(x).to(tl.float8e5)`. Python
-`BLOCK_SIZE: tl.constexpr` becomes a Lean `Nat` parameter. The host launch
-(grid, `reinterpret`, `numel` bookkeeping) is the trusted boundary; that
-the f8-side *input* buffer holds f8-grid points is a host-pipeline fact the
-theorems do not need (inputs are consumed as exact ℝ).
+Validation passed: complete repository closure, public finite witnesses,
+typed model executions, precision/cast/mask regressions, full source
+correspondence for both JITs, source gates, 32 audit/layout tests,
+coverage/manifest checks and fresh independent comparator/trust replay of
+11 files. Current fingerprints and theorem inventories match `Logs/comparator-check-eauavdpw`.
+The initial disk-space failure was discarded and replayed from a fresh copy.

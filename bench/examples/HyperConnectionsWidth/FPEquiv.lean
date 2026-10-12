@@ -20,38 +20,29 @@ abbrev Rules := FP.ScalarArithmetic.Rules
 
 /-- Check the computed weight, including the division and exponential. -/
 def residualSite (tau : ℝ) : Site where
-  before := (originalKernel tau).surfaceBody.take 3
+  before := Source.prefixBefore (originalKernel tau).surfaceBody "res_mix"
   shape := []
   left := .exp (.div .real .nil (.ref .real [] "h_res") (.const tau))
   right := .ref .real [] "residual"
 
 /-- The second rewrite follows the first one in the intermediate program. -/
 def branchSite (tau : ℝ) : Site where
-  before := (middleKernel tau).surfaceBody.take 5
+  before := Source.prefixBefore (middleKernel tau).surfaceBody "branch_in"
   shape := []
   left := .exp (.div .real .nil (.ref .real [] "h_pre") (.const tau))
   right := .ref .real [] "residual"
 
-def original (tau : ℝ) : Program :=
-  ⟨originalKernel tau, [residualSite tau, branchSite tau]⟩
+def original (tau : ℝ) : Program where
+  kernel := originalKernel tau
+  domain := [residualSite tau, branchSite tau]
 
 def optimized (tau : ℝ) : Program :=
-  ⟨optimizedKernel tau, [residualSite tau, branchSite tau]⟩
+  { original tau with kernel := optimizedKernel tau }
 
 specification mhc_width_equiv (tau : ℝ) (R : Rules) :
     original tau ≡[R] optimized tau := by
-  apply Spec.FloatingPoint.ofNumerical (lhs := original tau) (rhs := optimized tau)
-    (structural := fun _ _ => False) rfl rfl
-  intro α _ M D hM s hd
-  have first : FP.Structural.exec M (originalKernel tau) s =
-      FP.Structural.exec M (middleKernel tau) s :=
-    mul_commute R M D hM s (residualSite tau) "res_mix"
-      ((originalKernel tau).surfaceBody.drop 4) (hd _ (by simp [original]))
-  have second : FP.Structural.exec M (middleKernel tau) s =
-      FP.Structural.exec M (optimizedKernel tau) s :=
-    mul_commute R M D hM s (branchSite tau) "branch_in"
-      ((middleKernel tau).surfaceBody.drop 6) (hd _ (by simp [original]))
-  exact first.trans second
+  equiv_decompose
+  all_goals fp_prove
 
 #print_fp_assumptions mhc_width_equiv
 #guard_msgs (drop info) in
@@ -69,13 +60,13 @@ def matrixBranchSite (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Sit
     (matrixMiddle "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau).surfaceBody "z" 1)
     S [T] (.ref .real [S, T] "h_pre_logits") tau
 
-def matrixOriginalProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
-  ⟨matrixOriginal S T D numIters tau,
-    [matrixResidualSite S T D numIters tau, matrixBranchSite S T D numIters tau]⟩
+def matrixOriginalProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program where
+  kernel := matrixOriginal S T D numIters tau
+  domain := [matrixResidualSite S T D numIters tau, matrixBranchSite S T D numIters tau]
 
 def matrixOptimizedProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
-  ⟨matrixOptimized "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau,
-    [matrixResidualSite S T D numIters tau, matrixBranchSite S T D numIters tau]⟩
+  { matrixOriginalProgram S T D numIters tau with
+    kernel := matrixOptimized "res" "h_res" "h_pre" "res_mix" "branch_in" S T D numIters tau }
 
 /-- All dimensions and both full Sinkhorn loops remain in the source.
 The two matrix products retain their original operand order and backend. -/

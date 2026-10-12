@@ -1,40 +1,16 @@
 import bench.examples.FloatDTypeAdd.Kernels
-/- Real correctness of the float-annotated addition kernel. Dtype erasure
-removes both working precision and the explicit output quantization before
-interpreting the implementation as a mathematical function.
-The optimized implementation in Kernels.lean has its own real specification
-below, with the same mathematical formula and IO contract. Its proof uses
-real arithmetic and execution semantics independently of FPEquiv.lean.
--/
+import bench.examples.FloatDTypeAdd.Proofs.Real
 import bench.examples.VectorAdd.Correct
 import VeriTile.Meta.StatementAudit
+
+/-! Real correctness of the sources in Kernels.lean.
+IO contracts and mathematical formulas are stated below; execution and memory
+lemmas are in Proofs/Real.lean. Numerical casts are interpreted over the reals. -/
 
 namespace VeriTile.Bench.Examples.FloatDTypeAddCorrect
 open VeriTile.Bench.Examples.FloatDTypeAdd.Kernels
 open VeriTile Triton
 open scoped VeriTile.Triton.KernelIO₂
-
-@[simp] private theorem except_ok_bind {α β ε : Type _} (a : α)
-    (f : α → Except ε β) :
-    (Except.ok a : Except ε α) >>= f = f a := rfl
-
-
-theorem real_projection (xReg yReg outReg : RegionName) (B : Nat) :
-    (floatAddKernel xReg yReg outReg B).eraseDType.toAlgorithm? =
-      Except.ok (VectorAdd.Kernels.addKernel xReg yReg outReg B).toAlgKernel := by
-  have hcast : (Op.castFloat .real .fp32 (Op.ref .real [B] "out")).eraseDType =
-      Op.ref .real [B] "out" := by
-    rw [Op.eraseDType_castFloat .real .fp32 (Op.ref .real [B] "out")]
-    change (Op.ref .real [B] "out").eraseDType = Op.ref .real [B] "out"
-    rw [Op.eraseDType_ref]
-    rfl
-  simp [floatAddKernel, VectorAdd.Kernels.addKernel, ComputeKernel.eraseDType,
-    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
-    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
-    Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
-    Op.eraseDType, VeriTile.Triton.eraseDType, NumericDType.eraseDType,
-    MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def]
-  exact hcast
 
 /-- Correctness uses the mathematical projection of the original kernel. -/
 def floatAddIO (B : Nat) : KernelIO₂ where
@@ -67,25 +43,6 @@ specification float_add_correctness (B : Nat) :
         TileShape.allIndices, ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?,
         ComputeDType.eraseDType]
     · exact VectorAdd.addKernel_region_run B hB s xs ys hx hy
-
-/-! ## Optimized implementation: real correctness -/
-
-private theorem optimized_projection (B : Nat) :
-    (optimizedKernel B).eraseDType.toAlgorithm? =
-      Except.ok (VectorAdd.Kernels.optimizedKernel B).toAlgKernel := by
-  have hcast : (Op.castFloat .real .fp32 (Op.ref .real [B] "out")).eraseDType =
-      Op.ref .real [B] "out" := by
-    rw [Op.eraseDType_castFloat .real .fp32 (Op.ref .real [B] "out")]
-    change (Op.ref .real [B] "out").eraseDType = Op.ref .real [B] "out"
-    rw [Op.eraseDType_ref]
-    rfl
-  simp [optimizedKernel, VectorAdd.Kernels.optimizedKernel, ComputeKernel.eraseDType,
-    ComputeStmt.toAlgorithm?, ComputeStmt.listToAlgorithm?,
-    ComputeExpr.toAlgorithm?, ComputeOp.toAlgorithm?, ComputeDType.eraseDType,
-    Kernel.eraseDType, Stmt.eraseDTypeList, Stmt.eraseDType,
-    Op.eraseDType, VeriTile.Triton.eraseDType, NumericDType.eraseDType,
-    MemAccess.eraseDType.eq_def, MaskOpt.eraseDType.eq_def]
-  exact hcast
 
 /-- Keep the optimized fp32 source; erase quantization only for this real specification. -/
 def optimizedIO (B : Nat) : KernelIO₂ :=

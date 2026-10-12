@@ -303,14 +303,10 @@ private partial def cmpDepsFromExpr :
 private partial def directPinsFromExpr (assigned : Assigned) :
     TSyntax `tritonExpr → List String := fun stx =>
   if stx.raw.getKind == ``VeriTile.Triton.DSL.tritonDottedIdentMethodCast then
-    let args := stx.raw.getArgs
-    if h : args.size = 4 then
-      let i : TSyntax `ident := ⟨args[0]⟩
-      match dottedToBaseName? i with
-      | some name =>
-          if assigned.contains name then [name] else []
-      | none => []
-    else []
+    -- A cast of a local identifier has no address computation to pin.
+    -- In particular, `bits.to(tl.float16)` does not make `bits` a Nat.
+    -- Address uses of the result still propagate through `natDeps`.
+    []
   else
   if stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCast ||
       stx.raw.getKind == ``VeriTile.Triton.DSL.tritonMethodCastDTypeIdent ||
@@ -664,12 +660,33 @@ private partial def intExprWithPins? (pins : List String) :
   | `(tritonExpr| $a:tritonExpr /  $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
   | `(tritonExpr| $a:tritonExpr // $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
   | `(tritonExpr| $a:tritonExpr %  $b:tritonExpr) => intExprWithPins? pins a || intExprWithPins? pins b
+  | `(tritonExpr| tl.minimum($a:tritonExpr, $b:tritonExpr))
+  | `(tritonExpr| tl.maximum($a:tritonExpr, $b:tritonExpr))
+  | `(tritonExpr| min($a:tritonExpr, $b:tritonExpr)) =>
+      intExprWithPins? pins a || intExprWithPins? pins b
+  | `(tritonExpr| tl.multiple_of($e:tritonExpr, $_align:tritonExpr))
+  | `(tritonExpr| tl.max_contiguous($e:tritonExpr, $_align:tritonExpr)) =>
+      intExprWithPins? pins e
+  | `(tritonExpr| $e:tritonExpr[None, :])
+  | `(tritonExpr| $e:tritonExpr[:, None]) =>
+      intExprWithPins? pins e
+  -- A reduction or selection of signed metadata stays signed when its result
+  -- is later used as an address. The condition alone does not type the values.
+  | `(tritonExpr| tl.max($e:tritonExpr $[, $_kwargs:tritonReduceKwarg]*)) =>
+      intExprWithPins? pins e
+  | `(tritonExpr| tl.where($_c:tritonExpr, $a:tritonExpr, $b:tritonExpr)) =>
+      intExprWithPins? pins a || intExprWithPins? pins b
   | `(tritonExpr| ($e:tritonExpr)) => intExprWithPins? pins e
   | `(tritonExpr| ($e:tritonExpr).to(tl.int32)) => intExprWithPins? pins e
   | `(tritonExpr| ($e:tritonExpr).to(tl.int64)) => intExprWithPins? pins e
   | `(tritonExpr| ($e:tritonExpr).to(tl.int16)) => intExprWithPins? pins e
   | `(tritonExpr| ($e:tritonExpr).to(tl.int8)) => intExprWithPins? pins e
   | _ => Bool.false
+
+/-- Whether an integer-valued source expression needs the signed channel.
+The expander includes both inferred pins and registers already known to be signed. -/
+def isSignedExpr (pins : List String) (e : TSyntax `tritonExpr) : Bool :=
+  intExprWithPins? pins e
 
 private def addAssignedInts (pins lhs : List String)
     (rhs : List (TSyntax `tritonExpr)) : List String :=
@@ -804,7 +821,7 @@ private def dtypeOfTritonDType (stx : TSyntax `tritonDType) : Option DInfo :=
   | `(tritonDType| tl.float8e4nv) => some .f8e4
   | `(tritonDType| tl.float8e5) => some .f8e5
   | `(tritonDType| tl.int1) => some .bool
-  | `(tritonDType| tl.int8) => some .int
+  | `(tritonDType| tl.int8) => some .int8
   | `(tritonDType| tl.int16) => some .int
   | `(tritonDType| tl.int32) => some .int
   | `(tritonDType| tl.int64) => some .int
@@ -812,6 +829,8 @@ private def dtypeOfTritonDType (stx : TSyntax `tritonDType) : Option DInfo :=
   | `(tritonDType| tl.uint16) => some .nat
   | `(tritonDType| tl.uint32) => some .nat
   | `(tritonDType| tl.uint64) => some .nat
+  | `(tritonDType| DTYPE) => some (.floatVar "dtype")
+  | `(tritonDType| OUT_DTYPE) => some (.floatVar "out_dtype")
   | _ => none
 
 mutual
@@ -920,6 +939,10 @@ private partial def rootedPtrDType (regionDTypes : RegionDTypes)
   match stx with
   | `(tritonExpr| $($r:term)) => typedRegionTermDType? r
   | `(tritonExpr| ($e:tritonExpr)) => rootedPtrDType regionDTypes ptrElems e
+  -- Layout hints preserve pointer element storage, including through aliases.
+  | `(tritonExpr| tl.multiple_of($e:tritonExpr, $_align:tritonExpr))
+  | `(tritonExpr| tl.max_contiguous($e:tritonExpr, $_align:tritonExpr)) =>
+      rootedPtrDType regionDTypes ptrElems e
   | `(tritonExpr| $r:ident) =>
       let name := r.getId.toString
       match lookupRegionDType regionDTypes name with
@@ -1022,5 +1045,12 @@ def lookupPtrElem (ptrElems : PtrElems) (name : String) : Option DInfo :=
   match List.find? (fun entry : String × DInfo => entry.1 == name) ptrElems with
   | some entry => some entry.2
   | none => none
+
+/-- Recover the element dtype through a pointer expression, including offsets
+from a bound pointer. The caller supplies bindings at the current program point;
+an offset must not cause a typed load to fall back to the real carrier. -/
+def pointerElementDType? (regionDTypes : RegionDTypes) (ptrElems : PtrElems)
+    (pointer : TSyntax `tritonExpr) : Option DInfo :=
+  rootedPtrDType regionDTypes ptrElems pointer
 
 end VeriTile.Triton.DSL.Inference

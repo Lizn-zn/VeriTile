@@ -25,6 +25,9 @@ import re, sys, os, glob
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 BENCH = os.path.join(ROOT, "bench", "tritonbench_g")
+sys.path.insert(0, os.path.join(ROOT, "bench"))
+from pathlib import Path
+from port_layout import specification_files
 
 DECL_KW = r"(?:noncomputable\s+|private\s+|protected\s+|partial\s+|@\[[^\]]*\]\s*)*" \
           r"(def|denotation|theorem|specification|lemma|abbrev|instance)"
@@ -37,6 +40,58 @@ SELFREF_TOKENS = ("exec", "toAlgKernel", "toAlgorithm", "SurfaceValue",
 # we only flag readMem when applied to an *executed* state below.
 
 
+def declaration_scan(text):
+    """Blank comments/literals for presentation discovery, preserving offsets.
+
+    Lean elaboration remains the authority for proof discovery. In particular,
+    a prose line starting with 'specification' is not a source declaration.
+    """
+    out = list(text)
+    i, depth = 0, 0
+    raw_start = re.compile(r'r(#+)"')
+    char_literal = re.compile(r"'(?:\\.|[^'\\])'")
+    while i < len(text):
+        start = i
+        if text.startswith('/-', i):
+            depth, i = 1, i + 2
+            while i < len(text) and depth:
+                if text.startswith('/-', i):
+                    depth, i = depth + 1, i + 2
+                elif text.startswith('-/', i):
+                    depth, i = depth - 1, i + 2
+                else:
+                    i += 1
+        elif text.startswith('--', i):
+            end = text.find('\n', i)
+            i = len(text) if end < 0 else end
+        elif text[i] == '«':
+            end = text.find('»', i + 1)
+            i = len(text) if end < 0 else end + 1
+        elif (raw := raw_start.match(text, i)):
+            closing = '"' + raw[1]
+            end = text.find(closing, i + len(raw[0]))
+            i = len(text) if end < 0 else end + len(closing)
+        elif (char := char_literal.match(text, i)):
+            i += len(char[0])
+        elif text[i] == '"':
+            i += 1
+            while i < len(text):
+                if text[i] == '\\':
+                    i += 2
+                elif text[i] == '"':
+                    i += 1
+                    break
+                else:
+                    i += 1
+        else:
+            i += 1
+            continue
+        for j in range(start, min(i, len(text))):
+            if out[j] != '\n':
+                out[j] = ' '
+    return ''.join(out)
+
+
 def split_decls(text):
     """Return list of (name, kind, header_start, body_start, end, docstring)."""
     lines = text.split("\n")
@@ -45,7 +100,7 @@ def split_decls(text):
     for ln in lines:
         offs.append(p); p += len(ln) + 1
     decls = []
-    matches = list(DECL_RE.finditer(text))
+    matches = list(DECL_RE.finditer(declaration_scan(text)))
     for i, m in enumerate(matches):
         kind = m.group(2)
         name = m.group(3)
@@ -76,7 +131,7 @@ def trim_decl(t):
             a = max(t.rfind("/--"), t.rfind("/-!"))
             if a != -1:
                 t = t[:a].rstrip(); changed = True
-        m = re.search(r"\n[ \t]*(set_option|attribute|@\[|open\b|section\b|namespace\b|end\b)[^\n]*$", t)
+        m = re.search(r"\n[ \t]*(set_option|attribute|@\[|open\b|section\b|namespace\b|variable\b|end\b)[^\n]*$", t)
         if m:
             t = t[:m.start()].rstrip(); changed = True
     return t
@@ -316,6 +371,11 @@ def make_sheet(file_path, manifest):
     with open(file_path, encoding="utf-8") as source:
         text = source.read()
     decls = split_decls(text)
+    shared = Path(file_path).with_name("Kernels.lean")
+    if Path(file_path).name in {"Correct.lean", "FPEquiv.lean"} and shared.is_file():
+        # Parse each module separately so the entry's imports and namespaces
+        # cannot become part of the final shared kernel's displayed body.
+        decls = split_decls(shared.read_text()) + decls
     defmap = {d["name"]: d for d in decls if d["kind"] in ("def", "abbrev", "instance")}
     mdecls = manifest.get(os.path.abspath(file_path), [])
     headline, pinned = find_summary_theorems(decls, mdecls)
@@ -438,7 +498,7 @@ def main():
         i = args.index("--out"); outdir = args[i + 1]; del args[i:i + 2]
     files = [a for a in args if a.endswith(".lean")]
     if not files:
-        files = sorted(glob.glob(os.path.join(BENCH, "*", "*.lean")))
+        files = [str(p) for p in specification_files(Path(BENCH))]
         if outdir is None:
             outdir = os.path.join(BENCH, "_spec-sheets")
     # Check the whole batch before writing anything, including on Linux.
@@ -459,7 +519,7 @@ def main():
         idx = ["# Spec-sheet index", ""]
         risky = [s for s in stats if s["selfref"]]
         nohit = [s for s in stats if s["headline"] == 0]
-        idx.append(f"- {len(stats)} kernels, "
+        idx.append(f"- {len({os.path.dirname(s['file']) for s in stats})} kernels, "
                    f"{sum(s['headline'] for s in stats)} headline theorems, "
                    f"{len(risky)} with self-ref tokens, "
                    f"{len(nohit)} with no summary theorem found.")

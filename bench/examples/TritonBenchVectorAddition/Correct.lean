@@ -1,27 +1,16 @@
 import bench.examples.TritonBenchVectorAddition.Kernels
-/-
-Real-valued correctness of the typed TritonBench vector-addition kernel.
-The specification states pointwise addition on active lanes, with termination
-and preservation of memory outside the output window. No numerical assumptions.
-
-The optimized implementation in Kernels.lean has its own real specification
-below, with the same mathematical formula and IO contract. Its proof uses
-real arithmetic and execution semantics independently of FPEquiv.lean.
--/
-import bench.tritonbench_g.vector_addition.VectorAddition
+import bench.examples.TritonBenchVectorAddition.Proofs.Real
+import bench.tritonbench_g.vector_addition.Correct
 import VeriTile.Meta.StatementAudit
+
+/-! Real correctness of the sources in Kernels.lean.
+IO contracts and mathematical formulas are stated below; execution and memory
+lemmas are in Proofs/Real.lean. Numerical casts are interpreted over the reals. -/
 
 namespace VeriTile.Bench.Examples.TritonBenchVectorAdditionCorrect
 open VeriTile.Bench.Examples.TritonBenchVectorAddition.Kernels
 open VeriTile Triton
 open scoped VeriTile.Triton.MaskedKernelIO₂
-
-
-/-- Erasing precision recovers the existing TritonBench mathematical kernel. -/
-theorem real_projection (nElements blockSize : Nat) :
-    (originalKernel nElements blockSize).toAlgorithm? =
-      (VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel
-        "x" "y" "output" nElements blockSize).toAlgorithm? := rfl
 
 /-- Independent IO wiring, program window and active-lane predicate. -/
 def addIO (nElements blockSize : Nat) : MaskedKernelIO₂ where
@@ -41,23 +30,11 @@ specification vector_addition_correct (nElements blockSize : Nat) :
   exact VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel_correctness
     "x" "y" "output" nElements blockSize
 
-/-! ## Optimized implementation: real correctness -/
-
 section Optimized
+
 set_option maxHeartbeats 5000000
+
 attribute [local simp] ComputeExpr.toAlgorithm? ComputeOp.toAlgorithm? ComputeDType.eraseDType
-
-private theorem optional_add_comm (a b : Option ℝ) :
-    Option.map₂ (fun x y => x + y) a b = Option.map₂ (fun x y => x + y) b a :=
-  Option.map₂_comm add_comm
-
--- This equality is derived in the real interpreter; it uses no FP assumptions.
-private theorem optimized_exec (n B : Nat) (s : BlockState) :
-    exec (optimizedKernel n B).toAlgKernel s =
-      exec (VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel "x" "y" "output" n B).toAlgKernel s := by
-  simp [optimizedKernel, VeriTile.Bench.TritonBenchG.VectorAddition.add_kernel, exec, stepStmts, stepStmt, evalOp.eq_def,
-    Region.cast, Tile.bop, Tile.cop, NumericDType.add, NumericDType.mul,
-      ComparableDType.lt, add_comm, optional_add_comm]
 
 /-- The optimized source retains the original IO windows and memory contract. -/
 def optimizedIO (n B : Nat) : MaskedKernelIO₂ :=

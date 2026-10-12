@@ -10,6 +10,8 @@ explicit numerical operations. Unsupported syntax fails. A structural proof
 must establish successful executions, not equality of two failures.
 -/
 import VeriTile.Triton.Core.Ast
+import VeriTile.Triton.Core.DiscreteReduction
+import VeriTile.Triton.Core.Reshape
 
 namespace VeriTile.Triton.FP.Structural
 
@@ -45,9 +47,11 @@ inductive Binary where
   deriving DecidableEq, Repr
 
 inductive Unary where
-  | exp | libdeviceExp | libdeviceLog | libdeviceExpm1 | libdeviceLog1p
+  | exp | libdeviceExp | libdeviceLog | libdeviceExpm1 | libdeviceLog1p | libdeviceTanh
   | exp2 | log | log2 | sigmoid | sqrt | rsqrt | tanh
   | sin | cos | tan | atan | cosh | sinh | erf
+  /-- Minimum with a positive-infinite right operand; preserves FP behavior. -/
+  | minPosInf
   deriving DecidableEq, Repr
 
 /-- Numerical operations are arbitrary functions. `none` records an ordinary
@@ -57,6 +61,10 @@ structure Algebra (α : Type) where
   literal : Option ComputeDType → FloatDType → ℝ → α
   negInf : α
   binary : Option ComputeDType → FloatDType → Binary → α → α → α
+  /-- Atomic addition has its own backend, selected by storage dtype. Its
+  rounding and special-value behavior need not equal ordinary addition.
+  Missing support fails; scalar rewrite assumptions impose no atomic laws. -/
+  atomicAdd : FloatDType → Option (α → α → α) := fun _ => none
   unary : Option ComputeDType → Unary → α → α
   /-- Floating comparisons stay opaque and retain precision/dtype. Missing
   support still fails; no order on the floating carrier is assumed. -/
@@ -67,6 +75,9 @@ structure Algebra (α : Type) where
   fromNat : Option ComputeDType → Nat → α
   fromInt : Option ComputeDType → Int → α
   fp32Bits : Float32Bits → α
+  /-- E5M2 byte interpretation preserves signed zero and special-value payloads.
+  The dtype records source precision (or an explicit erased projection). -/
+  float8E5Bits : Option (FloatDType → Float8E5Bits → α) := none
   /-- Compute loads retain their explicit load precision. -/
   fp32Load : α → α
   /-- Preserve the complete reduction operation and layout. No max identity,
@@ -79,11 +90,62 @@ structure Algebra (α : Type) where
   reduceSum : Option ComputeDType → {shape : TileShape} →
     (axis : Fin shape.length) → (keepDims : Bool) → Values α .real shape →
     Values α .real (TileShape.reduceShape shape axis keepDims)
+  /-- Typed floating sums use a distinct opaque backend, including the actual
+  reduction dtype and layout. No widening, regrouping, scalar fold or final
+  cast is implicit. Missing support fails, as for typed dot. -/
+  reduceSumTyped : Option ComputeDType → (dtype : FloatDType) → {shape : TileShape} →
+    (axis : Fin shape.length) → (keepDims : Bool) → Values α dtype.toTileDType shape →
+    Option (Values α dtype.toTileDType (TileShape.reduceShape shape axis keepDims)) :=
+    fun _ _ {_} _ _ _ => none
+  /-- Preserve the complete scan kind, axis, direction and computation precision.
+  The backend chooses its floating evaluation order; no real fold, associativity,
+  reduction identity or scan decomposition is assumed. Missing support fails. -/
+  scan : Option ComputeDType → {shape : TileShape} → ScanOp →
+    (axis : Fin shape.length) → ScanDirection → Values α .real shape →
+    Option (Values α .real shape) := fun _ {_} _ _ _ _ => none
   /-- Matrix multiplication remains opaque, including its backend precision.
   Missing backend support fails; no scalar expansion or transpose law is assumed. -/
   dot : Option ComputeDType → {batch : TileShape} → {m k n : Nat} →
     Values α .real (batch ++ [m, k]) → Values α .real (batch ++ [k, n]) →
     Option (Values α .real (batch ++ [m, n])) := fun _ {_} {_} {_} {_} _ _ => none
+  /-- Explicit dot options select a separate opaque backend operation. They
+  cannot silently fall back to the default dot or to a post-dot cast: input
+  precision and accumulation/output settings can change the computation. -/
+  dotWithOptions : Option ComputeDType → DotOptions →
+    {batch : TileShape} → {m k n : Nat} →
+    Values α .real (batch ++ [m, k]) → Values α .real (batch ++ [k, n]) →
+    Option (Values α .real (batch ++ [m, n])) := fun _ _ {_} {_} {_} {_} _ _ => none
+  /-- Typed dot consumes and produces values in the declared channels directly.
+  These tags select the operation; no artificial operand or output casts are
+  inserted by the interpreter. -/
+  dotTyped : Option ComputeDType → (left right out : FloatDType) → DotOptions →
+    {batch : TileShape} → {m k n : Nat} →
+    Values α left.toTileDType (batch ++ [m, k]) →
+    Values α right.toTileDType (batch ++ [k, n]) →
+    Option (Values α out.toTileDType (batch ++ [m, n])) :=
+    fun _ _ _ _ _ {_} {_} {_} {_} _ _ => none
+  /-- Fused dot with an explicit accumulator remains a separate backend operation.
+  Missing support fails instead of assuming a dot/add decomposition. -/
+  dotAcc : Option ComputeDType → (left right out : FloatDType) → DotOptions →
+    {batch : TileShape} → {m k n : Nat} →
+    Values α left.toTileDType (batch ++ [m, k]) →
+    Values α right.toTileDType (batch ++ [k, n]) →
+    Values α out.toTileDType (batch ++ [m, n]) →
+    Option (Values α out.toTileDType (batch ++ [m, n])) :=
+    fun _ _ _ _ _ {_} {_} {_} {_} _ _ _ => none
+
+/-- Interpret explicit zero padding in the access channel.
+Floating zero is interpreted by the algebra, never by the carrier's arbitrary
+`Inhabited` default. This does not impose a numerical identity on that value. -/
+def boundaryZero {α : Type} [Inhabited α] (M : Algebra α)
+    (p : Option ComputeDType) : (d : TileDType) → Value α d
+  | .real => M.literal p .real 0
+  | .fp32 => M.literal p .fp32 0
+  | .fp16 => M.literal p .fp16 0
+  | .bf16 => M.literal p .bf16 0
+  | .f8e4 => M.literal p .f8e4 0
+  | .f8e5 => M.literal p .f8e5 0
+  | d => defaultValue d
 
 /-- A transpose only rearranges indices; it applies no numerical operation. -/
 def transposeValues {α : Type} {dtype : TileDType} : (batch : TileShape) → {m n : Nat} →
@@ -140,6 +202,15 @@ def setReg {α : Type} (s : State α) (name : RegName)
 
 def write {α : Type} (s : State α) (r : RegionName) (o : Nat) (v : Cell α) : State α :=
   { s with mem := fun r' o' => if r' = r ∧ o' = o then v else s.mem r' o' }
+
+@[simp] theorem write_regs {α : Type} (s : State α) (r : RegionName) (o : Nat)
+    (v : Cell α) : (s.write r o v).regs = s.regs := rfl
+
+@[simp] theorem write_pids {α : Type} (s : State α) (r : RegionName) (o : Nat)
+    (v : Cell α) : (s.write r o v).pids = s.pids := rfl
+
+@[simp] theorem write_undef {α : Type} (s : State α) (r : RegionName) (o : Nat)
+    (v : Cell α) : (s.write r o v).undef = s.undef := rfl
 
 @[simp] theorem write_same {α : Type} (s : State α) (r : RegionName) (o : Nat) (v : Cell α) :
     (s.write r o v).mem r o = v := by simp [write]
@@ -270,6 +341,20 @@ def bop {A B C : Type} (f : A → B → C)
     (bc : Broadcast a b out) (va : TileIndex a → A) (vb : TileIndex b → B) : TileIndex out → C :=
   fun i => f (va (bc.leftIndex i)) (vb (bc.rightIndex i))
 
+/-- Exact address/control arithmetic, following the algorithm interpreter's
+`Nat.div` / `Int.div` convention (also for zero divisors). These operations do
+not use the opaque floating backend or require a numerical assumption. -/
+def integralFloorDiv {α : Type} : {dtype : TileDType} → IntegralDType dtype →
+    Value α dtype → Value α dtype → Value α dtype
+  | _, .nat => (· / ·)
+  | _, .int => (· / ·)
+
+/-- Remainder uses the same discrete convention as the algorithm interpreter. -/
+def integralMod {α : Type} : {dtype : TileDType} → IntegralDType dtype →
+    Value α dtype → Value α dtype → Value α dtype
+  | _, .nat => (· % ·)
+  | _, .int => (· % ·)
+
 def natLt {α : Type} : {dtype : TileDType} → ComparableDType dtype →
     Option (Value α dtype → Value α dtype → Bool)
   | _, .nat => some (fun a b => decide (a < b))
@@ -288,6 +373,7 @@ def numericLt {α : Type} (M : Algebra α) (p : Option ComputeDType) :
   | _, .bf16 => M.compareLt p .bf16
   | _, .f8e4 => M.compareLt p .f8e4
   | _, .f8e5 => M.compareLt p .f8e5
+  | _, .int => some (fun a b => decide (a < b))
   | _, h => natLt h
 
 def numericLe {α : Type} (M : Algebra α) (p : Option ComputeDType) :
@@ -298,6 +384,7 @@ def numericLe {α : Type} (M : Algebra α) (p : Option ComputeDType) :
   | _, .bf16 => M.compareLe p .bf16
   | _, .f8e4 => M.compareLe p .f8e4
   | _, .f8e5 => M.compareLe p .f8e5
+  | _, .int => some (fun a b => decide (a ≤ b))
   | _, h => natLe h
 
 /-- Equality stays an explicit backend operation. In particular, it is not
@@ -320,6 +407,7 @@ def numericEq {α : Type} (M : Algebra α) (p : Option ComputeDType) :
     numericLe M p .nat = natLe (α := α) .nat := rfl
 
 set_option maxHeartbeats 1600000 in
+mutual
 /-- Evaluate the supported expression fragment without any floating laws.
 The final failure branch is deliberate: never fall back to the Real evaluator. -/
 noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option ComputeDType) :
@@ -340,6 +428,12 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .castFloat src dst e, s => do
       let v ← evalOp M p e s
       return fun i => ofFloat dst (M.cast p src dst (toFloat src (v i)))
+  | .decodeFloat8E5 dst e, s => do
+      let decode ← M.float8E5Bits
+      let v ← evalOp M p e s
+      if (TileShape.allIndices shape).all (fun i => Float8E5Bits.isInt8 (v i)) then
+        some (fun i => ofFloat dst (decode dst (Float8E5Bits.ofInt (v i))))
+      else none
   | .castNatToInt e, s => do
       let v ← evalOp M p e s
       return fun i => Int.ofNat (v i)
@@ -354,6 +448,7 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .libdeviceExp a, s => return (M.unary p .libdeviceExp) ∘ (← evalOp M p a s)
   | .libdeviceLog a, s => return (M.unary p .libdeviceLog) ∘ (← evalOp M p a s)
   | .libdeviceExpm1 a, s => return (M.unary p .libdeviceExpm1) ∘ (← evalOp M p a s)
+  | .libdeviceTanh a, s => return (M.unary p .libdeviceTanh) ∘ (← evalOp M p a s)
   | .libdeviceLog1p a, s => return (M.unary p .libdeviceLog1p) ∘ (← evalOp M p a s)
   | .exp2 a, s => return (M.unary p .exp2) ∘ (← evalOp M p a s)
   | .log a, s => return (M.unary p .log) ∘ (← evalOp M p a s)
@@ -369,6 +464,7 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .cosh a, s => return (M.unary p .cosh) ∘ (← evalOp M p a s)
   | .sinh a, s => return (M.unary p .sinh) ∘ (← evalOp M p a s)
   | .erf a, s => return (M.unary p .erf) ∘ (← evalOp M p a s)
+  | .minPosInf a, s => return (M.unary p .minPosInf) ∘ (← evalOp M p a s)
   | .max2 bc a b, s => return bop (M.binary p .real .max) bc (← evalOp M p a s) (← evalOp M p b s)
   | .pow bc a b, s => return bop (M.binary p .real .pow) bc (← evalOp M p a s) (← evalOp M p b s)
   | .natToReal e, s => do
@@ -410,7 +506,33 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .ite c a b, s => do
       let vc ← evalOp M p c s
       if vc PUnit.unit then evalOp M p a s else evalOp M p b s
-  | .load d mem mask, s => do
+  | .load d (.blockPtr ptr checkedAxes) mask padding, s => do
+      let ptrs ← evalOp M p ptr s
+      let read := fun i =>
+        let bp := ptrs i
+        let ix := TileShape.indexToList _ i
+        if bp.inBounds ix checkedAxes then
+          (s.mem bp.region (bp.address ix)).read d
+        else match padding with
+          | .zero => boundaryZero M p d
+          | .unspecified => s.undef d bp.region (bp.address ix)
+      match mask with
+      | .none => return read
+      | .mask cond => do
+          let active ← evalOp M p cond s
+          return fun i =>
+            let bp := ptrs i
+            let ix := TileShape.indexToList _ i
+            if active i then read i
+            else if bp.inBounds ix checkedAxes then s.undef d bp.region (bp.address ix)
+            else match padding with
+              | .zero => boundaryZero M p d
+              | .unspecified => s.undef d bp.region (bp.address ix)
+      | .maskOther cond other => do
+          let active ← evalOp M p cond s
+          let fallback ← evalOp M p other s
+          return fun i => if active i then read i else fallback i
+  | .load d mem mask padding, s => do
       let addressResult : Option (TileIndex _ → RegionName × Nat) := match mem with
         | .region r off => (evalOp M p off s).map (fun offsets i => (Region.cast r, offsets i))
         | .ptr e => evalOp M p e s
@@ -433,36 +555,95 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .reduceSum axis keepDims e, s => do
       let v ← evalOp M p e s
       return M.reduceSum p axis keepDims v
+  | .reduceSumTyped dtype axis keepDims e, s => do
+      M.reduceSumTyped p dtype axis keepDims (← evalOp M p e s)
   | .castRealToInt8 .., _ => none
-  | .floorDiv .., _ => none
-  | .mod .., _ => none
+  | .floorDiv h bc a b, s =>
+      return bop (integralFloorDiv h) bc (← evalOp M p a s) (← evalOp M p b s)
+  | .mod h bc a b, s =>
+      return bop (integralMod h) bc (← evalOp M p a s) (← evalOp M p b s)
   | .bitAnd .., _ => none
   | .bitOr .., _ => none
   | .bitXor .., _ => none
   | .shiftLeft .., _ => none
   | .shiftRight .., _ => none
-  | .reduceMaxNat .., _ => none
-  | .scan .., _ => none
+  | .reduceMaxNat axis keepDims e, s => do
+      let v ← evalOp M p e s
+      TileShape.discreteMaximum axis keepDims v
+  | .reduceMaxInt axis keepDims e, s => do
+      let v ← evalOp M p e s
+      TileShape.discreteMaximum axis keepDims v
+  | .scan op axis direction e, s => do
+      M.scan p op axis direction (← evalOp M p e s)
   | .argMax .., _ => none
   | .argMin .., _ => none
   | .sort .., _ => none
-  | .dot a b, s => do
-      M.dot p (← evalOp M p a s) (← evalOp M p b s)
+  | .dot (options := options) a b, s => do
+      let va ← evalOp M p a s
+      let vb ← evalOp M p b s
+      if options = {} then M.dot p va vb else M.dotWithOptions p options va vb
+  | .dotTyped left right out a b options, s => do
+      M.dotTyped p left right out options (← evalOp M p a s) (← evalOp M p b s)
+  | .dotAcc left right out a b acc options, s => do
+      M.dotAcc p left right out options
+        (← evalOp M p a s) (← evalOp M p b s) (← evalOp M p acc s)
   | .dotInt .., _ => none
   | .transpose (batch := batch) a, s => do
       return transposeValues batch (← evalOp M p a s)
-  | .reshape .., _ => none
-  | .remap .., _ => none
+  | .reshape (shape := input) output e, s => do
+      let v ← evalOp M p e s
+      if h : TileShape.product input = TileShape.product output then
+        some (fun i => v (TileShape.reshapeIndex h i))
+      else none
+  | .remap _ map a, s => do
+      let v ← evalOp M p a s
+      return fun i => v (map i)
   | .join .., _ => none
   | .split .., _ => none
   | .expandDim (shape := shape) axis a, s => do
       let v ← evalOp M p a s
       return fun i => v (TileShape.dropInsertedIndex shape axis 1 i)
-  | .ptrSub .., _ => none
-  | .makeBlockPtr .., _ => none
-  | .makeBlockPtrDyn .., _ => none
-  | .makeBlockPtrDynOffsets .., _ => none
-  | .advanceBlockPtr .., _ => none
+  | .ptrSub bc a b, s =>
+      return bop (fun (a : RegionName × Nat) (b : Nat) => (a.1, a.2 - b)) bc
+        (← evalOp M p a s) (← evalOp M p b s)
+  | .makeBlockPtr region base parent block strides offsets, _ =>
+      some (fun _ => ⟨Region.cast region, base, parent, block, strides, offsets⟩)
+  | .makeBlockPtrDyn region base parent block strides offsets, s => do
+      let base ← evalOp M p base s
+      return fun _ => ⟨region, base PUnit.unit, parent, block, strides, offsets⟩
+  | .makeBlockPtrDynOffsets region base parent block strides offsets, s => do
+      let base ← evalOp M p base s
+      let offsets ← evalOffsets M p offsets s
+      return fun _ => ⟨region, base PUnit.unit, parent, block, strides, offsets⟩
+  | .advanceBlockPtr ptr deltas, s => do
+      let ptrs ← evalOp M p ptr s
+      return fun i => (ptrs i).advance deltas
+  | .advanceBlockPtrDyn ptr deltas, s => do
+      let ptrs ← evalOp M p ptr s
+      let ds ← evalDeltas M p deltas s
+      return fun i => (ptrs i).advance ds
+termination_by structural e _ => e
+
+/-- Evaluate dynamic coordinate expressions, failing if any is unavailable. -/
+noncomputable def evalOffsets {α : Type} [Inhabited α] (M : Algebra α)
+    (p : Option ComputeDType) : List (Op .nat []) → State α → Option (List Nat)
+  | [], _ => some []
+  | e :: rest, s => do
+      let v ← evalOp M p e s
+      let vs ← evalOffsets M p rest s
+      return v PUnit.unit :: vs
+termination_by structural es _ => es
+
+/-- Signed dynamic advance coordinates, preserving missing-register failure. -/
+noncomputable def evalDeltas {α : Type} [Inhabited α] (M : Algebra α)
+    (p : Option ComputeDType) : List (Op .int []) → State α → Option (List Int)
+  | [], _ => some []
+  | e :: rest, s => do
+      let v ← evalOp M p e s
+      let vs ← evalDeltas M p rest s
+      return v PUnit.unit :: vs
+termination_by structural es _ => es
+end
 
 -- Materialize the dependent unfold theorem in its defining module. Imported
 -- lazy equation generation uses Lean's default heartbeat limit instead of the
@@ -480,11 +661,11 @@ noncomputable def evalComputeOp {α : Type} [Inhabited α] (M : Algebra α) :
       let v ← evalComputeOp M e s
       return fun _ => v PUnit.unit
   | .load .fp64 .., _ => none
-  | .load .fp32 mem mask, s => do
-      let v ← evalOp M (some .fp32) (.load .real mem mask) s
+  | .load .fp32 mem mask padding, s => do
+      let v ← evalOp M (some .fp32) (.load .real mem mask padding) s
       return fun i => M.fp32Load (v i)
-  | .load .int32 mem mask, s => evalOp M (some .int32) (.load .int mem mask) s
-  | .load .uint32 mem mask, s => evalOp M (some .uint32) (.load .nat mem mask) s
+  | .load .int32 mem mask padding, s => evalOp M (some .int32) (.load .int mem mask padding) s
+  | .load .uint32 mem mask padding, s => evalOp M (some .uint32) (.load .nat mem mask padding) s
   | .bitcast .., _ => none
 
 noncomputable def evalExpr {α : Type} [Inhabited α] (M : Algebra α) :
@@ -497,7 +678,21 @@ noncomputable def evalExpr {α : Type} [Inhabited α] (M : Algebra α) :
 semantics. Each active lane copies its already typed value into memory. -/
 noncomputable def store {α : Type} [Inhabited α] (M : Algebra α)
     (mem : MemAccess dtype shape) (mask : MaskOpt dtype shape)
-    (values : Values α dtype shape) (s : State α) : Option (State α) := do
+    (values : Values α dtype shape) (s : State α) : Option (State α) :=
+  match mem with
+  | .blockPtr ptr checkedAxes => do
+      let ptrs ← evalOp M none ptr s
+      let activeResult : Option (TileIndex shape → Bool) := match mask with
+        | .none => some (fun _ => Bool.true)
+        | .mask e | .maskOther e _ => evalOp M none e s
+      let active ← activeResult
+      return (TileShape.allIndices shape).foldl (fun t i =>
+        let bp := ptrs i
+        let ix := TileShape.indexToList shape i
+        if active i && bp.inBounds ix checkedAxes then
+          t.write bp.region (bp.address ix) (.mk dtype (values i))
+        else t) s
+  | _ => do
   let addressResult : Option (TileIndex shape → RegionName × Nat) := match mem with
     | .region r off => (evalOp M none off s).map (fun offsets i => (Region.cast r, offsets i))
     | .ptr e => evalOp M none e s
@@ -510,6 +705,54 @@ noncomputable def store {α : Type} [Inhabited α] (M : Algebra α)
   return (TileShape.allIndices shape).foldl (fun t i =>
     if active i then t.write (addresses i).1 (addresses i).2 (.mk dtype (values i)) else t) s
 
+def atomicAddition {α : Type} (M : Algebra α) :
+    {dtype : TileDType} → NumericDType dtype → Option (Value α dtype → Value α dtype → Value α dtype)
+  | _, .real => M.atomicAdd .real
+  | _, .fp32 => M.atomicAdd .fp32
+  | _, .fp16 => M.atomicAdd .fp16
+  | _, .bf16 => M.atomicAdd .bf16
+  | _, .f8e4 => M.atomicAdd .f8e4
+  | _, .f8e5 => M.atomicAdd .f8e5
+  | _, .nat => some (· + ·)
+  | _, .int => some (· + ·)
+
+/-- One program's masked read-modify-write fold. Each lane reads the state
+left by the preceding lane, including repeated addresses. Floating atomic
+addition is its own opaque backend, selected by storage dtype. There is no
+commutation, reassociation or connection to ordinary floating addition. -/
+noncomputable def atomicAdd {α : Type} [Inhabited α] (M : Algebra α)
+    (nd : NumericDType dtype) (mem : MemAccess dtype shape) (mask : MaskOpt dtype shape)
+    (values : Values α dtype shape) (s : State α) : Option (State α) := do
+  let combine ← atomicAddition M nd
+  match mem with
+  | .blockPtr ptr checkedAxes => do
+      let ptrs ← evalOp M none ptr s
+      let activeResult : Option (TileIndex shape → Bool) := match mask with
+        | .none => some (fun _ => Bool.true)
+        | .mask e | .maskOther e _ => evalOp M none e s
+      let active ← activeResult
+      return (TileShape.allIndices shape).foldl (fun t i =>
+        let bp := ptrs i
+        let ix := TileShape.indexToList shape i
+        if active i && bp.inBounds ix checkedAxes then
+          t.write bp.region (bp.address ix)
+            (.mk dtype (combine ((t.mem bp.region (bp.address ix)).read dtype) (values i)))
+        else t) s
+  | _ => do
+      let addressResult : Option (TileIndex shape → RegionName × Nat) := match mem with
+        | .region r off => (evalOp M none off s).map (fun offsets i => (Region.cast r, offsets i))
+        | .ptr e => evalOp M none e s
+        | .blockPtr .. => none
+      let addresses ← addressResult
+      let activeResult : Option (TileIndex shape → Bool) := match mask with
+        | .none => some (fun _ => Bool.true)
+        | .mask e | .maskOther e _ => evalOp M none e s
+      let active ← activeResult
+      return (TileShape.allIndices shape).foldl (fun t i =>
+        let p := addresses i
+        if active i then t.write p.1 p.2
+          (.mk dtype (combine ((t.mem p.1 p.2).read dtype) (values i))) else t) s
+
 noncomputable def stepAlg {α : Type} [Inhabited α] (M : Algebra α) :
     Stmt → State α → Option (State α)
   | .assign d sh n e, s => do
@@ -517,6 +760,8 @@ noncomputable def stepAlg {α : Type} [Inhabited α] (M : Algebra α) :
       return s.setReg n d sh v
   | .store _ _ mem e mask, s => do
       store M mem mask (← evalOp M none e s) s
+  | .atomicAdd nd _ mem e mask, s => do
+      atomicAdd M nd mem mask (← evalOp M none e s) s
   | _, _ => none
 
 mutual
@@ -529,6 +774,8 @@ noncomputable def step {α : Type} [Inhabited α] (M : Algebra α) :
       return s.setReg n d sh v
   | .store _ _ mem e mask, s => do
       store M mem mask (← evalExpr M e s) s
+  | .atomicAdd nd _ mem e mask, s => do
+      atomicAdd M nd mem mask (← evalExpr M e s) s
   | .forLoop idx n body, s => loop M idx 0 n body s
   | .forRange idx start stop stride body, s => range M idx start stop stride body s
   | .forRangeDyn idx start stop stride body, s => do
@@ -536,6 +783,11 @@ noncomputable def step {α : Type} [Inhabited α] (M : Algebra α) :
       let b ← evalOp M none stop s
       let d ← evalOp M none stride s
       range M idx (a PUnit.unit) (b PUnit.unit) (d PUnit.unit) body s
+  | .forRangeInt idx start stop stride body, s => do
+      let a ← evalOp M none start s
+      let b ← evalOp M none stop s
+      let d ← evalOp M none stride s
+      rangeInt M idx (a PUnit.unit) (b PUnit.unit) (d PUnit.unit) body s
   | .ifThen cond body, s => do
       let c ← evalOp M none cond s
       if c PUnit.unit then run M body s else some s
@@ -580,6 +832,20 @@ noncomputable def range {α : Type} [Inhabited α] (M : Algebra α)
       range M idx (cur + stride) stop stride body t
     else some s
 termination_by _ => (sizeOf body + 1, stop - cur)
+decreasing_by all_goals omega
+
+
+/-- Signed range indices are never clipped to zero. Bounds and stride remain
+fixed throughout execution; only the body changes the program state. -/
+noncomputable def rangeInt {α : Type} [Inhabited α] (M : Algebra α)
+    (idx : RegName) (cur stop : Int) (stride : Nat) (body : List ComputeStmt) :
+    State α → Option (State α)
+  | s => if stride = 0 then some s
+    else if cur < stop then do
+      let t ← run M body (s.setReg idx .int [] (fun _ => cur))
+      rangeInt M idx (cur + stride) stop stride body t
+    else some s
+termination_by _ => (sizeOf body + 1, (stop - cur).toNat)
 decreasing_by all_goals omega
 
 end

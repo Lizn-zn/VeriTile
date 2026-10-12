@@ -2,7 +2,10 @@
 
 The migration has 19 real correctness files and 19 files with completed FP
 specifications. StableLogSumExp now proves its conditional candidate against
-the unchanged direct reference. The older unconditional shift is recorded separately in `StableLogSumExp/Proofs/Unconditional.lean`.
+the unchanged direct reference. `StableLogSumExp/Proofs/Unconditional.lean`
+refutes the older general FP specification with a singleton logical countermodel:
+all selected scalar rules and domain checks hold, but the stored outputs differ.
+This is a disproof under the abstract theory, not a GPU or two-gates failure.
 The current reports select numerical assumptions using a local-ULP mean-bias
 budget and a peak absolute-error ratio gate.
 
@@ -139,7 +142,7 @@ formats. It supplies no fp64 instance.
 |---|---|---|
 | `RowWiseSum` | Both fp32 addition assumptions are admitted and bound. | The conditional reduction-tree derivation is connected; no whole-reduction numerical guarantee is inferred. |
 | `SoftmaxStable` | fp32 libdevice EXP-SUB is admitted and bound together with the scalar arithmetic rules. | `SoftmaxStableFPEquiv.softmax_stable_equiv` completes the guarded, scheduled equivalence; max, bf16 stores, output frames and symbolic positive row length are retained. |
-| `StableLogSumExp` | Both conditional tl.log atoms and libdevice EXP-SUB are bound. Unconditional LOG-MUL is INCONCLUSIVE and LOG-EXP-LIBDEVICE is FAIL. | `logsumexp_equiv` completes the conditional candidate/reference comparison. The older unconditional shifted source is still not certified. |
+| `StableLogSumExp` | Both conditional tl.log atoms and libdevice EXP-SUB are bound. Unconditional LOG-MUL is INCONCLUSIVE and LOG-EXP-LIBDEVICE is FAIL. | `logsumexp_equiv` completes the conditional candidate/reference comparison. The older general FP target is refuted by a model satisfying all selected rules, including the conditional log atoms; real correctness remains valid. |
 | `OnlineSoftmax` | libdevice EXP-SUB is bound. The normalized-value derivation needs no max identity or EXP-NEG-INF-SUB atom. | `OnlineSoftmaxFPEquiv.online_softmax_equiv` compares actual stored output rows. The complete online source includes its second-pass load, normalization and store; both executions succeed and preserve other memory. |
 | `Welford` | Both count atoms are admitted and bound for integer `0 <= i < 2^24`. | `WelfordFPEquiv.welford_equiv` closes the original comparison for `0 < N <= 2^24`, retaining both bf16 outputs and frames. |
 | `FusedLayerNorm` | The same two count atoms are admitted and bound. | `FusedLayerNormFPEquiv.layernorm_equiv` closes the original comparison for `N <= 2^24`; empty output rows remain covered. |

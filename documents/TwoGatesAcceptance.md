@@ -89,7 +89,7 @@ Shape 按是否改变计算过程处理：
 - **kernel 内部 tile shape**：常通过 `BLOCK_SIZE: tl.constexpr` 等编译期参数确定；它与输入总长度不同。
 - **启动及编译配置**：各实现的 grid、block 参数、`num_warps`、精度选项等。参考和候选可以采用不同配置，但两边都需记录。
 
-仓库的 [vector_addition.py](../bench/tritonbench_g/vector_addition/vector_addition.py) 使用 `n_elements` 表示输入长度，以 `BLOCK_SIZE: tl.constexpr` 定义每个 program 处理的 tile，并由 wrapper 根据输入长度计算 grid。这与 [Triton 官方向量加法示例](https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html) 的处理一致。当前 [SoftmaxTriton1.lean](../bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean) 也将 `n_cols` 和 `BLOCK_SIZE` 分别保留为参数。
+仓库的 [vector_addition.py](../bench/tritonbench_g/vector_addition/vector_addition.py) 使用 `n_elements` 表示输入长度，以 `BLOCK_SIZE: tl.constexpr` 定义每个 program 处理的 tile，并由 wrapper 根据输入长度计算 grid。这与 [Triton 官方向量加法示例](https://triton-lang.org/main/getting-started/tutorials/01-vector-add.html) 的处理一致。当前 [Kernels.lean](../bench/tritonbench_g/softmax_triton1/Kernels.lean) 也将 `n_cols` 和 `BLOCK_SIZE` 分别保留为参数。
 
 建议将数值检查绑定到“实现对 + 具体 shape/stride + dtype/运算精度 + 两边的执行配置 + 高斯探针配置”。同一份参数化源码可以产生多个检查实例；新 shape 尚未检查时标为未验证，不能自动继承旧实例的 PASS。已有参数化代数定理可按其前提实例化复用；数值证据的范围单独记录。使用 autotune 时，还需固定或记录本次实际选中的配置。
 

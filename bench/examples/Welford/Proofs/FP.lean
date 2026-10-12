@@ -6,6 +6,7 @@ import VeriTile.Triton.Float.WelfordInduction
 import VeriTile.Triton.Float.WelfordSchedule
 import VeriTile.Triton.Float.WelfordConditions
 import VeriTile.Triton.Float.ScheduledIO
+import VeriTile.Triton.Float.CountConversionLaws
 
 /-! FP proof support for Welford. The public specification and atomic
 assumption report are in ../FPEquiv.lean; the shared sources are in ../Kernels.lean.
@@ -471,8 +472,8 @@ end VeriTile.Bench.Examples.WelfordFPComparison
 
 /- Scheduled public IO objects for the original Welford pair. Their domain
 is computed syntax containing only value checks. The run comparison remains
-conditional on scalar count conversion; WelfordFPEquiv discharges those
-premises from the accepted bounded atoms. -/
+conditional on scalar count conversion; the final composition below discharges
+those premises from the accepted bounded atoms. -/
 
 namespace VeriTile.Bench.Examples.WelfordFPContract
 open VeriTile.Bench.Examples.Welford.Kernels
@@ -524,7 +525,7 @@ theorem same_signature (x mean variance : RegionName) (N stride : Nat) (empty : 
 
 /-- Both original runs, both typed output cells, and both memory frames under
 the syntactic contract. This is a support theorem, not a completed `≡[R]`
-specification: CountConversion is supplied by the admitted public theorem within its bound. -/
+specification: the final composition supplies CountConversion within its admitted bound. -/
 theorem original_runs_under_count {α : Type} [Inhabited α] (R : Rules) (M : Algebra α)
     (D : Domain α) (hM : Models R.assumptions M D) (s : State α) (plans : Schedules)
     (x mean variance : RegionName) (N stride : Nat) (hN : 0 < N) (hdistinct : mean ≠ variance)
@@ -544,5 +545,19 @@ theorem original_runs_under_count {α : Type} [Inhabited α] (R : Rules) (M : Al
   obtain ⟨hi, hs⟩ := (requirements_holds M D s x N stride empty plans).mp hd
   exact original_runs R M D hM s plans x mean variance N stride hN hdistinct
     (rowValues s x stride) empty (fun _ => rfl) hc hi hs
+
+/-- Compose bounded count conversion with the two executions and both output
+frames. The nonempty-row and count-bound premises stay explicit. -/
+theorem equivalent (N stride : Nat) (hN : 0 < N) (hBound : N ≤ FP.CountConversion.limit)
+    (empty : ReductionPlan 0) (R : FP.CountConversion.Rules) :
+    FP.Scheduled.Equivalent₁ₓ₂ R.assumptions
+      (online "x" "mean" "variance" N stride empty)
+      (twopass "x" "mean" "variance" N stride empty) := by
+  refine ⟨by simp [online, IO₁ₓ₂PrivateScratch, onlineIO],
+    by simp [twopass, IO₁ₓ₂PrivateScratch, twopassIO, onlineIO], ?_⟩
+  intro α _ M D hM plans s hd
+  exact (original_runs_under_count R.arithmetic M D (FP.CountConversion.arithmetic_models R M D hM)
+    s plans "x" "mean" "variance" N stride hN (by decide) empty
+    (FP.CountConversion.conversion R M D hM s N hBound) hd).2.2
 
 end VeriTile.Bench.Examples.WelfordFPContract

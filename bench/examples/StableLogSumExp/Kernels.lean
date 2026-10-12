@@ -3,9 +3,11 @@ import VeriTile.Triton.DSL
 /-!
 StableLogSumExp: source programs shared by the real and FP proof files.
 The original direct and shifted tl.log programs remain explicit. The additional
-candidate composes conditional tl.log rewrites. Correct.lean proves all
-three mathematical projections; FPEquiv.lean proves the candidate against the
-unchanged direct reference. The older unconditional shift is not certified.
+candidate composes conditional tl.log rewrites. Correct.lean proves the direct
+and candidate mathematical projections; FPEquiv.lean compares that same pair.
+Proofs/LegacyCorrect.lean proves the older shift's real correctness;
+Proofs/Unconditional.lean refutes its general FP specification with a logical
+countermodel of the selected atoms, including the conditional log rules.
 These sources use libdevice.exp for exp-sub rewrites: the configured fp32
 tl.exp probe failed its bias gate (0.1608954387 ULP > 0.05).
 The new log atoms do not equate tl.log with libdevice.log, so they cannot

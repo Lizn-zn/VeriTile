@@ -233,4 +233,18 @@ theorem original_runs_under_count {α : Type} [Inhabited α] (R : Rules) (M : Al
     (original_values R M D hM s plans xs empty N hN hc hi hs ε (xs i.val) (gs i) (bs i))).trans
       (hvz i).symm)
 
+/-- Bind the bounded count atoms and compose the complete LayerNorm
+executions. Empty rows retain the structural proof and need no domain checks. -/
+theorem equivalent (N stride : Nat) (hBound : N ≤ FP.CountConversion.limit) (ε : ℝ)
+    (empty : ReductionPlan 0) (R : FP.CountConversion.Rules) :
+    FP.Scheduled.Equivalent₃ R.assumptions
+      (fused "x" "gamma" "beta" "y" N stride ε empty)
+      (twopass "x" "gamma" "beta" "y" N stride ε empty) := by
+  refine ⟨by simp [fused, PrivateScratch, fusedIO, twopassIO],
+    by simp [twopass, PrivateScratch, twopassIO], ?_⟩
+  intro α _ M D hM plans s hd
+  exact (original_runs_under_count R.arithmetic M D (FP.CountConversion.arithmetic_models R M D hM)
+    s plans "x" "gamma" "beta" "y" N stride ε empty
+    (FP.CountConversion.conversion R M D hM s N hBound) hd).2.2
+
 end VeriTile.Bench.Examples.LayerNormFPContract

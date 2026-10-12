@@ -57,6 +57,8 @@ syntax "tl.math.rsqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.rsqrt(" tritonExpr ")" : tritonExpr
 syntax "tl.tanh(" tritonExpr ")" : tritonExpr
 syntax "triton_tanh(" tritonExpr ")" : tritonExpr
+syntax "libdevice.tanh(" tritonExpr ")" : tritonExpr
+syntax "tl.extra.cuda.libdevice.tanh(" tritonExpr ")" : tritonExpr
 syntax "tanh(" tritonExpr ")" : tritonExpr
 syntax "tl.sin(" tritonExpr ")" : tritonExpr
 syntax "tl.math.sin(" tritonExpr ")" : tritonExpr
@@ -83,6 +85,11 @@ syntax "(" tritonExpr " if " tritonExpr " else " tritonExpr ")" : tritonExpr
 syntax "tl.toReal(" tritonExpr ")" : tritonExpr
 syntax "tl.cast(" tritonExpr ", " tritonDType ")" : tritonExpr
 syntax "tl.bitcast(" tritonExpr ", " tritonDType ")" : tritonExpr
+syntax:max (name := tritonMethodBitcast) tritonExpr:max noWs "." "to" "(" tritonDType "," "bitcast=True" ")" : tritonExpr
+syntax:max (name := tritonIdentMethodBitcast) ident noWs "." "to" "(" tritonDType "," "bitcast=True" ")" : tritonExpr
+syntax (name := tritonIdentMethodBitcastSpaced) ident "." "to" "(" tritonDType "," "bitcast=True" ")" : tritonExpr
+syntax:max (name := tritonDottedIdentMethodBitcast) ident noWs "(" tritonDType "," "bitcast=True" ")" : tritonExpr
+
 syntax "tl.extra.cuda.libdevice.llrint(" tritonExpr ")" : tritonExpr
 syntax:max (name := tritonMethodCastDTypeIdent) tritonExpr:max noWs "." "to" "(" ident "." ident ")" : tritonExpr
 syntax:max (name := tritonIdentMethodCastDTypeIdent) ident noWs "." "to" "(" ident "." ident ")" : tritonExpr
@@ -131,6 +138,7 @@ syntax "DTYPE" : tritonDType
 syntax "tl.dot(" tritonExpr ", " tritonExpr ")" : tritonExpr
 syntax "tl.dot(" tritonExpr ", " tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ")" : tritonExpr
+syntax "tl.dot(" tritonExpr ", " tritonExpr ", " tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
 
 syntax ident "=" tritonDType : tritonMemKwarg
 syntax ident " = " tritonDType : tritonMemKwarg
@@ -141,11 +149,12 @@ syntax "boundary_check=" term : tritonMemKwarg
 syntax "boundary_check=(" term ")" : tritonMemKwarg
 syntax "boundary_check=([" num,* "]" ":" term ")" : tritonMemKwarg
 syntax "boundary_check=(" num,* ")" : tritonMemKwarg
-syntax "padding_option=\"zero\"" : tritonMemKwarg
+syntax "padding_option=" str : tritonMemKwarg
 syntax "eviction_policy=\"evict_last\"" : tritonMemKwarg
 syntax "eviction_policy=\"evict_first\"" : tritonMemKwarg
 
 syntax "axis" "=" num : tritonReduceKwarg
+syntax "axis" "=" "None" : tritonReduceKwarg
 syntax num : tritonReduceKwarg
 syntax "keep_dims" "=" "false" : tritonReduceKwarg
 syntax "keep_dims" "=" "true" : tritonReduceKwarg
@@ -154,6 +163,8 @@ syntax "return_indices=False" : tritonReduceKwarg
 syntax "reverse=True" : tritonReduceKwarg
 syntax "reverse=False" : tritonReduceKwarg
 syntax "out_dtype=" tritonDType : tritonReduceKwarg
+syntax ident "=" tritonDType : tritonReduceKwarg
+syntax "input_precision=" str : tritonReduceKwarg
 syntax ident "=" tritonExpr : tritonReduceKwarg
 
 syntax "tl.sum(" tritonExpr ("," tritonReduceKwarg)* ")" : tritonExpr
@@ -185,6 +196,7 @@ syntax "tl.make_block_ptr(" ident "=" tritonExpr ", " ident "=" "(" tritonExpr,*
   ")" ", " ident "=" "(" tritonExpr,* ")" ", " ident "=" "(" tritonExpr,* ")"
   ", " ident "=" "(" tritonExpr,* ")" ")" : tritonExpr
 syntax "tl.advance(" tritonExpr ", " "[" tritonExpr,* "]" ")" : tritonExpr
+syntax "tl.advance(" tritonExpr ", " "(" tritonExpr,* ")" ")" : tritonExpr
 syntax "tl.advance(" tritonExpr ", " ident "=" "(" tritonExpr,* ")" ")" : tritonExpr
 
 syntax:max tritonExpr:max noWs "[" ":" "]" : tritonExpr

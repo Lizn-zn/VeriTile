@@ -122,6 +122,17 @@ Supported channels:
 - `tl.maximum(a, b)` and `tl.minimum(a, b)` as pointwise select-based sugar
   over comparable channels. Branch broadcasting is currently limited to
   scalar-to-tile lifting, matching `tl.where`.
+  Signed integer operands stay signed through min/max, `tl.multiple_of`,
+  `tl.max_contiguous` and row/column broadcast views. Compiler-hint arguments
+  do not change the value's signedness.
+- `tl.minimum(a, float("inf"))` retains a distinct `Op.minPosInf` operation.
+  The operand must use fp32/fp64 computation; lower-precision operands need
+  an explicit cast. The DSL rejects an uncast operand instead of silently
+  widening the minimum operation.
+  Its real projection is identity on `WithBot ℝ`; FP execution calls the
+  backend's opaque `minPosInf` unary operation at the expression's compute
+  precision. This spelling does not introduce a standalone positive-infinity
+  value into the real carrier, or assume an FP identity for the operation.
 - Directed scans: `tl.cumsum`, `tl.cumprod`, and `tl.associative_scan(x, op,
   axis=N)` on `.real` tiles, each accepting `reverse=True/False`:
   `forward` is the prefix fold, `reverse` the suffix fold along the scanned

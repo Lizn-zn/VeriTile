@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 #
-# Compile and comparator-check every benchmark port `Port.lean`. Independent of
+# Compile and comparator-check every benchmark source, entry and proof file. Independent of
 # the main library build: failures here don't
 # break `lake build VeriTileFull` or `scripts/check-artifact.sh`, but they
 # show up clearly per-kernel.
 #
-# Ports are independent single-file elaborations, so they run in parallel.
+# Each file is replayed independently, including imported dependencies.
 # Concurrency defaults to a memory-capped heuristic (each `lake env lean`
 # on a mathlib-heavy port peaks at a few GB); override with
 # `CHECK_PORTS_JOBS=N`.
@@ -28,19 +28,13 @@ cd "${PROJECT_ROOT}"
 PORTS_ROOT="bench/tritonbench_g"
 
 find_port() {
-  # The Lean port lives in `<dir>/<CamelCase>.lean`. We don't hard-code the
-  # CamelCase translation here — just take the first .lean file in the dir
-  # (each port dir is expected to have at most one).
-  local dir="$1"
-  local lean
-  lean=$(find "${dir}" -maxdepth 1 -type f -name '*.lean' | head -n 1)
-  [ -n "${lean}" ] && printf '%s\n' "${lean}"
+  python3 bench/port_layout.py proofs "$1"
 }
 
 select_ports() {
   if [ "$#" -eq 0 ]; then
     for d in "${PORTS_ROOT}"/*/; do
-      find_port "${d}"
+      find_port "${d}" || return $?
     done
   else
     for name in "$@"; do
@@ -93,8 +87,8 @@ fi
 launcher_status=0
 results="$(printf '%s\n' "${port_list}" | xargs -P "${JOBS}" -I{} bash -c '
   port="{}"
-  kernel="$(basename "$(dirname "${port}")")"
-  log="${TMPDIR_CHECK}/${kernel}.log"
+  kernel="${port#bench/tritonbench_g/}"
+  log="${TMPDIR_CHECK}/${kernel//\//_}.log"
   if python3 "${PROJECT_ROOT}/scripts/check_comparator.py" --file "${port}" \
       --workspace "${TMPDIR_CHECK}/judge" >"${log}" 2>&1; then
     cat "${log}" >&2
@@ -110,7 +104,7 @@ if [ "${launcher_status}" -ne 0 ]; then
   exit 1
 fi
 
-expected="$(printf '%s\n' "${port_list}" | while IFS= read -r port; do basename "$(dirname "${port}")"; done)"
+expected="$(printf '%s\n' "${port_list}" | sed 's#^bench/tritonbench_g/##')"
 if ! python3 "${SCRIPT_DIR}/check_worker_results.py" "${expected}" "${results}"; then
   exit 1
 fi

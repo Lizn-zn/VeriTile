@@ -62,7 +62,7 @@ run_cmd do
     throwError "FP recurrence proof imported its correctness counterpart"
 ''')
 
-    def test_invariant_initialization_iteration_domains_and_unchanged_memory(self):
+    def test_iterations_outputs_observations_domains_and_memory(self):
         self.check_lean((ROOT / 'bench/tests/FPOnlineSoftmax.lean').read_text())
 
     def test_public_output_spec_uses_only_admitted_scalar_atoms(self):
@@ -79,9 +79,6 @@ run_cmd do
             '  add_commute', '  add_assoc', '  mul_commute', '  mul_assoc',
             '  mul_distrib', '  cancel', '  add_zero', '  mul_one',
             '  div_mul_rcp', '  mul_rcp_cancel', '  exp_sub(libdevice.exp)'})
-
-    def test_observation_requires_final_registers_and_preserves_source_effects(self):
-        self.check_lean((ROOT / 'bench/tests/FPObservedRow.lean').read_text())
 
 
 if __name__ == '__main__':

@@ -22,28 +22,24 @@ abbrev Rules := FP.ScalarArithmetic.Rules
 
 /-- Finite operands after the original common prefix. -/
 def additionSite (tau : ℝ) : Site where
-  before := (originalKernel tau).surfaceBody.take 5
+  before := Source.prefixBefore (originalKernel tau).surfaceBody "out"
   shape := []
   left := .ref .real [] "res_mix"
   right := .ref .real [] "branch_mix"
 
-def original (tau : ℝ) : Program :=
-  ⟨originalKernel tau, [additionSite tau]⟩
+def original (tau : ℝ) : Program where
+  kernel := originalKernel tau
+  domain := [additionSite tau]
 
 def optimized (tau : ℝ) : Program :=
-  ⟨optimizedKernel tau, [additionSite tau]⟩
+  { original tau with kernel := optimizedKernel tau }
 
 /-- Under the finite-operand contract, every successful run is preserved,
 including all registers and memory; failed surrounding executions also agree. -/
 specification mhc_depth_equiv (tau : ℝ) (R : Rules) :
     original tau ≡[R] optimized tau := by
-  apply Spec.FloatingPoint.ofNumerical
-    (lhs := original tau) (rhs := optimized tau)
-    (structural := fun _ _ => False) rfl rfl
-  intro α _ M D hM s hd
-  exact add_commute R M D hM s (additionSite tau) "out"
-    ((originalKernel tau).surfaceBody.drop 6)
-    (hd _ (by simp [original]))
+  equiv_decompose
+  all_goals fp_prove
 
 #print_fp_assumptions mhc_depth_equiv
 #guard_msgs (drop info) in
@@ -56,12 +52,13 @@ def matrixAdditionSite (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.S
   .add (FP.ProfiledRewrite.prefixBefore (matrixOriginal S T D numIters tau).surfaceBody "out") [S, D]
     (.ref .real [S, D] "res_mix") (.ref .real [S, D] "branch_mix")
 
-def matrixOriginalProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
-  ⟨matrixOriginal S T D numIters tau, [matrixAdditionSite S T D numIters tau]⟩
+def matrixOriginalProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program where
+  kernel := matrixOriginal S T D numIters tau
+  domain := [matrixAdditionSite S T D numIters tau]
 
 def matrixOptimizedProgram (S T D numIters : Nat) (tau : ℝ) : FP.ProfiledRewrite.Program :=
-  ⟨matrixOptimized "res_mix" "branch_out" "h_post" "out" S T D numIters tau,
-    [matrixAdditionSite S T D numIters tau]⟩
+  { matrixOriginalProgram S T D numIters tau with
+    kernel := matrixOptimized "res_mix" "branch_out" "h_post" "out" S T D numIters tau }
 
 /-- Contextual equivalence for every matrix dimension and iteration count. -/
 specification mhc_depth_matrix_equiv (S T D numIters : Nat) (tau : ℝ) (R : Rules) :

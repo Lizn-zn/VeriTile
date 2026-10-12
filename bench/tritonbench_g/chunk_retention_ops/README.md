@@ -1,35 +1,24 @@
 # chunk_retention_ops
 
-- Source file: `chunk_retention_ops.py` (upstream `data/TritonBench_G_v1/chunk_retention_ops.py`)
-- Corpus: TritonBench-G v1
-- Size: 363 lines, 4 `@triton.jit` kernels
-- Status: **PORTED** (both state-recurrence kernels) — `ChunkRetentionOps.lean`,
-  main theorems `cro_fwd_h_exec_genuine` and `cro_bwd_dh_exec_genuine`
-  (`exec`-level, dimension-general, 0 `sorry`).
+All four JIT sources in `chunk_retention_ops.py` have complete typed original and candidate implementations in `Kernels.lean`. `Correct.lean` exposes eight real correctness specifications; `FPEquiv.lean` exposes four conditional FP equivalences. Execution and memory proofs live in `Proofs/`.
 
-The upstream file is `chunk_retention`'s corpus twin, but the two are **not**
-byte-duplicates where it matters:
+| Source | Mathematical contract | Candidate and admitted atom |
+|---|---|---|
+| Forward state | Seeded decayed recurrence, pre-update history, optional final state, shorter final partial-chunk decay | Commute decayed carry and weighted dot; `add_commute` |
+| Forward output | Row-decayed Q·H plus causal distance-decayed Q·K·V over all K blocks, then scale | Put the final scale factor first; `mul_commute` |
+| Backward state | Descending decayed recurrence, storing history before each update; all BT/BK/BV independent, including an empty loop | Commute decayed carry and scaled-query/weighted-gradient dot; `add_commute` |
+| Backward gradients | Complete V loop, all dQ/dK/dV outputs and their query/key/causal decay weights | Commute final weighted dQ carry and score-gradient dot; `add_commute` |
 
-- `fwd_kernel_h` is statement-for-statement identical to the ported
-  `chunk_retention` sibling's (only `initial_state`/`final_state` are spelled
-  `h0`/`ht`), so the whole forward proof stack — decay prologue, ragged
-  last-chunk boundary gate, recursive `croState`, per-chunk store history —
-  carries over.
-- `bwd_kernel_dh` is the **fixed** sibling: where `chunk_retention`'s backward
-  is only compilable square, stores once, and carries dead loads, this one is
-  the clean dimension-general store-history kernel — per-chunk in-loop stores
-  of the descending carry `D_next = d_b·D + (scale·q)ᵀ·(do ⊙ d_i)`, fixed
-  `d_b`/`d_i` (no ragged rebind on the backward side). Its spec `croDhCarry`
-  is recursive like the forward's, so the decayed advance is definitional.
+The head rate is `1 - 2^(-5 - head % H)`. Signed indices, intrinsic exp2/log2, casts, TF32-disabled dots, masks and stores remain in the typed source. The explicit `arange(...).to(tl.int32)` states the signed index type. Reverse time is represented by an ascending counter visiting `NT-1-j`.
 
-Headlines: `h[·,·,t]` = decayed pre-chunk forward state (all four
-`USE_INITIAL_STATE`/`STORE_FINAL_STATE` configurations, ragged and exact
-division alike); `dh[·,·,t]` = pre-chunk descending carry `croDhCarry (NT-1-t)`.
-Everything symbolic; the layout side conditions are the standard three.
+The backward-state source differs from `chunk_retention`: it stores every history tile, reads scaled Q and row-weighted dO, and applies full-BT decay to the carry at each update. It has no square-tile restriction or post-loop-index use. Forward state shortens the last chunk's decay when needed; backward state deliberately keeps full-BT decay, as the Python source does.
 
-The decay prologue's implicit int→float promotions are spelled
-`tl.toReal(...)` — a `Translation-surface blocker:` registered in
-`proof_blockers.md`. The nat-truncated ragged `d_i` tail (forward) is disclosed
-in the preamble and is unobservable through the boundary-checked `v`. The
-descending loop is spelled as its ascending change of variable
-(`chunk_linear_attn` respelling, zero library change).
+The other three kernel bodies are identical to their `chunk_retention` counterparts after parameter renaming. `Proofs/SourceComparison.lean` proves equality of the complete typed source functions, including signatures and both candidates. Their real execution proofs are reused through those checked bodies; the public entries still show this case's implementation, IO, conditions and mathematical formulas.
+
+All real contracts include successful finite flat-memory execution, bounds on actual active accesses and preservation of other whole tagged cells. Zero unspecified values, output injectivity and necessary aliasing conditions remain explicit. Dimensions and strides stay symbolic. Compatible storage supports fp32/fp16/bf16; independent seed, value and output types are exposed where the source supports them.
+
+FP guards inspect the actual reached finite operands. The four nonempty typed executions in `Proofs/TypedExecution.lean` use a named abstract model and do not claim GPU or IEEE validation. Experiment shapes select assumptions and do not restrict the symbolic dimensions of the proof.
+
+`bench/tests/ChunkRetentionOpsReal.lean` checks both complete backward-state variants in finite memory, with three time chunks, 16-wide tiles, a partial final chunk, nonzero program IDs, nontrivial carry decay and adjacent tagged-memory preservation. It also checks the empty reverse loop. The other three real regression families are reused through the complete-source equalities.
+
+Accepted in `../verification_round.md`. The 3,472-job integrated build, source gates, scope review and new finite-memory regression pass. Independent comparator/trust receipt `Logs/comparator-check-w_2hgm4d` accepts all 10 case/regression files, 90 named declarations and 485 kernel theorem targets, with 1,390 matching source/configuration fingerprints. Host composition, grid/allocation construction, backend tile legality, cross-program races and performance remain outside these per-JIT contracts.

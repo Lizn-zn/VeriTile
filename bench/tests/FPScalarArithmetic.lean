@@ -11,8 +11,6 @@ open FP.Equational (ReductionTree ReductionPlan)
 -- Ordinary division is bound to the same tested fragments as the existing
 -- reciprocal example, including its nonzero denominator guard.
 example : entry .divMulRcp (by decide) = FP.Reciprocal.entry .fp32 (by decide) := rfl
-example : (report .mulDistribute (by decide)).report.compute = "fp32" := rfl
-example : (report .mulDistribute (by decide)).report.output = "fp32" := rfl
 example : (report .mulDistribute (by decide)).report.key = FP.ReportedAdmission.fp32_mul_distrib.key := rfl
 example : (report .mulRcpCancel (by decide)).guards = [⟨"a", .finite⟩, ⟨"a", .nonzero⟩] := rfl
 

@@ -108,15 +108,13 @@ theorem log_sum_exp_refinement_view :
   simp [execR, directLSEKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul,
         ComputeExpr.toAlgorithm?] at hL
-  repeat unfold evalOp at hL
-  simp [Tile.reduceSum, Tile.reduceSumDrop,
+  simp [Tile.reduceSumDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hL
   simp [execR, stableLSEKernel, stepStmtsR, stepStmtR, evalOpR.eq_def,
         Tile.bop, Tile.uop, NumericDType.add, NumericDType.mul, NumericDType.sub,
         ComputeExpr.toAlgorithm?] at hR
-  repeat unfold evalOp at hR
-  simp [Tile.reduceSum, Tile.reduceSumDrop,
-        Tile.reduceMax, Tile.reduceMaxDrop,
+  simp [Tile.reduceSumDrop,
+        Tile.reduceMaxDrop,
         TileShape.axisDim, TileShape.eraseAxis, TileShape.insertAxisIndex] at hR
   subst lhs'
   subst rhs'

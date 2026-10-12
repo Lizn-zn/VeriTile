@@ -1,0 +1,386 @@
+import VeriTile.Triton
+import VeriTile.Meta.StatementAudit
+namespace VeriTile.Bench.TritonBenchG.DequantizeMatmul.RealReference
+open VeriTile.Triton
+def dequantize_kernel
+    (b_ptr b_scale_ptr fpb_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ComputeKernel := triton {
+  tl.region b_ptr = tl.int8
+  k_block_idx = tl.program_id(axis=0)
+  n_block_idx = tl.program_id(axis=1)
+  offs_k = tl.arange(0, $(BLOCK_SIZE_K))
+  offs_n = tl.arange(0, $(BLOCK_SIZE_N))
+  b_offs = (k_block_idx * $(BLOCK_SIZE_K) + offs_k[:, None]) * $(stride_bk) +
+    (n_block_idx * $(BLOCK_SIZE_N) + offs_n[None, :]) * $(stride_bn)
+  fpb_offs = (k_block_idx * $(BLOCK_SIZE_K) + offs_k[:, None]) * $(stride_fpbk) +
+    (n_block_idx * $(BLOCK_SIZE_N) + offs_n[None, :]) * $(stride_fpbn)
+  bs_offs = n_block_idx * $(BLOCK_SIZE_N) + offs_n[None, :]
+  n_mask = n_block_idx * $(BLOCK_SIZE_N) + offs_n[None, :] < $(N)
+  mask = (k_block_idx * $(BLOCK_SIZE_K) + offs_k[:, None] < $(K)) & n_mask
+  int_b = tl.load(b_ptr + b_offs, mask=mask, other=0.0)
+  scale_b = tl.load(b_scale_ptr + bs_offs, mask=n_mask, other=0.0)
+  tl.store(fpb_ptr + fpb_offs, int_b * scale_b, mask=mask)
+}
+
+/-! ### Row-major flattening of the 2-D tile into `⊨` lanes -/
+
+/-- Lane `j` of the row-major flattening of an `R × C` tile. -/
+def laneIdx (R C : Nat) (j : Fin (R * C)) : TileIndex [R, C] :=
+  (⟨j.val / C, Nat.div_lt_of_lt_mul
+      (Nat.lt_of_lt_of_le j.isLt (Nat.le_of_eq (Nat.mul_comm R C)))⟩,
+   ⟨j.val % C, Nat.mod_lt _ (Nat.pos_of_ne_zero (by
+      rintro rfl
+      exact absurd j.isLt (by simp)))⟩,
+   PUnit.unit)
+
+/-- The lane of a logical `R × C` tile index — inverse of `laneIdx`. -/
+def laneOf (R C : Nat) (idx : TileIndex [R, C]) : Fin (R * C) :=
+  ⟨idx.1.val * C + idx.2.1.val, by
+    have h1 : idx.1.val + 1 ≤ R := idx.1.isLt
+    have h2 : idx.1.val * C + idx.2.1.val < idx.1.val * C + C :=
+      Nat.add_lt_add_left idx.2.1.isLt _
+    refine Nat.lt_of_lt_of_le h2 ?_
+    rw [← Nat.succ_mul]
+    exact Nat.mul_le_mul_right C h1⟩
+
+@[simp] theorem laneIdx_laneOf (R C : Nat) (idx : TileIndex [R, C]) :
+    laneIdx R C (laneOf R C idx) = idx := by
+  obtain ⟨a, b, u⟩ := idx
+  have hC : 0 < C := Nat.lt_of_le_of_lt (Nat.zero_le _) b.isLt
+  have hdiv : (a.val * C + b.val) / C = a.val := by
+    rw [Nat.mul_comm, Nat.mul_add_div hC, Nat.div_eq_of_lt b.isLt, Nat.add_zero]
+  have hmod : (a.val * C + b.val) % C = b.val := by
+    rw [Nat.mul_comm, Nat.mul_add_mod, Nat.mod_eq_of_lt b.isLt]
+  simp only [laneIdx, laneOf, hdiv, hmod]
+
+theorem laneOf_injective (R C : Nat) : Function.Injective (laneOf R C) :=
+  Function.LeftInverse.injective (laneIdx_laneOf R C)
+
+/-- Tile-index injectivity from the lane-indexed injectivity the `⊨` headline
+states (`laneIdx` is onto the tile indices). -/
+theorem inj_of_lane_inj {R C : Nat} {F : TileIndex [R, C] → Nat}
+    (h : Function.Injective (fun j : Fin (R * C) => F (laneIdx R C j))) :
+    Function.Injective F := by
+  intro a b hab
+  have hcomp : F (laneIdx R C (laneOf R C a)) = F (laneIdx R C (laneOf R C b)) := by
+    rw [laneIdx_laneOf, laneIdx_laneOf]; exact hab
+  exact laneOf_injective R C (h hcomp)
+
+/-! ### Windows, gates and the per-lane spec -/
+
+/-- Weight-tile read address of tile cell `idx` for program `(p₀, p₁)`. -/
+def bOffset (p₀ p₁ stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) : Nat :=
+  (p₀ * BLOCK_SIZE_K + idx.1.val) * stride_bk +
+    (p₁ * BLOCK_SIZE_N + idx.2.1.val) * stride_bn
+
+/-- Output write address of tile cell `idx` for program `(p₀, p₁)`. -/
+def fpbOffset (p₀ p₁ stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) : Nat :=
+  (p₀ * BLOCK_SIZE_K + idx.1.val) * stride_fpbk +
+    (p₁ * BLOCK_SIZE_N + idx.2.1.val) * stride_fpbn
+
+/-- Column-scale read address of tile column `j` for program `(_, p₁)`. -/
+def nOffset (p₁ BLOCK_SIZE_N : Nat) (j : Fin BLOCK_SIZE_N) : Nat :=
+  p₁ * BLOCK_SIZE_N + j.val
+
+/-- The kernel's store gate `mask` = `(k·BSK + i < K) & (n·BSN + j < N)`. -/
+def dequantizeActive (p₀ p₁ K N BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) : Prop :=
+  p₀ * BLOCK_SIZE_K + idx.1.val < K ∧ p₁ * BLOCK_SIZE_N + idx.2.1.val < N
+
+instance dequantizeActiveDecidable
+    (p₀ p₁ K N BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) :
+    Decidable (dequantizeActive p₀ p₁ K N BLOCK_SIZE_N BLOCK_SIZE_K idx) := by
+  unfold dequantizeActive
+  infer_instance
+
+/-- State-coupled readback spec (internal to `dequantize_kernel_correct`): the
+exact dequantized value written at active tile lane `idx`. The `⊨` headline
+re-expresses it as the pure product `xs j * ys j` of the loaded tiles. -/
+noncomputable def dequantizeSpec
+    (s : BlockState) (b_ptr b_scale_ptr : RegionName)
+    (p₀ p₁ stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N]) : ℝ :=
+  (s.readMemValue .int b_ptr (bOffset p₀ p₁ stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K idx) : ℝ) *
+    s.readMem b_scale_ptr (nOffset p₁ BLOCK_SIZE_N idx.2.1)
+
+private noncomputable def dequantizeStoreBase
+    (s : BlockState) (b_ptr b_scale_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    BlockState :=
+  ((((((((((s.setReg "k_block_idx" .nat [] (Tile.scalar (s.pids 0))).setReg
+    "n_block_idx" .nat [] (Tile.scalar (s.pids 1))).setReg
+    "offs_k" .nat [BLOCK_SIZE_K] (Tile.vec fun i => i.val)).setReg
+    "offs_n" .nat [BLOCK_SIZE_N] (Tile.vec fun i => i.val)).setReg
+    "b_offs" .nat [BLOCK_SIZE_K, BLOCK_SIZE_N]
+      { data := fun i => bOffset (s.pids 0) (s.pids 1) stride_bk stride_bn
+          BLOCK_SIZE_N BLOCK_SIZE_K i }).setReg
+    "fpb_offs" .nat [BLOCK_SIZE_K, BLOCK_SIZE_N]
+      { data := fun i => fpbOffset (s.pids 0) (s.pids 1) stride_fpbk stride_fpbn
+          BLOCK_SIZE_N BLOCK_SIZE_K i }).setReg
+    "bs_offs" .nat [1, BLOCK_SIZE_N]
+      { data := fun i => nOffset (s.pids 1) BLOCK_SIZE_N i.2.1 }).setReg
+    "n_mask" .bool [1, BLOCK_SIZE_N]
+      { data := fun i => decide (nOffset (s.pids 1) BLOCK_SIZE_N i.2.1 < N) }).setReg
+    "mask" .bool [BLOCK_SIZE_K, BLOCK_SIZE_N]
+      { data := fun i => decide (dequantizeActive (s.pids 0) (s.pids 1) K N
+          BLOCK_SIZE_N BLOCK_SIZE_K i) }).setReg
+    "int_b" .int [BLOCK_SIZE_K, BLOCK_SIZE_N]
+      { data := fun i =>
+          if dequantizeActive (s.pids 0) (s.pids 1) K N BLOCK_SIZE_N BLOCK_SIZE_K i then
+            s.readMemValue .int b_ptr (bOffset (s.pids 0) (s.pids 1) stride_bk stride_bn
+              BLOCK_SIZE_N BLOCK_SIZE_K i)
+          else (0 : Int) }).setReg
+    "scale_b" .real [1, BLOCK_SIZE_N]
+      { data := fun i =>
+          if nOffset (s.pids 1) BLOCK_SIZE_N i.2.1 < N then
+            some (s.readMem b_scale_ptr (nOffset (s.pids 1) BLOCK_SIZE_N i.2.1))
+          else some (0.0 : ℝ) }
+
+/-- Algorithm-layer correctness for `dequantize_kernel`. -/
+theorem dequantize_kernel_correct
+    (b_ptr b_scale_ptr fpb_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (s s' : BlockState)
+    (hOutInj : Function.Injective
+      (fpbOffset (s.pids 0) (s.pids 1) stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K))
+    (hExec : exec (dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+          stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K) s = some s') :
+    ∀ idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N],
+      s'.readMem fpb_ptr
+          (fpbOffset (s.pids 0) (s.pids 1) stride_fpbk stride_fpbn
+            BLOCK_SIZE_N BLOCK_SIZE_K idx)
+        = if dequantizeActive (s.pids 0) (s.pids 1) K N BLOCK_SIZE_N BLOCK_SIZE_K idx then
+          dequantizeSpec s b_ptr b_scale_ptr (s.pids 0) (s.pids 1) stride_bk stride_bn
+            BLOCK_SIZE_N BLOCK_SIZE_K idx
+        else
+          s.readMem fpb_ptr
+            (fpbOffset (s.pids 0) (s.pids 1) stride_fpbk stride_fpbn
+              BLOCK_SIZE_N BLOCK_SIZE_K idx) := by
+  intro idx
+  simp [exec, dequantize_kernel, stepStmts, stepStmt, evalOp.eq_def, Option.bind,
+        Tile.bop, Tile.cop, Tile.expandDim, Tile.intToReal,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        TileShape.dropInsertedIndex] at hExec
+  rw [← hExec]
+  let offsetFn : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N] → Nat :=
+    fun idx =>
+      (s.pids 0 * BLOCK_SIZE_K + idx.1.val) * stride_fpbk +
+        (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val) * stride_fpbn
+  let active : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N] → Prop :=
+    fun idx =>
+      s.pids 0 * BLOCK_SIZE_K + idx.1.val < K ∧
+        s.pids 1 * BLOCK_SIZE_N + idx.2.1.val < N
+  let valueFn : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N] → ℝ :=
+    fun idx => WithBot.unbotD 0
+      (Option.map (fun b => if active idx then
+        (s.readMemValue .int b_ptr
+          ((s.pids 0 * BLOCK_SIZE_K + idx.1.val) * stride_bk +
+            (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val) * stride_bn) : ℝ) * b
+        else 0)
+        (if s.pids 1 * BLOCK_SIZE_N + idx.2.1.val < N then
+          some (s.readMem b_scale_ptr (s.pids 1 * BLOCK_SIZE_N + idx.2.1.val))
+        else some (0.0 : ℝ)))
+  have hOffsetInj : Function.Injective offsetFn := by
+    simpa [offsetFn, fpbOffset] using hOutInj
+  have hscatter := BlockState.scatter_readback_prop_masked_nd
+    (region := fpb_ptr)
+    (s := dequantizeStoreBase s b_ptr b_scale_ptr K N stride_bk stride_bn
+      stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K)
+    (offsetFn := offsetFn) (valueFn := valueFn) (P := active)
+    hOffsetInj idx
+  by_cases hActive : active idx
+  · rcases hActive with ⟨hk, hn⟩
+    simpa [offsetFn, active, valueFn, dequantizeActive, dequantizeSpec,
+      bOffset, fpbOffset, nOffset, hk, hn,
+      dequantizeStoreBase, TileShape.dropInsertedIndex, Bool.and_eq_true] using hscatter
+  · simpa [offsetFn, active, valueFn, dequantizeActive, dequantizeSpec,
+      bOffset, fpbOffset, nOffset, hActive,
+      dequantizeStoreBase, TileShape.dropInsertedIndex] using hscatter
+
+set_option maxHeartbeats 1600000 in
+/-- Frame half: every memory cell not actively written by the masked output
+store — every cell of every region other than `fpb_ptr`, and the masked-off
+lanes of the output window itself — is preserved by the run. -/
+private theorem dequantize_kernel_frame
+    (b_ptr b_scale_ptr fpb_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (s s1 : BlockState)
+    (hExec : exec ((dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+        stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K).toAlgKernel) s = some s1)
+    (r : RegionName) (o : Nat)
+    (hmiss : ∀ idx : TileIndex [BLOCK_SIZE_K, BLOCK_SIZE_N],
+      dequantizeActive (s.pids 0) (s.pids 1) K N BLOCK_SIZE_N BLOCK_SIZE_K idx →
+      ¬(fpb_ptr = r ∧ fpbOffset (s.pids 0) (s.pids 1) stride_fpbk stride_fpbn
+          BLOCK_SIZE_N BLOCK_SIZE_K idx = o)) :
+    s1.mem r o = s.mem r o := by
+  simp [exec, dequantize_kernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+        evalOp.eq_def, Option.bind, ComputeExpr.toAlgorithm?,
+        Tile.bop, Tile.cop, Tile.expandDim, Tile.intToReal,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        TileShape.dropInsertedIndex] at hExec
+  subst hExec
+  refine Eq.trans (foldl_store_preserve_cell _ _ _ r o _ _ ?_) rfl
+  intro k _ hmk hc
+  refine hmiss k ?_ (by simpa [fpbOffset] using hc)
+  simpa [dequantizeActive, Bool.and_eq_true] using hmk
+
+set_option maxHeartbeats 1600000 in
+/-- Termination: the kernel executes to completion from any state (a
+straight-line masked load / load / multiply / masked store). -/
+private theorem dequantize_kernel_exec_isSome
+    (b_ptr b_scale_ptr fpb_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (s : BlockState) :
+    ∃ s1, exec ((dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+        stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K).toAlgKernel) s = some s1 := by
+  simp [exec, dequantize_kernel, ComputeKernel.toAlgKernel, stepStmts, stepStmt,
+        evalOp.eq_def, Option.bind, ComputeExpr.toAlgorithm?,
+        Tile.bop, Tile.cop, Tile.expandDim, Tile.intToReal,
+        NumericDType.add, NumericDType.mul, ComparableDType.lt,
+        TileShape.dropInsertedIndex]
+
+/-- The kernel sits inside the flat-memory bridge's covered fragment (pointer
+arithmetic, two masked loads and a masked store). -/
+theorem dequantize_kernel_flattenOk
+    (b_ptr b_scale_ptr fpb_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat) :
+    ((dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+        stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K).toAlgKernel).FlattenOk := by
+  unfold Kernel.FlattenOk
+  simp [dequantize_kernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    StmtList.FlattenOk, Stmt.FlattenOk, Op.FlattenOk.eq_def]
+
+set_option maxHeartbeats 1600000 in
+/-- Per-execution safety walk: the two `program_id`s, the two `arange`s, the
+three offset tiles and the two mask tiles are memory-silent; the masked weight
+load, the column-scale load (gated by the wider `n_mask`) and the masked store
+reduce to the lane-wise bounds hypotheses. The `0 < BLOCK_SIZE_K` hypothesis is
+what lets an arbitrary scale column `n` be exhibited as a lane of the flattened
+`[BLOCK_SIZE_K, BLOCK_SIZE_N]` tile. -/
+theorem dequantize_kernel_traceSafe
+    (b_ptr b_scale_ptr fpb_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (hBK : 0 < BLOCK_SIZE_K)
+    (bounds : RegionBounds) (s : BlockState)
+    (h1 : ∀ j : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N),
+      dequantizeActive (s.pids 0) (s.pids 1) K N BLOCK_SIZE_N BLOCK_SIZE_K
+        (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j) →
+      bOffset (s.pids 0) (s.pids 1) stride_bk stride_bn BLOCK_SIZE_N BLOCK_SIZE_K
+        (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j) < bounds b_ptr)
+    (h2 : ∀ j : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N),
+      nOffset (s.pids 1) BLOCK_SIZE_N (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j).2.1 < N →
+      nOffset (s.pids 1) BLOCK_SIZE_N (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j).2.1
+        < bounds b_scale_ptr)
+    (h3 : ∀ j : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N),
+      dequantizeActive (s.pids 0) (s.pids 1) K N BLOCK_SIZE_N BLOCK_SIZE_K
+        (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j) →
+      fpbOffset (s.pids 0) (s.pids 1) stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K
+        (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j) < bounds fpb_ptr) :
+    Kernel.TraceSafe bounds
+      ((dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+        stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K).toAlgKernel) s := by
+  have h1' : ∀ (a : Fin BLOCK_SIZE_K) (b : Fin BLOCK_SIZE_N),
+      s.pids 0 * BLOCK_SIZE_K + a.val < K →
+      s.pids 1 * BLOCK_SIZE_N + b.val < N →
+      (s.pids 0 * BLOCK_SIZE_K + a.val) * stride_bk +
+        (s.pids 1 * BLOCK_SIZE_N + b.val) * stride_bn < bounds b_ptr := by
+    intro a b ha hb
+    have := h1 (laneOf BLOCK_SIZE_K BLOCK_SIZE_N (a, b, PUnit.unit))
+      (by simpa [dequantizeActive] using And.intro ha hb)
+    simpa [bOffset] using this
+  have h2' : ∀ b : Fin BLOCK_SIZE_N,
+      s.pids 1 * BLOCK_SIZE_N + b.val < N →
+      s.pids 1 * BLOCK_SIZE_N + b.val < bounds b_scale_ptr := by
+    intro b hb
+    have := h2 (laneOf BLOCK_SIZE_K BLOCK_SIZE_N (⟨0, hBK⟩, b, PUnit.unit))
+      (by simpa [nOffset] using hb)
+    simpa [nOffset] using this
+  have h3' : ∀ (a : Fin BLOCK_SIZE_K) (b : Fin BLOCK_SIZE_N),
+      s.pids 0 * BLOCK_SIZE_K + a.val < K →
+      s.pids 1 * BLOCK_SIZE_N + b.val < N →
+      (s.pids 0 * BLOCK_SIZE_K + a.val) * stride_fpbk +
+        (s.pids 1 * BLOCK_SIZE_N + b.val) * stride_fpbn < bounds fpb_ptr := by
+    intro a b ha hb
+    have := h3 (laneOf BLOCK_SIZE_K BLOCK_SIZE_N (a, b, PUnit.unit))
+      (by simpa [dequantizeActive] using And.intro ha hb)
+    simpa [fpbOffset] using this
+  unfold Kernel.TraceSafe
+  simp [dequantize_kernel, ComputeKernel.toAlgKernel, ComputeExpr.toAlgorithm?,
+    Stmt.TraceSafeList, Stmt.TraceSafe, Op.SafeAt.eq_def,
+    MaskOpt.SafeAt, MemAccess.SafeAt,
+    stepStmt, evalOp.eq_def, Option.bind, MemAccess.ActiveAddressSafe,
+    memAccessActiveAddressSafe, MaskOpt.Active, BlockState.setReg,
+    Tile.bop, Tile.cop, Tile.expandDim, Tile.intToReal,
+    NumericDType.add, NumericDType.mul, ComparableDType.lt,
+    TileShape.dropInsertedIndex]
+  refine ⟨?_, ?_, ?_⟩ <;> intros <;>
+    first
+      | (apply h1' <;> assumption)
+      | (apply h2' <;> assumption)
+      | (apply h3' <;> assumption)
+
+set_option maxHeartbeats 1600000 in
+/-- **The region-model masked Hoare triple** — termination, write-active-lane
+output values, and frame off the write-active output lanes, from any launch
+state whose weight window holds `xs` at the full mask and whose scale window
+holds `ys` at the column gate. This is the `hrun` obligation of the `⊨`
+headline. -/
+theorem dequantize_kernel_region_run
+    (b_ptr b_scale_ptr fpb_ptr : RegionName)
+    (K N stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K : Nat)
+    (s₀ : BlockState) (xs : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N) → Int)
+    (ys : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N) → ℝ)
+    (hOutInj : Function.Injective
+      (fpbOffset (s₀.pids 0) (s₀.pids 1) stride_fpbk stride_fpbn
+        BLOCK_SIZE_N BLOCK_SIZE_K))
+    (hx : ∀ j : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N),
+      dequantizeActive (s₀.pids 0) (s₀.pids 1) K N BLOCK_SIZE_N BLOCK_SIZE_K
+        (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j) →
+      s₀.readMemValue .int b_ptr (bOffset (s₀.pids 0) (s₀.pids 1) stride_bk stride_bn
+        BLOCK_SIZE_N BLOCK_SIZE_K (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j)) = xs j)
+    (hy : ∀ j : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N),
+      nOffset (s₀.pids 1) BLOCK_SIZE_N (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j).2.1 < N →
+      s₀.readMem b_scale_ptr (nOffset (s₀.pids 1) BLOCK_SIZE_N
+        (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j).2.1) = ys j) :
+    ∃ s1, exec ((dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+        stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K).toAlgKernel) s₀ = some s1
+      ∧ (∀ j : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N),
+          dequantizeActive (s₀.pids 0) (s₀.pids 1) K N BLOCK_SIZE_N BLOCK_SIZE_K
+            (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j) →
+          s1.readMem fpb_ptr (fpbOffset (s₀.pids 0) (s₀.pids 1) stride_fpbk stride_fpbn
+            BLOCK_SIZE_N BLOCK_SIZE_K (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j))
+            = (xs j : ℝ) * ys j)
+      ∧ (∀ r o,
+          (r ≠ fpb_ptr ∨ ∀ j : Fin (BLOCK_SIZE_K * BLOCK_SIZE_N),
+            dequantizeActive (s₀.pids 0) (s₀.pids 1) K N BLOCK_SIZE_N BLOCK_SIZE_K
+              (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j) →
+            o ≠ fpbOffset (s₀.pids 0) (s₀.pids 1) stride_fpbk stride_fpbn
+              BLOCK_SIZE_N BLOCK_SIZE_K (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j)) →
+          s1.mem r o = s₀.mem r o) := by
+  obtain ⟨s1, hs1⟩ := dequantize_kernel_exec_isSome b_ptr b_scale_ptr fpb_ptr K N
+    stride_bk stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K s₀
+  have hs1' : exec (dequantize_kernel b_ptr b_scale_ptr fpb_ptr K N stride_bk
+      stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K) s₀ = some s1 := hs1
+  refine ⟨s1, hs1, fun j hj => ?_, fun r o hcond => ?_⟩
+  · have h := dequantize_kernel_correct b_ptr b_scale_ptr fpb_ptr K N stride_bk
+      stride_bn stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K s₀ s1 hOutInj hs1'
+      (laneIdx BLOCK_SIZE_K BLOCK_SIZE_N j)
+    rw [if_pos hj] at h
+    rw [h, dequantizeSpec, hx j hj, hy j (by simpa [nOffset] using hj.2)]
+  · refine dequantize_kernel_frame b_ptr b_scale_ptr fpb_ptr K N stride_bk stride_bn
+      stride_fpbk stride_fpbn BLOCK_SIZE_N BLOCK_SIZE_K s₀ s1 hs1 r o
+      (fun idx hact ⟨hr, ho⟩ => ?_)
+    rcases hcond with hne | hno
+    · exact hne hr.symm
+    · exact hno (laneOf BLOCK_SIZE_K BLOCK_SIZE_N idx)
+        (by rw [laneIdx_laneOf]; exact hact)
+        (by rw [laneIdx_laneOf]; exact ho.symm)
+
+
+#guard_msgs (drop info) in
+#auditModuleAxioms
+end VeriTile.Bench.TritonBenchG.DequantizeMatmul.RealReference

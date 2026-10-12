@@ -200,23 +200,16 @@ theorem bptr_adv_eval (s : BlockState) (K N BK : Nat) (bp : Tile .ptr [K, N])
   simp [evalOp_ref, hb, evalOp_mul, evalOp_constNat, NumericDType.mul, Tile.bop]
 
 /-- **`accumulator = tl.dot(a, b, accumulator)` statement eval** (fused form
-`dot a b + accumulator`). -/
+retained as a single operation, interpreted here in real arithmetic). -/
 theorem accdot_op_eval (M K N : Nat) (st : BlockState)
     (zt : Tile .real [M, N]) (xt : Tile .real [M, K]) (yt : Tile .real [K, N])
     (hz : st.regs .real [M, N] "accumulator" = some zt)
     (hx : st.regs .real [M, K] "a" = some xt)
     (hy : st.regs .real [K, N] "b" = some yt) :
-    evalOp (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.dot (batch := []) (Op.ref .real [M, K] "a") (Op.ref .real [K, N] "b"))
-        (Op.ref .real [M, N] "accumulator")) st
+    @evalOp .real [M,N] (Op.dotAcc .real .real .real (batch := []) (Op.ref .real [M, K] "a") (Op.ref .real [K, N] "b") (Op.ref .real [M, N] "accumulator")) st
       = some (Tile.bop NumericDType.real.add (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
           (Tile.dot [] xt yt) zt) := by
-  have hd : evalOp (Op.dot (batch := []) (Op.ref .real [M, K] "a")
-        (Op.ref .real [K, N] "b")) st = some (Tile.dot [] xt yt) := by
-    rw [evalOp_dot]; simp [hx, hy]
-  rw [evalOp_add]
-  simp only [evalOp_ref, hz, bind, Option.bind_some]
-  erw [hd]
+  simp only [evalOp.eq_def, FloatDType.toTileDType, List.nil_append, hx, hy, hz, Option.bind_eq_bind, Option.bind_some]
   rfl
 
 /-- `dot + accumulator` lane `(i,j)`: `some (dv + zv)`. -/
@@ -288,9 +281,7 @@ def matmulLoopBody (M N BK : Nat) : List Stmt :=
     Stmt.assign .real [BK, N] "b"
       (Op.load .real (.ptr (Op.ref .ptr [BK, N] "b_ptrs")) .none),
     Stmt.assign .real [M, N] "accumulator"
-      (Op.add .real (Broadcast.consSame (Broadcast.consSame Broadcast.nil))
-        (Op.dot (batch := []) (Op.ref .real [M, BK] "a") (Op.ref .real [BK, N] "b"))
-        (Op.ref .real [M, N] "accumulator")),
+      (Op.dotAcc .real .real .real (batch := []) (Op.ref .real [M, BK] "a") (Op.ref .real [BK, N] "b") (Op.ref .real [M, N] "accumulator")),
     Stmt.assign .ptr [M, BK] "a_ptrs"
       (Op.ptrAdd Broadcast.scalarR (Op.ref .ptr [M, BK] "a_ptrs")
         (Op.mul .nat Broadcast.nil (Op.constNat BK) (Op.constNat 1))),

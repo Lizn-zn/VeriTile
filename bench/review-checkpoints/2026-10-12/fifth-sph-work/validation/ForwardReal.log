@@ -1,0 +1,99 @@
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:323:52: warning: 'simp' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:323:52: warning: this tactic is never executed
+
+Note: This linter can be disabled with `set_option linter.unreachableTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:474:52: warning: 'ring' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:634:60: warning: 'norm_num' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:634:60: warning: this tactic is never executed
+
+Note: This linter can be disabled with `set_option linter.unreachableTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:966:52: warning: 'ring' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1098:60: warning: 'norm_num' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1098:60: warning: this tactic is never executed
+
+Note: This linter can be disabled with `set_option linter.unreachableTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1230:60: warning: 'norm_num' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1230:60: warning: this tactic is never executed
+
+Note: This linter can be disabled with `set_option linter.unreachableTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1362:60: warning: 'norm_num' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1362:60: warning: this tactic is never executed
+
+Note: This linter can be disabled with `set_option linter.unreachableTactic false`
+Try this:
+  [apply] ring_nf
+  
+  The `ring` tactic failed to close the goal. Use `ring_nf` to obtain a normal form.
+    
+  Note that `ring` works primarily in *commutative* rings. If you have a noncommutative ring, abelian group or module, consider using `noncomm_ring`, `abel` or `module` instead.
+Try this:
+  [apply] ring_nf
+  
+  The `ring` tactic failed to close the goal. Use `ring_nf` to obtain a normal form.
+    
+  Note that `ring` works primarily in *commutative* rings. If you have a noncommutative ring, abelian group or module, consider using `noncomm_ring`, `abel` or `module` instead.
+Try this:
+  [apply] ring_nf
+  
+  The `ring` tactic failed to close the goal. Use `ring_nf` to obtain a normal form.
+    
+  Note that `ring` works primarily in *commutative* rings. If you have a noncommutative ring, abelian group or module, consider using `noncomm_ring`, `abel` or `module` instead.
+Try this:
+  [apply] ring_nf
+  
+  The `ring` tactic failed to close the goal. Use `ring_nf` to obtain a normal form.
+    
+  Note that `ring` works primarily in *commutative* rings. If you have a noncommutative ring, abelian group or module, consider using `noncomm_ring`, `abel` or `module` instead.
+Try this:
+  [apply] ring_nf
+  
+  The `ring` tactic failed to close the goal. Use `ring_nf` to obtain a normal form.
+    
+  Note that `ring` works primarily in *commutative* rings. If you have a noncommutative ring, abelian group or module, consider using `noncomm_ring`, `abel` or `module` instead.
+Try this:
+  [apply] ring_nf
+  
+  The `ring` tactic failed to close the goal. Use `ring_nf` to obtain a normal form.
+    
+  Note that `ring` works primarily in *commutative* rings. If you have a noncommutative ring, abelian group or module, consider using `noncomm_ring`, `abel` or `module` instead.
+Try this:
+  [apply] ring_nf
+  
+  The `ring` tactic failed to close the goal. Use `ring_nf` to obtain a normal form.
+    
+  Note that `ring` works primarily in *commutative* rings. If you have a noncommutative ring, abelian group or module, consider using `noncomm_ring`, `abel` or `module` instead.
+Try this:
+  [apply] ring_nf
+  
+  The `ring` tactic failed to close the goal. Use `ring_nf` to obtain a normal form.
+    
+  Note that `ring` works primarily in *commutative* rings. If you have a noncommutative ring, abelian group or module, consider using `noncomm_ring`, `abel` or `module` instead.
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1494:48: warning: Used `tac1 <;> tac2` where `(tac1; tac2)` would suffice
+
+Note: This linter can be disabled with `set_option linter.unnecessarySeqFocus false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1626:60: warning: 'norm_num' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1626:60: warning: this tactic is never executed
+
+Note: This linter can be disabled with `set_option linter.unreachableTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1890:60: warning: 'norm_num' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/ForwardReal.lean:1890:60: warning: this tactic is never executed
+
+Note: This linter can be disabled with `set_option linter.unreachableTactic false`

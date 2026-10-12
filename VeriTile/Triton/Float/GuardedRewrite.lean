@@ -1,3 +1,5 @@
+import VeriTile.Triton.Source
+import VeriTile.Meta.Specification
 import VeriTile.Triton.Float.ScalarArithmeticLaws
 
 /-! Contextual fp32 rewrites under the domains of the admitted scalar atoms.
@@ -158,5 +160,26 @@ theorem mul_commute {α : Type} [Inhabited α] (R : ScalarArithmetic.Rules)
   | some t =>
     simp only [Option.bind_some, run]
     rw [assignment_mul_commute R M D hM t out site.left site.right (hd t hp)]
+
+/-- A single source difference with its actual execution context retained. -/
+def Contextual {α : Type} [Inhabited α] (M : Algebra α) (s : State α)
+    (before after : List ComputeStmt) (lhs rhs : ComputeStmt) : Prop :=
+  run M (before ++ lhs :: after) s = run M (before ++ rhs :: after) s
+
+@[spec_rule] theorem contextual_add_commute {α : Type} [Inhabited α]
+    (R : ScalarArithmetic.Rules) (M : Algebra α) (D : Domain α)
+    (hM : Models R.assumptions M D) (s : State α) (before after : List ComputeStmt)
+    (out : RegName) (a b : Op .real shape)
+    (hd : ({ before := before, shape := shape, left := a, right := b } : Site).Holds M D s) :
+    Contextual M s before after (assignment .add out a b) (assignment .add out b a) :=
+  add_commute R M D hM s ⟨before, shape, a, b⟩ out after hd
+
+@[spec_rule] theorem contextual_mul_commute {α : Type} [Inhabited α]
+    (R : ScalarArithmetic.Rules) (M : Algebra α) (D : Domain α)
+    (hM : Models R.assumptions M D) (s : State α) (before after : List ComputeStmt)
+    (out : RegName) (a b : Op .real shape)
+    (hd : ({ before := before, shape := shape, left := a, right := b } : Site).Holds M D s) :
+    Contextual M s before after (assignment .mul out a b) (assignment .mul out b a) :=
+  mul_commute R M D hM s ⟨before, shape, a, b⟩ out after hd
 
 end VeriTile.Triton.FP.GuardedRewrite

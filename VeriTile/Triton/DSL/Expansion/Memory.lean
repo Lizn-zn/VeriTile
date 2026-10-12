@@ -31,18 +31,24 @@ private def expandLoadOtherAs? (dtype : DInfo) (e : TSyntax `tritonExpr) :
       | `(tritonExpr| 0.0) =>
           pure (some ⟨← `(Op.constNat 0), .nat, SInfo.scalar, none, none⟩)
       | _ => pure none
-  | .int =>
+  | .int | .int8 =>
       match e with
       | `(tritonExpr| $n:num) =>
+          if dtype == .int8 && n.getNat ≥ 128 then
+            Macro.throwError "tl.load: int8 other must fit the signed byte range"
           let t : TSyntax `term := ⟨Syntax.mkNumLit (toString n.getNat)⟩
-          pure (some ⟨← `(Op.constInt ($t : Int)), .int, SInfo.scalar, none, none⟩)
+          pure (some ⟨← `(Op.constInt ($t : Int)), dtype, SInfo.scalar, none, none⟩)
       | `(tritonExpr| -$n:num) =>
+          if dtype == .int8 && n.getNat > 128 then
+            Macro.throwError "tl.load: int8 other must fit the signed byte range"
           let t : TSyntax `term := ⟨Syntax.mkNumLit (toString n.getNat)⟩
-          pure (some ⟨← `(Op.constInt (-($t : Int))), .int, SInfo.scalar, none, none⟩)
+          pure (some ⟨← `(Op.constInt (-($t : Int))), dtype, SInfo.scalar, none, none⟩)
       | `(tritonExpr| 0.0) =>
-          pure (some ⟨← `(Op.constInt 0), .int, SInfo.scalar, none, none⟩)
+          pure (some ⟨← `(Op.constInt 0), dtype, SInfo.scalar, none, none⟩)
       | `(tritonExpr| $($t:term)) =>
-          pure (some ⟨← `(Op.constInt $t), .int, SInfo.scalar, none, none⟩)
+          if dtype == .int8 then
+            Macro.throwError "tl.load: int8 other requires a byte literal or a typed byte expression"
+          pure (some ⟨← `(Op.constInt $t), dtype, SInfo.scalar, none, none⟩)
       | _ => pure none
   | .bool =>
       match e with
@@ -78,6 +84,7 @@ private def dtypeName : DInfo → String
   | .f8e4 => "f8e4"
   | .f8e5 => "f8e5"
   | .int => "int"
+  | .int8 => "int8"
   | .nat => "nat"
   | .bool => "bool"
   | .ptr => "ptr"
@@ -100,7 +107,8 @@ partial def expandLoad (expandExpr : ExprExpander)
   let mut otherSyntax : Option (TSyntax `tritonExpr) := none
   let mut dtype? : Option DInfo := none
   let mut boundaryCheck? : Option (TSyntax `term) := none
-  let mut padding : TSyntax `term ← `(PaddingOption.zero)
+  let mut paddingOption? : Option String := none
+  let mut padding : TSyntax `term ← `(PaddingOption.unspecified)
   for kw in kwargs do
     match kw with
     | `(tritonMemKwarg| boundary_check=$axes:term) =>
@@ -119,8 +127,11 @@ partial def expandLoad (expandExpr : ExprExpander)
         if boundaryCheck?.isSome then
           Macro.throwError "tl.load: duplicate `boundary_check=` kwarg"
         boundaryCheck? := some (← numArrayAsNatListTerm axes)
-    | `(tritonMemKwarg| padding_option="zero") =>
-        padding := ← `(PaddingOption.zero)
+    | `(tritonMemKwarg| padding_option=$value:str) =>
+        if paddingOption?.isSome then
+          Macro.throwError "tl.load: duplicate `padding_option=` kwarg"
+        paddingOption? := some value.getString
+        padding := ← paddingOptionTerm value.getString
     | `(tritonMemKwarg| eviction_policy="evict_last") =>
         pure ()
     | `(tritonMemKwarg| eviction_policy="evict_first") =>
@@ -133,7 +144,7 @@ partial def expandLoad (expandExpr : ExprExpander)
              "`. Only `mask`, `other`, `dtype`, `boundary_check`, `padding_option`, and `eviction_policy` are recognized.")
         if dtype?.isSome then
           Macro.throwError "tl.load: duplicate `dtype=` kwarg"
-        dtype? := some (← expandDType dt)
+        dtype? := some (← expandStorageDType dt)
     | `(tritonMemKwarg| $name:ident = $val:tritonExpr) =>
         match name.getId.getString! with
         | "mask"  =>
@@ -145,7 +156,7 @@ partial def expandLoad (expandExpr : ExprExpander)
         | "dtype" =>
             if dtype?.isSome then
               Macro.throwError "tl.load: duplicate `dtype=` kwarg"
-            dtype? := some (← expandDTypeExpr val)
+            dtype? := some (← expandStorageDTypeExpr val)
         | unknown =>
             let msg : String :=
               "tl.load: unknown kwarg `" ++ unknown ++
@@ -155,29 +166,34 @@ partial def expandLoad (expandExpr : ExprExpander)
   let explicitOrDefaultDType := dtype?.orElse (fun _ => defaultDType)
   let loadDType (spDType? : Option DInfo := none) : DInfo :=
     explicitOrDefaultDType.orElse (fun _ => spDType?) |>.getD .real
-  let mkLoadOutWithDType (outDType : DInfo) (mem mask : TSyntax `term) (shape : SInfo) : MacroM EOut := do
+  let mkLoadOutWithDType (outDType : DInfo) (mem mask : TSyntax `term)
+      (shape : SInfo) (block : Bool) : MacroM EOut := do
+    if !block && paddingOption?.any (fun value => !value.isEmpty) then
+      Macro.throwError "tl.load: nonempty `padding_option` requires a block pointer"
+    -- Ordinary pointer loads do not use padding. Retain their existing AST.
+    let loadPadding ← if block then pure padding else `(PaddingOption.zero)
     match outDType with
     | .fp32 =>
-        let algTerm ← `(Op.load TileDType.real $mem $mask)
+        let algTerm ← `(Op.load TileDType.real $mem $mask $loadPadding)
         pure ⟨algTerm, .real, shape,
-          some (← fp32ComputeLoadExpr mem mask), some .fp32⟩
+          some (← fp32ComputeLoadExpr mem mask loadPadding), some .fp32⟩
     | _ =>
         let dt ← outDType.term
-        pure ⟨← `(Op.load $dt $mem $mask), outDType, shape, none, none⟩
+        pure ⟨← `(Op.load $dt $mem $mask $loadPadding), outDType, shape, none, none⟩
   let staticPtr? ←
     if boundaryCheck?.isSome then
       pure none
     else
       expandStaticPtrExpr env p
   let outDType := loadDType (staticPtr?.bind (fun sp => sp.regionDType?))
-  let mkLoadOut (mem mask : TSyntax `term) (shape : SInfo) : MacroM EOut := do
-    mkLoadOutWithDType outDType mem mask shape
+  let mkLoadOut (mem mask : TSyntax `term) (shape : SInfo) (block : Bool := Bool.false) : MacroM EOut := do
+    mkLoadOutWithDType outDType mem mask shape block
   if let some boundaryCheck := boundaryCheck? then
     if maskTerm.isSome || otherSyntax.isSome then
       Macro.throwError "tl.load: block-pointer `boundary_check` cannot be combined with `mask` or `other`"
     let p' ← expandExpr env p
     ensureDType .blockPtr p'.dtype "tl.load block pointer"
-    return ← mkLoadOut (← `(MemAccess.blockPtr $p'.term $boundaryCheck)) (← `(MaskOpt.none)) p'.shape
+    return ← mkLoadOut (← `(MemAccess.blockPtr $p'.term $boundaryCheck)) (← `(MaskOpt.none)) p'.shape Bool.true
   let otherIsNone := otherSyntax.any isNoneExpr
   let otherTerm ←
     match otherSyntax with
@@ -190,6 +206,12 @@ partial def expandLoad (expandExpr : ExprExpander)
             match ← expandLoadOtherAs? outDType other with
             | some out => pure out
             | none => expandExpr env other
+          -- Triton converts a floating `other` to the pointer element dtype.
+          -- fp32 uses the existing real-carrier compute-load representation.
+          let other' ← match outDType with
+            | .fp16 | .bf16 | .f8e4 | .f8e5 | .floatVar _ =>
+                coerceFloatOperand outDType other'
+            | _ => pure other'
           pure (some (other'.term, other'.dtype, other'.shape, other'.computeDType?))
   if let some (_, otherDType, _, _) := otherTerm then
     unless otherDType == outDType || (outDType == .fp32 && otherDType == .real) do
@@ -209,7 +231,7 @@ partial def expandLoad (expandExpr : ExprExpander)
       | none =>
           let p' ← expandExpr env p
           if p'.dtype == .blockPtr then
-            mkLoadOut (← `(MemAccess.blockPtr $p'.term ([] : List Nat))) (← `(MaskOpt.none)) p'.shape
+            mkLoadOut (← `(MemAccess.blockPtr $p'.term ([] : List Nat))) (← `(MaskOpt.none)) p'.shape Bool.true
           else
             ensureDType .ptr p'.dtype "tl.load pointer"
             mkLoadOut (← `(MemAccess.ptr $p'.term)) (← `(MaskOpt.none)) p'.shape
@@ -275,7 +297,7 @@ partial def expandStore (expandExpr : ExprExpander)
         if boundaryCheck?.isSome then
           Macro.throwError "tl.store: duplicate `boundary_check=` kwarg"
         boundaryCheck? := some (← numArrayAsNatListTerm axes)
-    | `(tritonMemKwarg| padding_option="zero") =>
+    | `(tritonMemKwarg| padding_option=$_:str) =>
         Macro.throwError "tl.store: `padding_option` is only valid on tl.load"
     | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
         unless name.getId.getString! == "dtype" do
@@ -308,6 +330,7 @@ partial def expandStore (expandExpr : ExprExpander)
     match ← expandLeanAntiquoteAs? storeExpected v with
     | some out => pure out
     | none => expandExpr env v
+  let v' := v'.forgetStorageWidth
   let valueExpr ←
     match v'.computeTerm with
     | some ce => pure ce
@@ -412,7 +435,7 @@ partial def expandAtomicAdd (expandExpr : ExprExpander)
     match kw with
     | `(tritonMemKwarg| boundary_check=$_:term) =>
         Macro.throwError "tl.atomic_add: `boundary_check=` is not supported; block-pointer atomics are deferred"
-    | `(tritonMemKwarg| padding_option="zero") =>
+    | `(tritonMemKwarg| padding_option=$_:str) =>
         Macro.throwError "tl.atomic_add: `padding_option` is only valid on tl.load"
     | `(tritonMemKwarg| $name:ident = $dt:tritonDType) =>
         unless name.getId.getString! == "dtype" do
@@ -442,6 +465,7 @@ partial def expandAtomicAdd (expandExpr : ExprExpander)
     match ← expandLeanAntiquoteAs? atomicExpected v with
     | some out => pure out
     | none => expandExpr env v
+  let v' := v'.forgetStorageWidth
   let valueExpr ←
     match v'.computeTerm with
     | some ce => pure ce

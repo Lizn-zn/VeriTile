@@ -1,0 +1,141 @@
+import bench.tritonbench_g.cross_entropy_ops.Proofs.ForwardProjection
+namespace VeriTile.Bench.TritonBenchG.CrossEntropyOps.ForwardIO
+open VeriTile.Triton ForwardReal
+set_option maxHeartbeats 3000000
+set_option maxRecDepth 10000
+def sourceIO (storage : Storage) (swapped : Bool)
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
+    (HAS_SMOOTHING SPLIT : Bool) : MetaMasked2DKernelIO₂ₓ₃ where
+  kernel := (forward storage swapped loss_ptr lse_ptr z_loss_ptr logits_ptr
+    labels_ptr smoothing logit_scale lse_square_scale ignored_index total_classes
+    class_start_idx n_cols n_rows logits_row_stride BLOCK_SIZE HAS_SMOOTHING SPLIT).eraseDType
+  projection := ForwardProjection.projection storage swapped loss_ptr lse_ptr z_loss_ptr logits_ptr
+    labels_ptr smoothing logit_scale lse_square_scale ignored_index total_classes
+    class_start_idx n_cols n_rows logits_row_stride BLOCK_SIZE HAS_SMOOTHING SPLIT
+  mbufL := Region.cast labels_ptr
+  inp := logits_ptr
+  out1 := loss_ptr
+  out2 := lse_ptr
+  out3 := z_loss_ptr
+  B := BLOCK_SIZE
+  mwinL := fun pid₀ _ => pid₀
+  read := fun pid₀ pid₁ _ j =>
+    pid₀ * logits_row_stride + (pid₁ * BLOCK_SIZE + j.val)
+  mask := fun _ pid₁ _ j => pid₁ * BLOCK_SIZE + j.val < n_cols
+  gwin := fun pid₀ _ lab =>
+    pid₀ * logits_row_stride + (lab - class_start_idx).toNat
+  gmask := fun _ pid₁ lab =>
+    lab ≠ ignored_index ∧
+    lab - class_start_idx ≥ (↑(pid₁ * BLOCK_SIZE) : Int) ∧
+    lab - class_start_idx < (↑(min n_cols ((pid₁ + 1) * BLOCK_SIZE)) : Int)
+  write1 := fun pid₀ pid₁ _ => pid₁ * n_rows + pid₀
+  write2 := fun pid₀ pid₁ _ => pid₁ * n_rows + pid₀
+  write3 := fun pid₀ pid₁ _ => pid₁ * n_rows + pid₀
+  writeMask3 := fun _ _ _ => SPLIT = Bool.false
+
+open scoped VeriTile.Triton.MetaMasked2DKernelIO₂ₓ₃ in
+
+theorem implements (storage : Storage) (swapped : Bool)
+    (loss_ptr lse_ptr z_loss_ptr logits_ptr : RegionName) (labels_ptr : Region .int)
+    (smoothing logit_scale lse_square_scale : ℝ) (ignored_index : Int)
+    (total_classes : Nat) (class_start_idx : Int)
+    (n_cols n_rows logits_row_stride BLOCK_SIZE : Nat)
+    (HAS_SMOOTHING SPLIT : Bool)
+    (hB : 0 < BLOCK_SIZE)
+    (hne : lse_ptr ≠ loss_ptr) (hneZ : lse_ptr ≠ z_loss_ptr)
+    (hLL : lse_ptr ≠ logits_ptr) (hLZ : loss_ptr ≠ z_loss_ptr) :
+    sourceIO storage swapped loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr smoothing
+        logit_scale lse_square_scale ignored_index total_classes class_start_idx
+        n_cols n_rows logits_row_stride BLOCK_SIZE HAS_SMOOTHING SPLIT ⊨
+      fun _ pid₁ lab xs g =>
+        if pid₁ * BLOCK_SIZE < n_cols then
+          (ceLossLocal n_cols total_classes BLOCK_SIZE smoothing logit_scale
+             lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+             pid₁ lab xs g,
+           ceBlockLSE n_cols BLOCK_SIZE pid₁ logit_scale xs,
+           ceZLossLocal n_cols BLOCK_SIZE logit_scale lse_square_scale
+             ignored_index pid₁ lab xs)
+        else (0, 0, 0) := by
+  obtain ⟨n, rfl⟩ := Nat.exists_eq_succ_of_ne_zero hB.ne'
+  refine MetaMasked2DKernelIO₂ₓ₃.Implements.intro _ ?_ ?_ ?_
+  · apply ForwardProjection.flatten_as_base storage swapped loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT
+    exact cross_entropy_fwd_flattenOk loss_ptr lse_ptr z_loss_ptr logits_ptr
+      labels_ptr smoothing logit_scale lse_square_scale ignored_index total_classes
+      class_start_idx n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT
+  · intro bounds s lab hlab hbL hbr hbg hbw1 hbw2 hbw3
+    apply ForwardProjection.safe_as_base storage swapped loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT bounds s
+    exact cross_entropy_fwd_traceSafe loss_ptr lse_ptr z_loss_ptr logits_ptr
+      labels_ptr smoothing logit_scale lse_square_scale ignored_index total_classes
+      class_start_idx n_cols n_rows logits_row_stride n HAS_SMOOTHING SPLIT bounds
+      s lab hlab hbL (fun j hj => hbr j hj) (fun h1 h2 h3 => hbg ⟨h1, h2, h3⟩)
+      (hbw1 trivial) (hbw2 trivial) (fun hSPf => hbw3 hSPf)
+  · intro s₀ lab xs g hlab hx hg
+    obtain ⟨s1, hexec, hval1, hval2, hval3, hframe⟩ := cross_entropy_fwd_region_run
+      loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr smoothing logit_scale
+      lse_square_scale ignored_index total_classes class_start_idx n_cols n_rows
+      logits_row_stride n HAS_SMOOTHING SPLIT hne hneZ hLL hLZ s₀ lab xs g hlab
+      (fun j hj => hx j hj) (fun hgm => hg hgm)
+    refine ⟨s1, (ForwardProjection.executes_as_base storage swapped loss_ptr lse_ptr z_loss_ptr logits_ptr labels_ptr
+      smoothing logit_scale lse_square_scale ignored_index total_classes class_start_idx
+      n_cols n_rows logits_row_stride (n+1) HAS_SMOOTHING SPLIT s₀).trans hexec, fun _ => ?_, fun _ => ?_, fun hSPf => ?_,
+      fun r o h1 h2 h3 => ?_⟩
+    · rw [show ((if s₀.pids 1 * (n+1) < n_cols then
+          (ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+             lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+             (s₀.pids 1) lab xs g,
+           ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs,
+           ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+             (s₀.pids 1) lab xs)
+        else ((0:ℝ), (0:ℝ), (0:ℝ))).1 : ℝ)
+        = (if s₀.pids 1 * (n+1) < n_cols then
+            ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+              lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+              (s₀.pids 1) lab xs g
+          else 0) from by split <;> rfl]
+      exact hval1
+    · rw [show ((if s₀.pids 1 * (n+1) < n_cols then
+          (ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+             lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+             (s₀.pids 1) lab xs g,
+           ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs,
+           ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+             (s₀.pids 1) lab xs)
+        else ((0:ℝ), (0:ℝ), (0:ℝ))).2.1 : ℝ)
+        = (if s₀.pids 1 * (n+1) < n_cols then
+            ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs
+          else 0) from by split <;> rfl]
+      exact hval2
+    · rw [show ((if s₀.pids 1 * (n+1) < n_cols then
+          (ceLossLocal n_cols total_classes (n+1) smoothing logit_scale
+             lse_square_scale ignored_index class_start_idx HAS_SMOOTHING SPLIT
+             (s₀.pids 1) lab xs g,
+           ceBlockLSE n_cols (n+1) (s₀.pids 1) logit_scale xs,
+           ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+             (s₀.pids 1) lab xs)
+        else ((0:ℝ), (0:ℝ), (0:ℝ))).2.2 : ℝ)
+        = (if s₀.pids 1 * (n+1) < n_cols then
+            ceZLossLocal n_cols (n+1) logit_scale lse_square_scale ignored_index
+              (s₀.pids 1) lab xs
+          else 0) from by split <;> rfl]
+      exact hval3 hSPf
+    · refine hframe r o ?_ ?_ ?_
+      · rcases h1 with hner | hno
+        · exact fun hc => hner hc.1.symm
+        · exact fun hc => hno trivial hc.2.symm
+      · rcases h2 with hner | hno
+        · exact fun hc => hner hc.1.symm
+        · exact fun hc => hno trivial hc.2.symm
+      · rcases h3 with hner | hno
+        · exact fun _ hc => hner hc.1.symm
+        · exact fun hSPf hc => hno hSPf hc.2.symm
+
+#guard_msgs (drop info) in
+#auditModuleAxioms
+end VeriTile.Bench.TritonBenchG.CrossEntropyOps.ForwardIO

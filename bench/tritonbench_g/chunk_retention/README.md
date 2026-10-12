@@ -1,51 +1,22 @@
 # chunk_retention
 
-- Source file: `chunk_retention.py` (upstream `data/TritonBench_G_v1/chunk_retention.py`)
-- Corpus: TritonBench-G v1
-- Size: 451 lines, 4 `@triton.jit` kernels
-- Status: **PORTED** (both state-recurrence kernels) — `ChunkRetention.lean`,
-  main theorems `crh_fwd_h_exec_genuine` and `crh_bwd_dh_exec_genuine`
-  (`exec`-level, 0 `sorry`).
+The four JIT sources in `chunk_retention.py` share complete typed original and candidate implementations in `Kernels.lean`. `Correct.lean` states eight real specifications; `FPEquiv.lean` states four conditional FP equivalences. Execution, loop, memory and arithmetic proofs are in `Proofs/`.
 
-The retention (decayed) sibling of the ported `chunk_linear_attn` pair: the
-file's four kernels split two/two, and **this port covers the state-recurrence
-pair** (`fwd_kernel_h`, the file's first kernel, and `bwd_kernel_dh`);
-`fwd_kernel_o`/`bwd_kernel_dqkv` are the trusted boundary.
+| Source | Real contract | Candidate and FP atom |
+|---|---|---|
+| `chunk_retention_fwd_kernel_h` | Seeded decayed recurrence, pre-update history, optional final state; includes the last partial chunk's shorter decay length | Commute decayed carry and weighted dot; `add_commute` |
+| `chunk_retention_fwd_kernel_o` | Row-decayed Q·H plus causal, distance-decayed Q·K·V; sums all K blocks, then scales | Move the final scale factor to the left; `mul_commute` |
+| `chunk_retention_bwd_kernel_dh` | Actual untransposed dO·V contraction over reverse chunks, multiplied by full-chunk decay and written once | Commute carry and weighted dot; `add_commute` |
+| `chunk_retention_bwd_kernel_dqkv` | All V blocks and all three dQ/dK/dV outputs, with their query/key/causal decay weights | Commute the final weighted dQ carry and score-gradient dot; `add_commute` |
 
-`fwd_kernel_h` runs the decayed recurrence
+The head rate is `1 - 2^(-5 - head % H)`. Integer row offsets remain signed, including negative exponents in unused tail lanes. The explicit `arange(...).to(tl.int32)` states the signed index type; implicit float promotion is handled by the DSL. Intrinsic `tl.math.exp2` and `tl.math.log2`, casts, TF32-disabled dots, branches, pointer order and stores are retained. The reverse loop uses an ascending counter with index `NT-1-j`.
 
-```
-h[·,·,t] = H_t,   H_0 = (h0 or 0),   H_{t+1} = d_b(t)·H_t + k_tᵀ·(v_t ⊙ d_i(t))
-```
+The supplied backward-state source requires square `BT` tiles. It does not read `q` or `scale`, loads an unused history tile, does not transpose V, and applies the chunk factor only after the loop. Its sole store uses base `head*historyHead + keyBlock*K*V`, row offset `valueBlock*BT`, and column offset zero. These behaviors are preserved in the formula and access bounds. Its public real contract requires `NT>0` because the Python source uses the loop index after the loop.
 
-with the per-head decay `b_b = log2(1 - 2^(-5 - i_h))` and per-chunk factors
-`2^(len(t)·b_b)`, where `len(t)` is `T % BT` on a **ragged last chunk** — the
-kernel rebinds `d_b`/`d_i` inside the loop on that chunk, and the proof's loop
-invariant carries the register clause conditionally (`c < NT →` standard) so
-one theorem covers ragged and exact division alike, plus all four
-`USE_INITIAL_STATE`/`STORE_FINAL_STATE` configurations. The spec `crhState` is
-*recursive* (not a power closed form): the ragged chunk gives the final step
-its own decay length, and the recursion makes the per-chunk advance
-definitional. Everything stays symbolic (dims, strides, `H`, `NT`); the layout
-side conditions are the same three as `chunk_linear_attn`.
+Each real contract includes successful execution in finite flat allocations, bounds on actual active accesses, active-output injectivity and preservation of all other tagged cells. Source block padding is unspecified; the zero-extended formulas explicitly require a zero unspecified-value oracle. Required aliasing conditions are visible in the public entries. Dimensions and strides remain symbolic. Compatible dot storage supports fp32/fp16/bf16, with the independent storage and output types exposed by each source.
 
-Three faithfulness disclosures (all in the `.lean` preamble):
+FP requirements check the actual reached operands of the admitted local rewrite. They retain dtype, casts and dot options, and do not use precision erasure. `Proofs/TypedExecution.lean` supplies complete original/candidate executions with nonempty domains under a named abstract arithmetic model; these witnesses are not GPU measurements. Experiment shapes select atomic assumptions and do not become symbolic proof dimensions.
 
-1. The decay prologue's implicit int→float promotions are spelled
-   `tl.toReal(...)` — a `Translation-surface blocker:` registered in
-   `proof_blockers.md` (the `rbe_triton_transform` precedent).
-2. On the ragged chunk, `(T % BT) - o_i - 1` goes negative on an integer tile
-   upstream; the `.nat` channel truncates those lanes at `0`. The divergence
-   is unobservable through every store — those lanes multiply `v` rows beyond
-   `T`, which the block-pointer boundary check zeroes.
-3. **`bwd_kernel_dh` is only compilable square** (`BK = BT = BV`, forced by
-   its own `tl.dot` shapes), its loop is store-free with a dead `dh` load, and
-   its single final store reuses the loop variable `i_t` *after* the loop
-   (Python leaves `0`; the surface pre-initializes `i_t = 0` since the DSL
-   scopes loop-body names). The headline proves exactly what this kernel
-   computes — `dh` block = `d_b · Σ_{all chunks} (do ⊙ d_i)·v` under its
-   scrambled contraction — with the oddities documented, not smoothed over.
+`bench/tests/ChunkRetentionReal.lean` exercises all four full real contracts with 16-wide tiles, nonzero program IDs and partial time/key/value tails. It checks multiple K/V/time iterations, all forward seed/final flags, nontrivial head decay, all gradient outputs and adjacent tagged-cell preservation.
 
-`bwd_kernel_dh` descends (`range(NT-1, -1, -1)`); the surface spells the
-ascending change of variable (`chunk_linear_attn` respelling, zero library
-change). Arithmetic is over `ℝ`; the host launch is the trusted boundary.
+Accepted in `../verification_round.md`. The 3,470-job integrated build, four real regressions, source gates and coverage review pass. Independent comparator/trust receipt `Logs/comparator-check-v3__2clu` accepts all 20 case/regression files, 299 named declarations and 1,759 kernel theorem targets, with 1,381 matching source/configuration fingerprints. Host composition, allocation/grid construction, backend tile legality, inter-program races and performance remain outside these per-JIT contracts.

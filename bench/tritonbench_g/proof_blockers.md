@@ -5,11 +5,10 @@ both Lean and Python source fingerprints by `bench/coverage_review.py` and
 rendered into `proof_gap_manifest.tsv` by `bench/check_proof_gap_manifest.py`.
 The [browsable coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)
 shows exact theorem statements, IO definitions, Python functions, numeric
-models, and limitations for all 345 headlines across 173 ports.
+models, and limitations for all 431 headlines across 173 ports.
 
-The 2026-09-24 review records 8 `full_value_candidate`, 296 `specialization`,
-37 `precomputed_input_slice`, 3 `pre_rounding_slice`, and 1 `blocked_summary`
-rows. A candidate is subject to its model and explicit assumptions; a scope
+The current review records 141 `full_value_candidate`, 258 `specialization`,
+27 `precomputed_input_slice`, 3 `pre_rounding_slice`, and 2 `blocked_summary` rows. A candidate is subject to its model and explicit assumptions; a scope
 review is not an independent certification of the Python translation or GPU
 execution. Source changes require a new review rather than automatically
 retaining a favorable label. Explicit source annotations cannot be overridden
@@ -17,7 +16,7 @@ by the review metadata. Axiom cleanliness is a separate property.
 
 Several headline statements consume prepared intermediates even when the file
 also contains a full producer surface or projection proof. For example,
-`flash_decode2_llama`, `flash_decode2_phi`, `chunk_cumsum_vector`, and
+`flash_decode2_llama`, `flash_decode2_phi`, and
 `layer_norm_ops` include writeback contracts whose inputs are already computed.
 The inventory records the actual headline's scope, without transferring claims
 from neighboring declarations. `rotary_emb` proves separate store contracts;
@@ -36,6 +35,29 @@ per-statement inventory. The sections below track additional named-surface,
 frame, and translation limitations. The mechanical translation scan remains
 a consistency gate, not a substitute for review against `review_criteria.md`.
 
+## Block-sparse public contract
+
+`block_sparse_attn/Correct.lean` now states complete source-to-initial-array
+correctness and flat IO for both source variants and all three storage types.
+The signed CSR loop, independent column stride, actual loads/dots/normalization
+and final masked stores are composed without a whole-body `hstep` premise.
+Arithmetic allocation windows imply access safety; the flat postcondition
+includes tagged outputs and every other memory cell. `FPEquiv.lean` exposes
+whole-source score-scale commutation using only admitted `mul_commute`.
+
+The translation-surface marker for `block_sparse_attn` covers explicit
+fp32/fp16/bf16 storage specialization, probability/output casts and a fixed
+`static_print` payload. Signed metadata, all masks, branches and `tl.exp`
+remain in the complete source; integer overflow and host launch are outside
+the per-program model.
+
+The old conditional summary and detached store slices remain explicitly marked
+in `Proofs/LegacySummary.lean`; neither public entry imports them. The manifest
+now describes the new public contracts. Final acceptance independently
+replayed all 59 case/test files, checked 480 named declarations and 2,709 kernel
+theorem targets, and verified all 953 snapshot input hashes. The case is
+complete for the displayed contracts; see [the case notes](block_sparse_attn/README.md).
+
 ## Correctness-Surface Blockers
 
 Every completed port must expose its correctness claim through a **named**
@@ -53,7 +75,7 @@ correctness as an inline exec-existential
 
 which proves termination and every stored output cell but **omits the frame** —
 "no cell outside the write set changed" is not part of the statement. **None**
-of the 25 headlines across these files carries a frame conjunct. Lifting one to `⊨`
+of the 16 headlines across these files carries a frame conjunct. Lifting one to `⊨`
 is therefore a *proof* obligation (fit an IO skin, discharge `FlattenOk` /
 `TraceSafeR`, prove the frame), not a rename — which is why they are registered
 here rather than silently accepted.
@@ -68,12 +90,6 @@ and the audit rejects both an unregistered offender and a stale entry here.
 
 | Port | Headlines | Frame in statement |
 |---|---|---|
-| `bmm_optimized` | `bmm_o_exec_genuine` | no |
-| `chunk_bwd_dqkg` | `chunk_bwd_dqkg_exec_genuine` | no |
-| `chunk_gla_fwd` | `chunk_gla_fwd_o_exec_genuine` | no |
-| `chunk_linear_attn` | `cla_fwd_h_exec_genuine`, `cla_bwd_dh_exec_genuine` | no |
-| `chunk_retention` | `crh_fwd_h_exec_genuine`, `crh_bwd_dh_exec_genuine` | no |
-| `chunk_retention_ops` | `cro_fwd_h_exec_genuine`, `cro_bwd_dh_exec_genuine` | no |
 | `int4_matmul` | `int4_matmul_exec_genuine` | no |
 | `int8_dequant_matmul` | `int8_dequant_matmul_exec_genuine` | no |
 | `int8_matmul_kernel` | `int8_matmul_kernel_exec_genuine` | no |
@@ -85,56 +101,38 @@ and the audit rejects both an unregistered offender and a stale entry here.
 | `parallel_attention` | `pa_fwd_o_exec_genuine`, `pa_bwd_dkv_exec_genuine` | no |
 | `parallel_retention_attention` | `pra_fwd_o_exec_genuine`, `pra_bwd_dkv_exec_genuine` | no |
 
-These are the 16 ports added between 2026-08-10 and 2026-08-25 (ports 156–173:
+These are the 10 remaining ports added between 2026-08-10 and 2026-08-25 (ports 156–173:
 the descending-lever, fp8 and integer families). Every other port states its
 headline on a named surface.
 
 ### What each of these is actually blocked on
 
-Reconnaissance (2026-08-27), so the debt is planned rather than guessed. The
-16 split into two families, and the blocker is different in each.
+The remaining 10 ports fall into two signature families. All contain loops,
+so completing them requires actual prologue/loop/store execution, active
+access bounds and a full memory frame. The shared `UKernelIO.ImplementsAt`
+bridge now supports exact real execution with state-dependent launch
+conditions, as used by `bmm_optimized`. Existing streaming `ImplementsR`
+contracts remain available where appropriate; converting every proof to
+`execR` is no longer a prerequisite for a named correctness surface.
 
-**All 16 loop, and that fixes the face.** Every streaming skin in
-`KernelSpec.lean` carries only `ImplementsR` — the `⊨[R]` face, which runs
-under `execR`. Measured across the corpus: all 19 streaming skins are invoked
-with `ImplementsR.intro` and none has ever been used with the exact
-`Implements.intro` (the 33 exact-only skins are all non-streaming). So lifting
-any of these 16 is not "fit a skin and add a frame" on top of the existing
-proof — the existing stacks are all built on the exact `exec` side, and they
-have to be **mirrored onto `execR`**: the prologue run, the loop step and
-`forRangeTraceSafeR_inv` invariant, and the terminal store with the
-`writeMemAsR` readback/frame family. That mirror is the bulk of the cost, in
-every one of the 16.
-
-**Family 1 — three program axes, all-float channels (8 ports).** Seven of the
-eight already have an arity-matching skin, so at least no new library surface
+**Family 1 — three program axes, all-float channels (2 ports).** Both already have an arity-matching skin, so at least no new library surface
 is needed for the signature.
 
 | Port | channels in/out | arity-matching skin |
 |---|---|---|
-| `bmm_optimized` | `A`,`B` / `O` (2/1) | `StreamMetaMasked3DKernelIO₂` at `nMeta := 0` — **verified fit**: `bmm_chunk_fwd` already states its batched-matmul headline on exactly this skin and degeneracy |
-| `chunk_gla_fwd` | `q`,`v`,`g`,`h`,`A` / `o` (5/1) | `StreamMasked3DKernelIO₅` |
-| `chunk_linear_attn` | `k`,`v`,`h0` / `h`,`ht` (3/2) | `StreamMasked3DKernelIO₃ₓ₂` |
-| `chunk_retention` | `k`,`v`,`h0` / `h`,`ht` (3/2) | `StreamMasked3DKernelIO₃ₓ₂` |
-| `chunk_retention_ops` | `k`,`v`,`h0` / `h`,`ht` (3/2) | `StreamMasked3DKernelIO₃ₓ₂` |
 | `parallel_attention` | `q`,`k`,`v` / `o`,`z` (3/2) | `StreamMasked3DKernelIO₃ₓ₂` |
 | `parallel_retention_attention` | `q`,`k`,`v` / `o` (3/1) | `StreamMasked3DKernelIO₃` |
-| `chunk_bwd_dqkg` | 7 in / 3 out | none — would need a `₇ₓ₃`-shaped skin |
 
-Only the `bmm_optimized` row is a verified fit (a sibling port uses that skin
-today). The rest are **arity matches read off the surface signatures**; the
-in/out split for the `chunk_*` trio is inferred from the stored pointer names
-(`p_h`, `p_ht`), not from a checked store map. Confirm before building.
+These are arity matches read off the surface signatures; confirm input and
+output roles against the actual stores before selecting a contract.
 
-`bmm_optimized` is the cheapest entry point but not a free one. In its favour,
-its existing invariant `bmmInv` already carries `s.mem = s0.mem`, so prologue
-and K-loop touch no memory and the whole-kernel frame reduces to the frame of
-the single terminal masked scatter store. Against it: `bmm_chunk_fwd` runs
-`mask1 = mask2 = writeMask = True`, whereas `bmm_optimized` is ported at
-`DIVISIBLE_M = DIVISIBLE_N = DIVISIBLE_K = False` with real masks and carries
-both `GROUP_M` CTA-reorder arms; its template's `⊨` section is ~1100 lines; and
-per the paragraph above its ~600-line exec-side stack (`bmmPrologue_run`,
-`bmmLoop_step`, `bmmLoop_run`, `bmmStores_run`) needs an `execR` mirror first.
+`bmm_optimized` has left this blocker list. Its public contract now uses the
+shared pointwise `UKernelIO.ImplementsAt` bridge, with both runtime grid
+dimensions pinned, full active-address safety and preservation of all other
+memory cells. The source retains all eight mask arms and the final short CTA
+group. Its real product formula explicitly requires zero unspecified loads;
+`Proofs/UndefinedTail.lean` refutes removing that condition. Final acceptance
+is tracked separately in `verification_round.md`.
 
 **Family 2 — typed `.int` / `.nat` data channels (8 ports).** `int4_matmul`,
 `int8_dequant_matmul`, `int8_matmul_kernel`, `int8_matmul_quantization`,
@@ -153,6 +151,29 @@ that would move all eight, and the highest-leverage item on this list.
 
 ## Translation-Surface Blockers
 
+`attention_fwd_triton1` resolves the Python test's fp32 dtype aliases explicitly:
+its six casts target `p_h.dtype.element_ty`, four occurrences of `b_q.dtype`,
+and `p_o.dtype.element_ty`, all `tl.float32` for fp32 Q/K/V and the wrapper's
+same-dtype H/O allocations. Region metadata supplies load types. The explicit
+casts retain FP operations that the legacy alias shorthand would erase.
+The source mapping is documented in the directory README; Lean checks the
+resulting complete typed sources, not Python-to-Lean alias resolution.
+
+
+`attention_forward_triton` uses a fully inlined helper in `Kernels.lean`.
+`_attn_fwd_inner`'s entire loop replaces its call and return; its unused stage
+argument disappears. The source's 128/96 head constants become symbolic
+`BLOCK_DMODEL`/`HEAD_ACTIVE`; the supplied Python test selects fp16 Q/K/V and
+fp32 scale buffers, and the wrapper fixes fp16 output. These storage annotations
+and the explicit `tl.float16` terminal cast preserve that configuration.
+`tl.math.exp2`, the two dots (including `out_dtype=tl.float16`), the load masks,
+pointer updates and output store remain in the code. The real source/loop
+identities and named `FPAttentionSource.lean` cast/store/mask checks connect the
+proofs to the displayed source. This is a reviewed transcription exception;
+those Lean checks do not independently verify Python-to-Lean translation or GPU
+execution. The real mathematical claim requires whole KV blocks.
+
+
 A port whose Lean `triton { }` surface deliberately deviates from a literal
 transcription of the upstream Python kernel body declares that with an
 explicit `Translation-surface blocker:` line in its module preamble.
@@ -162,18 +183,48 @@ here and in `completion_audit.md`. The current registered set — each entry is
 a documented, deliberate surface deviation, not an unproven correctness gap
 unless stated:
 
-- `attn_fwd_triton` — the `_attn_fwd_inner` helper JIT (both call sites) is
-  inlined into the single streaming loop; the hard-coded `tl.arange(0, 128)` /
-  `< 96` head constants are generalized to the `BLOCK_DMODEL` / `HEAD_ACTIVE`
-  binders (the Python literals are the `128`/`96` instantiation of the
-  dimension-general top theorem).
-- `attn_fwd_causal` — same helper inlining and `128`/`96` → `BLOCK_DMODEL` /
-  `HEAD_ACTIVE` generalization as `attn_fwd_triton`.
+- `bgmv_expand_slice` — the source macro specializes input/weight dtype and
+  stages CAST_TYPE before register inference; the store spells out Triton's
+  implicit output conversion. The early return becomes a non-sentinel active
+  branch. Complete-source and precision regressions check all specializations;
+  real source correspondence, full flat IO and typed execution witnesses retain
+  the metadata, split calculation, masks, exact pointers and all numeric flags.
+- `attention_score` — Q/K/Out fp16 and M fp32 storage are explicit, with
+  `Out.type.element_ty` resolved to `tl.float16` for the supplied Python test
+  configuration. Explicit region lists retain all inputs and the output.
+  `FPAttentionScoreSource.lean` checks dot/load/store precision, signed window
+  arithmetic and the source's IS_EVEN_N-controlled query-tail selection.
+  Lean checks the transcription; the lexical gate does not verify this alias
+  resolution or GPU behavior.
+- `attn_fwd_triton` — both helper JIT calls are inlined with independent
+  pointer copies; the supplied bf16 Q/K/V/Out and fp32 scales are explicit.
+  The value dot preserves its V-to-fp16 cast and fp16 result. Both defined
+  outer stages and the finite additive penalty are retained. Head constants
+  `128`/`96` become `BLOCK_DMODEL`/`HEAD_ACTIVE`; undefined helper stages are
+  excluded. The changed historical model lives in `Proofs/LegacyExactMask`.
+- `attn_fwd_causal` — both JIT helper calls are inlined with separate local
+  pointers; fp16 Q/K/V/Out and fp32 scales are explicit. The `128`/`96`
+  constants are generalized to `BLOCK_DMODEL`/`HEAD_ACTIVE`. Both defined
+  outer stages and the finite additive penalty are retained; stages leaving
+  the Python helper bounds undefined are excluded. The changed historical
+  exact-mask model is isolated under `Proofs/LegacyExactMask.lean`.
 - `attention_fwd_triton2` — same helper inlining and `128`/`96` →
-  `BLOCK_DMODEL` / `HEAD_ACTIVE` generalization.
-- `attention_fwd_triton3` — the `_attn_fwd_inner` helper JIT is inlined into
-  the single streaming loop (its loads/`tl.where`/`tl.advance` appear in the
-  Lean surface but not in the Python `_attn_fwd` body).
+  `BLOCK_DMODEL` / `HEAD_ACTIVE` generalization, explicit fp16 Q/K/V and fp32
+  scale storage, and the wrapper's bf16 output alias resolved to `tl.bfloat16`.
+  The V-to-fp16 cast inside the fp16-output dot and final bf16 cast/store are
+  preserved in both sources and checked by `FPAttentionFwdTriton2Source.lean`.
+  The real projection/IO proofs transfer the independent attention formula;
+  partial KV tails have checked counterexamples.
+- `attention_fwd_triton3` — the helper JIT is inlined and fp16 Q/K/V/Out,
+  fp32 M/L and the source-dependent probability/output casts are explicit.
+  The current shared source retains signed windows and bounds, KV tail checks,
+  initial pointer advance, NaN alpha repair and all stores. Both real IO
+  contracts cover independent strides, INIT/END, grouped heads and checked
+  partial KV tails. The FP candidate changes only END normalization using
+  div_mul_rcp under actual finite/nonzero intermediate-value guards.
+  `Proofs/LegacySource.lean` preserves the altered historical transcription;
+  its claims are excluded from the public headline inventory. The checked
+  source-mask counterexample remains in `Proofs/SourceReview.lean`.
 - `parallel_attention` — the DSL has no cross-`@triton.jit` function-call
   surface, so the backward dk/dv helper `_parallel_rebased_bwd_dkv` is
   ported as a standalone kernel over universally-quantified scalar arguments
@@ -204,57 +255,36 @@ unless stated:
   `o_q[None, :] - o_k[:, None]` (no unary tile negation in the DSL; the two
   agree on every lane the causal `tl.where` keep mask retains), and the
   decay prologue's implicit int→float promotions are spelled with the
-  explicit `tl.toReal(...)` cast (the `chunk_retention` precedent). The
+  explicit `tl.toReal(...)` cast (the older recurrent-state translation). The
   port covers `parallel_retention_fwd_kernel` (the file's first kernel) and
   the dk/dv helper; the backward shell and `_parallel_retention_bwd_dq` are
   the trusted boundary.
-- `attention_llama` — the `USE_FP8` constexpr arm is dropped entirely
-  (parameter + both `if USE_FP8:` blocks): that path bit-reinterprets int8
-  K/V bytes as `tl.float8e5` (`.to(tl.float8e5, bitcast=True)`) and
-  re-encodes to fp16 — the fixed-width-cast ℝ-model-limit family
-  (`llama_ff_triton` / `sgmv_expand_slice` dropped-arm precedent), so only
-  the `USE_FP8 = False` arm is transcribed (upstream test cases 1/2; the
-  int8 cases 3/4 launch the dropped arm and are out of the modeled
-  surface). The `IS_CAUSAL` constexpr is split into twin surfaces
-  (`attention_llama_fwd_surface` / `attention_llama_fwd_causal_surface`,
-  the `triton_matmul` twin-surface precedent); the causal twin keeps both
-  `block_n_end` assignments and the causal `tl.where` statement, and the
-  loop bound is a runtime register in both arms (`forRangeDyn`). The K/V
-  loads' POSITIONAL `other` argument (`tl.load(k_ptrs, mask, 0.)`) has no
-  DSL spelling (the grammar has the `other=` kwarg only, and adding the
-  kwarg would break the audit's kwarg-sequence scan against the Python),
-  so they are spelled as plain masked loads whose masked-off lanes read
-  the `undef` carrier — pinned to `0` (Python's exact fill value) by the
-  headlines' `hundef` hypothesis. The host launch (grid,
-  `assert Lk in {16,32,64,128}`, `num_warps`/`num_stages`) is the trusted
-  boundary.
-- `bmm_optimized` — the `DIVISIBLE_M/N/K` `triton.heuristics` constexprs
-  select between arms in which the load/store *mask arguments* are `None`
-  or mask tiles; a register holding "`None` or a tile" has no DSL analogue
-  (`MaskOpt` is syntax-level), so the port fixes the constexpr assignment
-  `DIVISIBLE_M = DIVISIBLE_N = DIVISIBLE_K = False` — the fully-masked arm,
-  total for arbitrary `M, N, K` (the other arms are mask-elision
-  optimizations the host may select when a dimension happens to be
-  divisible). The `GROUP_M == 1` / `else` CTA-reorder branch is transcribed
-  in full (both arms; the runtime `GROUP_SIZE` boundary gate as a nested
-  `Stmt.ifThenElse`). The three batch-offset parameter reassignments
-  (`A += pid_b*M*K`, `B += pid_b*K*N`, `O += pid_b*M*N`) are folded into
-  the three pointer-tile constructions (the DSL cannot rebind a region
-  parameter), the tuple assignment `pid_m, pid_n = pidx, pidy` is split
-  into one statement each, and the single-argument `range(num_iters)` is
-  spelled `range($(0), num_iters, $(1))`. The `triton.autotune` config
-  sweep and the host launch are the trusted boundary.
-- `f8_conversion_utils` — Triton's `tl.store` implicitly casts the stored
-  value to the destination pointer's element type, and both hosts fix that
-  type outside the kernel text (`triton.reinterpret(x, tl.float8e5)` on the
-  fp8 side, a `torch.float16` allocation on the fp16 side); the DSL types a
-  store by its **value**, so the implicit casts are spelled explicitly —
-  `(x).to(tl.float16)` in `kernel_f8_to_f16`, `(x).to(tl.float8e5)` in
-  `kernel_f16_to_f8`. Python `BLOCK_SIZE: tl.constexpr` becomes a Lean
-  `Nat` parameter. The host launch (grid, the `reinterpret` calls, the
-  `numel` bookkeeping) is the trusted boundary; the f8-side *input*
-  buffer's grid membership is a host-pipeline fact the headlines do not
-  consume (inputs are exact ℝ per the `⊨[R]` convention).
+- `attention_llama` — `Kernels.lean` contains both USE_FP8 storage
+  specializations and preserves both IS_CAUSAL branches. Textual differences:
+  positional load zero-fill is written as `other=`, Q.dtype.element_ty resolves
+  to fp16, pointer-region dtypes are explicit, and the implicit fp16 output
+  conversion is spelled as a cast. Both int8-to-E5M2 reinterpretations and
+  subsequent fp16 casts are present; the FP8 arm is no longer omitted.
+  Source tests inspect dot precision, casts, masks and stores. The textual
+  scanner's specialization exception is not a Python-to-Lean proof.
+  Correct.lean exposes independent formulas and full flat IO for both storage
+  modes and versions, with its whole-block/nonempty-visible-row conditions.
+  FPEquiv.lean uses only add_commute and retains symbolic shapes/strides.
+  Host launch configuration and concrete hardware execution remain outside
+  these per-program specifications.
+- `bmm_optimized` — `Kernels.lean` specializes all eight `DIVISIBLE_M/N/K`
+  mask choices because `None` is syntax-level. Both CTA-reorder branches and
+  the final shortened group remain, as do all three pointer-parameter updates
+  and actual `tl.num_programs` calls. Tuple assignment is split and range
+  start/step are explicit. Common fp32/fp16/bf16 storage, fp32 dot accumulation
+  and `allow_tf32=false` are preserved; implicit store conversion is explicit.
+  Masked loads still omit `other`. The autotune sweep, fixed-width address
+  overflow and grid-wide execution are outside the per-program proof.
+- `cache_transform_triton` — both complete gathers specialize the nine independent
+  cosine/sine fp32/fp16/bf16 storage pairs because region dtype annotations are
+  syntax-level. Explicit signatures retain both inputs, signed metadata and
+  both outputs. Original masks, omitted `other`, the full decoding tile and
+  all strides remain; the only candidate edit commutes an exact index product.
 - `int4_matmul` — three disclosed surface deviations, none semantic.
   (1) The `SPLIT_K` constexpr is fixed to `1` (the `tl.store` epilogue arm;
   the autotune table sweeps `SPLIT_K ∈ {1,2}` and the atomic-add arm
@@ -499,9 +529,15 @@ unless stated:
   binders (`K = BLOCK_SIZE_K · numKBlocks`).
 - `matmul_triton_autotune` — the `tl.cdiv(K, BLOCK_SIZE_K)` trip count is the
   antiquoted `numKBlocks` binder; the K-loop counter is spelled `kk`.
-- `bmm_chunk_bwd` — the in-body `chunk_size_limit = min(chunk_size, seqlen -
-  pid_c·chunk_size)` is supplied as the precomputed `chunk_size_limit`
-  parameter (`seqlen` is not a surface binder).
+- `bmm_chunk_bwd` — host-selected A/Dout storage and dot dtypes are
+  specialized explicitly. The complete source now computes its own chunk
+  length and retains all residual arms, partial tails and output casts;
+  the former precomputed-length specialization lives in `Proofs/Legacy.lean`.
+- `bmm_chunk_fwd` — host-selected A/B storage and dot dtypes are specialized
+  explicitly. The nested causal early return is written as its complementary
+  active-tile guard; skipped tiles perform no loads/stores. The actual
+  in-body length, partial K blocks, signed sequence filter, original load
+  storage and output conversion remain in the complete source.
 - `iv_dependent_matmul` — only the canonical `type == "pre_load"` scheduling
   mode is mechanized; the string constexpr `type` and the four other mode
   branches are described informally, not transcribed.
@@ -558,27 +594,27 @@ unless stated:
   int→float promotion of `tl.arange(0, NB_TOKENS) + starting_idx` is the
   explicit `tks`/`tks_f` binding pair. Fully value-verified on the full 2-D
   tile.
-- `chunk_retention_ops` — same decay-prologue `tl.toReal(...)` promotion
-  casts as its `chunk_retention` twin (the two `fwd_kernel_h` bodies are
-  statement-identical); the port covers the state-recurrence pair
-  (`fwd_kernel_h`, the file's first kernel, and the dimension-general
-  `bwd_kernel_dh`); `fwd_kernel_o`/`bwd_kernel_dqkv` are the trusted boundary.
-- `chunk_retention` — the decay prologue's implicit int→float promotions
-  (`i_h * 1.0`, `BT * b_b`, `(BT - o_i - 1) * b_b`, `(o_i + 1) * b_b`) have
-  no implicit-coercion analogue in the shape/dtype-typed DSL and are spelled
-  with the explicit nat→real cast `tl.toReal(...)` (the
-  `rbe_triton_transform` precedent), so the `tl.*` call set differs from the
-  Python surface by exactly these casts. The port covers the state-recurrence
-  pair (`fwd_kernel_h`, the file's first kernel, and `bwd_kernel_dh`);
-  `fwd_kernel_o`/`bwd_kernel_dqkv` are the trusted boundary.
-- `chunk_gla_fwd` — the file's four `A`-builder kernels (including its first,
-  `chunk_gla_fwd_A_kernel_intra_sub_inter`) each open with bare early
-  `return`s (`if i_t * BT + i_i * BC >= T: return`, `if i_i <= i_j: return`);
-  `Stmt` has no early exit, and the `bgmv_shrink_kernel` guard-wrap
-  workaround is a per-kernel port of its own, one per builder. The port
-  covers the fifth kernel, `chunk_gla_fwd_kernel_o`, with a full multi-block
-  K-loop headline; the four builders that fill the `A` region are the
-  trusted boundary.
+- `chunk_retention` — the complete typed source spells the source's signed
+  `tl.arange` index type with an explicit `.to(tl.int32)` identity cast. This
+  extra cast is required to distinguish signed negative tail/score offsets
+  from natural-number subtraction in the DSL. All four full real and FP
+  source pairs retain the intrinsic decay operations, casts and stores;
+  implicit integer-to-float promotion is handled by the DSL.
+- `chunked_cumsum_fwd` — bias storage and finite/positive-infinite upper
+  bounds select explicit typed source templates. The selected clamp and
+  multiply statements are quoted into one complete body. All preprocessing,
+  casts, masks, both stores and the scan remain. The public real contract
+  requires `pid_c * chunk_size <= seqlen`, as supplied by the host launch, so
+  natural subtraction matches the source's remaining length. The default
+  `tl.minimum(x, float("inf"))` remains an opaque FP operation and projects
+  to identity only in the real semantics.
+- `chunk_retention_ops` — all four complete typed sources retain signed
+  indices via an explicit `.to(tl.int32)` identity cast, with automatic float
+  promotion. The reverse loop visits NT-1-j with an ascending counter. All
+  backward-state history stores and full-BT decay updates are retained, with
+  independent tile dimensions. Three shared source pairs are checked equal
+  to their `chunk_retention` counterparts; backward state has its own full
+  real execution, bounds and tagged-cell frame proof.
 - `bgmv_shrink_kernel` — the Python early `return` on the signed sentinel
   (`lora_index == -1`) is an `if lora_index != -1 { ... }` guard in the
   faithful surface (DSL has no early exit); the guard-false path is proven
@@ -603,18 +639,11 @@ unless stated:
   `tl.store(..., None)` is the unmasked `tl.store`; `libdevice.rsqrt` is
   spelled `tl.rsqrt` (rmsnorm_triton / layer_norm_liger precedent); register
   casts are parenthesized `(tmpN).to(tl.float32)`.
-- `fast_ce_loss` — `_cross_entropy_forward`'s `labels_ptr += row_idx` pointer
-  bump is folded into the load offset (`tl.load(labels_ptr + row_idx)`: same
-  address, same single load) and the following `.to(tl.int32)` — identity on
-  the already-`.int` channel — is dropped. The forward headline is stated on
-  the `MetaGatherMasked2DKernelIO₂ₓ₂` skin whose `mwinL := fun pid₀ _ => pid₀`
-  field *is* the label's address, so the metadata load has to be written in
-  that shape; the skin's metadata-load lemma is not stated for a rebound
-  pointer register. The file's own `_chunked_cross_entropy_forward` surface
-  keeps the literal `labels_ptr += row_idx` / `tl.load(labels_ptr)` /
-  `.to(tl.int32)` spelling — it is stated on the plain
-  `Realizes_without_Rounding` surface, which puts no shape constraint on the
-  load, so this is a `⊨`-skin constraint and not a `.int`-channel limit.
+- `fast_ce_loss` — DO_SOFTCAPPING and DO_LOGIT_SCALING are staged through
+  cap/scale before dtype inference. All four combinations retain complete
+  source templates; full statement-tree comparison and FPFastCeSource check
+  branch/cast correspondence. The old pointer-load/cast exception is removed:
+  the signed label pointer bump and direct load cast now remain literal.
 
 ### Required VeriTile surface extensions
 
@@ -623,3 +652,191 @@ loops for translation coverage (see the `attn_fwd_*` / `attention_fwd_*`
 entries above). Future work may add executable semantics for projecting
 helper calls as calls, but that is a surface-notation concern, not a proof
 gap.
+
+
+## `attention_kernel` migration
+
+The public directory now has Kernels/Correct/FPEquiv entries for both fp16 and
+bf16 storage. Both originals and reciprocal candidates have independent real
+IO proofs: scaled Q·K and both B0 bias windows feed the base-2 weighted sum,
+with successful flat execution, active-address safety and a memory frame.
+The real scope is contiguous head rows, unit inner stride, positive block/head
+sizes, P_SEQ=0 and one or more whole key blocks; head and bias strides are
+symbolic. Arbitrary-layout and partial-key-block real correctness remain outside
+this contract. No identity-fp16-rounding premise is used by the current entries.
+
+The FP proof uses only div_mul_rcp at actual post-loop fp32 operands, under
+finite accumulator and finite/nonzero denominator checks. It retains every
+source stride, both bias windows, storage-dtype bias arithmetic/scalar conversion,
+default fp32 dots, Q/P casts, exp2, loads and store. Nonempty 2×2 full-source
+executions for both dtypes inhabit the domain in a model of the admitted rules.
+The textual translation exception now concerns explicit storage specializations
+and implicit scalar/dtype conversions, checked by the source regression.
+Historical cast-bearing claims are retained in Proofs/Legacy.lean; the new real
+proofs execute a checked cast-free source and do not import that legacy model.
+Final replay status is recorded in verification_round.md.
+
+
+## Deferred attention_kernel_aligned
+
+The user deferred this directory on 2026-10-08. Python's bf16 arm passes
+out_dtype=bfloat16 to the score dot; current Triton explicitly rejects that
+output type. The Lean frontend retains the same rejection. The historical
+port's generic OUT_DTYPE also fails current elaboration. This is not a numeric
+refutation and is not a missing two-gates rule. See the source link and planned
+scope in attention_kernel_aligned/README.md. Original Python is unchanged;
+new real/FP entries and independent replay remain pending.
+
+### attention_llama: retained formula scope
+
+The three public entries cover fp16 and int8/E5M2 sources and their carry-first
+candidates. Both causal branches keep the upstream predicate
+`key + start_position ≤ query`. The local `offs_n` score mask is unchanged.
+
+The independent real formulas require whole streamed key blocks and a nonempty
+visible key set for each causal row. Non-divisible tail formulas and empty
+visible-row formulas remain outside this contract; active-address safety also
+covers partial tails. FP8 real correctness requires finite signed-byte inputs
+only on active loads; the input-array IO pins the original integer cells.
+Successful flat execution and the complete raw-cell frame are proved for both
+versions. No decoded-memory replacement or output equation is a premise.
+
+FP equivalence requires finite computed sum(p) and rescaled l_prev at each
+reached l_curr addition. Only add_commute is used. Nonempty execution/domain
+witnesses exist for both storage modes and both causal flags. No new atomic
+experiment is missing for this candidate. See verification_round.md for the
+separate build/replay acceptance record.
+
+
+## attention_score: signed-source replacement
+
+The current Kernels/Correct/FPEquiv entries retain signed offsets and sizes,
+all four flags, fp16 Q/K/Out, fp32 M/accumulation, both checked-load arms and
+masked output stores. Both real projections implement an independent finite
+Q/K/M column sum, with complete trace safety and flat IO. Positive common
+query/key block size is the only dimension premise; partial query blocks and
+empty loops are included. The IO windows require unmasked M padding, K reads
+before empty loops, and output allocation only for active keys.
+
+The scalar-left FP candidate uses only mul_commute at finite actual fp32
+operands in every reached iteration. Typed-source regressions retain the
+precision boundaries and IS_EVEN_N-controlled query-tail selection.
+Independent comparator replay and trust checks accept all 33 case/regression
+files; all 198 named proofs are in the actual inventories, and snapshot inputs
+match the final sources. This is the fifteenth completed directory.
+
+The historical natural-subtraction window is preserved only in
+Proofs/LegacyNaturalWindow.lean. Query 0/key 1 is included by that model but
+excluded by the source's ordinary positive signed window. Its old statements
+are absent from the public scope inventory. attention_kernel_aligned remains
+user-deferred and is not a prerequisite for this work.
+
+
+## attn_fwd_causal: complete two-helper source contracts
+
+Kernels.lean retains both defined outer stages, independent helper pointer
+copies, source strides, masks and finite additive penalty. Correct.lean now
+proves both complete erased kernels against an independent normalized base-2
+weighted sum. The formula retains repeated visits and masked-load padding;
+it does not silently replace the finite penalty with exact causal masking.
+
+The real contracts include successful flat-memory execution, all actual
+address bounds and preservation of every cell outside active output writes.
+Only actual input reads are pinned. Scale loads remain unmasked even for
+fully padded key tiles. The partial, unaligned-range regression checks this
+allocation requirement. No loop invariant or output equation is assumed by
+the public contracts. Shapes and independent source strides are symbolic.
+
+FPEquiv.lean proves complete-program division-to-reciprocal equivalence using
+only div_mul_rcp. Guards inspect actual fp32 accumulators and denominators
+after both loops; all source casts, dot precisions, masks, stores and failures
+are retained. TypedExecution supplies a consistent-model execution/domain
+witness. Experimental dimensions do not restrict the symbolic derivation.
+
+RealFlatCounterexample supplies a concrete disjoint flat allocation and
+successful execution of both versions: Q/K=0, scales=1 and V=[0,1] yield a
+strictly positive first output. Thus the real source is not exact causal
+masking. This is not a claim about GPU fp16 underflow. The earlier changed
+exact-mask model remains in Proofs/LegacyExactMask and has no current public
+coverage rows. Host launches and fixed-width address overflow are outside
+these per-program contracts.
+
+Final validation: `TritonBenchGVerified` builds (3,723 jobs); both focused
+source/IO regressions, all 29 metadata/layout/shard tests and all source gates
+pass. Independent comparator/trust replay accepts all 48 case/regression
+files, including 307 named proofs and 1231 kernel theorem targets;
+all 824 snapshot input hashes match. Evidence: `Logs/comparator-check-sve03cl2`.
+
+## attn_fwd_triton: bf16 two-helper source contracts
+
+Kernels.lean contains both complete sources with bf16 Q/K/V/Out, fp32
+scales/accumulators, a bf16-input fp32-output score dot and explicit fp16
+probability/V casts before the fp16-output value dot. The candidate changes
+only final division to reciprocal multiplication. Both legal outer stages,
+finite additive penalty, repeated visits, pointer reset and masks remain.
+
+Correct.lean displays an independent weighted-sum formula and both complete
+real flat IO contracts, including actual input windows, successful execution
+and the memory frame. RealProjection checks equality of the complete erased
+sources with the verified two-helper causal source before transferring these
+contracts. It does not assert FP equivalence between the two benchmark cases.
+The real exact-mask refutation also applies to actual flat source execution.
+
+FPEquiv.lean retains the bf16 source and uses only div_mul_rcp, checking actual
+finite fp32 accumulators and finite/nonzero row denominators after both loops.
+Its consistent-model execution witness covers both defined outer stages.
+Host launch composition and fixed-width overflow remain outside the per-program
+scope. The historical changed model has no current public coverage rows.
+
+Final validation: `TritonBenchGVerified` builds (3,733 jobs). The bf16 source
+regression, refreshed causal source regression, 29 metadata/layout/shard tests
+and all source gates pass. Independent comparator/trust replay accepts all
+12 case/regression files, including 176 named proofs and
+567 kernel theorem targets; all 834 snapshot inputs match.
+Evidence: `Logs/comparator-check-_zp921x6`.
+
+## batched_vecmat_mult: complete streamed GEMV contracts
+
+Kernels.lean contains both complete fp32 sources. The candidate swaps only the
+two operands of each vecmat addition; the dynamic K loop, input broadcasting,
+axis-2 reduction, transpose and unmasked store are unchanged.
+
+Correct.lean exposes both independent real double-sum formulas and complete
+flat-memory IO contracts. Dimensions remain symbolic, with K=BK*T, BK>0 and
+BN≤N plus bounds for the displayed unmasked input/output windows and disjoint
+allocations. The source does not use M; actual access windows determine
+validity. Both contracts include successful execution and every non-output
+cell's preservation, including T=0. RealSource proves whole-source erasure
+correspondence and the candidate's complete flat execution equality.
+StreamReal adds the exact real two-stream/two-program-ID IO face; identity
+rounding is confined to its internal bridge to the existing real foundation.
+
+FPEquiv.lean uses only add_commute, checking finite actual carry and block-sum
+operands at each reached update after the shared input prefix. Complete state
+and failure are preserved. Source regression checks fp32 loads, the leading
+unit broadcast axis, reduction/transpose expression, loop bounds and store.
+RealExecution witnesses disjoint flat memory at nonzero program IDs, a 2×3
+output tile and two K blocks: all six output values are 16. TypedExecution
+witnesses both complete executions and satisfiable domains in a consistent
+abstract model. Neither witness is a GPU experiment. Host launch composition,
+fixed-width address overflow and concrete IEEE identities remain outside the
+per-program contracts.
+
+Final validation: `TritonBenchGVerified` builds (3,743 jobs); the precision/geometry
+regression, 29 inventory/layout/shard tests and every source gate pass.
+Independent comparator/trust replay accepts all 11 case/shared/regression
+files, including 80 named proofs and 472 kernel theorem targets;
+all 844 final snapshot input hashes match.
+Evidence: `Logs/comparator-check-m5wnbzx6`.
+
+
+## FP8 conversion source mapping
+
+`f8_conversion_utils` now uses explicit typed region declarations and the
+source auditor's checked implicit-destination-cast correspondence. It no
+longer needs a translation-surface exception. Both complete JITs retain all
+input/output precisions, load defaults, masks and the duplicate forward store.
+The current real contracts erase precision for the copy formula, while typed
+FP equivalence preserves every conversion. Host reinterpret/launches and
+physical rounding remain outside these per-program statements. See its
+case README and verification round for the current proof acceptance status.

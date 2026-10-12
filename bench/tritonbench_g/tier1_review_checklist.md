@@ -13,10 +13,10 @@ For each item, check:
 ## Ready To Review
 
 - [x] `add_example.py`  
-  Lean: `bench/tritonbench_g/add_example/AddExample.lean`
+  Lean: `bench/tritonbench_g/add_example/Kernels.lean`
 
 - [x] `add_value.py`  
-  Lean: `bench/tritonbench_g/add_value/AddValue.lean`
+  Lean: `bench/tritonbench_g/add_value/Kernels.lean`
 
 - [x] `cosine_compute.py`  
   Lean: `bench/tritonbench_g/cosine_compute/CosineCompute.lean`
@@ -49,7 +49,7 @@ For each item, check:
   Lean: `bench/tritonbench_g/sin_kernel/SinKernel.lean`
 
 - [x] `softmax_triton1.py`  
-  Lean: `bench/tritonbench_g/softmax_triton1/SoftmaxTriton1.lean`
+  Lean: `bench/tritonbench_g/softmax_triton1/Kernels.lean`
 
 - [x] `softmax_triton2.py`  
   Lean: `bench/tritonbench_g/softmax_triton2/SoftmaxTriton2.lean`
@@ -58,12 +58,12 @@ For each item, check:
   Lean: `bench/tritonbench_g/square_matrix/SquareMatrix.lean`
 
 - [x] `triton_mul2.py`  
-  Lean: `bench/tritonbench_g/triton_mul2/TritonMul2.lean`
+  Lean: `bench/tritonbench_g/triton_mul2/Kernels.lean`
 
 - [x] `vector_addition.py`  
-  Lean: `bench/tritonbench_g/vector_addition/VectorAddition.lean`
+  Lean: `bench/tritonbench_g/vector_addition/Kernels.lean`
 
 - [x] `vector_addition_custom.py`  
-  Lean: `bench/tritonbench_g/vector_addition_custom/VectorAdditionCustom.lean`
+  Lean: `bench/tritonbench_g/vector_addition_custom/Kernels.lean`
 
 ## Checked But Not Ported

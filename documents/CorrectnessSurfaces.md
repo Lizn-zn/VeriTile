@@ -10,7 +10,7 @@ floating-point atom assumptions.** Both retain the `specification` keyword.
 | `Spec.Real claim` | An implementation satisfies its mathematical formula in ideal real semantics |
 | `lhs ≡[R] rhs` | The two implementations are equivalent under the two-gates-admitted atomic rules supplied by `R` |
 
-The existing TritonBench [vector addition correctness theorem](../bench/tritonbench_g/vector_addition/VectorAddition.lean)
+The existing TritonBench [vector addition correctness theorem](../bench/tritonbench_g/vector_addition/Correct.lean)
 uses the real `addIO … ⊨ fun xs ys i => xs i + ys i` surface. The separate
 [correctness example](../bench/examples/TritonBenchVectorAddition/Correct.lean)
 defines its fp32 kernel and real-valued IO specification:

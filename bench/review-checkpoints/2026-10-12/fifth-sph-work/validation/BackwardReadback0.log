@@ -1,0 +1,420 @@
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:159:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 4"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:163:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 5"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:167:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 6"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:171:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 9"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:175:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 10"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:179:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 11"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:183:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 12"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:187:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 13"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:191:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 14"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:195:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 15"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:199:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 16"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:203:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 17"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:207:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 18"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:211:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 19"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:215:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 20"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:219:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 21"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:223:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 22"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:227:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 23"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:231:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 24"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:235:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 25"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:239:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 26"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:243:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 27"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:247:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 28"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:251:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 29"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:255:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 30"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:259:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 31"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:263:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 32"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:267:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 33"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:271:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 34"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:275:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 35"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:279:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 36"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:283:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 37"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:287:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 38"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:291:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 39"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:295:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 40"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:299:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 41"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:303:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 42"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:307:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 43"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:311:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 44"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:315:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 45"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:319:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 46"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:323:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 47"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:327:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 48"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:331:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 49"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:335:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 50"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:339:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 51"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:343:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 52"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:347:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 53"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:351:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 54"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:355:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 55"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:359:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 56"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:363:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 57"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:367:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 58"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:371:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 59"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:375:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 60"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:379:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 61"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:383:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 62"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:387:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 63"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:391:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 64"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:395:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 65"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:399:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 66"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:403:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 67"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:407:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 68"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:411:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 69"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:415:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 70"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:419:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 71"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:423:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 72"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:427:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 73"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:431:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 74"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:435:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 75"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:439:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 76"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:443:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 77"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:447:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 78"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:451:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 79"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:455:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 80"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:459:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 81"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:463:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 82"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:467:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 83"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:471:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 84"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:475:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 85"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:479:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "lane 86"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:481:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "polynomial equation derived"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:484:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "readback substituted"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`
+/home/argustest/lizn/VeriTile/Logs/fifth-sph-work/FifthSphDraft/BackwardReadback0.lean:486:2: warning: 'run_tac
+  do
+    IO.FS.writeFile "/tmp/fifth-sph-readback-0-progress.txt" "normalization complete"' tactic does nothing
+
+Note: This linter can be disabled with `set_option linter.unusedTactic false`

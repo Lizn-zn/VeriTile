@@ -56,6 +56,34 @@ by `deltas` (per-axis offset add). -/
           some ⟨fun i => (p.data i).advance deltas⟩) := by
   simp [evalOp]
 
+/-- Dynamic advancement evaluates the signed coordinates before changing any
+pointer metadata; a missing coordinate causes evaluation to fail. -/
+@[simp] theorem advanceBlockPtrDyn_eval {shape : TileShape}
+    (ptr : Op .blockPtr shape) (deltas : List (Op .int [])) (s : BlockState) :
+    evalOp (.advanceBlockPtrDyn ptr deltas) s = (do
+      let p ← evalOp ptr s
+      let ds ← deltas.mapM (fun delta => do
+        let v ← evalOp delta s
+        some (v.data PUnit.unit))
+      some ⟨fun i => (p.data i).advance ds⟩) := by simp [evalOp]
+
+/-- Constant dynamic coordinates recover the existing static operation. -/
+theorem advanceBlockPtrDyn_constants {shape : TileShape}
+    (ptr : Op .blockPtr shape) (deltas : List Int) (s : BlockState) :
+    evalOp (.advanceBlockPtrDyn ptr (deltas.map Op.constInt)) s =
+      evalOp (.advanceBlockPtr ptr deltas) s := by
+  have h : (deltas.map Op.constInt).mapM (fun delta => do
+      let v ← evalOp delta s
+      some (v.data PUnit.unit)) = some deltas := by
+    induction deltas with
+    | nil => rfl
+    | cons d ds ih =>
+        have hc : evalOp (.constInt d) s = some (Tile.scalar d) := by simp [evalOp]
+        simp only [List.map_cons, List.mapM_cons, hc, Option.bind_some, Tile.scalar, ih]
+        rfl
+  simp only [advanceBlockPtrDyn_eval, advanceBlockPtr_eval, h]
+  cases evalOp ptr s <;> rfl
+
 /-- **No-boundary-check block-ptr real load.** With an empty `boundary_check`
 list, `inBounds` is vacuously `true`, so an unmasked `.real` block-pointer load
 reads `readMem` at each lane's resolved address `bp.address (indexToList …)`. -/

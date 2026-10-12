@@ -24,7 +24,7 @@ REDUCTIONS = (
       ("stableSoftmaxKernel", "stableIO", "stable_softmax_correct"))),
     ("StableLogSumExp", "StableLogSumExpCorrect", "LogSumExp",
      (("directLSEKernel", "directIO", "direct_logsumexp_correct"),
-      ("stableLSEKernel", "stableIO", "stable_logsumexp_correct"))),
+      ("optimizedLSEKernel", "optimizedIO", "optimized_logsumexp_correct"))),
     ("SoftmaxReciprocal", "SoftmaxReciprocalCorrect", "SoftmaxReciprocal",
      (("stableSoftmaxKernel", "divIO", "softmax_div_correct"),
       ("softmaxRecipKernel", "recipIO", "softmax_reciprocal_correct"))),
@@ -54,15 +54,21 @@ class ExampleLayoutTests(unittest.TestCase):
                 self.assertEqual({p.name for p in folder.glob("*.lean")},
                                  {"Kernels.lean", "Correct.lean", "FPEquiv.lean"})
                 for entry, forbidden in (
-                    ("FPEquiv", {"Correct.lean", "Real.lean", "LegacyRealEquiv.lean"}),
+                    ("FPEquiv", {"Correct.lean", "Real.lean", "LegacyCorrect.lean", "LegacyRealEquiv.lean"}),
                     ("Correct", {"FPEquiv.lean", "FP.lean"}),
-                    ("Kernels", {"Correct.lean", "FPEquiv.lean", "Real.lean", "FP.lean", "LegacyRealEquiv.lean"}),
+                    ("Kernels", {"Correct.lean", "FPEquiv.lean", "Real.lean", "FP.lean", "LegacyCorrect.lean", "LegacyRealEquiv.lean"}),
                 ):
                     reached = set()
                     dependencies(folder / f"{entry}.lean", reached)
                     bad = [str(p.relative_to(ROOT)) for p in reached
                            if p.is_relative_to(examples) and p.name in forbidden]
                     self.assertEqual(bad, [], f"{folder.name}/{entry} imports the opposite proof layer")
+                for helper in (folder / "Proofs").glob("*.lean"):
+                    reached = set()
+                    dependencies(helper, reached)
+                    bad = [str(p.relative_to(ROOT)) for p in reached
+                           if p.is_relative_to(examples) and p.name in {"Correct.lean", "FPEquiv.lean"}]
+                    self.assertEqual(bad, [], f"{helper.relative_to(examples)} imports a reader entry")
 
 
 class ExamplePairTests(unittest.TestCase):
@@ -96,6 +102,126 @@ class ExamplePairTests(unittest.TestCase):
     def test_optimized_real_specs_bind_sources_formulas_and_full_scope(self):
         self.assertEqual(self.lean(
             (ROOT / "bench/tests/OptimizedRealExamples.lean").read_text()), "")
+
+    def test_public_scheduled_contracts_match_proved_execution_contracts(self):
+        families = ("SoftmaxStable", "StableLogSumExp", "OnlineSoftmax", "Welford", "FusedLayerNorm")
+        build = subprocess.run(
+            ["lake", "build", *(f"bench.examples.{name}.FPEquiv" for name in families)],
+            cwd=ROOT, text=True, capture_output=True, timeout=300)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        source = "\n".join(f"import bench.examples.{name}.FPEquiv" for name in families)
+        source += "\nopen VeriTile Triton Bench.Examples\n"
+        for public, internal, names in (
+            ("SoftmaxStableFPEquiv", "SoftmaxStableFPContract", ("stable", "naive")),
+            ("StableLogSumExpFPEquiv", "StableLogSumExpFPContract", ("optimized", "original")),
+            ("OnlineSoftmaxFPEquiv", "OnlineSoftmaxFPContract", ("batch", "online")),
+        ):
+            for name in names:
+                expected = f"{internal}.{name} x y N"
+                if public != "StableLogSumExpFPEquiv":
+                    expected = f"({{ toIO₁ := {expected}, comparisons := [] }} : FP.Kernel₁)"
+                source += f'''
+example (x y : RegionName) (N : Nat) :
+    {public}.{name} x y N = {expected} := rfl
+'''
+        for name in ("online", "twopass"):
+            source += f'''
+example (x mean variance : RegionName) (N stride : Nat) (empty : FP.Equational.ReductionPlan 0) :
+    WelfordFPEquiv.{name} x mean variance N stride empty =
+      WelfordFPContract.{name} x mean variance N stride empty := rfl
+'''
+        for name in ("fused", "twopass"):
+            source += f'''
+example (x g b y : RegionName) (N stride : Nat) (eps : Real) (empty : FP.Equational.ReductionPlan 0) :
+    FusedLayerNormFPEquiv.{name} x g b y N stride eps empty =
+      LayerNormFPContract.{name} x g b y N stride eps empty := rfl
+'''
+        self.assertEqual(self.lean(source), "")
+
+    def test_public_kernel_adapter_preserves_obligations(self):
+        self.assertEqual(self.lean('''
+import VeriTile.Triton.Float.Kernel
+open VeriTile Triton FP
+
+-- An empty comparison list neither weakens nor strengthens execution equivalence.
+example (R : Spec.Assumptions GuardedFragment) (lhs rhs : Kernel₁)
+    (hempty : lhs.comparisons = []) :
+    Scheduled.ConditionalEquivalent₁ R lhs rhs ↔
+      Scheduled.Equivalent₁ R lhs.toIO₁ rhs.toIO₁ := by
+  constructor
+  · rintro ⟨hl, hr, h⟩
+    refine ⟨hl, hr, ?_⟩
+    intro α _ M D hM plans s hd
+    exact h α M D hM (by simp [hempty]) plans s hd
+  · exact Kernel₁.ofExecution
+'''), "")
+        # Default-argument failures are deferred by Lean's elaborator. Check
+        # rejection of the whole file, rather than catching a local tactic.
+        for io_type in ("KernelIO₁", "KernelIO₃", "KernelIO₁ₓ₂", "MaskedKernelIO₂"):
+            with self.subTest(io_type=io_type), tempfile.TemporaryDirectory() as tmp:
+                path = Path(tmp) / "UnsupportedReplacement.lean"
+                path.write_text(f'''
+import VeriTile.Triton.Float.Kernel
+open VeriTile Triton
+example (io : {io_type}) : {io_type} :=
+  io.withKernel (.mk [] [] [.effectMarker "tl.async_copy"])
+''')
+                result = subprocess.run(["lake", "env", "lean", str(path)], cwd=ROOT,
+                                        text=True, capture_output=True, timeout=180)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("could not synthesize default value for parameter 'projection'",
+                              result.stdout + result.stderr)
+
+    def test_extracted_fp_proofs_match_complete_public_contracts(self):
+        cases = (
+            ("RowWiseSum", "RowWiseSumFPEquiv", "(n B : Nat)", "n B", ("original", "reversed")),
+            ("RowWiseMax", "RowWiseMaxFPEquiv", "(n B : Nat)", "n B", ("originalIO", "inlinedIO")),
+            ("FusedSiLU", "FusedSiLUFPEquiv", "(B : Nat)", "B", ("fusedIO", "unfusedIO")),
+            ("FusedSwiglu", "FusedSwigluFPEquiv", "(n B : Nat)", "n B", ("fusedIO", "unfusedIO")),
+            ("SoftmaxReciprocal", "SoftmaxReciprocalFPEquiv", "(B : Nat)", "B",
+             ("originalIO", "reciprocalIO")),
+            ("FloatDTypeSoftmax", "FloatDTypeSoftmaxFPEquiv", "(B : Nat)", "B",
+             ("originalIO", "reciprocalIO")),
+            ("LogExp", "LogExp.FPEquiv", "(x y : RegionName) (B : Nat)", "x y B",
+             ("originalIO", "optimizedIO")),
+        )
+        build = subprocess.run(
+            ["lake", "build", *(f"bench.examples.{case[0]}.FPEquiv" for case in cases)],
+            cwd=ROOT, text=True, capture_output=True, timeout=300)
+        self.assertEqual(build.returncode, 0, build.stdout + build.stderr)
+        source = "\n".join(f"import bench.examples.{case[0]}.FPEquiv" for case in cases)
+        source += "\nopen VeriTile Triton Bench.Examples\n"
+        for _, namespace, params, args, contracts in cases:
+            for contract in contracts:
+                source += f'''
+example {params} : {namespace}.{contract} {args} =
+    {namespace}.Execution.{contract} {args} := rfl
+'''
+        # The named prefix must still include the branch selector. Dropping
+        # it would silently weaken the comparison-availability requirement.
+        source += '''
+example (x : RegionName) (B : Nat) :
+    LogExp.FPEquiv.domain x B =
+      ({ code := (LogExp.optimizedKernel x "y" B).surfaceBody.take 4,
+         guards := [⟨"a", [B], .finite⟩] } : FP.Guarded.Precondition) := rfl
+'''
+        self.assertEqual(self.lean(source), "")
+
+    def test_public_kernel_adapter_keeps_unproved_premises_visible(self):
+        output = self.lean('''
+import VeriTile.Triton.Float.Kernel
+import VeriTile.Meta.StatementAudit
+open VeriTile Triton
+open scoped VeriTile.Spec
+theorem opaque_adapted (R : Spec.Assumptions FP.GuardedFragment) (lhs rhs : FP.Kernel₁)
+    (hs : Spec.ProgramSyntax.signature lhs = Spec.ProgramSyntax.signature rhs)
+    (h : FP.Scheduled.Equivalent₁ R lhs.toIO₁ rhs.toIO₁) : lhs ≡[R] rhs :=
+  Spec.FloatingPoint.ofNumerical (structural := fun _ _ => False) rfl hs
+    (FP.Kernel₁.ofExecution h)
+#print_fp_assumptions opaque_adapted
+''')
+        self.assertEqual(output, 'FP assumptions used by opaque_adapted:\n'
+                         '  unresolved FP proof: h (atomic assumptions unavailable)\n')
 
     def test_same_original_implementation_in_both_files(self):
         """A correct file for one implementation cannot certify a different FP input."""

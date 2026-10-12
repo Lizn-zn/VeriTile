@@ -219,6 +219,12 @@ noncomputable def stepStmt : Stmt → BlockState → Option BlockState
       let step' ← evalOp step s
       stepForRangeAux idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
         (step'.data PUnit.unit) body s
+  | .forRangeInt idx start stop step body, s => do
+      let start' ← evalOp start s
+      let stop' ← evalOp stop s
+      let step' ← evalOp step s
+      stepForRangeIntAux idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
+        (step'.data PUnit.unit) body s
   | .ifThen cond body, s => do
       let c ← evalOp cond s
       if c.data PUnit.unit then stepStmts body s else some s
@@ -264,6 +270,19 @@ noncomputable def stepForRangeAux
         | none => none
       else some s
 termination_by _ => (sizeOf body + 1, stop - cur)
+decreasing_by all_goals omega
+
+noncomputable def stepForRangeIntAux
+    (idx : RegName) (cur stop : Int) (step : Nat) (body : List Stmt) :
+    BlockState → Option BlockState
+  | s =>
+      if step = 0 then some s
+      else if cur < stop then
+        match stepStmts body (s.setReg idx .int [] (Tile.scalar cur)) with
+        | some s' => stepForRangeIntAux idx (cur + step) stop step body s'
+        | none => none
+      else some s
+termination_by _ => (sizeOf body + 1, (stop - cur).toNat)
 decreasing_by all_goals omega
 
 end
@@ -420,6 +439,40 @@ theorem step_one_iter {idx} {cur stop step} {body} {s}
   rfl
 
 end stepForRangeAux
+
+namespace stepForRangeIntAux
+
+@[simp] theorem step_zero_step {idx} {cur stop} {body} {s} :
+    stepForRangeIntAux idx cur stop 0 body s = some s := by
+  unfold stepForRangeIntAux
+  simp
+
+@[simp] theorem step_ge {idx} {cur stop step} {body} {s}
+    (hstep : step ≠ 0) (h : stop ≤ cur) :
+    stepForRangeIntAux idx cur stop step body s = some s := by
+  unfold stepForRangeIntAux
+  simp [hstep, Int.not_lt.mpr h]
+
+@[simp] theorem step_lt {idx} {cur stop step} {body} {s}
+    (hstep : step ≠ 0) (h : cur < stop) :
+    stepForRangeIntAux idx cur stop step body s
+      = (stepStmts body (s.setReg idx .int [] (Tile.scalar cur))).bind
+          (stepForRangeIntAux idx (cur + step) stop step body) := by
+  conv_lhs => unfold stepForRangeIntAux
+  simp [hstep, h]
+  cases hbody : stepStmts body (s.setReg idx .int [] (Tile.scalar cur)) <;> rfl
+
+@[simp] theorem forRangeInt_unfold {idx} {start stop step} {body} {s} :
+    stepStmt (.forRangeInt idx start stop step body) s
+      = (evalOp start s).bind (fun start' =>
+          (evalOp stop s).bind (fun stop' =>
+            (evalOp step s).bind (fun step' =>
+              stepForRangeIntAux idx (start'.data PUnit.unit) (stop'.data PUnit.unit)
+                (step'.data PUnit.unit) body s))) := by
+  unfold stepStmt
+  rfl
+
+end stepForRangeIntAux
 
 noncomputable def exec (k : Kernel) (s : BlockState) : Option BlockState :=
   stepStmts k.body s
@@ -829,12 +882,15 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
       simpa [stepStmt] using h
     exact stepAtomicRMW_pid h'
   case forLoop idx n body =>
+    have : 0 < sizeOf idx := by cases idx; simp
     simp at h
     exact stepForLoopAux_pid h
   case forRange idx start stop step body =>
+    have : 0 < sizeOf idx := by cases idx; simp
     simp at h
     exact stepForRangeAux_pid h
   case forRangeDyn idx start stop step body =>
+    have : 0 < sizeOf idx := by cases idx; simp
     cases hstart : evalOp start s with
     | none => simp [hstart] at h
     | some startTile =>
@@ -846,6 +902,19 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
         | some stepTile =>
           simp [hstart, hstop, hstep] at h
           exact stepForRangeAux_pid h
+  case forRangeInt idx start stop step body =>
+    have : 0 < sizeOf idx := by cases idx; simp
+    cases hstart : evalOp start s with
+    | none => simp [hstart] at h
+    | some startTile =>
+      cases hstop : evalOp stop s with
+      | none => simp [hstart, hstop] at h
+      | some stopTile =>
+        cases hstep : evalOp step s with
+        | none => simp [hstart, hstop, hstep] at h
+        | some stepTile =>
+          simp [hstart, hstop, hstep] at h
+          exact stepForRangeIntAux_pid h
   case ifThen cond body =>
     cases hcond : evalOp cond s with
     | none => simp [stepStmt, hcond] at h
@@ -866,6 +935,8 @@ theorem stepStmt_pid {st : Stmt} {s s' : BlockState}
           exact stepStmts_pid h
         · simp [hc] at h
           exact stepStmts_pid h
+termination_by (sizeOf st, 0)
+decreasing_by all_goals (subst_vars; simp_wf; omega)
 
 theorem stepStmts_pid {body : List Stmt} {s s' : BlockState}
     (h : stepStmts body s = some s') :
@@ -879,6 +950,8 @@ theorem stepStmts_pid {body : List Stmt} {s s' : BlockState}
       cases hst : stepStmt st s <;> simp [hst] at h
       rename_i mid
       exact (stepStmts_pid h).trans (stepStmt_pid hst)
+termination_by (sizeOf body, 0)
+decreasing_by all_goals (subst_vars; simp_wf; omega)
 
 theorem stepForLoopAux_pid {idx : RegName} {start n : Nat}
     {body : List Stmt} {s s' : BlockState}
@@ -894,6 +967,8 @@ theorem stepForLoopAux_pid {idx : RegName} {start n : Nat}
   · have hge : n ≤ start := Nat.le_of_not_gt hlt
     rw [stepForLoopAux.step_ge hge] at h
     simp_all
+termination_by (sizeOf body + 1, n - start)
+decreasing_by all_goals (subst_vars; simp_wf; omega)
 
 theorem stepForRangeAux_pid {idx : RegName} {cur stop step : Nat}
     {body : List Stmt} {s s' : BlockState}
@@ -913,6 +988,29 @@ theorem stepForRangeAux_pid {idx : RegName} {cur stop step : Nat}
     · have hge : stop ≤ cur := Nat.le_of_not_gt hlt
       rw [stepForRangeAux.step_ge hstep hge] at h
       simp_all
+termination_by (sizeOf body + 1, stop - cur)
+decreasing_by all_goals (subst_vars; simp_wf; omega)
+
+theorem stepForRangeIntAux_pid {idx : RegName} {cur stop : Int} {step : Nat}
+    {body : List Stmt} {s s' : BlockState}
+    (h : stepForRangeIntAux idx cur stop step body s = some s') :
+    s'.pid = s.pid := by
+  by_cases hstep : step = 0
+  · subst hstep
+    rw [stepForRangeIntAux.step_zero_step] at h
+    simp_all
+  · by_cases hlt : cur < stop
+    · rw [stepForRangeIntAux.step_lt hstep hlt] at h
+      cases hbody : stepStmts body (s.setReg idx .int [] (Tile.scalar cur)) <;>
+        simp [hbody] at h
+      rename_i mid
+      exact (stepForRangeIntAux_pid h).trans
+        ((stepStmts_pid hbody).trans (BlockState.setReg_pid s idx .int [] (Tile.scalar cur)))
+    · have hge : stop ≤ cur := Int.le_of_not_gt hlt
+      rw [stepForRangeIntAux.step_ge hstep hge] at h
+      simp_all
+termination_by (sizeOf body + 1, (stop - cur).toNat)
+decreasing_by all_goals (subst_vars; simp_wf; omega)
 
 end
 
@@ -958,6 +1056,7 @@ def storeFree : Stmt → Bool
   | .forLoop _ _ _ => Bool.false
   | .forRange _ _ _ _ _ => Bool.false
   | .forRangeDyn _ _ _ _ _ => Bool.false
+  | .forRangeInt _ _ _ _ _ => Bool.false
   | .ifThen _ body => body.attach.all (fun ⟨st, _⟩ => storeFree st)
   | .ifThenElse _ t e =>
       t.attach.all (fun ⟨st, _⟩ => storeFree st) &&
@@ -997,6 +1096,8 @@ theorem storeFree_stepStmt_mem (st : Stmt) (s s' : BlockState)
   | .forLoop _ _ _ => simp [storeFree] at hsf
   | .forRange _ _ _ _ _ => simp [storeFree] at hsf
   | .forRangeDyn _ _ _ _ _ => simp [storeFree] at hsf
+
+  | .forRangeInt _ _ _ _ _ => simp [storeFree] at hsf
 
 /-- A list of store-free statements preserves all of memory. -/
 theorem storeFree_stepStmts_mem (stmts : List Stmt) (s s' : BlockState)

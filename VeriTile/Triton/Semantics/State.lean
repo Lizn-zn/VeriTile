@@ -506,6 +506,52 @@ def defaultCarrier : (dtype : TileDType) → TileCarrier dtype
       { region := "", baseOffset := 0, parentShape := [], blockShape := [],
         strides := [], offsets := [] }
 
+/-- Unspecified block-load lanes are drawn from the state's oracle, without a
+memory read. Integer/boolean carriers project the same oracle into their value
+domain. Pointer-valued loads retain the model's default pointer restriction. -/
+noncomputable def unspecifiedValue (s : BlockState) (dtype : TileDType)
+    (region : RegionName) (offset : Nat) : TileCarrier dtype :=
+  match dtype with
+  | .real => some (s.undef region offset)
+  | .fp32 => FloatDType.fp32.ofReal (s.undef region offset)
+  | .fp16 => FloatDType.fp16.ofReal (s.undef region offset)
+  | .bf16 => FloatDType.bf16.ofReal (s.undef region offset)
+  | .f8e4 => FloatDType.f8e4.ofReal (s.undef region offset)
+  | .f8e5 => FloatDType.f8e5.ofReal (s.undef region offset)
+  | .int => Int.floor (s.undef region offset)
+  | .nat => Nat.floor (s.undef region offset)
+  | .bool => decide (s.undef region offset ≠ 0)
+  | d => defaultCarrier d
+
+/-- The padding policy belongs to a load, not to the pointer or to a store. -/
+noncomputable def paddingValue (s : BlockState) (dtype : TileDType)
+    (padding : PaddingOption) (region : RegionName) (offset : Nat) : TileCarrier dtype :=
+  match padding with
+  | .zero => defaultCarrier dtype
+  | .unspecified => s.unspecifiedValue dtype region offset
+
+@[simp] theorem paddingValue_zero (s : BlockState) (dtype : TileDType)
+    (region : RegionName) (offset : Nat) :
+    s.paddingValue dtype .zero region offset = defaultCarrier dtype := rfl
+
+theorem paddingValue_of_undef_zero (s : BlockState) (dtype : TileDType)
+    (padding : PaddingOption) (region : RegionName) (offset : Nat)
+    (h : s.undef = fun _ _ => 0) :
+    s.paddingValue dtype padding region offset = defaultCarrier dtype := by
+  cases padding with
+  | zero => rfl
+  | unspecified =>
+      cases dtype <;> simp [paddingValue, unspecifiedValue, h, defaultCarrier,
+        FloatDType.ofReal]
+
+theorem paddingValue_congr (s t : BlockState) (dtype : TileDType)
+    (padding : PaddingOption) (region : RegionName) (offset : Nat)
+    (h : s.undef = t.undef) :
+    s.paddingValue dtype padding region offset = t.paddingValue dtype padding region offset := by
+  cases padding with
+  | zero => rfl
+  | unspecified => cases dtype <;> simp only [paddingValue, unspecifiedValue, h]
+
 def rmwReturnedValue (dtype : TileDType) (event : RMWEvent) : TileCarrier dtype :=
   match event.result with
   | some cell =>

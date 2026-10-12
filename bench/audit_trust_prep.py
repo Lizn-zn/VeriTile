@@ -75,7 +75,8 @@ def prepare_source(text, rel, manifest=MANIFEST):
     else:
         path = Path(rel)
         source_module = '.'.join((*path.parts[:3], 'Kernels'))
-        if (path.parts[:2] == ('bench', 'examples') and len(path.parts) >= 4
+        if (path.parts[:2] in {('bench', 'examples'), ('bench', 'tritonbench_g')}
+                and len(path.parts) >= 4
                 and f'import {source_module}' in lines):
             footer.append(f"#auditModuleSpecs from [{source_module}]")
         else:

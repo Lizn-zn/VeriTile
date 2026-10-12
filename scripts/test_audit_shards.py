@@ -17,7 +17,7 @@ class AuditAggregateTests(unittest.TestCase):
         ports = self.root / 'bench/tritonbench_g'
         ports.mkdir(parents=True)
         (self.root / 'scripts').mkdir()
-        for name in ['audit_tritonbench_g.sh', 'audit_source.py']:
+        for name in ['audit_tritonbench_g.sh', 'audit_source.py', 'port_layout.py']:
             shutil.copyfile(ROOT / 'bench' / name, self.root / 'bench' / name)
         for name in ['proof_blockers.md', 'completion_audit.md']:
             (ports / name).touch()
@@ -56,6 +56,15 @@ class AuditAggregateTests(unittest.TestCase):
         self.assertEqual(calls, ['structural', 'library'])
         self.assertIn('global gates passed; corpus audit is separate', result.stdout)
         self.assertNotIn('TritonBench-G audit gates passed', result.stdout)
+
+    def test_source_mode_does_not_run_or_claim_any_proof_replay(self):
+        result, calls = self.run_aggregate(['--source-only'])
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        self.assertEqual(calls, ['structural'])
+        self.assertIn('no proof replay was requested', result.stdout)
+        result, calls = self.run_aggregate(['--source-only'], {'FAIL_STATIC': '1'})
+        self.assertNotEqual(result.returncode, 0)
+        self.assertEqual(calls, ['structural'])
 
     def test_global_failures_fail_both_modes(self):
         for args in [(), ('--global-only',)]:
@@ -99,9 +108,11 @@ class AuditShardTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         (self.root / 'bench').mkdir()
         (self.root / 'scripts').mkdir()
-        for name in ['audit_trust.sh', 'check_worker_results.py', 'select_audit_shard.py']:
+        for name in ['audit_trust.sh', 'check_worker_results.py', 'select_audit_shard.py', 'port_layout.py']:
             shutil.copyfile(ROOT / 'bench' / name, self.root / 'bench' / name)
         self.targets = [f'bench/tritonbench_g/{name}/Port.lean' for name in ['alpha', 'beta', 'gamma']]
+        self.targets += [f'bench/tritonbench_g/split/{name}.lean'
+                         for name in ['Kernels', 'Correct', 'FPEquiv', 'Proofs/Real']]
         self.targets += ['bench/examples/One.lean', 'bench/examples/Two.lean',
                          'bench/examples/LogExp/Kernels.lean',
                          'bench/examples/LogExp/Correct.lean',

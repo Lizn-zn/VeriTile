@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT / 'bench'))
 sys.path.insert(0, str(ROOT / 'scripts'))
 import coverage_review as coverage
-from spec_sheet import split_statement, body_of, hypotheses, make_sheet
+from spec_sheet import split_statement, split_decls, body_of, hypotheses, make_sheet
 from record_coverage_ci import completed_record
 
 
@@ -28,6 +28,42 @@ class Row:
 
 
 class CoverageReviewTests(unittest.TestCase):
+    def test_presentation_discovery_ignores_prose_and_literal_declarations(self):
+        source = ('/- outer /- nested -/\nspecification is not code\n-/\n'
+                  'def marker : String := "\nspecification fake : False\n"\n'
+                  'def raw : String := r#"/-"#\n'
+                  '/-- A real claim. -/\n'
+                  'specification result : True := proof\n')
+        decls = split_decls(source)
+        self.assertEqual([d['name'] for d in decls], ['marker', 'raw', 'result'])
+        result = decls[-1]
+        self.assertEqual(result['start'], source.index('specification result'))
+        self.assertEqual(result['doc'], '/-- A real claim. -/')
+
+    def test_next_section_prose_does_not_leak_into_a_spec_definition(self):
+        source = ('def expected : Nat := 1\n\n'
+                  '/-- Supporting proofs.\nlemma takes symbolic arguments. -/\n'
+                  'section Helpers\nvariable (n : Nat)\n'
+                  'theorem helper : n = n := by rfl\nend Helpers\n')
+        defs = split_decls(source)
+        self.assertEqual(defs[0]['text'], 'def expected : Nat := 1')
+        self.assertEqual([d['name'] for d in defs], ['expected', 'helper'])
+
+    def test_split_sheet_keeps_module_preambles_out_of_kernel_bodies(self):
+        with tempfile.TemporaryDirectory() as directory:
+            source = Path(directory) / 'Correct.lean'
+            source.with_name('Kernels.lean').write_text(
+                'namespace Example\ndef kernel : Nat := 1\nend Example\n')
+            source.write_text('import Example.Kernels\nimport Example.Proofs.Real\n'
+                              'namespace Example\n'
+                              'specification kernel_correctness : kernel = 1 := by rfl\n'
+                              'end Example\n')
+            sheet, stats = make_sheet(str(source), {})
+            self.assertEqual(stats['headline'], 1)
+            self.assertIn('def kernel : Nat := 1\n```', sheet)
+            self.assertNotIn('import Example.', sheet)
+            self.assertNotIn('end Example', sheet)
+
     def fixture(self, root):
         directory = root / 'bench/tritonbench_g/example'
         directory.mkdir(parents=True)
@@ -76,6 +112,32 @@ class CoverageReviewTests(unittest.TestCase):
                 path.write_text(json.dumps(changed))
                 with self.assertRaisesRegex(ValueError, 'Unexpected/duplicate'):
                     coverage.load_reviews([row], root, path)
+
+    def test_split_port_shared_source_and_proof_changes_invalidate_review(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            row, record, path = self.fixture(root)
+            old = root / row.file
+            correct = old.with_name('Correct.lean')
+            old.rename(correct)
+            row.file = correct.relative_to(root).as_posix()
+            port = record['ports'][0]
+            port['file'] = row.file
+            (correct.parent / 'Proofs').mkdir()
+            support = [correct.with_name('Kernels.lean'), correct.with_name('FPEquiv.lean'),
+                       correct.parent / 'Proofs/Real.lean']
+            for file in support:
+                file.write_text('-- fixture\n')
+            port['support_sha256'] = {p.relative_to(root).as_posix(): coverage.digest(p)
+                                      for p in support}
+            path.write_text(json.dumps(record))
+            coverage.load_reviews([row], root, path)
+            for file in support:
+                original = file.read_text()
+                file.write_text(original + '-- changed\n')
+                with self.assertRaisesRegex(ValueError, 'shared source/proofs'):
+                    coverage.load_reviews([row], root, path)
+                file.write_text(original)
 
     def test_python_links_must_resolve_to_exact_function(self):
         with tempfile.TemporaryDirectory() as directory:

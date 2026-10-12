@@ -21,6 +21,7 @@ globs = [
   "VeriTile.Meta.StatementAudit",
   "VeriTile.Meta.EquivDecompose",
   "VeriTile.Meta.FPProve",
+  "VeriTile.Meta.Disprove",
   "VeriTile.Spec",
   # Worked-example KERNELS live in bench/examples/ (self-contained example
   # directories can separate kernels and their proofs). The library keeps shared
@@ -44,9 +45,8 @@ globs = ["VeriTile.Math.+"]
 # Independent real-correctness and FP-equivalence specification examples.
 [[lean_lib]]
 name = "TritonBenchSpecExamples"
-globs = ["bench.examples.+", "bench.tritonbench_g.vector_addition.VectorAddition"]
+globs = ["bench.examples.+"]
 roots = [
-  "bench.tritonbench_g.vector_addition.VectorAddition",
   "bench.examples.TritonBenchVectorAddition.Correct",
   "bench.examples.TritonBenchVectorAddition.FPEquiv",
 ]
@@ -66,3 +66,40 @@ globs = [
   "VeriTile.Examples.ApproxGeLU.+",
   "VeriTile.Meta.TrustReport",
 ]
+
+# Migrated benchmark directories: shared sources, real correctness and FP
+# equivalence. Add a port here as its separate entry modules are connected.
+[[lean_lib]]
+name = "TritonBenchGVerified"
+globs = [
+  "bench.tritonbench_g.softmax_triton1.+",
+  "bench.tritonbench_g.vector_addition.+",
+  "bench.tritonbench_g.add_example.+",
+  "bench.tritonbench_g.add_value.+",
+  "bench.tritonbench_g.triton_mul2.+",
+  "bench.tritonbench_g.vector_addition_custom.+",
+  "bench.tritonbench_g.adam_update_triton.+",
+  "bench.tritonbench_g.apply_penalty.+",
+  "bench.tritonbench_g.attention_forward_triton.+",
+  "bench.tritonbench_g.attention_fwd_triton1.+",
+  "bench.tritonbench_g.attention_fwd_triton2.+",
+  "bench.tritonbench_g.attention_fwd_triton3.+",
+  "bench.tritonbench_g.attention_kernel.+",
+  "bench.tritonbench_g.attention_llama.+",
+  "bench.tritonbench_g.attention_score.+",
+  "bench.tritonbench_g.attn_fwd_causal.+",
+  "bench.tritonbench_g.attn_fwd_triton.+",
+  "bench.tritonbench_g.batched_vecmat_mult.+",
+  "bench.tritonbench_g.bgmv_expand_slice.+",
+  "bench.tritonbench_g.bgmv_shrink_kernel.+",
+  "bench.tritonbench_g.block_sparse_attn.+",
+  "bench.tritonbench_g.bmm_chunk_bwd.+",
+  "bench.tritonbench_g.bmm_chunk_fwd.+",
+  "bench.tritonbench_g.bmm_optimized.+",
+  "bench.tritonbench_g.cache_transform_triton.+",
+]
+
+# Internal work in progress; membership does not mark a case as accepted.
+[[lean_lib]]
+name = "TritonBenchGInProgress"
+globs = ["bench.tritonbench_g.chunk_bwd_dqkg.+", "bench.tritonbench_g.chunk_cumsum_kernel.+", "bench.tritonbench_g.chunk_cumsum_vector.+", "bench.tritonbench_g.chunk_delta_fwd.+", "bench.tritonbench_g.chunk_gate_recurrence.+", "bench.tritonbench_g.chunk_gated_attention.+", "bench.tritonbench_g.chunk_gla_fwd.Kernels", "bench.tritonbench_g.chunk_gla_fwd.Correct", "bench.tritonbench_g.chunk_gla_fwd.FPEquiv", "bench.tritonbench_g.chunk_gla_fwd.Proofs.+", "bench.tritonbench_g.chunk_gla_simple.Kernels", "bench.tritonbench_g.chunk_gla_simple.Correct", "bench.tritonbench_g.chunk_gla_simple.FPEquiv", "bench.tritonbench_g.chunk_gla_simple.Proofs.+", "bench.tritonbench_g.chunk_linear_attn.Kernels", "bench.tritonbench_g.chunk_linear_attn.Correct", "bench.tritonbench_g.chunk_linear_attn.FPEquiv", "bench.tritonbench_g.chunk_linear_attn.Proofs.+", "bench.tritonbench_g.chunk_retention.Kernels", "bench.tritonbench_g.chunk_retention.Correct", "bench.tritonbench_g.chunk_retention.FPEquiv", "bench.tritonbench_g.chunk_retention.Proofs.+", "bench.tritonbench_g.chunk_retention_ops.Kernels", "bench.tritonbench_g.chunk_retention_ops.Correct", "bench.tritonbench_g.chunk_retention_ops.FPEquiv", "bench.tritonbench_g.chunk_retention_ops.Proofs.+", "bench.tritonbench_g.chunked_cumsum_fwd.+", "bench.tritonbench_g.context_attn_bloom.+", "bench.tritonbench_g.context_attn_fwd.+", "bench.tritonbench_g.context_attn_llama.+", "bench.tritonbench_g.context_attn_mistral.+", "bench.tritonbench_g.context_attn_nopad.+", "bench.tritonbench_g.cosine_compute.+", "bench.tritonbench_g.cross_entropy1.+", "bench.tritonbench_g.cross_entropy2.+", "bench.tritonbench_g.cross_entropy_ops.+", "bench.tritonbench_g.decay_cumsum.+", "bench.tritonbench_g.dequantize_matmul.+", "bench.tritonbench_g.dequantize_rowwise.+", "bench.tritonbench_g.destindex_copy.+", "bench.tritonbench_g.destindex_copy_kv1.+", "bench.tritonbench_g.destindex_copy_kv2.+", "bench.tritonbench_g.diag_ssm_triton.+", "bench.tritonbench_g.dropout_triton.+", "bench.tritonbench_g.embedding_triton_kernel.+", "bench.tritonbench_g.f8_conversion_utils.+", "bench.tritonbench_g.fast_ce_loss.+", "bench.tritonbench_g.fast_layernorm.+", "bench.tritonbench_g.fast_rms_layernorm.+", "bench.tritonbench_g.fast_rope_embedding.+"]

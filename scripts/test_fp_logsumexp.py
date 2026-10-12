@@ -12,7 +12,9 @@ class LogSumExpFPTests(unittest.TestCase):
     def setUpClass(cls):
         result = subprocess.run(
             ['lake', 'build', 'bench.examples.StableLogSumExp.FPEquiv',
-             'bench.examples.StableLogSumExp.Correct', 'VeriTile.Meta.StatementAudit',
+             'bench.examples.StableLogSumExp.Correct',
+             'bench.examples.StableLogSumExp.Proofs.Unconditional',
+             'bench.examples.StableLogSumExp.Proofs.LegacyCorrect', 'VeriTile.Meta.StatementAudit',
              'bench.examples.LogExp.Correct', 'bench.examples.LogExp.FPEquiv',
              'VeriTile.Triton.Float.LogExpCounterexample'],
             cwd=ROOT, text=True, capture_output=True, timeout=300)
@@ -33,6 +35,7 @@ class LogSumExpFPTests(unittest.TestCase):
         output = self.check_lean('''
 import bench.examples.StableLogSumExp.Proofs.FP
 import bench.examples.StableLogSumExp.Correct
+import bench.examples.StableLogSumExp.Proofs.LegacyCorrect
 open VeriTile Triton VeriTile.Bench.Examples
 example (B : Nat) :
     (StableLogSumExpCorrect.directIO B).kernel =
@@ -46,6 +49,18 @@ example (x y : RegionName) (B : Nat) :
     (StableLogSumExpFPExecution.stableIO x y B).kernel = StableLogSumExp.Kernels.stableLSEKernel x y B := rfl
 ''')
         self.assertEqual(output, '')
+        self.check_lean('''
+import bench.examples.StableLogSumExp.Correct
+open Lean Elab Command in
+run_cmd do
+  let env ← getEnv
+  for name in [
+      `VeriTile.Bench.Examples.StableLogSumExpCorrect.direct_logsumexp_correct,
+      `VeriTile.Bench.Examples.StableLogSumExpCorrect.optimized_logsumexp_correct] do
+    unless env.contains name do throwError "Missing current specification: {name}"
+  if env.contains `VeriTile.Bench.Examples.StableLogSumExpCorrect.stable_logsumexp_correct then
+    throwError "Current correctness entry imported the historical specification"
+''')
         self.check_lean('''
 import bench.examples.StableLogSumExp.Proofs.FP
 open Lean Elab Command in
@@ -68,6 +83,33 @@ run_cmd do
                      '  unresolved FP proof: h.1 (atomic assumptions unavailable)\n'
                      'FP assumptions used by exp_sub_holds:\n  none\n')
         self.assertEqual(output[output.index('FP assumptions used by'):], expected)
+
+    def test_unconditional_spec_is_refuted_by_a_model_of_all_selected_atoms(self):
+        self.check_lean('''
+import bench.examples.StableLogSumExp.Proofs.Unconditional
+open VeriTile Triton Bench.Examples StableLogSumExpFPContract
+open StableLogSumExpUnconditional
+open scoped VeriTile.Spec
+-- Refute the public notation, not merely its numerical constructor.
+example (R : FP.Exponential.Rules) : ¬ (∀ B, equivalenceGoal B R) := by
+  intro h
+  exact unconditional_disproved R (h 1)
+example (R : FP.LogSumExp.Rules) :
+    ¬ (stable "x" "y" 1 ≡[R] direct "x" "y" 1) :=
+  unconditional_disproved_with_log_rules R
+-- Check the positive premises too: all atoms hold and the domain is inhabited.
+example (R : FP.LogSumExp.Rules) : FP.Guarded.Models R.assumptions Model.algebra Model.domain :=
+  Model.models R
+example : (requirements "x" 1 FP.Equational.seededSchedules).Holds
+    Model.algebra Model.domain Model.initial := Model.domain_holds
+#axiomsClean Model.models
+#axiomsClean Model.domain_holds
+#axiomsClean Model.stored_outputs
+#axiomsClean FP.models_of_atoms
+#axiomsClean FP.Scheduled.observe₁_eq_of_equiv
+#axiomsClean unconditional_disproved
+#axiomsClean unconditional_disproved_with_log_rules
+''')
 
     def test_piecewise_branching_precision_and_exact_counterexamples(self):
         self.check_lean((ROOT / 'bench/tests/FPLogExp.lean').read_text())

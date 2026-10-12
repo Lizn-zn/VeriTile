@@ -40,6 +40,18 @@ def ensureComputeCmpComposable (ctx : String) (e : EOut) : MacroM Unit := do
         (ctx ++ ": compute-only expressions without a composable floating annotation must be assigned or stored directly before algorithm-layer composition")
   | none, _ => pure ()
 
+/-- A constexpr floating scalar does not promote a half/bfloat16 tensor.
+Only literal syntax is retargeted: a loaded scalar or an explicit cast remains
+an independently typed operand. Division promotes half operands to fp32. -/
+private def scalarLiteralAt (dtype : DInfo) (e : EOut) : MacroM EOut := do
+  if e.computeDType?.isSome then return e
+  unless dtype == .fp16 || dtype == .bf16 do return e
+  match e.term with
+  | `(Op.const $value) =>
+      let proof ← dtype.floatProof
+      return { e with term := ← `(Op.constFloat $proof $value), dtype := dtype }
+  | _ => return e
+
 partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
@@ -58,8 +70,17 @@ partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (
       | none => pure b'
     else
       pure b'
+  let isDivision := match op with | `(Op.div) => Bool.true | _ => Bool.false
+  let (a', b') ← if isDivision then pure (a', b') else do
+    let aa ← scalarLiteralAt b'.dtype a'
+    let bb ← scalarLiteralAt a'.dtype b'
+    pure (aa, bb)
   let (a', b') ← coerceNatIntOperands ctx a' b'
   let (a', b') ← coerceRealArithOperands ctx a' b'
+  let (a', b') ←
+    if isDivision && (a'.dtype == .fp16 || a'.dtype == .bf16) then
+      pure (← coerceFloatOperand .real a', ← coerceFloatOperand .real b')
+    else pure (a', b')
   ensureComputeArithComposable ctx a'
   ensureComputeArithComposable ctx b'
   unless a'.dtype == b'.dtype do
@@ -416,46 +437,33 @@ partial def expandSort (expandExpr : ExprExpander) (env : Env)
   let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
   pure ⟨← `(Op.sort (⟨$axisLit, by simp⟩) $eTerm), .real, e'.shape, none, none⟩
 
-/-- Lower a `tl.sum(...)` / `tl.max(...)` expression with optional reduction
-kwargs (`axis = K`, `keep_dims = true|false`) into the corresponding
-`Op.reduceSum / .reduceMax` AST nodes.
-
-Triton spec for omitted `axis` is `axis = None` → **reduce over all
-dimensions**, not "reduce the last axis". We honor that: omitted-axis on a
-rank-`N` tile lowers to `N` nested `axis = 0, keep_dims = keepDims` calls,
-collapsing the tile to a scalar (`keep_dims = false`) or to all-`1`s
-(`keep_dims = true`). For rank-1 tiles this degenerates to a single call,
-so existing 1D `tl.sum(x)` / `tl.max(x)` kernels are unaffected. With an
-explicit `axis = K` we lower to a single call against that axis.
-
-`keep_dims = false` erases the reduced dim; `keep_dims = true` collapses
-it to `1`. -/
+/-- Lower floating reductions without changing their numerical operation.
+A floating sum retains its input dtype unless an explicit `dtype` is supplied.
+The source frontend flattens a whole tile before one reduction when `axis` is
+omitted; nested axis reductions would change the opaque FP operation. Rank-one
+inputs and explicit-axis reductions need no flattening. -/
 partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
     (e : TSyntax `tritonExpr)
     (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
-  let e' ← expandExpr env e
-  let eTerm ← realMathTerm ctx e'
-  let dims := match e'.shape with | .dims ds => ds
+  let original ← expandExpr env e
+  let dims := match original.shape with | .dims ds => ds
   if dims.isEmpty then
     Macro.throwError (ctx ++ ": reduction expects a tile, got scalar")
+  let isSum := ctx == "tl.sum"
   let mut seenAxis : Bool := Bool.false
   let mut seenKeepDims : Bool := Bool.false
+  let mut seenDType : Bool := Bool.false
   let mut keepDims : Bool := Bool.false
   let mut axis? : Option Nat := none
+  let mut dtype? : Option DInfo := none
   for kw in kwargs do
     match kw with
-    | `(tritonReduceKwarg| $n:num) =>
-        if seenAxis then
-          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+    | `(tritonReduceKwarg| axis=None) =>
+        if seenAxis then Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
         seenAxis := Bool.true
-        if n.getNat ≥ dims.length then
-          Macro.throwError
-            (ctx ++ ": axis `" ++ toString n.getNat ++ "` out of bounds for rank "
-             ++ toString dims.length)
-        axis? := some n.getNat
+    | `(tritonReduceKwarg| $n:num)
     | `(tritonReduceKwarg| axis = $n:num) =>
-        if seenAxis then
-          Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+        if seenAxis then Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
         seenAxis := Bool.true
         if n.getNat ≥ dims.length then
           Macro.throwError
@@ -463,64 +471,94 @@ partial def expandReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) 
              ++ toString dims.length)
         axis? := some n.getNat
     | `(tritonReduceKwarg| keep_dims = false) =>
-        if seenKeepDims then
-          Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
+        if seenKeepDims then Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
         seenKeepDims := Bool.true
     | `(tritonReduceKwarg| keep_dims = true) =>
-        if seenKeepDims then
-          Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
+        if seenKeepDims then Macro.throwError (ctx ++ ": duplicate `keep_dims=` kwarg")
         seenKeepDims := Bool.true
         keepDims := Bool.true
     | `(tritonReduceKwarg| return_indices=True) =>
         Macro.throwError (ctx ++ ": `return_indices=True` is only supported through tuple binding")
-    | `(tritonReduceKwarg| return_indices=False) =>
-        pure ()
-    | `(tritonReduceKwarg| $name:ident = $_) =>
+    | `(tritonReduceKwarg| return_indices=False) => pure ()
+    | `(tritonReduceKwarg| $name:ident=$dt:tritonDType) =>
+        unless isSum && name.getId == `dtype do
+          Macro.throwError (ctx ++ ": unsupported dtype kwarg `" ++ name.getId.toString ++ "`")
+        if seenDType then Macro.throwError (ctx ++ ": duplicate `dtype=` kwarg")
+        seenDType := Bool.true
+        dtype? := some (← expandDType dt)
+    | `(tritonReduceKwarg| $name:ident = $value:tritonExpr) =>
         let nm := name.getId.toString
-        if nm == "axis" || nm == "keep_dims" then
-          Macro.throwError
-            (ctx ++ ": `" ++ nm ++ "=` value is not a recognized literal")
+        if nm == "dtype" && isSum then
+          if seenDType then Macro.throwError (ctx ++ ": duplicate `dtype=` kwarg")
+          seenDType := Bool.true
+          match value with
+          | `(tritonExpr| None) => pure ()
+          | _ => dtype? := some (← expandDTypeExpr value)
+        else if nm == "axis" then
+          if seenAxis then Macro.throwError (ctx ++ ": duplicate `axis=` kwarg")
+          seenAxis := Bool.true
+          match value with
+          | `(tritonExpr| None) => pure ()
+          | _ => Macro.throwError (ctx ++ ": `axis=` must be a numeric literal or None")
         else
-          Macro.throwError
-            (ctx ++ ": unknown kwarg `" ++ nm ++
-             "`. Only `axis = N` and `keep_dims = true|false` are supported.")
+          Macro.throwError (ctx ++ ": unknown or unsupported kwarg `" ++ nm ++ "`")
     | _ => Macro.throwUnsupported
+  let e' ← match dtype? with
+    | none => pure original
+    | some dtype => do
+        -- A `.real` carrier with an fp32/fp64 annotation already has that
+        -- computation dtype. Do not insert a fictitious same-dtype cast.
+        if original.dtype == .real && original.computeDType? == some dtype then
+          pure original
+        else
+          let casted ← coerceFloatOperand dtype original
+          if dtype == .real then
+            pure { casted with
+              computeTerm := some (← fp64ComputeExpr casted.term)
+              computeDType? := some .real }
+          else pure { casted with computeTerm := none, computeDType? := none }
+  let eTerm ← if isSum then
+      -- Check that this is a floating reduction without erasing its channel.
+      let _ ← e'.dtype.floatProof
+      pure e'.term
+    else realMathTerm ctx e'
+  let resultDType := if isSum then e'.dtype else DInfo.real
+  let reducer ← if isSum && e'.dtype != .real then do
+      let dtype ← e'.dtype.floatProof
+      `(Op.reduceSumTyped $dtype)
+    else pure op
+  let finish (term : TSyntax `term) (outDims : List (TSyntax `term)) : MacroM EOut := do
+    if resultDType == .real then
+      let (computeTerm?, computeDType?) ← floatingComputeArith? ctx term e' e'
+      pure ⟨term, resultDType, SInfo.dims outDims, computeTerm?, computeDType?⟩
+    else
+      pure ⟨term, resultDType, SInfo.dims outDims, none, none⟩
   let kdLit : TSyntax `term ← if keepDims then `(Bool.true) else `(Bool.false)
   match axis? with
   | some axisIdx =>
-      -- Single-axis reduction with explicit `axis = K`.
-      let outDims ←
-        if keepDims then setNthOne dims axisIdx else eraseNth dims axisIdx
+      let outDims ← if keepDims then setNthOne dims axisIdx else eraseNth dims axisIdx
       let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
-      let term ← `($op (⟨$axisLit, by simp⟩) $kdLit $eTerm)
-      let (computeTerm?, computeDType?) ← floatingComputeArith? ctx term e' e'
-      pure ⟨term, .real, SInfo.dims outDims, computeTerm?, computeDType?⟩
+      finish (← `($reducer (⟨$axisLit, by simp⟩) $kdLit $eTerm)) outDims
   | none =>
-      -- `axis = None` (Triton default): reduce over all dimensions.
-      -- Two regimes, because `keep_dims` changes how the rank evolves:
-      --   * `keep_dims = false`: each call drops the last remaining axis. This
-      --     still reduces every dimension, and keeps the intermediate shapes
-      --     syntactically reducible (`[M, N] -> [M] -> []`) so the generated
-      --     `Fin shape.length` proof closes by `simp`.
-      --   * `keep_dims = true`: rank is preserved; emit calls with
-      --     `axis = 0, 1, …, dims.length - 1` so every axis is reduced.
-      let mut term := eTerm
-      for j in [:dims.length] do
-        let axisIdx := if keepDims then j else (dims.length - 1 - j)
-        let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
-        term ← `($op (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.reduceShape]⟩) $kdLit $term)
-      let outDims : List (TSyntax `term) ←
+      if dims.length == 1 then
+        let outDims ← if keepDims then setNthOne dims 0 else pure []
+        finish (← `($reducer (⟨0, by simp⟩) $kdLit $eTerm)) outDims
+      else
+        let mut product := dims.head!
+        for dim in dims.tail do
+          product ← `($product * $dim)
+        let flatShape ← (SInfo.dims [product]).term
+        let term ← `($reducer (⟨0, by simp⟩) Bool.false (Op.reshape $flatShape $eTerm))
         if keepDims then
           let oneLit : TSyntax `term ← `((1 : Nat))
-          pure (List.replicate dims.length oneLit)
-        else
-          pure []
-      let (computeTerm?, computeDType?) ← floatingComputeArith? ctx term e' e'
-      pure ⟨term, .real, SInfo.dims outDims, computeTerm?, computeDType?⟩
+          let outDims := List.replicate dims.length oneLit
+          let outShape ← (SInfo.dims outDims).term
+          finish (← `(Op.reshape $outShape $term)) outDims
+        else finish term []
 
-/-- Lower `tl.max(...)` reductions. Real-valued tiles keep the existing
-mathematical-real path; Nat tiles lower to `Op.reduceMaxNat`, which is needed
-for index arithmetic such as `tl.max(tl.where(nat_cond, nat_values, 0))`. -/
+/-- Lower `tl.max(...)` reductions. Natural and signed integer tiles retain
+their exact discrete carrier; floating tiles retain their computation precision.
+In particular, a signed metadata maximum is never clipped to natural zero. -/
 partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
     (e : TSyntax `tritonExpr)
     (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
@@ -528,10 +566,14 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
   let mut eTerm := e'.term
   let mut outDType : DInfo := .real
   let mut isNat : Bool := Bool.false
+  let mut isInt : Bool := Bool.false
   match e'.dtype with
   | .nat =>
       outDType := .nat
       isNat := Bool.true
+  | .int =>
+      outDType := .int
+      isInt := Bool.true
   | .real =>
       pure ()
   | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 =>
@@ -597,9 +639,11 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
       let term ←
         if isNat then
           `(Op.reduceMaxNat (⟨$axisLit, by simp⟩) $kdLit $eTerm)
+        else if isInt then
+          `(Op.reduceMaxInt (⟨$axisLit, by simp⟩) $kdLit $eTerm)
         else
           `(Op.reduceMax (⟨$axisLit, by simp⟩) $kdLit $eTerm)
-      let (ct, cp) ← if isNat then pure (none, none)
+      let (ct, cp) ← if isNat || isInt then pure (none, none)
                     else floatingComputeArith? "tl.max" term e' e'
       pure ⟨term, outDType, SInfo.dims outDims, ct, cp⟩
   | none =>
@@ -612,6 +656,10 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
             `(Op.reduceMaxNat
                 (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.reduceShape]⟩)
                 $kdLit $term)
+          else if isInt then
+            `(Op.reduceMaxInt
+                (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.reduceShape]⟩)
+                $kdLit $term)
           else
             `(Op.reduceMax
                 (⟨$axisLit, by simp [TileShape.eraseAxis, TileShape.reduceShape]⟩)
@@ -622,47 +670,31 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
           pure (List.replicate dims.length oneLit)
         else
           pure []
-      let (ct, cp) ← if isNat then pure (none, none)
+      let (ct, cp) ← if isNat || isInt then pure (none, none)
                     else floatingComputeArith? "tl.max" term e' e'
       pure ⟨term, outDType, SInfo.dims outDims, ct, cp⟩
 
 /-- Lower a `tl.dot(a, b)` to `Op.dot a b` (or `Op.dotInt` on the `.int`
 channel).
 
-Algorithm-layer dot is real-valued unless *both* operands are `.int`, in
-which case the lowering is the integer matmul `Op.dotInt` (Triton's
-int8/int32-accumulator `tl.dot`) and the result stays `.int`. If the
-surface operands were explicitly cast to fp32/fp16/bf16, first project
-those float tiles back to real so the cast remains visible in the operand
-term before the dot. Mixed int/float operands are rejected (Triton would
-not accept them either); nat operands must be cast to a signed int first
-(int8 loads are signed). -/
+Algorithm-typed operands retain the real-channel dot. Explicit floating
+operands/results use `Op.dotTyped`, so the original input channels and the
+selected output type survive nested arithmetic and stores. Integer operands
+use `Op.dotInt`. Mixed integer/floating operands are rejected. -/
 partial def expandDot (expandExpr : ExprExpander) (env : Env)
-    (a b : TSyntax `tritonExpr) : MacroM EOut := do
-  let a0 ← expandExpr env a
-  let b0 ← expandExpr env b
+    (a b : TSyntax `tritonExpr) (options : Option (TSyntax `term) := none)
+    (resultHint : Option DInfo := none) : MacroM EOut := do
+  let a0 := (← expandExpr env a).forgetStorageWidth
+  let b0 := (← expandExpr env b).forgetStorageWidth
   if (a0.dtype == .int) != (b0.dtype == .int) then
     Macro.throwError
       ("tl.dot: mixed operand dtypes — both operands must be int "
         ++ "(integer tl.dot, `Op.dotInt`) or both float (`Op.dot`); "
         ++ "cast the odd side first (nat values: `tl.cast(x, tl.int32)`)")
   let outDType : DInfo := if a0.dtype == .int then .int else .real
-  let a' ←
-    match a0.dtype with
-    | .real | .int => pure a0
-    | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 | .floatVar _ =>
-        pure { a0 with term := ← realMathTerm "tl.dot lhs" a0, dtype := .real }
-    | _ =>
-        ensureDType .real a0.dtype "tl.dot"
-        pure a0
-  let b' ←
-    match b0.dtype with
-    | .real | .int => pure b0
-    | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 | .floatVar _ =>
-        pure { b0 with term := ← realMathTerm "tl.dot rhs" b0, dtype := .real }
-    | _ =>
-        ensureDType .real b0.dtype "tl.dot"
-        pure b0
+  -- Typed dot consumes its operands directly, without artificial widening casts.
+  let a' := a0
+  let b' := b0
   -- Both operands must be rank ≥ 2 (the trailing two dims are the matmul);
   -- any leading dims form a shared `batch` prefix that must agree
   -- syntactically. The inner dim `K` is the last of `a` / first-of-trailing
@@ -699,14 +731,121 @@ partial def expandDot (expandExpr : ExprExpander) (env : Env)
         let tail ← batchTerm rest
         `($d :: $tail)
   let batchT ← batchTerm aBatch
-  let opTerm ←
-    if outDType == .int then
-      `(Op.dotInt (batch := $batchT) (M := $aM) (K := $aK) (N := $bN)
-          $a'.term $b'.term)
-    else
-      `(Op.dot (batch := $batchT) (M := $aM) (K := $aK) (N := $bN)
-          $a'.term $b'.term)
-  pure ⟨opTerm, outDType, .dims (aBatch ++ [aM, bN]), none, none⟩
+  let optionsT ← match options with
+    | some term => pure term
+    | none => `(({} : DotOptions))
+  if outDType == .int then
+    let opTerm ← `(Op.dotInt (options := $optionsT) (batch := $batchT)
+      (M := $aM) (K := $aK) (N := $bN) $a'.term $b'.term)
+    return ⟨opTerm, .int, .dims (aBatch ++ [aM, bN]), none, none⟩
+  let typed := a'.dtype != .real || b'.dtype != .real ||
+    (resultHint.isSome && resultHint != some .fp32 && resultHint != some .real)
+  if !typed then
+    let opTerm ← `(Op.dot (options := $optionsT) (batch := $batchT)
+      (M := $aM) (K := $aK) (N := $bN) $a'.term $b'.term)
+    return ⟨opTerm, .real, .dims (aBatch ++ [aM, bN]), none, none⟩
+  -- Triton's fp32 and bf16 operands produce fp32; fp16/fp8 operands use the
+  -- selected result type, defaulting to fp32. Result dtype is part of the dot.
+  if resultHint == some .bf16 then
+    Macro.throwError "tl.dot: bfloat16 output requires a float32/float16 dot followed by a cast"
+  let out := if a'.dtype == .fp32 || a'.dtype == .bf16 || a'.computeDType? == some .fp32 then DInfo.fp32
+    else resultHint.getD .fp32
+  if out != .fp32 && out != .fp16 then
+    Macro.throwError "tl.dot: typed floating results require float16 or float32"
+  let leftProof ← a'.dtype.floatProof
+  let rightProof ← b'.dtype.floatProof
+  let outProof ← out.floatProof
+  let opTerm ← `(Op.dotTyped $leftProof $rightProof $outProof
+    (options := $optionsT) (batch := $batchT) (M := $aM) (K := $aK) (N := $bN)
+    $a'.term $b'.term)
+  return ⟨opTerm, out, .dims (aBatch ++ [aM, bN]), none, none⟩
+
+/-- Preserve the explicit dot accumulator as part of the opaque operation.
+Triton 3.7.1 defaults out_dtype to fp32 even when an accumulator is supplied;
+fp16 accumulation requires an explicit matching out_dtype. -/
+partial def expandDotAcc (expandExpr : ExprExpander) (env : Env)
+    (a b acc : TSyntax `tritonExpr) (options : Option (TSyntax `term) := none)
+    (resultHint : Option DInfo := none) : MacroM EOut := do
+  let acc' ← expandExpr env acc
+  let hint := resultHint.getD .fp32
+  let dot ← expandDot expandExpr env a b options (some hint)
+  ensureShape dot.shape acc'.shape "tl.dot accumulator"
+  if dot.dtype == .int then
+    ensureDType .int acc'.dtype "tl.dot accumulator"
+    let (bc, outShape) ← broadcastTerm dot.shape acc'.shape "tl.dot accumulator"
+    return ⟨← `(Op.add NumericDType.int $bc $dot.term $acc'.term),
+      .int, outShape, none, none⟩
+  unless acc'.dtype == .real || acc'.dtype == .fp32 || acc'.dtype == .fp16 do
+    Macro.throwError "tl.dot accumulator must have float16 or float32 precision"
+  let declared := if acc'.dtype == .real then DInfo.fp32 else acc'.dtype
+  if hint != declared then
+    Macro.throwError "tl.dot: out_dtype must match accumulator precision"
+  let actual := if dot.dtype == .real then DInfo.fp32 else dot.dtype
+  ensureDType actual declared "tl.dot accumulator"
+  let a' ← expandExpr env a
+  let b' ← expandExpr env b
+  let .dims aDims := a'.shape
+  let .dims bDims := b'.shape
+  let rec batchTerm : List (TSyntax `term) → MacroM (TSyntax `term)
+    | [] => `(([] : TileShape))
+    | d :: rest => do
+        let tail ← batchTerm rest
+        `($d :: $tail)
+  let batchT ← batchTerm (aDims.dropLast.dropLast)
+  let aM := aDims[aDims.length - 2]!
+  let aK := aDims[aDims.length - 1]!
+  let bN := bDims[bDims.length - 1]!
+  let left ← a'.dtype.floatProof
+  let right ← b'.dtype.floatProof
+  let out ← acc'.dtype.floatProof
+  let optionsT ← match options with
+    | some term => pure term
+    | none => `(({} : DotOptions))
+  let term ← `(Op.dotAcc $left $right $out (batch := $batchT)
+    (M := $aM) (K := $aK) (N := $bN) $a'.term $b'.term $acc'.term $optionsT)
+  let (ct, cp) ← if acc'.dtype == .real then
+    floatingComputeArith? "tl.dot accumulator" term acc' acc'
+    else pure (none, none)
+  return ⟨term, acc'.dtype, dot.shape, ct, cp⟩
+
+/-- Dot options are compile-time choices, retained even in nested expressions.
+Unknown or repeated options are rejected instead of silently losing precision. -/
+def expandDotOptions (kwargs : Array (TSyntax `tritonReduceKwarg)) :
+    MacroM (TSyntax `term × Option DInfo) := do
+  let mut resultHint : Option DInfo := none
+  let mut result ← `(({} : DotOptions))
+  let mut seen : List String := []
+  for kw in kwargs do
+    let (name, updated) ← match kw with
+      | `(tritonReduceKwarg| out_dtype=$dt:tritonDType) => do
+          let info ← expandDType dt
+          resultHint := some info
+          let dtype ← info.term
+          pure ("out_dtype", ← `({ $result with outDType := some $dtype }))
+      | `(tritonReduceKwarg| input_precision=$mode:str) =>
+          pure ("input_precision", ← `({ $result with inputPrecision := some $mode }))
+      | `(tritonReduceKwarg| $key:ident=$value:tritonExpr) => do
+          let name := key.getId.toString
+          let term ← match value with
+            | `(tritonExpr| True) | `(tritonExpr| true) => `(Bool.true)
+            | `(tritonExpr| False) | `(tritonExpr| false) => `(Bool.false)
+            | `(tritonExpr| $($t:term)) => pure t
+            | `(tritonExpr| $n:num) => pure ⟨n.raw⟩
+            | `(tritonExpr| $i:ident) => pure ⟨i.raw⟩
+            | _ => Macro.throwError "tl.dot options require compile-time values"
+          match name with
+          | "allow_tf32" => pure (name, ← `({ $result with allowTF32 := some $term }))
+          | "input_precision" => pure (name, ← `({ $result with inputPrecision := some $term }))
+          | "max_num_imprecise_acc" =>
+              pure (name, ← `({ $result with maxNumImpreciseAcc := some $term }))
+          | _ => Macro.throwError ("tl.dot: unsupported option `" ++ name ++ "`")
+      | _ => Macro.throwError "tl.dot: unsupported option"
+    if seen.contains name then Macro.throwError ("tl.dot: repeated option `" ++ name ++ "`")
+    seen := name :: seen
+    result := updated
+  if seen.contains "allow_tf32" && seen.contains "input_precision" then
+    Macro.throwError "tl.dot: specify only one of allow_tf32 and input_precision"
+  return (result, resultHint)
 
 partial def expandShapeDims (ctx : String) (dims : Array (TSyntax `tritonExpr)) :
     MacroM (TSyntax `term × SInfo) := do

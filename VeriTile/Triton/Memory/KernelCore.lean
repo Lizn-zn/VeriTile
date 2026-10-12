@@ -2,7 +2,7 @@
 VeriTile.Triton.Memory.KernelCore
 
 The **unified KernelIO core**: one vectorized, channel-typed IO signature
-(`UKernelIO`) whose single assembly lemma (`UKernelIO.Implements.intro`)
+(`UKernelIO`) whose single assembly lemma (`UKernelIO.ImplementsAt.intro`)
 carries the flat-memory bridge for the *entire* concrete KernelIO family.
 
 The concrete structs in `Memory/KernelSpec.lean` (`KernelIO₂`, the
@@ -162,13 +162,51 @@ namespace UKernelIO
 abbrev Ctx (io : UKernelIO) : Type :=
   ∀ k : Fin io.nIn, Fin (io.iarity k) → (io.ity k).carrier
 
-/-- `io.Implements f` — the channel-typed masked Hoare triple. For any
+/-- Pointwise flat-memory contract. A caller may first constrain the initial
+state's grid dimensions and program IDs. It retains successful execution,
+typed output observations and the complete output/scratch memory frame. -/
+def ImplementsAt (io : UKernelIO) (s₀ : BlockState) (vals : io.Ctx)
+    (f : (o : Fin io.nOut) → Fin (io.oarity o) →
+      (io.oty o).carrier) :
+    Prop :=
+  ∀ A : FlatAlloc,
+    A.Disjoint →
+    A.regions = io.bufs →
+    (∀ r, r ∉ A.regions → A.extent r = 0) →
+    s₀.undef = (fun _ _ => 0) →
+    (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)), io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+      io.iwin i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j < A.extent (io.ibuf i)) →
+    (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)), io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+      io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j < A.extent (io.obuf o)) →
+    (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)), io.smask t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+      io.swin t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j < A.extent (io.sbuf t)) →
+    (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)), io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+      (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) = vals i j) →
+    ∃ s',
+      exec (A.flattenKernel io.kernel.toAlgKernel) (A.flattenState s₀)
+        = some s'
+      ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+          io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+          (io.oty o).read s' A.flat
+              (A.addr (io.obuf o) (io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j))
+            = f o j)
+      ∧ (∀ r' o',
+          (r' ≠ A.flat ∨
+            ((∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+                io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+                o' ≠ A.addr (io.obuf o) (io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)) ∧
+             (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+                io.smask t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+                o' ≠ A.addr (io.sbuf t) (io.swin t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)))) →
+          s'.mem r' o' = (A.flattenState s₀).mem r' o')
+
+/-- `io.Implements3D f` — the channel-typed masked Hoare triple. For any
 context `vals` the launch state holds on every input channel (channel-typed,
 at the `vals`-dependent windows), the translated kernel terminates, every
-write-active lane of every output channel holds `f … vals o j`, and every
+write-active lane of every output channel holds `f pid₀ pid₁ pid₂ vals o j`, and every
 flat cell outside the declared output/scratch windows is unchanged. -/
-def Implements (io : UKernelIO)
-    (f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) →
+def Implements3D (io : UKernelIO)
+    (f : Nat → Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) →
       (io.oty o).carrier) :
     Prop :=
   ∀ A : FlatAlloc,
@@ -196,7 +234,7 @@ def Implements (io : UKernelIO)
           io.omask o vals pid₀ pid₁ pid₂ j →
           (io.oty o).read s' A.flat
               (A.addr (io.obuf o) (io.owin o vals pid₀ pid₁ pid₂ j))
-            = f pid₀ pid₁ vals o j)
+            = f pid₀ pid₁ pid₂ vals o j)
       ∧ (∀ r' o',
           (r' ≠ A.flat ∨
             ((∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
@@ -207,40 +245,53 @@ def Implements (io : UKernelIO)
                 o' ≠ A.addr (io.sbuf t) (io.swin t vals pid₀ pid₁ pid₂ j)))) →
           s'.mem r' o' = (A.flattenState s₀).mem r' o')
 
+/-- The existing three-coordinate contract is exactly the family of pointwise
+contracts. Fixing a state changes the binder order, not its memory guarantees. -/
+theorem implements3D_iff_at (io : UKernelIO)
+    (f : Nat → Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) → (io.oty o).carrier) :
+    io.Implements3D f ↔ ∀ (s : BlockState) (vals : io.Ctx),
+      io.ImplementsAt s vals (f (s.pids 0) (s.pids 1) (s.pids 2) vals) := by
+  constructor
+  · intro h s vals A hd hr hc
+    exact h A hd hr hc (s.pids 0) (s.pids 1) (s.pids 2) vals s rfl rfl rfl
+  · intro h A hd hr hc p₀ p₁ p₂ vals s h₀ h₁ h₂
+    subst h₀
+    subst h₁
+    subst h₂
+    exact h s vals A hd hr hc
+
+/-- Backward-compatible formula interface for kernels whose formula is
+independent of the third grid coordinate. All three coordinates still index
+input/output windows and are universally quantified. -/
+def Implements (io : UKernelIO)
+    (f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) → (io.oty o).carrier) : Prop :=
+  io.Implements3D (fun p₀ p₁ _ => f p₀ p₁)
+
 @[inherit_doc] scoped infix:25 " ⊨ᵤ " => UKernelIO.Implements
 
-/-- Assembly lemma — **the** flattening-bridge proof of the whole family.
-The obligations are the family's usual three, with the channel-typed pin
-hypothesis threaded through both `hts` and `hrun` (value-dependent windows
-need the pinned values to state their bounds).
-
-`hrun` additionally receives the **`undef` pin** `s₀.undef = fun _ _ => 0`
-that `Implements` hypothesises. Without it, a kernel whose masked loads lack
-an `other=` default reads `s₀.undef` at masked-off lanes; if the kernel then
-reduces across the tile, the value stored at an *active* lane depends on
-`undef` at *inactive* lanes and no `⊨`-shaped contract is provable. Since
-this is a hypothesis the consumer *discharges*, handing it over strictly
-weakens the obligation — skins that do not need it simply ignore the binder. -/
-theorem Implements.intro (io : UKernelIO)
-    {f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) →
+/-- Shared flattening assembly at a fixed initial state. The existing undef
+pin is available to both safety and execution proofs. -/
+theorem ImplementsAt.intro (io : UKernelIO) (s₀ : BlockState) (vals : io.Ctx)
+    {f : (o : Fin io.nOut) → Fin (io.oarity o) →
       (io.oty o).carrier}
     (hok : (io.kernel.toAlgKernel).FlattenOk)
-    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (vals : io.Ctx),
+    (hts : ∀ (bounds : RegionBounds),
+      s₀.undef = (fun _ _ => 0) →
       (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
-        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
-        (io.ity i).read s (io.ibuf i) (io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j)
+        io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
           = vals i j) →
       (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
-        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
-        io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.ibuf i)) →
+        io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        io.iwin i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j < bounds (io.ibuf i)) →
       (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
-        io.omask o vals (s.pids 0) (s.pids 1) (s.pids 2) j →
-        io.owin o vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.obuf o)) →
+        io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j < bounds (io.obuf o)) →
       (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
-        io.smask t vals (s.pids 0) (s.pids 1) (s.pids 2) j →
-        io.swin t vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.sbuf t)) →
-      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
-    (hrun : ∀ (s₀ : BlockState) (vals : io.Ctx),
+        io.smask t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        io.swin t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j < bounds (io.sbuf t)) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s₀)
+    (hrun :
       s₀.undef = (fun _ _ => 0) →
       (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
         io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
@@ -251,7 +302,7 @@ theorem Implements.intro (io : UKernelIO)
             io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
             (io.oty o).read s1 (io.obuf o)
                 (io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
-              = f (s₀.pids 0) (s₀.pids 1) vals o j)
+              = f o j)
         ∧ (∀ r o',
             (∀ (oc : Fin io.nOut) (j : Fin (io.oarity oc)),
               io.omask oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
@@ -260,14 +311,11 @@ theorem Implements.intro (io : UKernelIO)
               io.smask t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
               r ≠ io.sbuf t ∨ o' ≠ io.swin t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
             s1.mem r o' = s₀.mem r o')) :
-    io.Implements f := by
-  intro A hd hregs hcov pid₀ pid₁ pid₂ vals s₀ hpid₀ hpid₁ hpid₂ hu hib hob hsb hpins
-  subst hpid₀
-  subst hpid₁
-  subst hpid₂
-  obtain ⟨s1, hexec, hval, hframe⟩ := hrun s₀ vals hu hpins
+    io.ImplementsAt s₀ vals f := by
+  intro A hd hregs hcov hu hib hob hsb hpins
+  obtain ⟨s1, hexec, hval, hframe⟩ := hrun hu hpins
   have hts' : Kernel.TraceSafe A.extent (io.kernel.toAlgKernel) s₀ :=
-    hts A.extent s₀ vals hpins hib hob hsb
+    hts A.extent hu hpins hib hob hsb
   have hbridge := A.exec_flatten hd hcov _ s₀ hts' hok hu
   refine ⟨A.flattenState s1, ?_, ?_, ?_⟩
   · rw [hbridge, hexec, Option.map_some]
@@ -308,6 +356,109 @@ theorem Implements.intro (io : UKernelIO)
               · exact hn.2 t j hj (by rw [hoeq, hoj])
             · exact Or.inl hrs
     · simp only [FlatAlloc.flattenState, if_neg hr]
+
+/-- Three-coordinate assembly reuses the pointwise flattening bridge.
+The obligations are the family's usual three, with the channel-typed pin
+hypothesis threaded through both `hts` and `hrun` (value-dependent windows
+need the pinned values to state their bounds).
+
+`hrun` additionally receives the **`undef` pin** `s₀.undef = fun _ _ => 0`
+that `Implements` hypothesises. Without it, a kernel whose masked loads lack
+an `other=` default reads `s₀.undef` at masked-off lanes; if the kernel then
+reduces across the tile, the value stored at an *active* lane depends on
+`undef` at *inactive* lanes and no `⊨`-shaped contract is provable. Since
+this is a hypothesis the consumer *discharges*, handing it over strictly
+weakens the obligation — skins that do not need it simply ignore the binder. -/
+theorem Implements3D.intro (io : UKernelIO)
+    {f : Nat → Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) →
+      (io.oty o).carrier}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (vals : io.Ctx),
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        (io.ity i).read s (io.ibuf i) (io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j)
+          = vals i j) →
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.ibuf i)) →
+      (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+        io.omask o vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.owin o vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.obuf o)) →
+      (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+        io.smask t vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.swin t vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.sbuf t)) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (vals : io.Ctx),
+      s₀.undef = (fun _ _ => 0) →
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
+          = vals i j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+            io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+            (io.oty o).read s1 (io.obuf o)
+                (io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
+              = f (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) vals o j)
+        ∧ (∀ r o',
+            (∀ (oc : Fin io.nOut) (j : Fin (io.oarity oc)),
+              io.omask oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+              r ≠ io.obuf oc ∨ o' ≠ io.owin oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
+            (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+              io.smask t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+              r ≠ io.sbuf t ∨ o' ≠ io.swin t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
+            s1.mem r o' = s₀.mem r o')) :
+    io.Implements3D f := by
+  intro A hd hregs hcov pid₀ pid₁ pid₂ vals s₀ hpid₀ hpid₁ hpid₂ hu hib hob hsb hpins
+  subst hpid₀
+  subst hpid₁
+  subst hpid₂
+  exact ImplementsAt.intro io s₀ vals hok
+    (fun bounds _ => hts bounds s₀ vals) (hrun s₀ vals)
+    A hd hregs hcov hu hib hob hsb hpins
+
+/-- The existing two-coordinate formula interface reuses the same bridge. -/
+theorem Implements.intro (io : UKernelIO)
+    {f : Nat → Nat → io.Ctx → (o : Fin io.nOut) → Fin (io.oarity o) →
+      (io.oty o).carrier}
+    (hok : (io.kernel.toAlgKernel).FlattenOk)
+    (hts : ∀ (bounds : RegionBounds) (s : BlockState) (vals : io.Ctx),
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        (io.ity i).read s (io.ibuf i) (io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j)
+          = vals i j) →
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.iwin i vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.ibuf i)) →
+      (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+        io.omask o vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.owin o vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.obuf o)) →
+      (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+        io.smask t vals (s.pids 0) (s.pids 1) (s.pids 2) j →
+        io.swin t vals (s.pids 0) (s.pids 1) (s.pids 2) j < bounds (io.sbuf t)) →
+      Kernel.TraceSafe bounds (io.kernel.toAlgKernel) s)
+    (hrun : ∀ (s₀ : BlockState) (vals : io.Ctx),
+      s₀.undef = (fun _ _ => 0) →
+      (∀ (i : Fin io.nIn) (j : Fin (io.iarity i)),
+        io.imask i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+        (io.ity i).read s₀ (io.ibuf i) (io.iwin i vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
+          = vals i j) →
+      ∃ s1, exec (io.kernel.toAlgKernel) s₀ = some s1
+        ∧ (∀ (o : Fin io.nOut) (j : Fin (io.oarity o)),
+            io.omask o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+            (io.oty o).read s1 (io.obuf o)
+                (io.owin o vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j)
+              = f (s₀.pids 0) (s₀.pids 1) vals o j)
+        ∧ (∀ r o',
+            (∀ (oc : Fin io.nOut) (j : Fin (io.oarity oc)),
+              io.omask oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+              r ≠ io.obuf oc ∨ o' ≠ io.owin oc vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
+            (∀ (t : Fin io.nScr) (j : Fin (io.sarity t)),
+              io.smask t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j →
+              r ≠ io.sbuf t ∨ o' ≠ io.swin t vals (s₀.pids 0) (s₀.pids 1) (s₀.pids 2) j) →
+            s1.mem r o' = s₀.mem r o')) :
+    io.Implements f := by
+  exact Implements3D.intro io hok hts hrun
 
 end UKernelIO
 

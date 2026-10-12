@@ -1,5 +1,5 @@
 import bench.examples.VectorAdd.Kernels
-import VeriTile.Triton.Float.GuardedRewrite
+import VeriTile.Triton.Float.RewriteTactics
 import VeriTile.Meta.StatementAudit
 
 /-! VectorAdd: contextual FP equivalence from the admitted scalar add_commute.
@@ -16,28 +16,24 @@ abbrev Rules := FP.ScalarArithmetic.Rules
 
 /-- Finite operands after the original common prefix. -/
 def additionSite (blockSize : Nat) : Site where
-  before := (originalKernel blockSize).surfaceBody.take 4
+  before := Source.prefixBefore (originalKernel blockSize).surfaceBody "out"
   shape := [blockSize]
   left := .ref .real [blockSize] "x"
   right := .ref .real [blockSize] "y"
 
-def original (blockSize : Nat) : Program :=
-  ⟨originalKernel blockSize, [additionSite blockSize]⟩
+def original (blockSize : Nat) : Program where
+  kernel := originalKernel blockSize
+  domain := [additionSite blockSize]
 
 def optimized (blockSize : Nat) : Program :=
-  ⟨optimizedKernel blockSize, [additionSite blockSize]⟩
+  { original blockSize with kernel := optimizedKernel blockSize }
 
 /-- Under the finite-operand contract, every successful run is preserved,
 including all registers and memory; failed surrounding executions also agree. -/
 specification add_kernel_equiv (blockSize : Nat) (R : Rules) :
     original blockSize ≡[R] optimized blockSize := by
-  apply Spec.FloatingPoint.ofNumerical
-    (lhs := original blockSize) (rhs := optimized blockSize)
-    (structural := fun _ _ => False) rfl rfl
-  intro α _ M D hM s hd
-  exact add_commute R M D hM s (additionSite blockSize) "out"
-    ((originalKernel blockSize).surfaceBody.drop 5)
-    (hd _ (by simp [original]))
+  equiv_decompose
+  all_goals fp_prove
 
 #print_fp_assumptions add_kernel_equiv
 #guard_msgs (drop info) in

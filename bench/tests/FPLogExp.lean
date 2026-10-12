@@ -113,7 +113,7 @@ set_option maxHeartbeats 1600000 in
 theorem finite_input_domain (a : ℚ) (B : Nat) :
     (LogExp.FPEquiv.domain "x" B).Holds (LogExp.FPEquiv.engine model)
       (fun _ _ => True) (withInput a) := by
-  simp [FP.Guarded.Precondition.Holds, LogExp.FPEquiv.domain, LogExp.optimizedKernel,
+  simp [FP.Guarded.Precondition.Holds, LogExp.FPEquiv.domain, Source.prefixBefore, LogExp.optimizedKernel,
     ComputeKernel.surfaceBody, run, step, evalExpr, evalComputeOp, evalOp_unfold,
     ComputeDType.eraseDType, LogExp.FPEquiv.engine, Algebra.withDefaultPrecision,
     resolvePrecision, numericLt, numericLe, numeric, bop, model]

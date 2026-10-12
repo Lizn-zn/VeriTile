@@ -12,6 +12,13 @@ and contract helpers live in the example's `Proofs/FP.lean` and never import the
 correctness counterpart. See the [example index](../bench/examples/README.md)
 for the shared implementations and precise observation scopes.
 
+All 19 examples keep IO definitions, necessary conditions and specifications in
+their reader entries. Auxiliary real lemmas live in `Proofs/Real.lean`; FP
+execution, recurrence and scalar composition lemmas live in `Proofs/FP.lean`
+when needed. Public FP contracts expose precision, operand domains, schedules
+and comparison requirements. The entry proofs compose the checked lemmas;
+helper modules do not import the entry files.
+
 Experimental shape and distribution select assumptions. They are not extra
 shape conditions on the subsequent Lean derivation. Kernel dimensions remain
 parameters except where a case was already explicitly a fixed-rank slice.
@@ -36,7 +43,7 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Adam-named Lion update | `AdamUpdateGridLaunch/Correct.lean` — checked for both sources per program; original grid proofs retained | `AdamUpdateGridLaunch/FPEquiv.lean` — checked per program; momentum addition commutation, masked in-place stores retained |
 | Stable softmax | `SoftmaxStable/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxStable/FPEquiv.lean` — checked for the libdevice.exp kernels, using admitted scalar arithmetic and EXP-SUB; symbolic row length, scheduled sums, bf16 stores and frames retained |
 | Log-exp elimination | `LogExp/Correct.lean` — checked for the fixed reference and guarded candidate against the identity formula | `LogExp/FPEquiv.lean` — checked using the admitted conditional `log_exp_cancel .libdevice` atom |
-| Stable logsumexp | `StableLogSumExp/Correct.lean` — checked for both original kernels and the conditional candidate against logsumexp | `StableLogSumExp/FPEquiv.lean` — `logsumexp_equiv` checks the conditional tl.log candidate against the unchanged direct reference, using `log_mul_split .tl`, `log_exp_cancel .tl`, exp-sub and arithmetic. The older unconditional shifted source is not certified. |
+| Stable logsumexp | `StableLogSumExp/Correct.lean` — checked for the direct reference and conditional candidate against logsumexp; the historical shift's real proof is in `Proofs/LegacyCorrect.lean` | `StableLogSumExp/FPEquiv.lean` — `logsumexp_equiv` checks the conditional tl.log candidate against the unchanged direct reference, using `log_mul_split .tl`, `log_exp_cancel .tl`, exp-sub and arithmetic. The older general FP target is refuted by a singleton logical countermodel in `Proofs/Unconditional.lean`. |
 | Softmax reciprocal | `SoftmaxReciprocal/Correct.lean` — checked for both original kernels against the softmax formula | `SoftmaxReciprocal/FPEquiv.lean` — ordinary fp32 division versus a shared reciprocal, with the original bf16 output cast and explicit finite/nonzero operand domain |
 | Float dtype softmax | `FloatDTypeSoftmax/Correct.lean` — checked for both original fp32-load/fp64-work kernels against the softmax formula | `FloatDTypeSoftmax/FPEquiv.lean` — fp32 load, fp64 work, fp32 output; only the casted division/reciprocal relation is assumed |
 | Fused SiLU | `FusedSiLU/Correct.lean` — checked for both original kernels against residual + silu(x · gate), including empty blocks and scratch framing | `FusedSiLU/FPEquiv.lean` — checked; original fused versus materialized pipeline, with no numerical assumptions |
@@ -45,8 +52,11 @@ FP equivalence. Pending entries must not be advertised as proved.
 | Fused layernorm | `FusedLayerNorm/Correct.lean` — checked for both original kernels against population-variance normalization and affine transformation | `FusedLayerNorm/FPEquiv.lean` — checked for `N <= 2^24`, including empty output rows; original statistics, affine suffix, bf16 stores and frames retained |
 
 There are 19 correctness modules and 19 modules with completed FP specifications.
-StableLogSumExp proves the conditional candidate; its older unconditional shift
-remains a separately recorded goal in `StableLogSumExp/Proofs/Unconditional.lean`; the fallback version is the supported optimized source. The eight `Proofs/LegacyRealEquiv.lean` modules
+StableLogSumExp proves the conditional candidate. Its older general FP target
+is refuted in `StableLogSumExp/Proofs/Unconditional.lean` by a logical model of
+all selected atoms, with different stored outputs on a legal singleton row.
+This is not a GPU or two-gates failure; the fallback version is the supported
+optimized source. The eight `Proofs/LegacyRealEquiv.lean` modules
 retain proofs with real intermediate arithmetic and their stated cast semantics.
 Their presence does not complete a pending FP transformation.
 
@@ -110,7 +120,14 @@ loads, which these examples do not use. This is not a complete IEEE evaluator.
 
 [The remaining prerequisites](./FPRemainingAdmissionGaps.md) distinguish the
 main-table algebraic countermodels from the supplemental rule set. The
-unconditional logsumexp shift remains pending. Its two scalar probes and paired libdevice.log
+historical unconditional logsumexp shift's general FP specification is refuted
+under the currently selected atomic theory by the `refutation` declarations in
+[Unconditional.lean](../bench/examples/StableLogSumExp/Proofs/Unconditional.lean).
+The singleton countermodel satisfies all selected rules and domain checks,
+while the kernels store different outputs. This is a logical disproof under
+the abstract theory, not a GPU or two-gates failure.
+
+The two scalar probes and paired libdevice.log
 variants in `experiments/floating_point/supplement/log_product_config.py`
 completed on H200: LOG-MUL is bias-INCONCLUSIVE and LOG-EXP-LIBDEVICE is
 bias-REJECT. Both variants have identical observations and PTX after removing
@@ -221,14 +238,14 @@ lemmas, not the public equivalence scope.
 
 Stable logsumexp retains its single bf16 store at `pid` and uses libdevice.exp.
 The conditional candidate's log-product and log-exp atoms are admitted and
-bound, and its complete FP specification preserves both fallbacks. Only the
-historical unconditional shift still needs the unadmitted log equations; its
-goal is isolated in `StableLogSumExp/Proofs/Unconditional.lean`. Count-conversion
+bound, and its complete FP specification preserves both fallbacks. The
+historical unconditional shift's general FP target has a checked logical
+counterexample in `StableLogSumExp/Proofs/Unconditional.lean`. Count-conversion
 atoms are admitted with their explicit integer bound. Any external unresolved
 FP premise remains visible to the assumption printer, including equations
 accessed through record fields.
 
-Legacy `KernelIO.Equiv` proofs quantify over a boundary-rounding model. They
+Legacy `KernelIO₁.Equiv` proofs quantify over a boundary-rounding model. They
 are not proofs under the new two-gates-selected atom calculus and do not count
 as completed FP entries in this ledger.
 

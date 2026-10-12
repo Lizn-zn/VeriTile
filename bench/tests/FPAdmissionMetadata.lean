@@ -1,26 +1,12 @@
 import VeriTile.Triton.Float.LogExp
 import VeriTile.Triton.Float.Exponential
 import VeriTile.Triton.Float.CountConversion
-import bench.examples.FloatDTypeAdd.FPEquiv
-import bench.examples.HyperConnectionsDepth.FPEquiv
-import bench.examples.TritonBenchVectorAddition.FPEquiv
-import bench.examples.AdamUpdateGridLaunch.FPEquiv
-import bench.examples.HyperConnectionsWidth.FPEquiv
-import bench.examples.VectorAdd.FPEquiv
-import bench.examples.FlatVectorAdd.FPEquiv
-
-open VeriTile.Bench.Examples.AdamUpdateGridLaunch.Kernels
-open VeriTile.Bench.Examples.FlatVectorAdd.Kernels
-open VeriTile.Bench.Examples.FloatDTypeAdd.Kernels
-open VeriTile.Bench.Examples.HyperConnectionsDepth.Kernels
-open VeriTile.Bench.Examples.HyperConnectionsWidth.Kernels
-open VeriTile.Bench.Examples.TritonBenchVectorAddition.Kernels
-open VeriTile.Bench.Examples.VectorAdd.Kernels
+import VeriTile.Triton.Float.ScalarArithmetic
 
 /- These checks detect changes in selected report metadata. They do not prove
 numerical relations or supply evidence to the kernel equivalence proofs. -/
 namespace FPAdmissionMetadataTests
-open VeriTile.Triton.FP VeriTile.Bench.Examples
+open VeriTile.Triton.FP
 
 def fp32Rule (r : ReportedRule) (ruleID : String) : Prop :=
   r.ruleID = ruleID ∧ r.input = "fp32" ∧ r.compute = "fp32" ∧
@@ -49,12 +35,10 @@ theorem guarded_product_report_matches :
   decide
 
 theorem exponential_report_matches :
-    SupplementalAdmission.fp32_exp_sub.report.ruleID = "EXP-SUB" ∧
-    SupplementalAdmission.fp32_exp_sub.report.input = "fp32" ∧
-    SupplementalAdmission.fp32_exp_sub.report.compute = "fp32" ∧
-    SupplementalAdmission.fp32_exp_sub.report.accumulator = "fp32" ∧
-    SupplementalAdmission.fp32_exp_sub.report.output = "fp32" ∧
-    SupplementalAdmission.fp32_exp_sub.guards = Exponential.guards := by decide
+    fp32Rule SupplementalAdmission.fp32_exp_sub.report "EXP-SUB" ∧
+    SupplementalAdmission.fp32_exp_sub.guards = Exponential.guards := by
+  unfold fp32Rule
+  decide
 
 open CountConversion in
 theorem count_report_matches (a : Atom) (h : a.Available) :

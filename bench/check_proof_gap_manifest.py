@@ -70,6 +70,7 @@ ISSUE_BY_FAMILY = {
     "matmul-output-store-accumulator": "#148",
     "matmul-tma-output-store-accumulator": "#148",
     "proof-slice-precomputed-value": "#152",
+    "csr-loop-invariant": "#152",
     "quantization-semantic-followup": "#158",
     "rope-head-slice-lift": "#153",
     "rotary-2d-tile-value-lift": "#153",
@@ -462,7 +463,8 @@ def headline_names(full_text: str) -> set[str]:
 
 def collect(*, reviewed: bool = True) -> list[Summary]:
     rows: list[Summary] = []
-    for lean_file in sorted(PORTS_ROOT.glob("*/*.lean")):
+    from port_layout import specification_files
+    for lean_file in specification_files(PORTS_ROOT):
         rel = lean_file.relative_to(ROOT).as_posix()
         full_text = lean_file.read_text()
         self_ref_names = find_self_ref_value_defs(full_text)

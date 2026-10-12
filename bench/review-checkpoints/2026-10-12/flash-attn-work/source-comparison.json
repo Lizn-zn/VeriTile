@@ -1,0 +1,14 @@
+{
+  "python_sha256": "fedc0f296ff2f6c4176ee990c1ea4a29129466998c8ac2fc3f6b1ccc5dfc84a1",
+  "lean_sha256": "807cf6b024fb57a6bd4e7a1fd7569afb6b44cfb5adbcbb1f35224f14e4799e36",
+  "complete_statement_ast": true,
+  "loads": 3,
+  "stores": 2,
+  "block_pointer_constructions": 4,
+  "both_causal_branches": true,
+  "normalizations": [
+    "Lean Nat/real/type antiquotations and braces",
+    "Two fixed 2D tl.advance delta lists to Python tuples",
+    "Independent validation of both explicit destination casts"
+  ]
+}

@@ -15,6 +15,7 @@ import Mathlib.Analysis.SpecialFunctions.Pow.Real
 import Mathlib.Algebra.BigOperators.Group.Finset.Basic
 import VeriTile.Triton.Math.Erf
 import VeriTile.Triton.Semantics.State
+import VeriTile.Triton.Core.DiscreteReduction
 
 namespace VeriTile.Triton
 
@@ -441,6 +442,17 @@ noncomputable def Tile.reduceSum {shape : TileShape}
   · exact Tile.reduceSumDrop axis x
   · exact Tile.reduceSumKeep axis x
 
+/-- The real interpreter of a typed floating sum. Dtype tags are retained in
+the AST and FP interpreter; here every floating carrier is projected to real
+arithmetic, exactly as for typed dot. This is not a rounding model. -/
+noncomputable def Tile.reduceSumTyped {shape : TileShape}
+    (dtype : FloatDType) (axis : Fin shape.length) (keepDims : Bool)
+    (x : Tile dtype.toTileDType shape) :
+    Tile dtype.toTileDType (TileShape.reduceShape shape axis keepDims) :=
+  let sum := Tile.reduceSum axis keepDims
+    (⟨fun i => FloatDType.cast dtype .real (x.data i)⟩ : Tile .real shape)
+  ⟨fun i => FloatDType.cast .real dtype (sum.data i)⟩
+
 /-! ### `simp` lemmas for the structural cases of reduceSum -/
 
 @[simp] theorem Tile.reduceSum_false {shape : TileShape}
@@ -639,6 +651,12 @@ noncomputable def Tile.reduceMaxNat {shape : TileShape}
   cases keepDims
   · exact Tile.reduceMaxNatDrop axis x
   · exact Tile.reduceMaxNatKeep axis x
+
+/-- Signed integer maximum, preserving an all-negative input maximum. -/
+noncomputable def Tile.reduceMaxInt {shape : TileShape}
+    (axis : Fin shape.length) (keepDims : Bool) (x : Tile .int shape) :
+    Option (Tile .int (TileShape.reduceShape shape axis keepDims)) :=
+  (TileShape.discreteMaximum axis keepDims x.data).map Tile.mk
 
 /-- Directed scan along an axis. At each output index, folds all input lanes
 whose coordinate on `axis` is `≤` the output coordinate (`.forward`, a prefix
