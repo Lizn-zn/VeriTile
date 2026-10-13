@@ -1,7 +1,15 @@
 # flash_attn
 
-- Source file: `flash_attn.py`
-- Corpus: TritonBench-G v1
-- Status: DSL port compiles; see `../completion_audit.md` and `../proof_blockers.md` for audit and proof status.
+`Kernels.lean` contains the shared typed transcription of the complete Python `_fwd_kernel` and a candidate that commutes the natural-number head-base multiplication. This is an indexing normalization; no floating-point operation is changed and no performance improvement is claimed.
 
-This directory is the per-kernel workspace for the TritonBench-G full-formalization roadmap.
+`Correct.lean` exposes independent real correctness for the original and candidate, plus complete flat execution and a memory frame. `Formula.lean` defines the batch attention numerator, denominator and log-sum-exp directly from initial memory. The proof connects the actual source registers to those formulas through every online-softmax iteration, then covers both final stores. It supports both causal modes, positive `BLOCK_N` and positive source loop stop, arbitrary nonnegative source-used strides, and partial final KV tiles. The source loads the entire final KV tile even when it extends past `SEQLEN`; the formula and address bounds include those physical keys. Causal masking does not remove load obligations.
+
+The source uses `off_bs_head * stride_q_head` for Q/K/V/O, uses `stride_k_seqlen` for V rows, and multiplies by the exact decimal `1.44269504`. Unused source parameters remain present at the public boundary. Q and O storage are independently fp16, bf16 or fp32; K/V are fp16 and L is fp32. Q and probability matrices are explicitly cast to fp16, and O is cast through fp16 before its storage cast. The real theorem erases those floating dtypes; it does not assert an IEEE error bound.
+
+The two-output reference stores L, then O, in source lane order. This defines the result even for aliasing output addresses instead of imposing extra injectivity or disjoint-output hypotheses. Memory outside the exact write window is unchanged. The flat theorem additionally requires disjoint allocation regions, coverage, zero undefined-memory values and bounds for all actual reads/writes. It makes no claim that an unpadded Python allocation is safe for an unaligned tile.
+
+`FPEquiv.lean` proves complete typed-state/failure equivalence with default fp32 compute precision, empty input domain and no FP atoms. All source arithmetic, casts, reductions, dot options, masks and both stores remain identical. This is equivalence of the two full kernels under the profiled structural semantics, not a real-algebra floating-point approximation.
+
+`Proofs/RealWitness.lean` checks a concrete noncontiguous two-block case with `SEQLEN=3`, `BLOCK_N=2`, a nonzero head ID and finite inputs. The padded fourth key has value 4: noncausal O is 1 and L is 2, so silently truncating the formula at `SEQLEN` would give the wrong answer. `NumericTypedModel.lean` supplies a separate exact-real backend with negative infinity, numerical reductions/dots, and explicit typed storage. `NumericTypedExecution.lean` proves successful full typed runs for both causal modes; `NumericTypedValues.lean` reads back the noncausal fp16 O cell as 1 and the fp32 L cell as 2 for both kernels. The backend's identity casts do not model physical IEEE rounding.
+
+`Proofs/LegacyReal.lean` retains the historical public specifications and their hypotheses. Compatibility helpers match current source padding and typed-dot ASTs; their real semantics are proved in `LegacyCompat.lean`. The older theorem scope is not used to restrict the new full-source contracts.

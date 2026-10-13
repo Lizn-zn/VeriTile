@@ -68,6 +68,7 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .arange _ => True
   | .broadcast e _ => e.MemorySafe bounds
   | .full _ e => e.MemorySafe bounds
+  | .withPrecision _ _ e => e.MemorySafe bounds
   | .castFloat _ _ e => e.MemorySafe bounds
   | .castNatToInt e => e.MemorySafe bounds
   | .castIntToNat e => e.MemorySafe bounds
@@ -123,8 +124,11 @@ def Op.MemorySafe (bounds : RegionBounds) : Op dtype shape → Prop
   | .reduceMaxInt _ _ a => a.MemorySafe bounds
   | .reduceSum _ _ a => a.MemorySafe bounds
   | .reduceSumTyped _ _ _ a => a.MemorySafe bounds
+  | .reduceMaxTyped _ _ _ a => a.MemorySafe bounds
   | .scan _ _ _ a => a.MemorySafe bounds
   | .argMax _ a => a.MemorySafe bounds
+  | .argMaxTyped _ _ a _ => a.MemorySafe bounds
+  | .indexedMaxValue _ _ a => a.MemorySafe bounds
   | .argMin _ a => a.MemorySafe bounds
   | .sort _ a => a.MemorySafe bounds
   | .dot a b _ => a.MemorySafe bounds ∧ b.MemorySafe bounds

@@ -58,6 +58,55 @@ replayed all 59 case/test files, checked 480 named declarations and 2,709 kernel
 theorem targets, and verified all 953 snapshot input hashes. The case is
 complete for the displayed contracts; see [the case notes](block_sparse_attn/README.md).
 
+## FlashAttention historical AST equalities
+
+Fresh compilation of `flash_attn/Proofs/LegacyReal.lean` still rejects
+`flashLoopBody_eq_tail` and `flashLoopBodyG_eq_tail`: their retained statements
+use `Op.load`'s default `.zero` padding, whereas the faithful source loop uses
+`.unspecified`. The adjacent `_source` statements explicitly retain that
+padding. These are AST equality claims, so equality of unmasked load execution
+does not prove the retained statements. No new axiom or altered historical
+statement has been substituted. The five historical public declarations remain
+in the legacy proof module until this incompatibility is resolved; their old
+coverage entry path also needs migration. The fresh failure log is
+`/private/tmp/flash-legacy-public-migration.log`. This port is not added to the
+locally completed list.
+
+## Raw-copy mixed payload conversions
+
+`var_len_copy` has no wrapper restriction requiring floating payloads or equal
+input/output dtypes. Its 36 floating pairs and nine homogeneous discrete profiles
+are separate proof families; neither establishes arbitrary mixed conversion.
+The current DSL routes floating-to-signed casts through `Op.castRealToInt8`
+even for the common `.int` carrier, represents floating-to-unsigned casts by
+an unprojected placeholder register, and rejects Bool method casts on an
+already-loaded variable. See `VeriTile/Triton/DSL/Expansion/Main.lean`'s
+`tritonDottedIdentMethodCast` and `tl.cast` branches. Width-changing signed and
+unsigned conversions additionally need explicit fixed-width behavior: Int/Nat
+carrier proofs do not establish narrowing or wraparound. These are outstanding
+translation/semantic obligations, not numerical atoms that can be admitted to
+make a complete-copy claim. Homogeneous discrete IO, frame and access-safety
+proofs now pass alongside exact typed execution witnesses; mixed conversions
+remain outside those contracts. Source-level FP equality alone is not used to
+certify value correctness.
+
+## RMSNorm integer-power source dispatch
+
+`rmsnorm_triton` calls `libdevice.pow(x.to(tl.float32), 2)`. Pinned Triton 3.5.1
+dispatches fp32/int32 to `__nv_powif` and fp64/int32 to `__nv_powi`, separately
+from floating-exponent `powf`/`pow`. The current literal-two DSL expansion uses
+multiplication. An exact-real square identity therefore cannot establish
+source floating-operation fidelity for this port. A separate integer-power
+AST operation and precision-aware backend callback are designed in
+`docs/superpowers/specs/2026-10-13-libdevice-integer-power-design.md`; design
+confirmation is pending, and no source FP completion is claimed.
+
+The same port's wrapper has no floating-only dtype validation. A direct
+stored-int32-load followed by `.to(tl.float32)` currently fails DSL expansion
+with "signed integer casts are not modeled yet". This separate conversion
+obligation remains open alongside the mixed-copy conversion gaps. The six-format
+floating family must not be described as exhaustive wrapper coverage.
+
 ## Correctness-Surface Blockers
 
 Every completed port must expose its correctness claim through a **named**
@@ -548,6 +597,12 @@ unless stated:
   single-tile specializations; the multi-tile fallback branches (pointer `+=`
   advances, online recurrences) are not transcribed. This one is a genuine
   partial-coverage scope restriction, not just a notational rewrite.
+- `softmax_triton3` — the typed fp16/bf16 output store spells the implicit
+  destination conversion explicitly because `output_row_start_ptr`/`output_ptrs`
+  aliases lose their storage annotation in the current DSL. The fp32 store is
+  unchanged. `Proofs/Source.lean` checks the exact store carrier and single cast
+  over all nine input/mask storage pairs, both versions and both mask branches;
+  this preserves source precision rather than adding an arithmetic rewrite.
 - `relu_strided_buffer` — the `one_tile_per_cta` constexpr branch is split
   into two Lean surfaces (one-tile and grid-stride); the `relu_forward`
   helper JIT (`tl.where(x > 0, x, 0)`) is inlined at its call site; the

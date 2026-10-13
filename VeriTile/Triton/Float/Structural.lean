@@ -97,6 +97,21 @@ structure Algebra (α : Type) where
     (axis : Fin shape.length) → (keepDims : Bool) → Values α dtype.toTileDType shape →
     Option (Values α dtype.toTileDType (TileShape.reduceShape shape axis keepDims)) :=
     fun _ _ {_} _ _ _ => none
+  /-- Typed maximum retains the actual floating channel and reduction layout.
+  No widening, scalar fold or max law is assumed. Missing support fails. -/
+  reduceMaxTyped : Option ComputeDType → (dtype : FloatDType) → {shape : TileShape} →
+    (axis : Fin shape.length) → (keepDims : Bool) → Values α dtype.toTileDType shape →
+    Option (Values α dtype.toTileDType (TileShape.reduceShape shape axis keepDims)) :=
+    fun _ _ {_} _ _ _ => none
+  /-- Paired indexed maximum with smallest-index ties, preserving actual dtype,
+  layout and precision. Both AST projections invoke this same deterministic
+  callback on identical inputs, retaining coupled NaN/tie behavior. No
+  numerical law is assumed. Empty axes fail before this optional callback. -/
+  indexedMax : Option ComputeDType → (dtype : FloatDType) → {shape : TileShape} →
+    (axis : Fin shape.length) → Values α dtype.toTileDType shape →
+    Option (Values α dtype.toTileDType (TileShape.eraseAxis shape axis) ×
+      Values α .nat (TileShape.eraseAxis shape axis)) :=
+    fun _ _ {_} _ _ => none
   /-- Preserve the complete scan kind, axis, direction and computation precision.
   The backend chooses its floating evaluation order; no real fold, associativity,
   reduction identity or scan decomposition is assumed. Missing support fails. -/
@@ -425,6 +440,8 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
   | .broadcast e _, s | .full _ e, s => do
       let v ← evalOp M p e s
       return fun _ => v PUnit.unit
+  | .withPrecision _ precision e, s =>
+      evalOp M (some (match precision with | .fp32 => .fp32 | .fp64 => .fp64)) e s
   | .castFloat src dst e, s => do
       let v ← evalOp M p e s
       return fun i => ofFloat dst (M.cast p src dst (toFloat src (v i)))
@@ -557,6 +574,11 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
       return M.reduceSum p axis keepDims v
   | .reduceSumTyped dtype axis keepDims e, s => do
       M.reduceSumTyped p dtype axis keepDims (← evalOp M p e s)
+  | .reduceMaxTyped dtype axis keepDims e, s => do
+      let v ← evalOp M p e s
+      if 0 < TileShape.axisDim _ axis then
+        M.reduceMaxTyped p dtype axis keepDims v
+      else none
   | .castRealToInt8 .., _ => none
   | .floorDiv h bc a b, s =>
       return bop (integralFloorDiv h) bc (← evalOp M p a s) (← evalOp M p b s)
@@ -575,7 +597,19 @@ noncomputable def evalOp {α : Type} [Inhabited α] (M : Algebra α) (p : Option
       TileShape.discreteMaximum axis keepDims v
   | .scan op axis direction e, s => do
       M.scan p op axis direction (← evalOp M p e s)
-  | .argMax .., _ => none
+  | .argMax axis e, s => do
+      let v ← evalOp M p e s
+      if TileShape.axisDim _ axis = 0 then none else (M.indexedMax p .real axis v).map Prod.snd
+  | .argMaxTyped dtype axis e precision, s => do
+      let actual := match precision with
+        | some .fp32 => some ComputeDType.fp32
+        | some .fp64 => some ComputeDType.fp64
+        | none => p
+      let v ← evalOp M actual e s
+      if TileShape.axisDim _ axis = 0 then none else (M.indexedMax actual dtype axis v).map Prod.snd
+  | .indexedMaxValue dtype axis e, s => do
+      let v ← evalOp M p e s
+      if TileShape.axisDim _ axis = 0 then none else (M.indexedMax p dtype axis v).map Prod.fst
   | .argMin .., _ => none
   | .sort .., _ => none
   | .dot (options := options) a b, s => do
@@ -877,5 +911,30 @@ theorem exec_seq_nil {α : Type} [Inhabited α] (M : Algebra α)
     (ins outs : List RegionName) (s : State α) :
     exec M (ComputeKernel.seq ins outs []) s = some s := by
   simp [ComputeKernel.seq, exec, run]
+
+/-- Empty typed maxima fail before invoking the opaque backend. -/
+@[simp] theorem evalOp_reduceMaxTyped_empty {α : Type} [Inhabited α]
+    (M : Algebra α) (p : Option ComputeDType) (dtype : FloatDType)
+    {shape : TileShape} (axis : Fin shape.length) (keepDims : Bool)
+    (e : Op dtype.toTileDType shape) (s : State α)
+    (h : TileShape.axisDim shape axis = 0) :
+    evalOp M p (.reduceMaxTyped dtype axis keepDims e) s = none := by
+  cases he : evalOp M p e s <;> simp [evalOp, he, h]
+
+/-- Empty argmax fails before invoking the backend, even if it supplies a value. -/
+@[simp] theorem evalOp_argMax_empty {α : Type} [Inhabited α]
+    (M : Algebra α) (p : Option ComputeDType) {shape : TileShape}
+    (axis : Fin shape.length) (e : Op .real shape) (s : State α)
+    (h : TileShape.axisDim shape axis = 0) :
+    evalOp M p (.argMax axis e) s = none := by
+  cases he : evalOp M p e s <;> simp [evalOp, he, h]
+
+@[simp] theorem evalOp_argMaxTyped_empty {α : Type} [Inhabited α]
+    (M : Algebra α) (p : Option ComputeDType) (dtype : FloatDType)
+    {shape : TileShape} (axis : Fin shape.length)
+    (e : Op dtype.toTileDType shape) (s : State α)
+    (h : TileShape.axisDim shape axis = 0) :
+    evalOp M p (.argMaxTyped dtype axis e) s = none := by
+  cases he : evalOp M p e s <;> simp [evalOp, he, h]
 
 end VeriTile.Triton.FP.Structural

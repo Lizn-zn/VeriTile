@@ -3,11 +3,58 @@
 **Reopened: FP precision correction.** The earlier source expansion widened
 half/bfloat16 sums to fp32. The corrected source retains the product's sum dtype
 and specializes the output dtype before arithmetic promotion. Both complete
-real correctness specifications rebuild successfully; the old FP theorem,
-its source regression and execution witness still need updating. In particular,
+real correctness specifications rebuild successfully; the old general FP theorem
+and fp16-output execution witness still need updating. The source precision
+regression is refreshed and passes. In particular,
 fp16 addition has no admitted `add_commute` row in the current tables. This case
 is not currently counted as complete, and its older receipt does not validate
 the new FP lowering.
+
+`Proofs/SupportedFP32.lean` now proves the unchanged output-first candidate for fp32
+output storage, across every input/weight/cast choice and both masking and
+accumulation flags. `Proofs/FP32.lean` checks finite actual promoted operands
+under the taken sentinel branch, reached output iteration and accumulation arm.
+The typed reduction and explicit output conversion remain unchanged. Its only
+numerical atom is the existing admitted fp32 `add_commute`; this scoped theorem
+does not discharge the arbitrary-output theorem in `FPEquiv.lean`.
+`Proofs/FP32Execution.lean` supplies a separate nonempty execution and guard
+witness for this supported theorem: fp32 input cast to bf16 weights, fp32
+output, a masked K tail, two output-loop iterations and signed-sentinel skip.
+It uses the consistent abstract backend, not a GPU experiment.
+
+The admission gap is specifically fp16: its addition has no admitted row.
+There are existing bf16 and bf16-to-fp32 commutation report rows, but the old
+`ScalarArithmetic.Rules` interface exposes only fp32 atoms, so applying those
+rows would require a separate correctly typed and validated rule interface.
+The old theorem and its signature are retained as pending, without new axioms,
+placeholder proofs or a substituted candidate.
+
+`Proofs/GeneralCountermodel.lean` checks that the old fp32-only assumptions
+cannot prove the general target. It copies the pending domain locator exactly
+and proves source correspondence with `TypedSource.original` and `outputFirst`.
+For fp16 input/weights/output, K=N=BK=BN=SPLIT_N=1, unit strides, active slot 0
+and accumulation enabled, both complete kernels execute. A model changing only
+fp16 addition to left projection satisfies every selected fp32 scalar rule;
+the original stores 1 at Y[0], while the candidate stores 2. The copied locator
+returns an empty domain for this source. `not_output_first_equiv` refutes the
+old equivalence for every `ScalarArithmetic.Rules` parameter. Its axiom audit
+contains only `propext`, `Classical.choice` and `Quot.sound`. This is a logical
+countermodel to the current assumptions, not an IEEE or GPU numerical failure.
+The original public declarations remain unchanged and pending.
+
+`Proofs/AdditionProfiles.lean` adds separate typed scalar admission plumbing
+for the existing bf16, bf16_fp32 and fp32 ADD-COMMUTE report rows. Input guards
+read each profile's typed registers and observations read its typed output.
+Validation remains an explicit premise for the exact bound fragments; report
+metadata and admission are checked without adding axioms. Inspection of
+`experiments/floating_point/kernels.py` shows that both bf16 profiles widen
+inputs to fp32 before addition. The bf16 profile then rounds through
+bf16→fp32 before the final bf16 output conversion; bf16_fp32 converts the fp32
+result directly to output bf16. The new fragments preserve these conversions.
+Consequently these rows alone do not establish commutativity of the abstract
+native bf16 primitive used by BGMV: an explicit lowering correspondence is
+still required. No fp16 or fp64 report is supplied, and this plumbing is not
+connected to or counted as a proof of the pending general theorem.
 
 The three public entries share the complete source of
 `bgmv_expand_slice.py`'s `_bgmv_expand_slice_kernel`:
@@ -40,8 +87,8 @@ output-pointer conversion is explicit at each branch's accumulator assignment,
 with no arithmetic between that conversion and the common store. This gives
 both branches the actual stored dtype without widening the sum itself.
 The Python early return is a non-sentinel active branch. These translation
-choices have full-source real correspondence; the FP source regression must
-be refreshed for the corrected typed sum and conversion placement.
+choices have full-source real correspondence; the refreshed source regression
+checks the corrected typed sum, promotion and conversion placement.
 
 `Proofs/RealIOExecution.lean` instantiates the complete contract with four
 concrete disjoint allocations, nonzero program IDs and slot, N=5/SPLIT_N=2,

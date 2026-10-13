@@ -40,6 +40,79 @@ structure EOut where
   computeDType? : Option DInfo := none
   deriving Inhabited
 
+/-- Recover the structural floating expression retained by an elaborated operand. -/
+def EOut.floatingTerm (e : EOut) : MacroM (TSyntax `term) := do
+  match e.computeTerm with
+  | none => pure e.term
+  | some ce =>
+      match ce with
+      | `(ComputeExpr.alg $op) => pure op
+      | `(ComputeExpr.compute (ComputeOp.alg $_ $op)) => pure op
+      | `(ComputeExpr.compute (ComputeOp.load $_ $mem $mask $padding)) =>
+          `(Op.load TileDType.real $mem $mask $padding)
+      | `(ComputeExpr.compute (ComputeOp.full $shape (ComputeOp.alg $_ $value))) =>
+          `(Op.full $shape $value)
+      | _ => Macro.throwError "floating composition requires a structural floating expression"
+
+/-- Preserve an operand's local arithmetic context before enclosing promotion.
+Unannotated scalar literals acquire the enclosing operation's precision. -/
+def EOut.scopedFloatingTerm (e : EOut) : MacroM (TSyntax `term) := do
+  let op ← e.floatingTerm
+  if e.computeDType?.isNone && e.computeTerm.isNone then
+    match e.term with
+    | `(Op.const $_) | `(Op.constFloat $_ $_) => return op
+    | _ => pure ()
+  let dtype ← e.dtype.floatProof
+  let precision ← if e.computeDType? == some .real then
+    `(IndexComputePrecision.fp64) else `(IndexComputePrecision.fp32)
+  `(Op.withPrecision $dtype $precision $op)
+
+/-- Remove only precision scopes equal to the enclosing explicit context.
+The normalization also runs over the final emitted compute statement tree. -/
+partial def normalizePrecisionScopes (precision : DInfo) (raw : Syntax) : MacroM Syntax := do
+  let term : TSyntax `term := ⟨raw⟩
+  match term with
+  | `(Op.withPrecision $dtype IndexComputePrecision.fp32 $op) =>
+      let child : TSyntax `term := ⟨← normalizePrecisionScopes .fp32 op.raw⟩
+      if precision == .fp32 then return child.raw
+      return (← `(Op.withPrecision $dtype IndexComputePrecision.fp32 $child)).raw
+  | `(Op.withPrecision $dtype IndexComputePrecision.fp64 $op) =>
+      let child : TSyntax `term := ⟨← normalizePrecisionScopes .real op.raw⟩
+      if precision == .real then return child.raw
+      return (← `(Op.withPrecision $dtype IndexComputePrecision.fp64 $child)).raw
+  | `(ComputeOp.alg ComputeDType.fp32 $op) =>
+      let child : TSyntax `term := ⟨← normalizePrecisionScopes .fp32 op.raw⟩
+      return (← `(ComputeOp.alg ComputeDType.fp32 $child)).raw
+  | `(ComputeOp.alg ComputeDType.fp64 $op) =>
+      let child : TSyntax `term := ⟨← normalizePrecisionScopes .real op.raw⟩
+      return (← `(ComputeOp.alg ComputeDType.fp64 $child)).raw
+  | _ =>
+      match raw with
+      | .node info kind args =>
+          return .node info kind (← args.mapM (normalizePrecisionScopes precision))
+      | other => return other
+
+/-- An explicit cast has a destination compute context and preserves the
+source expression's independent context. Narrow destinations use fp32 profile;
+the destination FloatDType still determines their rounding format. -/
+def explicitFloatCast (dst : DInfo) (e : EOut) : MacroM EOut := do
+  let srcProof ← e.dtype.floatProof
+  let dstAlg := if dst == .fp32 then DInfo.real else dst
+  let dstProof ← dstAlg.floatProof
+  let alg ← `(Op.castFloat $srcProof $dstProof $e.term)
+  let child ← e.scopedFloatingTerm
+  let fp ← `(Op.castFloat $srcProof $dstProof $child)
+  match dst with
+  | .real => return ⟨alg, .real, e.shape,
+      some (← `(ComputeExpr.compute (ComputeOp.alg ComputeDType.fp64 $fp))), some .real⟩
+  | .fp32 => return ⟨alg, .real, e.shape,
+      some (← `(ComputeExpr.compute (ComputeOp.alg ComputeDType.fp32 $fp))), some .fp32⟩
+  | _ =>
+      let normalized : TSyntax `term := ⟨← normalizePrecisionScopes .fp32 fp.raw⟩
+      let ct ← if normalized.raw == alg.raw then pure none
+        else pure (some (← `(ComputeExpr.alg $normalized)))
+      return ⟨alg, dst, e.shape, ct, none⟩
+
 /-- Forget storage width when entering the mathematical integer arithmetic
 channel. In particular, its results cannot later impersonate byte loads. -/
 def EOut.forgetStorageWidth (e : EOut) : EOut :=
@@ -87,7 +160,10 @@ def coerceFloatOperand (dst : DInfo) (e : EOut) : MacroM EOut := do
   if e.dtype == dst then return e
   let srcProof ← e.dtype.floatProof
   let dstProof ← dst.floatProof
-  return { e with term := ← `(Op.castFloat $srcProof $dstProof $e.term), dtype := dst }
+  let alg ← `(Op.castFloat $srcProof $dstProof $e.term)
+  let child ← e.scopedFloatingTerm
+  let fp ← `(Op.castFloat $srcProof $dstProof $child)
+  return { e with term := alg, dtype := dst, computeTerm := some (← `(ComputeExpr.alg $fp)) }
 
 def coerceRealArithOperands (ctx : String) (a b : EOut) : MacroM (EOut × EOut) := do
   let a := a.forgetStorageWidth
@@ -102,9 +178,11 @@ def coerceRealArithOperands (ctx : String) (a b : EOut) : MacroM (EOut × EOut) 
   | .int, .real =>
       pure ({ a with term := ← `(Op.intToReal $a.term), dtype := .real }, b)
   | .real, .fp32 | .real, .fp16 | .real, .bf16 | .real, .f8e4 | .real, .f8e5 | .real, .floatVar _ =>
-      pure (a, { b with term := ← realMathTerm (ctx ++ " rhs") b, dtype := .real })
+      let promoted ← coerceFloatOperand .real b
+      pure (a, { promoted with computeDType? := a.computeDType? })
   | .fp32, .real | .fp16, .real | .bf16, .real | .f8e4, .real | .f8e5, .real | .floatVar _, .real =>
-      pure ({ a with term := ← realMathTerm (ctx ++ " lhs") a, dtype := .real }, b)
+      let promoted ← coerceFloatOperand .real a
+      pure ({ promoted with computeDType? := b.computeDType? }, b)
   | .fp32, .fp16 | .fp32, .bf16 | .fp32, .f8e4 | .fp32, .f8e5 =>
       pure (a, ← coerceFloatOperand .fp32 b)
   | .fp16, .fp32 | .bf16, .fp32 | .f8e4, .fp32 | .f8e5, .fp32 =>

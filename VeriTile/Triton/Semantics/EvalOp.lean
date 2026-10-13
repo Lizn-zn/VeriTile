@@ -34,6 +34,7 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .full shape e, s => do
       let v ← evalOp e s
       some ⟨fun _ => v.data PUnit.unit⟩
+  | .withPrecision _ _ a, s => evalOp a s
   | .castFloat src dst a, s => do
       let va ← evalOp a s
       some ⟨fun i => src.cast dst (va.data i)⟩
@@ -135,8 +136,13 @@ noncomputable def evalOp : Op dtype shape → BlockState → Option (Tile dtype 
   | .reduceSum axis keepDims a, s => return Tile.reduceSum axis keepDims (← evalOp a s)
   | .reduceSumTyped dtype axis keepDims a, s =>
       return Tile.reduceSumTyped dtype axis keepDims (← evalOp a s)
+  | .reduceMaxTyped dtype axis keepDims a, s => do
+      Tile.reduceMaxTyped dtype axis keepDims (← evalOp a s)
   | .scan op axis dir a, s => return Tile.scan op axis dir (← evalOp a s)
   | .argMax axis a, s => return Tile.argMaxDrop axis (← evalOp a s)
+  | .argMaxTyped dtype axis a _, s => return Tile.argMaxTyped dtype axis (← evalOp a s)
+  | .indexedMaxValue dtype axis a, s => do
+      Tile.reduceMaxTyped dtype axis Bool.false (← evalOp a s)
   | .argMin axis a, s => return Tile.argMinDrop axis (← evalOp a s)
   | .sort axis a, s => return Tile.sortAxis axis (← evalOp a s)
   | .dot (batch := batch) a b _, s => do

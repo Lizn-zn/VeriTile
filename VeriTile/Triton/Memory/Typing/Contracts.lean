@@ -118,6 +118,7 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .arange _ => True
   | .broadcast e _ => e.RespectsRegionTyping Γ
   | .full _ e => e.RespectsRegionTyping Γ
+  | .withPrecision _ _ e => e.RespectsRegionTyping Γ
   | .castFloat _ _ e => e.RespectsRegionTyping Γ
   | .castNatToInt e => e.RespectsRegionTyping Γ
   | .castIntToNat e => e.RespectsRegionTyping Γ
@@ -175,8 +176,11 @@ def Op.RespectsRegionTyping (Γ : RegionTyping) : Op dtype shape → Prop
   | .reduceMaxInt _ _ a => a.RespectsRegionTyping Γ
   | .reduceSum _ _ a => a.RespectsRegionTyping Γ
   | .reduceSumTyped _ _ _ a => a.RespectsRegionTyping Γ
+  | .reduceMaxTyped _ _ _ a => a.RespectsRegionTyping Γ
   | .scan _ _ _ a => a.RespectsRegionTyping Γ
   | .argMax _ a => a.RespectsRegionTyping Γ
+  | .argMaxTyped _ _ a _ => a.RespectsRegionTyping Γ
+  | .indexedMaxValue _ _ a => a.RespectsRegionTyping Γ
   | .argMin _ a => a.RespectsRegionTyping Γ
   | .sort _ a => a.RespectsRegionTyping Γ
   | .dot a b _ => a.RespectsRegionTyping Γ ∧ b.RespectsRegionTyping Γ

@@ -79,7 +79,10 @@ root = Path(sys.argv[1])
 # `:= by trivial`, or the two-line `:= by` / lone indented `trivial` form).
 line_patterns = (
     re.compile(r"\bsorry\b"),
-    re.compile(r"\badmit\b"),
+    # `admit` is also a legitimate structure field (e.g. a validated rule's
+    # admission proof). A qualified field access is not the placeholder tactic.
+    # Standalone admit/sorry remain rejected; elaborated axioms are audited too.
+    re.compile(r"(?<!\.)\badmit\b"),
     re.compile(r":=\s*(?:by\s+)?trivial\s*$"),
 )
 whole_proof_trivial = re.compile(r":=\s*by[ \t]*\n\s*trivial[ \t]*\n(?![ \t])")

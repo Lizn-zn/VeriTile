@@ -12,6 +12,26 @@ from bench import audit_source as source
 
 
 class SourceSelectionTests(unittest.TestCase):
+    def test_placeholder_scan_distinguishes_admission_field_from_tactic(self):
+        script = (ROOT / 'bench/audit_tritonbench_g.sh').read_text()
+        start = script.index("<<'PY'\n", script.index('# Placeholder-proof scan.')) + len("<<'PY'\n")
+        code = script[start:script.index('\nPY\n', start)]
+        fixtures = [
+            ('by\n  exact p.row.admit _ _ (R.validated p)', True),
+            ('by\n  exact p.row.admit _ _ (R.validated p)\n  admit', False),
+            ('by\n  · admit', False),
+            ('by admit', False),
+            ('sorry', False),
+            ('by\n  exact p.row.admit sorry _ proof', False),
+            ('by\n  -- admit\n  exact admitted_rule', True),
+        ]
+        for proof, allowed in fixtures:
+            with self.subTest(proof=proof), tempfile.TemporaryDirectory() as temp:
+                (Path(temp) / 'Fixture.lean').write_text('theorem fixture : P := ' + proof + '\n')
+                result = subprocess.run([sys.executable, '-', temp], input=code,
+                                        cwd=ROOT, text=True, capture_output=True, timeout=20)
+                self.assertEqual(result.returncode == 0, allowed, result.stdout + result.stderr)
+
     def test_store_whitespace_and_nested_values(self):
         for py_ws in ['', ' ', '\n ']:
             for lean_ws in ['', ' ', '\n ']:

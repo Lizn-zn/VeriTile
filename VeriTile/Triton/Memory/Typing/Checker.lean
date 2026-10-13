@@ -353,6 +353,7 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .arange _ => .ok ()
   | .broadcast e _ => e.check ctx
   | .full _ e => e.check ctx
+  | .withPrecision _ _ e => e.check ctx
   | .castFloat _ _ e => e.check ctx
   | .castNatToInt e => e.check ctx
   | .castIntToNat e => e.check ctx
@@ -408,8 +409,11 @@ def Op.check (ctx : CheckCtx) : Op dtype shape → Except CheckError Unit
   | .reduceMaxInt _ _ a => a.check ctx
   | .reduceSum _ _ a => a.check ctx
   | .reduceSumTyped _ _ _ a => a.check ctx
+  | .reduceMaxTyped _ _ _ a => a.check ctx
   | .scan _ _ _ a => a.check ctx
   | .argMax _ a => a.check ctx
+  | .argMaxTyped _ _ a _ => a.check ctx
+  | .indexedMaxValue _ _ a => a.check ctx
   | .argMin _ a => a.check ctx
   | .sort _ a => a.check ctx
   | .dot a b _ => a.check ctx *> b.check ctx

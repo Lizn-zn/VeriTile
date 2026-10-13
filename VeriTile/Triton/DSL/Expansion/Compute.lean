@@ -13,39 +13,78 @@ namespace VeriTile.Triton.DSL
 def ensureComputeArithComposable (ctx : String) (e : EOut) : MacroM Unit := do
   match e.computeTerm, e.computeDType? with
   | some _, some .fp32 | some _, some .real => pure ()
-  | some _, _ =>
-      Macro.throwError
-        (ctx ++ ": compute-only expressions without a composable floating annotation must be assigned or stored directly before algorithm-layer composition")
+  | some ce, _ =>
+      match ce with
+      | `(ComputeExpr.alg $_) => pure ()
+      | _ => Macro.throwError (ctx ++ ": compute-only expressions without a composable floating annotation must be assigned or stored directly before algorithm-layer composition")
   | none, _ => pure ()
+
+private partial def replaceFloatingOperands (a aa b bb raw : Syntax) : Syntax :=
+  if raw == a then aa else if raw == b then bb else
+  match raw with
+  | .node info kind args => .node info kind (args.map (replaceFloatingOperands a aa b bb))
+  | other => other
 
 def floatingComputeArith? (ctx : String) (algTerm : TSyntax `term) (a b : EOut) :
     MacroM (Option (TSyntax `term) × Option DInfo) := do
-  match a.computeDType?, b.computeDType? with
-  | none, none => pure (none, none)
-  | some .fp32, none | none, some .fp32 | some .fp32, some .fp32 =>
-      -- This is annotation tracking only: Algorithm semantics still owns the
-      -- arithmetic term; Compute records that the result remains fp32.
-      pure (some (← fp32ComputeExpr algTerm), some .fp32)
-  | some .real, none | none, some .real | some .real, some .real =>
-      pure (some (← fp64ComputeExpr algTerm), some .real)
-  | some _, _ | _, some _ =>
-      Macro.throwError
-        (ctx ++ ": mixed or unsupported compute precisions; assign explicit casts first")
+  let precision := if a.computeDType? == some .real || b.computeDType? == some .real
+    then some DInfo.real else a.computeDType?.orElse (fun _ => b.computeDType?)
+  if precision.isNone && a.computeTerm.isNone && b.computeTerm.isNone then
+    return (none, none)
+  let operand (e : EOut) : MacroM (TSyntax `term) := do
+    match e.dtype with
+    | .real | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 | .floatVar _ => e.scopedFloatingTerm
+    | _ => pure e.term
+  let aa ← operand a
+  let bb ← operand b
+  let raw := replaceFloatingOperands a.term.raw aa.raw b.term.raw bb.raw algTerm.raw
+  let fp : TSyntax `term := ⟨raw⟩
+  match precision with
+  | some .fp32 => return (some (← fp32ComputeExpr fp), some .fp32)
+  | some .real => return (some (← fp64ComputeExpr fp), some .real)
+  | none => return (some (← `(ComputeExpr.alg $fp)), none)
+  | _ => Macro.throwError (ctx ++ ": unsupported floating compute precision")
 
 def ensureComputeCmpComposable (ctx : String) (e : EOut) : MacroM Unit := do
   match e.computeTerm, e.computeDType? with
   | some _, some .fp32 | some _, some .real => pure ()
-  | some _, _ =>
-      Macro.throwError
-        (ctx ++ ": compute-only expressions without a composable floating annotation must be assigned or stored directly before algorithm-layer composition")
+  | some ce, _ =>
+      match ce with
+      | `(ComputeExpr.alg $_) => pure ()
+      | _ => Macro.throwError (ctx ++ ": compute-only expressions without a composable floating annotation must be assigned or stored directly before algorithm-layer composition")
   | none, _ => pure ()
+
+-- Recognize source literals rather than inspecting an expanded subtraction:
+-- runtime negation and explicit casts must retain their own execution steps.
+private partial def floatingLiteralValue? (e : TSyntax `tritonExpr) :
+    MacroM (Option (TSyntax `term)) := do
+  match e with
+  | `(tritonExpr| $n:num) => return some (← `(($n : ℝ)))
+  | `(tritonExpr| $n:scientific) => return some (← `(($n : ℝ)))
+  | `(tritonExpr| ($inner:tritonExpr)) => floatingLiteralValue? inner
+  | `(tritonExpr| -$inner:tritonExpr) =>
+      match ← floatingLiteralValue? inner with
+      | some value => return some (← `(-$value))
+      | none => return none
+  | _ => return none
+
+private def foldTypedFloatingLiteral (other : EOut) (source : TSyntax `tritonExpr)
+    (e : EOut) : MacroM EOut := do
+  let typed := other.computeDType?.isSome || match other.dtype with
+    | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 => Bool.true
+    | _ => Bool.false
+  unless typed do return e
+  match ← floatingLiteralValue? source with
+  | some value => return ⟨← `(Op.const $value), .real, SInfo.scalar, none, none⟩
+  | none => return e
 
 /-- A constexpr floating scalar does not promote a half/bfloat16 tensor.
 Only literal syntax is retargeted: a loaded scalar or an explicit cast remains
 an independently typed operand. Division promotes half operands to fp32. -/
 private def scalarLiteralAt (dtype : DInfo) (e : EOut) : MacroM EOut := do
   if e.computeDType?.isSome then return e
-  unless dtype == .fp16 || dtype == .bf16 do return e
+  unless dtype == .fp32 || dtype == .fp16 || dtype == .bf16 ||
+      dtype == .f8e4 || dtype == .f8e5 do return e
   match e.term with
   | `(Op.const $value) =>
       let proof ← dtype.floatProof
@@ -56,6 +95,8 @@ partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (
     (a b : TSyntax `tritonExpr) : MacroM EOut := do
   let a' ← expandExpr env a
   let b' ← expandExpr env b
+  let a' ← foldTypedFloatingLiteral b' a a'
+  let b' ← foldTypedFloatingLiteral a' b b'
   let a' ←
     if a'.dtype == .nat && b'.dtype == .real then
       match ← expandLeanAntiquoteAs? .real a with
@@ -76,11 +117,20 @@ partial def expandArith (expandExpr : ExprExpander) (env : Env) (ctx : String) (
     let bb ← scalarLiteralAt a'.dtype b'
     pure (aa, bb)
   let (a', b') ← coerceNatIntOperands ctx a' b'
-  let (a', b') ← coerceRealArithOperands ctx a' b'
   let (a', b') ←
-    if isDivision && (a'.dtype == .fp16 || a'.dtype == .bf16) then
-      pure (← coerceFloatOperand .real a', ← coerceFloatOperand .real b')
-    else pure (a', b')
+    -- Select division's common type from the original operands. Generic
+    -- promotion first would round bf16 through fp16 for mixed half inputs.
+    -- Real/fp32 operands already dominate through the ordinary promotion path.
+    if isDivision &&
+        (a'.dtype == .fp16 || a'.dtype == .bf16 ||
+          b'.dtype == .fp16 || b'.dtype == .bf16) &&
+        a'.dtype != .real && b'.dtype != .real &&
+        a'.dtype != .fp32 && b'.dtype != .fp32 then
+      let aa ← coerceFloatOperand .real a'
+      let bb ← coerceFloatOperand .real b'
+      pure ({ aa with computeDType? := some .fp32 },
+        { bb with computeDType? := some .fp32 })
+    else coerceRealArithOperands ctx a' b'
   ensureComputeArithComposable ctx a'
   ensureComputeArithComposable ctx b'
   unless a'.dtype == b'.dtype do
@@ -304,7 +354,10 @@ partial def expandMinMax (expandExpr : ExprExpander) (env : Env) (ctx : String) 
       | none => pure b'
     else
       pure b'
-  let (a', b') ← coerceNatIntOperands ctx a' b'
+  let aa ← scalarLiteralAt b'.dtype a'
+  let bb ← scalarLiteralAt a'.dtype b'
+  let (a', b') ← coerceNatIntOperands ctx aa bb
+  let (a', b') ← coerceRealArithOperands ctx a' b'
   ensureComputeArithComposable ctx a'
   ensureComputeArithComposable ctx b'
   unless a'.dtype == b'.dtype do
@@ -370,8 +423,7 @@ partial def expandScan (expandExpr : ExprExpander) (env : Env) (ctx : String) (o
     | `(tritonReduceKwarg| keep_dims = true) =>
         Macro.throwError (ctx ++ ": `keep_dims` is not meaningful for prefix scans")
     | `(tritonReduceKwarg| $name:ident = $_) =>
-        Macro.throwError
-          (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
+        Macro.throwError (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
            "`. Only `axis = N` and `reverse=True/False` are supported.")
     | _ =>
         Macro.throwUnsupported
@@ -409,8 +461,7 @@ partial def parseAxisOnlyKwargs (ctx : String) (dims : List (TSyntax `term))
     | `(tritonReduceKwarg| keep_dims = true) =>
         Macro.throwError (ctx ++ ": `keep_dims` is not supported")
     | `(tritonReduceKwarg| $name:ident = $_) =>
-        Macro.throwError
-          (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
+        Macro.throwError (ctx ++ ": unsupported kwarg `" ++ name.getId.toString ++
            "`. Only `axis = N` is supported.")
     | _ =>
         Macro.throwUnsupported
@@ -419,13 +470,42 @@ partial def parseAxisOnlyKwargs (ctx : String) (dims : List (TSyntax `term))
 partial def expandArgReduce (expandExpr : ExprExpander) (env : Env) (ctx : String) (op : TSyntax `term)
     (e : TSyntax `tritonExpr)
     (kwargs : TSyntaxArray `tritonReduceKwarg) : MacroM EOut := do
-  let e' ← expandExpr env e
-  let eTerm ← realMathTerm ctx e'
+  let original ← expandExpr env e
+  if ctx != "tl.argmax" then
+    let eTerm ← realMathTerm ctx original
+    let dims := match original.shape with | .dims ds => ds
+    let axisIdx ← parseAxisOnlyKwargs ctx dims kwargs
+    let outDims ← eraseNth dims axisIdx
+    let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
+    return ⟨← `($op (⟨$axisLit, by simp⟩) $eTerm), .nat, .dims outDims, none, none⟩
+  let mut axisKwargs : TSyntaxArray `tritonReduceKwarg := #[]
+  for kw in kwargs do
+    match kw with
+    | `(tritonReduceKwarg| $name:ident = $value:tritonExpr) =>
+        if name.getId.toString == "tie_break_left" then
+          match value with
+          | `(tritonExpr| True) => pure ()
+          | _ => Macro.throwError "tl.argmax: only literal True leftmost tie breaking is supported"
+        else axisKwargs := axisKwargs.push kw
+    | _ => axisKwargs := axisKwargs.push kw
+  let e' ← if original.dtype == .bf16 then do
+      let term ← realMathTerm ctx original
+      pure (⟨term, .real, original.shape, some (← fp32ComputeExpr term), some .fp32⟩ : EOut)
+    else pure original
   let dims := match e'.shape with | .dims ds => ds
-  let axisIdx ← parseAxisOnlyKwargs ctx dims kwargs
+  let axisIdx ← parseAxisOnlyKwargs ctx dims axisKwargs
   let outDims ← eraseNth dims axisIdx
   let axisLit : TSyntax `num := ⟨Syntax.mkNumLit (toString axisIdx)⟩
-  pure ⟨← `($op (⟨$axisLit, by simp⟩) $eTerm), .nat, .dims outDims, none, none⟩
+  let term ← match e'.dtype with
+    | .real => match e'.computeDType? with
+      | some .fp32 => `(Op.argMaxTyped FloatDType.real (⟨$axisLit, by simp⟩) $e'.term (some IndexComputePrecision.fp32))
+      | some .real => `(Op.argMaxTyped FloatDType.real (⟨$axisLit, by simp⟩) $e'.term (some IndexComputePrecision.fp64))
+      | _ => `(Op.argMax (⟨$axisLit, by simp⟩) $e'.term)
+    | .fp32 | .fp16 | .f8e4 | .f8e5 => do
+        let dtype ← e'.dtype.floatProof
+        `(Op.argMaxTyped $dtype (⟨$axisLit, by simp⟩) $e'.term)
+    | _ => Macro.throwError "tl.argmax: unsupported or unspecialized storage dtype"
+  pure ⟨term, .nat, .dims outDims, none, none⟩
 
 partial def expandSort (expandExpr : ExprExpander) (env : Env)
     (e : TSyntax `tritonExpr)
@@ -567,6 +647,7 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
   let mut outDType : DInfo := .real
   let mut isNat : Bool := Bool.false
   let mut isInt : Bool := Bool.false
+  let mut promotedToFP32 := Bool.false
   match e'.dtype with
   | .nat =>
       outDType := .nat
@@ -576,8 +657,16 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
       isInt := Bool.true
   | .real =>
       pure ()
-  | .fp32 | .fp16 | .bf16 | .f8e4 | .f8e5 =>
+  | .fp32 =>
       eTerm ← realMathTerm "tl.max" e'
+  | .fp16 | .bf16 | .f8e4 | .f8e5 =>
+      -- Triton v3.5.1 standard.max promotes sub-32-bit floating inputs
+      -- before a value-only reduction. Preserve the conversion and its fp32
+      -- profile, so subsequent arithmetic also sees the promoted result.
+      eTerm ← realMathTerm "tl.max" e'
+      promotedToFP32 := Bool.true
+  | .floatVar _ =>
+      Macro.throwError "tl.max: specialize the floating storage dtype before reduction"
   | _ =>
       ensureDType .real e'.dtype "tl.max"
   let dims := match e'.shape with | .dims ds => ds
@@ -643,8 +732,11 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
           `(Op.reduceMaxInt (⟨$axisLit, by simp⟩) $kdLit $eTerm)
         else
           `(Op.reduceMax (⟨$axisLit, by simp⟩) $kdLit $eTerm)
-      let (ct, cp) ← if isNat || isInt then pure (none, none)
-                    else floatingComputeArith? "tl.max" term e' e'
+      let (ct, cp) ←
+        if isNat || isInt then pure (none, none)
+        else if promotedToFP32 then
+          pure (some (← fp32ComputeExpr term), some DInfo.fp32)
+        else floatingComputeArith? "tl.max" term e' e'
       pure ⟨term, outDType, SInfo.dims outDims, ct, cp⟩
   | none =>
       let mut term := eTerm
@@ -670,8 +762,11 @@ partial def expandReduceMax (expandExpr : ExprExpander) (env : Env)
           pure (List.replicate dims.length oneLit)
         else
           pure []
-      let (ct, cp) ← if isNat || isInt then pure (none, none)
-                    else floatingComputeArith? "tl.max" term e' e'
+      let (ct, cp) ←
+        if isNat || isInt then pure (none, none)
+        else if promotedToFP32 then
+          pure (some (← fp32ComputeExpr term), some DInfo.fp32)
+        else floatingComputeArith? "tl.max" term e' e'
       pure ⟨term, outDType, SInfo.dims outDims, ct, cp⟩
 
 /-- Lower a `tl.dot(a, b)` to `Op.dot a b` (or `Op.dotInt` on the `.int`
@@ -1098,8 +1193,7 @@ partial def expandReshapeLike (expandExpr : ExprExpander) (env : Env) (ctx : Str
   match literalProduct? inDims, literalProduct? outDims with
   | some inProduct, some outProduct =>
       unless inProduct == outProduct do
-        Macro.throwError
-          (ctx ++ ": literal element-count mismatch (" ++ toString inProduct ++
+        Macro.throwError (ctx ++ ": literal element-count mismatch (" ++ toString inProduct ++
            " input elements vs " ++ toString outProduct ++ " output elements)")
   | _, _ => pure ()
   pure ⟨← `(Op.reshape $outShape $e'.term), e'.dtype, .dims outDims, none, none⟩

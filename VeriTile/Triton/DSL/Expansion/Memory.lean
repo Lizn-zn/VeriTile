@@ -177,6 +177,11 @@ partial def expandLoad (expandExpr : ExprExpander)
         let algTerm ← `(Op.load TileDType.real $mem $mask $loadPadding)
         pure ⟨algTerm, .real, shape,
           some (← fp32ComputeLoadExpr mem mask loadPadding), some .fp32⟩
+    | .real =>
+        let algTerm ← `(Op.load TileDType.real $mem $mask $loadPadding)
+        if dtype? == some .real then
+          pure ⟨algTerm, .real, shape, some (← fp64ComputeExpr algTerm), some .real⟩
+        else pure ⟨algTerm, .real, shape, none, none⟩
     | _ =>
         let dt ← outDType.term
         pure ⟨← `(Op.load $dt $mem $mask $loadPadding), outDType, shape, none, none⟩

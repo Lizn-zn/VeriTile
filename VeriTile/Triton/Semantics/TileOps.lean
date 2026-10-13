@@ -622,6 +622,23 @@ noncomputable def Tile.reduceMax {shape : TileShape}
   · exact Tile.reduceMaxDrop axis x
   · exact Tile.reduceMaxKeep axis x
 
+/-- Real interpretation of dtype-preserving floating maximum. The existing
+maximum supplies the empty-axis failure behavior; these casts do not round. -/
+noncomputable def Tile.reduceMaxTyped {shape : TileShape}
+    (dtype : FloatDType) (axis : Fin shape.length) (keepDims : Bool)
+    (x : Tile dtype.toTileDType shape) :
+    Option (Tile dtype.toTileDType (TileShape.reduceShape shape axis keepDims)) := do
+  let result ← Tile.reduceMax axis keepDims
+    (⟨fun i => FloatDType.cast dtype .real (x.data i)⟩ : Tile .real shape)
+  pure ⟨fun i => FloatDType.cast .real dtype (result.data i)⟩
+
+@[simp] theorem Tile.reduceMaxTyped_eq_none {shape : TileShape}
+    (dtype : FloatDType) (axis : Fin shape.length) (keepDims : Bool)
+    (x : Tile dtype.toTileDType shape) (h : TileShape.axisDim shape axis = 0) :
+    Tile.reduceMaxTyped dtype axis keepDims x = none := by
+  cases keepDims <;>
+    simp [Tile.reduceMaxTyped, Tile.reduceMax, Tile.reduceMaxDrop, Tile.reduceMaxKeep, h]
+
 /-- Nat-valued reduce-max along an arbitrary axis. -/
 noncomputable def Tile.reduceMaxNatDrop {shape : TileShape}
     (axis : Fin shape.length) (x : Tile .nat shape) :
@@ -734,6 +751,13 @@ noncomputable def Tile.argMaxDrop {shape : TileShape}
     (axis : Fin shape.length) (x : Tile .real shape) :
     Tile .nat (TileShape.eraseAxis shape axis) :=
   Tile.argBestDrop (fun candidate current => decide (current < candidate)) axis x
+
+/-- Real projection of typed argmax; casts change only the carrier.
+Like the legacy real argmax, an empty axis has index zero. -/
+noncomputable def Tile.argMaxTyped {shape : TileShape}
+    (dtype : FloatDType) (axis : Fin shape.length)
+    (x : Tile dtype.toTileDType shape) : Tile .nat (TileShape.eraseAxis shape axis) :=
+  Tile.argMaxDrop axis ⟨fun i => FloatDType.cast dtype .real (x.data i)⟩
 
 /-- Axis index of the minimum value. Ties keep the earlier/smaller axis
 coordinate because replacement only occurs on strict improvement. -/

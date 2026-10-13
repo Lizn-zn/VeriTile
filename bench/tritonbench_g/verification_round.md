@@ -16,6 +16,572 @@ import each other. Corpus discovery, scope fingerprints and trust replay must
 include all these files. No port is considered complete simply because another
 member of its operator family has passed.
 
+## Active completion work — 2026-10-13
+
+`rmsnorm_fused` now passes its dependency-aware public build (3457 jobs).
+Six public correctness, complete trace-safety and nonempty execution heads use
+only standard Lean axioms; full-backend source equivalence prints no FP atoms.
+The four public contracts are registered with validated support fingerprints
+as `test-gap`. Coverage includes all 216 floating storage triples, arbitrary
+row length with positive block size, both complete loops, independent real
+flat IO and the full memory frame. Independent comparator replay remains pending.
+This gate precedes the new negative-constexpr DSL artifact refresh below.
+
+The shared negative-constexpr regression reproduces a precision defect in
+`target * -1`: the previous expansion widened narrow storage and introduced a
+runtime subtraction. The contextual correction now passes its DSL rebuild
+(789 jobs) and fp16/bf16/fp32/fp64/store/runtime-negation regression. A separate
+check confirms the untyped mathematical AST remains unchanged. Existing runtime
+scalar, mixed-half division and signed-address regressions also pass. Runtime
+operands and explicit casts remain outside literal recognition. The broader
+library refresh now passes all 3524 jobs, and the complete twenty-module
+`kldiv_ops` algorithm/execution/backward-safety chain passes against the new
+artifacts. Formal fp8 cases
+remain distinct from pinned Triton's source-supported nonzero scalar builders.
+
+The complete KL loop projection exposed a signed-index inference defect in
+the two dedicated antiquoted `range` parser forms. Their integer scan now
+propagates explicitly signed bounds into the loop body, matching the expander.
+The DSL rebuild passes 789 jobs; the new signed-address AST regression,
+existing signed-range execution tests and complete KL forward/backward
+algorithm projection all pass. The regression also checks that natural loops
+retain their natural index/address channels. The dependency-aware shared-library
+and KL public-entry refresh passes all 3538 jobs after this inference-only change.
+
+`nested_loops_processing` now passes complete actual int32 source execution,
+composing initialization, both outer iterations and all 24 stores with cached
+outer/middle values retained. The theorem permits arbitrary initial memory and
+aliases. The independent ordered-write oracle and source-memory preservation
+helpers now pass, as do all fifteen load/store profile checks. The complete
+24-write loop invariant and region-memory contract now pass, including cached
+initial input values and the complete outside-destination frame. Complete
+source access-safety and both int32 original/candidate flat-memory contracts
+also pass, as does a nonempty 24-store witness demonstrating overlap and the
+untouched sentinel. Payload generalization and final public integration remain
+under verification; this is not yet a completed public correctness contract.
+
+`rotary_emb`'s independent mathematical helper now passes its leaf compiler and
+module axiom audit: paired formulas, masked values, dimension bounds, region
+separation and a nonempty noncontiguous address-layout witness. The complete
+typed-source gate terminated with exit 137 without a Lean diagnostic. A
+source-preserving split into 36 named data/cosine helpers, each with six sine
+profiles, retains every profile mapping and all 34 source statements. Its
+single-compiler retry is now live; these helpers alone do not complete the port.
+Its separate paired-scatter helper now also passes compilation and module axiom
+audit, including cross-store readback, complete footprint frame, memory
+congruence, and register/program-id preservation. The temporary extra compiler
+lane is closed after this result.
+
+`kldiv_compute` now passes leaf checks for the complete eight-statement typed
+source, full-backend index-commutation equivalence, real projection/IO/frame,
+source trace safety, precision checks and mixed-storage execution witness.
+The formal source family has 216 floating storage triples; the public
+contracts require the source-supported predicate and cover 192 triples.
+All historical declaration text is preserved
+verbatim in the three-entry layout and supporting legacy module; all local
+imports exist and the eleven-module dependency graph is acyclic. The final
+dependency-aware build now passes 3538 jobs; the eight final axiom checks use
+only standard Lean axioms, and three contracts are registered with validated
+fingerprints as `test-gap`. Independent replay remains pending. The initial supported-profile
+arithmetic AST gate exposed an extra intermediate fp16 cast
+for mixed fp16/bf16 division in the shared DSL. A shared correction selects
+fp32 directly from original half/bfloat operands, before generic promotion;
+the DSL rebuild now passes all 789 jobs, and the exact AST regression passes
+both operand orders, unchanged mixed-half multiplication, and fp64 dominance.
+The KL source artifact and precision module now pass: all 216 formal load
+profiles, and the arithmetic/store ASTs of all 192 supported profiles, in both
+variants. The broader library refresh also passes.
+The preserved legacy real module and complete typed-to-real projection now
+also pass their leaf compiler gates, as do candidate flat-execution transport
+and complete real IO/frame composition. Independent read-only review found
+no additional source/contract defect, including the supported-dtype and
+zero-undefined boundaries. Actual source trace safety now passes after explicitly
+normalizing the candidate's commuted index in its bounds. Full backend FP
+state/memory/failure equivalence also passes. The mixed fp64/fp16/bf16 complete
+execution witness passes for both variants, including its active KL value and
+untouched masked sentinel. Both public-entry leaf checks now pass; the FP
+assumption list is empty. The complete shared-library and dependency-aware
+public build and final axiom audit have passed, and registration is complete.
+
+The next KL loop ports have source-obligation notes: `kldiv_ops` accumulates
+block sums before one scalar store, whereas `kldiv_triton` writes one scalar
+per block and increments the output pointer. The latter's reduced wrapper
+allocation is insufficient for general multi-block rows. Raw `exp`/`log`
+branches also retain the pinned frontend's fp32/fp64 input restriction.
+`kldiv_ops/Proofs/Math.lean` now passes compilation and its module axiom audit:
+independent pointwise, padded-block, prefix and whole-row formulas, including
+ceil-division coverage and equality between the complete block prefix and the
+logical-row formula. It is not yet connected to source execution and adds no
+completed port.
+The complete signed-loop forward/backward definitions in `Proofs/Algorithm.lean`
+and both algorithm-projection theorems also pass compilation and module axiom
+audit. Source review confirms all original branches and pre-loop assignments
+are retained. Their execution-to-formula proofs remain to be connected.
+Both actual initialization prefixes now execute in checked proofs, with memory
+and program identifiers preserved. The post-loop forward statement is also
+checked: a nonzero reduction performs one scalar accumulator store; elementwise
+mode preserves the state. These `Initialize`/`Finish` modules pass their axiom
+audits but do not yet establish the complete loop invariant.
+The complete backward block execution now passes, including both gradient
+branches, signed offsets, masked-zero loads and cached values before stores.
+Its nonnegative-address conversion, injectivity, active-lane readback and raw
+memory frame lemmas also pass compilation and module axiom audit. The combined
+source-block IO theorem now passes as well, establishing successful execution,
+active gradient outputs and the raw frame even when input and output alias.
+This uses the actual pre-store cached loads; no complete loop contract is counted.
+`BackwardState` also passes its metadata/register preservation check. Drafts
+now connect the visited-prefix invariant, positive-stride signed-loop termination
+and quotient/remainder coverage to the actual five-statement initialization.
+These full backward execution modules remain under compiler validation.
+The `BackwardInvariant` module has now passed with a compiled artifact and clean
+module axiom audit; full-loop termination/coverage and source assembly are next.
+`BackwardLoop` now also passes compilation and module axiom audit: actual signed
+loop execution terminates with complete coverage, and quotient/remainder
+decomposition gives every logical-column value. Source-prefix assembly remains
+under validation; the typed public contracts and safety checks are still pending.
+The complete `BackwardExecution.source_run` now passes compilation and module
+axiom audit, connecting all five actual initialization statements to the whole
+signed loop and independent gradient formula with a raw memory frame. This
+remains the ideal-real algorithm layer; typed projection, trace/allocation safety
+and flat public contracts are not yet complete.
+`ForwardStep` has now passed with a compiled artifact and module axiom audit:
+actual signed addresses, both explicit-zero masked loads, both loss branches
+(including runtime epsilon clamp in the mathematical projection), and reduction
+of the computed block lanes. `ForwardMath`, `ForwardFinish`, `ForwardBlock`,
+both forward invariants, both full loops and both complete source executions
+now pass compilation and module axiom audits. Reduction accumulates every block
+before one scalar store and permits input/output aliases; elementwise mode
+checks every logical column with separate output/input regions. Both include
+zero-length rows, partial final blocks and full raw-memory frames. Actual
+backward trace safety also passes, from the explicit active-address bounds
+through source initialization and the entire signed loop. Typed-source
+projection, flat contracts and public integration remain pending. The complete
+algorithm chain has now been refreshed successfully after literal expansion.
+Three new forward-safety modules also pass against those refreshed imports:
+actual source blocks, signed-loop invariants and whole source assembly. The
+reduced branch permits all aliases and checks the final scalar store for N=0;
+elementwise safety uses the actual active-column bounds. Typed `Kernels` and
+`SourceDomain` now compile, including the fp64 carry and fp8 nonzero-scalar
+source exclusions. Complete flat IO is being connected next; these results
+do not yet register a completed KL loop port.
+The Python-float epsilon signature is now checked against pinned Triton source:
+it is a runtime fp32 tensor argument, so the default forward clamp promotes
+narrow floating targets before the logarithm. The new
+`bench/tests/KldivRuntimeEpsilon.lean` AST regression now passes its compiler
+gate and module axiom audit, checking the half-to-fp32 clamp and fp32 logarithm.
+Pinned Triton source inspection rejects all four both-fp8 input pairs at the
+logarithm dtype boundary (24 destination triples). The new public contracts
+therefore explicitly require the source-supported predicate, retaining 192
+triples; this is not a native GPU compile observation. Native target lowering
+and discrete/mixed conversion coverage remain explicit source obligations.
+
+Seven shared DSL regressions pass after the signed pointer binding, square-root
+precision and typed `full`/`zeros` composition fixes. They check signed offsets
+and casts, signed ranges, local precision, both square-root spellings and mixed
+precision composition. `AttentionForwardClosedForm` also recompiles, and the full
+`VeriTile` build passes all 3524 jobs. Downstream normalization public entries
+are being refreshed separately.
+These checks do not establish whole-corpus completion.
+
+The normalization refresh exposed stale implicit-fp32 AST expectations in three
+session-added L2Norm precision checks. They now require the explicit fp32 compute
+expression produced by the repaired DSL. The first corrected source module
+passes. All twelve real/FP public entries now pass their six sequential builds:
+the two L2Norm forward ports, L2Norm backward and RMSNorm use 3445 jobs each;
+fast RMSNorm and fast LayerNorm use 3450 jobs each. Their FP assumption output
+is empty. The three changed L2 source/support fingerprints are refreshed and
+validated. The earlier combined build had been explicitly stopped after its
+known failure when measured host load reached 156 with heavy memory pressure;
+the sequential successful builds now close this downstream refresh.
+Online softmax's signed-loop safety invariant helper passes Lean and its module
+axiom audit, as do signed-loop state preservation and register preservation
+through arbitrary pointer stores and straight-line assignments. Exact source-body
+decomposition now passes; its concrete body-safety composition is being checked.
+All four loop bodies and the reduction preserve the two address-control
+registers. Memory-free prefixes/updates and generic masked/unmasked pointer
+load/store bounds also pass compilation and module axiom checks. The concrete
+input and output body compositions now pass, including source masks and exact
+output-pointer construction. All four signed ranges pass for arbitrary iteration
+counts under row/allocation bounds. Initialization and cross-loop control-state
+composition now pass, completing original-source access safety for all twelve
+storage/accumulation profiles. Generic signed-loop safety congruence also passes,
+including negative counters and zero stride. Candidate-source trace equivalence
+and complete access safety now pass compilation and module axiom audit too.
+The trace proof composes local safety with optional successor-state equality,
+retaining failed executions; it does not infer safety from final-state equality.
+Both source-backed numerical IO contracts and signed/natural execution transport
+now pass their leaf checks. Flat-memory bridges and final public integration
+also pass, as recorded below.
+
+The softmax strict three-entry migration now preserves all three historical
+public declarations and both historical kernel declarations byte-for-byte;
+the redundant compatibility module is removed. Complete region and flat
+contracts pass the final dependency-aware public build (3486 jobs). All six
+public contracts and four supporting witnesses/transport declarations have
+only standard axioms; the FP assumption list is empty. All six contracts are
+registered with validated source/support fingerprints as `test-gap`, retaining
+the independent comparator replay requirement.
+
+The var-length copy floating-family public checks pass, including full-loop
+overcopy behavior and raw/flat frames. Nine homogeneous discrete source/FP
+profiles now pass complete typed IO, raw/flat frames, access safety and exact
+typed execution witnesses. All 36 floating destination conversions have exact
+AST checks for both variants. All ten public contracts pass leaf gates; six
+new real specifications use named exact-copy contracts, preserving every
+hypothesis and the full frame. The final dependency-aware build passes all
+3468 jobs. All ten public contracts have only standard axioms, both FP
+assumption lists are empty, and all ten contracts are registered with validated
+source/support fingerprints as `test-gap`. Independent comparator replay is pending.
+Mixed payload conversion and fixed-width behavior remain explicit semantic
+gaps in `proof_blockers.md`.
+Independent review of RMSNorm implementation found the two-loop source,
+precision profiles and flat formula/frame wiring consistent; explicit typed
+trace-safety transport now passes through local safety/step equivalence and
+the complete loop, rather than being inferred from final states. All 216
+profiles and both variants pass precision checks; four numerical witnesses
+and both public entries pass leaf checks. Its full dependency-aware build now
+passes all 3447 jobs. All four public contracts and the separate trace-safety
+theorem have only standard axioms; the FP assumption list is empty. All four
+contracts are registered with validated source/support fingerprints as
+`test-gap`, with independent comparator replay pending.
+
+Log-softmax now passes its complete two-entry build (3454 jobs). All eight
+public declarations have only standard axioms and current registered hashes.
+Its raw-region backward formula retains arbitrary padding; exact-real executions
+prove zero padding yields (-4,-2) while padding five yields (-14,-12), with
+masked output cells unchanged. The flat VJP states its zero-undefined invariant.
+
+The current whole-source audit is not green: in-progress migrations prevent
+complete inventory discovery, and the proof-gap inventory still needs refresh.
+A lexical false positive on the legitimate `p.row.admit` admission-proof field
+was fixed; 33 source-audit regressions pass, including rejection of standalone
+`admit` and `sorry`. This does not certify the full corpus or its axiom footprint.
+
+The two sine ports now pass their combined four-entry build (3455 jobs),
+including all 28 typed-variant numerical witnesses and exact precision checks.
+Their six public contracts retain separate source coverage and are registered
+with current support hashes as `test-gap`. The shared sine precision fix is
+validated by these profiles; this gate does not certify every corpus dependent.
+
+The all-directory completion goal remains active. Thirty additional ports have
+locally checked original/candidate real and FP entries: `fused_activation`,
+`mul_exponent_compensator`, `relu_triton_kernel`, `relu_strided_buffer`, and
+`softmax_triton2`, `softmax_triton3`, `masked_add_cuda`, `square_matrix`, and
+`matrix_transpose`, `mean_reduction`, `l2_norm_triton1`, `l2_norm_triton2`,
+`l2_norm_bwd`, `max_reduction`, `rms_norm_triton`, `index_select_bwd`,
+`index_select_cat`, `geglu_tanh_triton`, `swiglu_fwd`, `swiglu_triton`, and
+`swiglu_backward`, `softmax_flaggems`, `sin_computation`, `sin_kernel`, and
+`log_softmax`, `softmax_optimize`, `rmsnorm_implementation`, `var_len_copy`, and
+`kldiv_compute`, `rmsnorm_fused`.
+These are not independently accepted cases: comparator
+replay remains pending on this macOS host, and the whole migrated corpus build
+still exposes the existing general BGMV precision failure.
+
+The combined `swiglu_triton` / `swiglu_backward` public-entry build passed all
+3459 jobs. Independent source review found no blocking defect. The former
+preserves all nineteen legacy declarations and covers 36 forward / 216 backward
+floating profiles, with exact mixed-fp64 operation-order checks. The latter
+preserves ten legacy declarations and covers 1296 wrapper-correlated profiles
+for both recomputation flags; eight exact-real executions check distinct outputs
+and optional OUT=DX overwrite. Their twelve public contracts are registered as
+`test-gap`, with independent comparator replay still pending.
+
+Sine-source inspection found missing fp64 precision propagation in both DSL
+sine spellings. Both now use the existing precision propagation helper, and
+`VeriTile.Triton` rebuilt successfully (3409 jobs). Per-port precision regressions
+and the broader dependency refresh are underway; the umbrella build alone does
+not certify all downstream proof modules after this shared change.
+
+- `fused_activation`: full grouped masked in-place sigmoid/ReLU formula for
+  original and bias-commuted candidate; FP uses `add_commute`. New source-facing
+  statements require positive bias count; the legacy total-Nat zero-divisor
+  theorem is retained with its modeling boundary explicitly documented.
+- `mul_exponent_compensator`: independent `xs i * 2^112` formula for both complete
+  unmasked sources, positive block size, flat bounds/execution/frame. The fp32
+  source-profile FP proof uses `mul_commute` on actual finite operands.
+- `relu_triton_kernel`: retains the original `pid = 0` store gate; candidate
+  fuses the result expression into that store. Complete output memory equality
+  and frame use no numerical atoms, with explicit comparison support. Temporary
+  registers need not agree. New source-facing statements require positive B.
+- `relu_strided_buffer`: both complete branch bodies, explicit loop and arbitrary
+  unspecified padding; repairs the legacy helper's incorrect zero-padding AST.
+  Both versions have real flat IO and frame, and FP constant folding preserves
+  the whole state without numerical atoms. The current source scope is rank-one
+  nonnegative input strides, positive output strides and fp32; negative strides
+  and other wrapper storage types are not certified. New headlines require B>0.
+- `softmax_triton2`: independent exp/sum formula for both original and reciprocal
+  candidate; masked flat IO and frame; FP uses `div_mul_rcp` on actual finite
+  numerator and finite/nonzero sum, retaining `tl.exp` and reductions. Complete
+  logical-row coverage requires n_cols<=B; larger rows have only the stated
+  source-tile prefix contract.
+- `softmax_triton3`: all nine input/mask storage pairs and both mask branches;
+  independent exp(input)/sum or exp(input+mask)/sum for both source versions,
+  full real IO, bounds, termination and frame. Typed FP execution equivalence
+  uses only `div_mul_rcp`. Exact source regressions check each output carrier
+  and single half/bfloat conversion. All seven modules pass targeted compilation.
+  The output-alias conversion exception is recorded in `proof_blockers.md`.
+- `masked_add_cuda`: all nine fp32/fp16/bf16 gradient/data storage pairs and
+  int32/int64 masks, with explicit runtime-fp32 alpha and exact output conversion.
+  Independent in-place formula, successful execution, integer input-mask channel,
+  active bounds and full frame; FP uses only `add_commute` on actual operands.
+  Legacy boolean-mask and real-only fp64-region contracts are separately labeled.
+  Other storage/scalar profiles and fp64 source precision remain pending.
+- `square_matrix`: complete masked row square and candidate that commutes the
+  natural-number input-address product, with fp32/fp16/bf16 storage. Independent
+  square formula, successful flat execution and complete frame; full typed FP
+  state/failure equivalence uses no numerical atoms. All eight legacy declaration
+  signatures/docstrings were preserved during the split. New typed statements
+  require positive B; logical full-row coverage requires n_cols<=B and unit input
+  inner stride. The actual source addresses contiguous columns. Read-only source
+  review passed, including typed load/padding, product, masks and stores.
+- `matrix_transpose`: full fp16 wrapper source, both input/output strides and
+  symbolic matrix dimensions. Independent transposed input windows, successful
+  flat execution and full frame; output-address injectivity is retained. The
+  candidate commutes exact natural-number address multiplication; typed FP
+  equivalence uses no numerical atoms. Exact load/transpose/store checks and
+  standard-axiom audit pass, with all twelve legacy headers/docstrings retained.
+  Both public entry dependency builds pass after the latest DSL load-cast update.
+- `mean_reduction`: complete accumulation loop for sixteen fp32/fp16/bf16/fp64
+  input/output pairs, both source versions. All inputs convert to fp32 before
+  accumulation; final sum/division remain fp32 and output conversion is explicit.
+  The real headline proves the independent streamed sum/N formula, successful
+  flat execution and full frame. New typed real scope requires positive N/BM/BN;
+  79 legacy declaration headers/docstrings survive unchanged. Typed FP equality
+  commutes only the natural-number program-base product and uses no atoms.
+  All precision/source regressions and both entry dependency builds pass locally.
+  Four public contracts are registered with validated source/support hashes and
+  `test-gap` status. The split-directory audit worker accounting fixtures now
+  cover all five Lean modules; both failure-injection test groups pass.
+  After the corrected ordinary-max lowering, the combined mean/transpose/square
+  public-entry dependency build passes (3455 jobs).
+
+**Source-fidelity correction:** the earlier claim that ordinary half/bfloat
+`tl.max` preserves its input dtype was incorrect for pinned Triton 3.5.1.
+[The versioned implementation](https://raw.githubusercontent.com/triton-lang/triton/v3.5.1/python/triton/language/standard.py)
+promotes bf16 to fp32 and, without returned indices, promotes other floating
+types narrower than 32 bits. Passing typed-max AST tests proved the wrong
+lowering shape, not source fidelity. The DSL now promotes fp16/bf16/f8 value-only
+max to an explicit fp32 computation. `ReduceMaxPromotion.lean` passes, checking
+positional/named axes, all-axis/keepdims and following subtraction for all four
+small floating types, plus the unchanged fp32 case. The corrected Flaggems
+source checks also pass; dependent complete execution proofs are being rebuilt.
+All 32 source-audit regression tests pass. The optional
+typed-max primitive itself is not a claim about ordinary `tl.max` lowering.
+The complete `VeriTile` library build passes after this correction (3524 jobs).
+
+Indexed maximum now has a separate optional paired backend: the selected value
+and its index project the same deterministic result with identical input dtype
+and computation precision. The source retains fp16/fp8, promotes bf16, and sends
+both fp32 projections through explicit fp32 precision. The supported leftmost-tie
+policy is retained; an explicit false policy is rejected rather than ignored.
+`TypedArgMax.lean` checks nonempty numerical selection, leftmost ties, separate
+ordinary/indexed dispatch, default/explicit precision, unsupported backends and
+empty axes. Its final file gate and standard-axiom audit pass, as does the ordinary
+max regression. Fresh real/DSL and downstream FP dependency closures pass (3409,
+932 and 3358 jobs respectively); this alone does not complete `max_reduction`.
+
+`l2_norm_triton2` now passes its complete public-entry dependency build (3445 jobs).
+Its typed forward family covers four storage types; backward covers sixteen X/DY
+pairs with DX matching X. Load/store/epsilon AST checks, complete source erasure,
+both independent real flat IO contracts and both full-state FP equivalences pass.
+The latter print no numerical assumptions. Padded square and dot sums are bridged
+to complete logical-row formulas when N<=B; new real headlines also require B>0.
+Concrete typed executions at a nonzero row address produce forward 3/4 and backward
+7/32, preserving masked sentinels, in the documented exact-real backend. All 29
+old headers/docstrings are retained. Six public contracts have validated source
+fingerprints and `test-gap` status. Independent acceptance is still pending.
+
+`l2_norm_triton1` also passes all ten module file gates and module axiom audits,
+including both full real contracts, complete FP equivalence without atoms, and
+typed numerical execution producing 3/4 while preserving masked sentinel 99.
+Its four storage profiles and runtime-fp32 epsilon are checked; new full-row real
+contracts require B>0 and N<=B. All sixteen old declaration headers/docstrings
+are preserved. Five public contracts are registered with validated fingerprints
+and `test-gap` status. The integrated public-entry Lake build passes (3445 jobs).
+
+`l2_norm_bwd` passes its complete public-entry dependency build (3445 jobs).
+Its sixteen X/DY storage pairs preserve fp32 loads and runtime epsilon, both
+reductions, destination casts and the source use of X row stride for all pointers.
+Independent active-lane finite-sum formulas, complete successful flat execution,
+bounds and frame contracts pass. Full-state FP equality prints no assumptions.
+Both typed numerical runs produce DX=7/32 and preserve the masked output sentinel.
+All sixteen historical declaration headers and twelve docstrings are preserved.
+Five contracts have validated source fingerprints and `test-gap` status;
+independent comparator replay remains pending.
+
+`max_reduction` passes the integrated public-entry dependency build (3451 jobs).
+All three complete source kernels cover six floating profiles: fp32, fp16,
+bf16, fp8e4nv, fp8e5 and fp64. Three original/candidate FP equivalences report
+no numerical assumptions. Real contracts include successful complete flat IO,
+independent finite maxima, leftmost dimension indices and full memory frames.
+Twelve complete dimension executions produce value 9 and signed index 1.
+Exact load/reduction/store precision regressions pass; all 31 legacy headers
+and docstrings are preserved. Nine public contracts have validated source
+fingerprints and `test-gap` status; independent acceptance remains pending.
+
+The local-precision scope repair passes its shared umbrella build (3409 jobs)
+and explicit FP downstream closure (3358 jobs). Backend trace tests distinguish
+inner fp32 multiplication/casts from enclosing fp64 operations, and source tests
+cover raw fp64 loads. A review caught an incorrect temporary fp16/bf16-to-fp32
+promotion change: Triton promotes that pair to fp16, as documented in the
+[official type-promotion rules](https://triton-lang.org/main/python-api/triton-semantics.html).
+The corrected frontend rebuild passes (789 jobs) and its source regressions pass;
+affected mixed-precision gates are being refreshed.
+The preceding ten locally checked ports now pass all twenty public entries
+against this final shared precision change (3497 jobs). The only additional
+repair was mean_reduction's expected load/store casts and child scopes;
+its source/support fingerprints are refreshed. This confirms local dependency
+checks, not independent replay.
+
+The three L2 ports have now refreshed their exact source assertions for
+explicit fp32 load casts, inner fp64 load scopes and fp32-to-fp64 store scopes.
+All six public correctness/FP entries pass the dependency rebuild (3465 jobs).
+Float64LoadCast and FP64ConversionBackend also pass separate compiler checks,
+including the distinction between explicit conversion and the fp32-load hook.
+The three ports' source/support fingerprints have been refreshed; their status
+remains `test-gap` pending independent replay.
+
+`rms_norm_triton` passes the integrated public-entry dependency build (3445 jobs)
+after the promotion correction. Its sixteen X/Y and W storage pairs retain the
+pre-weight output cast, exact promotion and final store conversion. Complete
+real IO/frame formulas, atom-free full-state FP equivalence and numerical
+execution producing 3/2 with preserved tail 99 pass. Symbolic row/column strides
+are covered; new full-row real contracts require 0<N, N<=B and positive output
+column stride. All fourteen old headers and docstrings are preserved. Five
+public contracts have validated fingerprints and `test-gap` status.
+
+`index_select_bwd` passes the integrated Correct/FPEquiv/precision dependency
+build. All 72 floating/signed-index profiles retain actual signed loads and
+conversions; the full real IO covers duplicate last-active writes, aliases,
+active address bounds and a complete flat-memory frame. Whole-state/failure
+FP equivalence has no numerical atoms. The 168 execution witnesses include
+masked duplicate writes and same-storage aliases. Sixteen historical
+headers/docstrings are preserved. Three contracts have validated fingerprints
+and `test-gap` status. Integer/boolean gradient storage, negative addresses,
+byte reinterpretation and cross-program GPU races remain explicit boundaries.
+
+`index_select_cat` passes the integrated correctness/FP dependency build
+(3447 jobs). Its 72 floating/signed-index profiles retain gather precision,
+implicit destination conversion and signed rows; the independent all-cell
+formula covers repeated indices, overlapping output strides and aliases.
+Full flat execution/frame, exact precision regressions and nonempty typed
+witnesses pass. All sixteen historical headers/docstrings are preserved.
+Three contracts have validated fingerprints and `test-gap` status.
+
+`geglu_tanh_triton` initially passed all six-storage compiler gates and the
+integrated dependency build (3444 jobs), with eight public contracts and no FP
+atoms. Independent source review then found that the literal-only product
+`3 * 0.044715` must fold before conversion to fp32. Emitting a runtime fp32
+multiplication changes the coefficient by one ULP. New typed/math source
+variants now use the folded `0.134145`; legacy declarations remain unchanged.
+The real bridge, exact load/store and mixed-precision AST regressions, and all
+public dependencies now pass the corrected integrated build (3445 jobs). All
+eight contract fingerprints are refreshed; independent replay remains pending.
+
+A corpus-wide static scan of literal-only arithmetic inside Python JIT bodies
+found two sites: the GeGLU product above and mul_exponent_compensator's
+`2.0 ** (127 - 15)`. The latter already injects a single exact `2^112` scalar,
+so it does not emit a runtime power operation. This is a literal-expression
+scan only; it does not establish general constexpr-variable folding fidelity.
+
+`swiglu_fwd` now has all helper/public compiler gates checked for 216 independent
+floating X/Y/OUT triples, both source variants, independent x*y/(1+exp(-x)),
+full flat IO/frame and atom-free whole-state/failure equivalence. Exact source
+regressions cover every load/store/formula; nonempty two-axis execution produces
+3*sigmoid(1) and preserves the adjacent lane. All ten old headers/docstrings
+are preserved. Independent source/spec review found no defect. Four contracts
+have validated fingerprints and `test-gap` status; integrated Lake passes
+(3447 jobs).
+
+After the indexed-max extension, explicit fp64 load/cast and backend separation,
+integer-to-bool load casts, runtime-fp32 scalar promotion and mixed min/max
+promotion regression files all pass again.
+The combined public-entry rebuild of the preceding ten locally checked ports
+also passes after the shared extension (3497 jobs), including all real and FP
+entries. This is a local dependency build, not independent comparator replay.
+
+The explicit fp64 load/cast repair distinguishes declared floating storage from
+legacy mathematical `RegionName` inference. Its complete umbrella rebuild passes
+(3410 jobs). Scalar, masked-offset, alias, overwritten-alias and annotated-real
+regressions pass, including fp64→fp32 conversion. Symbolic backend checks show
+this invokes the cast callback, not the distinct fp32-load callback. Integer
+bool casts, signed loads and integer where regressions also pass. Ordinary
+uncast fp64 loads and mixed fp64/runtime-fp32 expressions remain unresolved.
+
+BGMV's separately named `Proofs/SupportedFP32.lean` proves the exact output-first
+candidate for fp32 output across all input/weight/cast choices. The supporting
+source regression checks 144 configurations, the atom printer reports only
+`add_commute`, and a nonempty complete execution/domain witness checks consistency.
+The original general theorem is unchanged and still pending. A compiled logical
+countermodel now proves its fp32-only assumptions insufficient: both complete
+one-lane fp16 executions succeed, but store different outputs in a model of all
+the fp32 rules. This is not a physical GPU/IEEE counterexample. Missing fp16/fp64
+admissions and native bf16 correspondence remain unresolved. In particular, the
+existing bf16 probes widen inputs and explicitly round fp32 arithmetic; the new
+`AdditionProfiles.lean` preserves those exact cast chains and typed observations,
+but does not identify them with a native bf16 primitive. Its proof plumbing and
+the countermodel pass axiom checks using only the standard Lean axioms. The
+supported subset does not discharge the general statement; authorization to
+correct the original theorem contract has been requested and remains pending.
+
+Local evidence: shared `lake build VeriTile` passed (3524 jobs); the above
+public entries and helpers passed targeted Lean elaboration and public axiom
+checks. The final fused-activation and exponent-compensator source-domain
+refinements also passed their entry rechecks; their printed FP atoms are exactly
+`add_commute` and `mul_commute`, respectively.
+After the integer-mask DSL repair, a dependency-aware Lake build of all twelve
+Correct/FPEquiv entry targets for the six-port batch passed (3469 jobs). This
+re-elaborates the batch against the changed shared macro, rather than relying
+only on earlier artifacts. Remaining messages are unused-simp lints, not proof
+errors. The log is `/private/tmp/veritile-six-port-final-build.log`.
+Independent read-only reviews checked source correspondence, formula/IO scope,
+actual FP operand guards and preserved legacy signatures. All 15 port-layout,
+audit-aggregate and shard tests pass under Homebrew Bash 5/Python 3.14 with GNU
+xargs; the initial BSD xargs command-size failure was a host-tooling issue and
+has been resolved without changing the audit scripts. The comparator preflight
+fails because the required Linux systemd/Landlock judge tools are absent. Neither
+an infrastructure failure nor a source-inventory label is counted as proof
+acceptance. No GPU experiment has been rerun.
+
+The kernel manifest registers 18 original/candidate public contracts for the
+first five ports with `test-gap` status, preserving the pending independent
+replay requirement. A focused registry check passed for all 308 entries: ten
+nonempty fields, unique IDs, allowed categories/statuses, existing source files
+and declaration names. This structural check does not establish theorem
+elaboration, source fidelity or comparator acceptance. Three additional softmax3
+contracts are now registered with the same pending status.
+All 311 manifest entries pass the registry structural checks. The existing
+coverage validator also passes on the six-port batch: 28 declarations across
+12 entries, including their Python function links and complete current support
+fingerprints. The whole-corpus inventory still awaits the in-progress FlashAttn
+split's final Correct entry; this scoped result is not a global inventory pass.
+
+The corpus build terminated with two failed targets: the genuinely unresolved
+`bgmv_expand_slice.Proofs.FP`, and the obsolete top-level `FPEquivFP32` name that
+was moved to `Proofs/SupportedFP32` while its build job graph was already active.
+The latter is a stale build target, not a current extra source entry. This run
+does not prove whole-corpus success; a stable-tree replay remains required.
+
+The next masked-add source check exposed integer `load.to(int1)` being expanded
+as a boolean memory read. A minimal regression failed before repair. The shared
+DSL now retains explicitly declared int32/int64 loads and compares them with
+zero, using the existing integer truthiness semantics. The DSL dependency build
+and integer bool-cast regression pass; an independent read-only review checked
+the conversion and requested an exact-zero test, which has been added. The full
+integer-mask masked-add contract is still in progress; this repair is not itself
+acceptance of that port.
+
+Further source-fidelity work exposed mixed floating `minimum`/`maximum`
+rejection. Their expansion now applies the existing arithmetic promotion and
+constexpr-literal policy. The minimal fp32/bf16 maximum failed before the repair;
+the DSL rebuilt successfully afterwards. Exact AST regressions check widening
+at maximum/minimum with both operand orders and preservation of half precision
+for a constexpr scalar. A separate runtime-scalar regression checks the exact
+fp32 multiplication of a half input and explicitly fp32 scalar. These are shared
+source repairs, not full acceptance of the affected softmax/masked-add ports.
+The half/bfloat `tl.max` reduction still widens its result; full typed reduction
+support is a remaining semantic obligation, not a mere compilation issue.
+
 ## Reopened precision issue
 
 The typed-sum review reopened `bgmv_expand_slice`: its previous expansion
@@ -519,16 +1085,16 @@ entry changed.
 | `flash_decode2_phi` | pending review |
 | `fp4_to_bf16` | pending source import |
 | `fp4_to_bf16_conversion` | pending source import |
-| `fused_activation` | pending review |
+| `fused_activation` | local real/FP proofs checked; explicit source-profile scope; final integration and independent replay pending |
 | `fused_layernorm_triton` | pending review |
 | `fused_recurrent_delta` | pending review |
 | `fused_recurrent_hgrn` | pending review |
 | `fused_recurrent_retention` | pending review |
 | `fused_rotary_embedding` | pending review |
 | `fused_rwkv6_kernel` | pending review |
-| `geglu_tanh_triton` | pending review |
-| `index_select_bwd` | pending review |
-| `index_select_cat` | pending review |
+| `geglu_tanh_triton` | six floating formats; constexpr correction and all real/FP gates checked locally; independent replay pending |
+| `index_select_bwd` | 72 floating/signed-index profiles; full real/FP and execution checked locally; independent replay pending |
+| `index_select_cat` | 72 floating/signed-index profiles; full real/FP checked locally; independent replay pending |
 | `int4_matmul` | pending review |
 | `int8_dequant_matmul` | pending review |
 | `int8_matmul_kernel` | pending review |
@@ -544,9 +1110,9 @@ entry changed.
 | `ksoftmax_triton` | pending review |
 | `kv_cache_copy` | pending review |
 | `kv_cache_filling` | pending review |
-| `l2_norm_bwd` | pending review |
-| `l2_norm_triton1` | pending review |
-| `l2_norm_triton2` | pending review |
+| `l2_norm_bwd` | local full real/FP proofs and typed numerical execution checked; independent replay pending |
+| `l2_norm_triton1` | local full real/FP proofs and typed numerical execution checked; independent replay pending |
+| `l2_norm_triton2` | local full forward/backward real and FP proofs checked; independent replay pending |
 | `layer_norm_fwd` | pending source import |
 | `layer_norm_liger` | pending review |
 | `layer_norm_ops` | pending review |
@@ -555,10 +1121,10 @@ entry changed.
 | `layernorm_fwd_triton` | pending review |
 | `lightning_attention` | pending review |
 | `llama_ff_triton` | pending review |
-| `log_softmax` | pending review |
+| `log_softmax` | eight public contracts and 38 preserved legacy declarations; 36 forward/216 backward profiles, complete independent real formulas/IO/frame and atom-free FP; arbitrary-padding executions checked; integrated build passed 3454 jobs, independent replay pending |
 | `logsumexp_fwd` | pending review |
 | `lora_expand_gemv` | pending review |
-| `masked_add_cuda` | pending review |
+| `masked_add_cuda` | local real/FP checks passed; comparator replay and remaining dtype profiles pending |
 | `masked_select` | pending review |
 | `matmul_dequant_int4` | pending review |
 | `matmul_dequantize` | pending review |
@@ -572,12 +1138,12 @@ entry changed.
 | `matmul_triton2` | pending review |
 | `matmul_triton_autotune` | pending review |
 | `matrix_reduction` | pending review |
-| `matrix_transpose` | pending review |
+| `matrix_transpose` | local fp16 source/real/FP checks passed; comparator replay pending |
 | `matrix_vector_multip` | pending review |
-| `max_reduction` | pending review |
-| `mean_reduction` | pending review |
+| `max_reduction` | six floating profiles; full real/FP and typed execution checked locally; independent replay pending |
+| `mean_reduction` | local 16-pair source/real/FP checks passed; comparator replay pending |
 | `mixed_sparse_attention` | pending review |
-| `mul_exponent_compensator` | pending review |
+| `mul_exponent_compensator` | local real/FP proofs checked; explicit source-profile scope; final integration and independent replay pending |
 | `multinomial_sampling` | pending source import |
 | `nested_loops_processing` | pending review |
 | `parallel_attention` | pending review |
@@ -589,12 +1155,12 @@ entry changed.
 | `quantize_kv_copy` | pending review |
 | `quantize_kv_transform` | pending review |
 | `rbe_triton_transform` | pending review |
-| `relu_strided_buffer` | pending review |
-| `relu_triton_kernel` | pending review |
+| `relu_strided_buffer` | local real/FP proofs checked; explicit source-profile scope; final integration and independent replay pending |
+| `relu_triton_kernel` | local real/FP proofs checked; explicit source-profile scope; final integration and independent replay pending |
 | `reversed_cumsum` | pending review |
 | `reversed_cumsum_scalar` | pending review |
 | `rms_matmul_rbe` | pending review |
-| `rms_norm_triton` | pending review |
+| `rms_norm_triton` | sixteen storage pairs; complete real/FP and numerical execution checked locally; independent replay pending |
 | `rms_rbe_matmul` | pending review |
 | `rmsnorm_fused` | pending review |
 | `rmsnorm_fused_llama` | pending review |
@@ -610,20 +1176,20 @@ entry changed.
 | `rowwise_quantization_triton` | pending review |
 | `seeded_dropout` | pending source import |
 | `sgmv_expand_slice` | pending review |
-| `sin_computation` | pending review |
-| `sin_kernel` | pending review |
-| `softmax_flaggems` | pending review |
+| `sin_computation` | three public contracts and all 24 typed-variant exact-real executions locally checked; 12 input/output profiles; integrated four-entry gate passed 3455 jobs, independent replay pending |
+| `sin_kernel` | three public contracts and all four typed-variant exact-real executions locally checked; two wrapper-correlated profiles; integrated four-entry gate passed 3455 jobs, independent replay pending |
+| `softmax_flaggems` | 13 public contracts locally checked; all four full source families and both branches, arbitrary-padding region formulas/frame/safety and zero-undef flat IO; capped integrated build passed 3536 jobs; independent replay pending |
 | `softmax_optimize` | pending review |
 | `softmax_reducev` | pending review |
 | `softmax_triton1` | verified: both real specs and conditional FP equivalence (per-program scope) |
-| `softmax_triton2` | pending review |
-| `softmax_triton3` | pending review |
+| `softmax_triton2` | local real/FP proofs checked; explicit source-profile scope; final integration and independent replay pending |
+| `softmax_triton3` | local typed real/FP proofs checked for 9 storage pairs and both mask branches; final integration and independent replay pending |
 | `spinning_lock_reduction` | pending source import |
-| `square_matrix` | pending review |
+| `square_matrix` | local source/real/FP checks passed; comparator replay pending |
 | `streamk_matmul` | pending source import |
-| `swiglu_backward` | pending review |
-| `swiglu_fwd` | pending review |
-| `swiglu_triton` | pending review |
+| `swiglu_backward` | 1296 correlated storage profiles, both recompute flags; full real/FP and alias witnesses checked locally; independent replay pending |
+| `swiglu_fwd` | 216 floating triples; full real/FP, precision and execution checks pass locally; independent replay pending |
+| `swiglu_triton` | 36 forward/216 backward profiles; full real/FP, mixed-precision and execution checks pass locally; independent replay pending |
 | `token_attn_llama2` | pending review |
 | `token_attn_mistral` | pending review |
 | `token_attn_reduceV` | pending review |

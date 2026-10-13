@@ -694,6 +694,11 @@ private def addAssignedInts (pins lhs : List String)
     (fun acc (l, e) => if intExprWithPins? pins e then addUnique acc l else acc)
     pins
 
+private def signedRangeTerm (term : TSyntax `term) : Bool :=
+  match term with
+  | `(($_:term : Int)) => Bool.true
+  | _ => Bool.false
+
 mutual
 
 private partial def scanIntStmts (pins : List String)
@@ -723,10 +728,15 @@ private partial def scanIntStmt (pins : List String)
       scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
   | `(tritonStmt| tl.for $i:ident in $_:num { $stmts:tritonStmt* }) =>
       scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
-  | `(tritonStmt| for $i:ident in range(0, $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
-      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
-  | `(tritonStmt| for $i:ident in range($($_:term), $($_:term), $($_:term)) { $stmts:tritonStmt* }) =>
-      scanIntStmts pins stmts.toList |>.filter (fun name => name != i.getId.toString)
+  -- These parser forms contain terms directly, rather than tritonExpr nodes.
+  -- Propagate their signed index just as for the general range syntax below.
+  | `(tritonStmt| for $i:ident in range(0, $($stop:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      let pins' := if signedRangeTerm stop then addUnique pins i.getId.toString else pins
+      scanIntStmts pins' stmts.toList |>.filter (fun name => name != i.getId.toString)
+  | `(tritonStmt| for $i:ident in range($($start:term), $($stop:term), $($_:term)) { $stmts:tritonStmt* }) =>
+      let pins' :=
+        if signedRangeTerm start || signedRangeTerm stop then addUnique pins i.getId.toString else pins
+      scanIntStmts pins' stmts.toList |>.filter (fun name => name != i.getId.toString)
   | `(tritonStmt| for $i:ident in range($start:tritonExpr, $stop:tritonExpr) { $stmts:tritonStmt* }) =>
       let pins' :=
         if intExprWithPins? pins start || intExprWithPins? pins stop then addUnique pins i.getId.toString else pins

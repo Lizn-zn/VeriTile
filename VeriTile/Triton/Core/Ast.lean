@@ -100,6 +100,12 @@ inductive RMWOp where
   | cas
   deriving DecidableEq, BEq, Repr
 
+/-- Explicit precision for indexed reductions returning natural coordinates.
+These cannot be wrapped by floating-only `ComputeOp.alg`. -/
+inductive IndexComputePrecision where
+  | fp32 | fp64
+  deriving DecidableEq, Repr
+
 mutual
 
 inductive Op : TileDType → TileShape → Type where
@@ -118,6 +124,10 @@ inductive Op : TileDType → TileShape → Type where
   | arange    : (n : Nat) → Op .nat [n]
   | broadcast : Op dtype [] → (shape : TileShape) → Op dtype shape
   | full      : (shape : TileShape) → Op dtype [] → Op dtype shape
+  /-- Evaluate a floating subtree at its own arithmetic precision. This preserves
+  nested source precision when an enclosing operation promotes its result. -/
+  | withPrecision : (dtype : FloatDType) → IndexComputePrecision →
+      Op dtype.toTileDType shape → Op dtype.toTileDType shape
   | castFloat : (src dst : FloatDType) → Op src.toTileDType shape → Op dst.toTileDType shape
   | castNatToInt : Op .nat shape → Op .int shape
   | castIntToNat : Op .int shape → Op .nat shape
@@ -223,6 +233,11 @@ inductive Op : TileDType → TileShape → Type where
   | reduceSumTyped : (dtype : FloatDType) → (axis : Fin shape.length) → (keepDims : Bool) →
                 Op dtype.toTileDType shape →
                 Op dtype.toTileDType (TileShape.reduceShape shape axis keepDims)
+  /-- A floating maximum that preserves the source and result dtype. The FP
+  interpreter keeps this operation opaque; real projection is ordinary max. -/
+  | reduceMaxTyped : (dtype : FloatDType) → (axis : Fin shape.length) → (keepDims : Bool) →
+                Op dtype.toTileDType shape →
+                Op dtype.toTileDType (TileShape.reduceShape shape axis keepDims)
   /-- Directed scan along an axis: prefix fold when `dir = .forward`, suffix
   fold when `dir = .reverse` (`reverse=True`). `tl.cumsum` and `tl.cumprod`
   lower to this node with `.sum` / `.prod`; `tl.associative_scan` accepts the
@@ -232,6 +247,14 @@ inductive Op : TileDType → TileShape → Type where
   /-- Axis index of the maximum value, with ties resolved toward the smallest
   axis coordinate. -/
   | argMax    : (axis : Fin shape.length) → Op .real shape →
+                Op .nat (TileShape.eraseAxis shape axis)
+  /-- Selected value of a paired indexed maximum. Unlike ordinary maximum,
+  this retains the indexed combine operation and its special-value semantics. -/
+  | indexedMaxValue : (dtype : FloatDType) → (axis : Fin shape.length) →
+                Op dtype.toTileDType shape → Op dtype.toTileDType (TileShape.eraseAxis shape axis)
+  /-- Dtype-preserving floating argmax, with the same leftmost tie policy. -/
+  | argMaxTyped : (dtype : FloatDType) → (axis : Fin shape.length) →
+                Op dtype.toTileDType shape → (precision : Option IndexComputePrecision := none) →
                 Op .nat (TileShape.eraseAxis shape axis)
   /-- Axis index of the minimum value, with ties resolved toward the smallest
   axis coordinate. -/

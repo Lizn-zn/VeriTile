@@ -189,6 +189,7 @@ def flattenOp (A : FlatAlloc) :
   | _, _, .arange n => .arange n
   | _, _, .broadcast e sh => .broadcast (A.flattenOp e) sh
   | _, _, .full sh e => .full sh (A.flattenOp e)
+  | _, _, .withPrecision dtype precision a => .withPrecision dtype precision (A.flattenOp a)
   | _, _, .castFloat src dst a => .castFloat src dst (A.flattenOp a)
   | _, _, .castNatToInt a => .castNatToInt (A.flattenOp a)
   | _, _, .castIntToNat a => .castIntToNat (A.flattenOp a)
@@ -244,8 +245,11 @@ def flattenOp (A : FlatAlloc) :
   | _, _, .reduceMaxInt ax kd a => .reduceMaxInt ax kd (A.flattenOp a)
   | _, _, .reduceSum ax kd a => .reduceSum ax kd (A.flattenOp a)
   | _, _, .reduceSumTyped dtype ax kd a => .reduceSumTyped dtype ax kd (A.flattenOp a)
+  | _, _, .reduceMaxTyped dtype ax kd a => .reduceMaxTyped dtype ax kd (A.flattenOp a)
   | _, _, .scan op ax dir a => .scan op ax dir (A.flattenOp a)
   | _, _, .argMax ax a => .argMax ax (A.flattenOp a)
+  | _, _, .argMaxTyped dtype ax a p => .argMaxTyped dtype ax (A.flattenOp a) p
+  | _, _, .indexedMaxValue dtype ax a => .indexedMaxValue dtype ax (A.flattenOp a)
   | _, _, .argMin ax a => .argMin ax (A.flattenOp a)
   | _, _, .sort ax a => .sort ax (A.flattenOp a)
   | _, _, .dot (options := options) a b =>
@@ -494,6 +498,7 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .arange _ => True
   | .broadcast e _ => e.FlattenOk
   | .full _ e => e.FlattenOk
+  | .withPrecision _ _ e => e.FlattenOk
   | .castFloat _ _ e => e.FlattenOk
   | .castNatToInt e => e.FlattenOk
   | .castIntToNat e => e.FlattenOk
@@ -549,8 +554,11 @@ def Op.FlattenOk : Op dtype shape → Prop
   | .reduceMaxInt _ _ a => a.FlattenOk
   | .reduceSum _ _ a => a.FlattenOk
   | .reduceSumTyped _ _ _ a => a.FlattenOk
+  | .reduceMaxTyped _ _ _ a => a.FlattenOk
   | .scan _ _ _ a => a.FlattenOk
   | .argMax _ a => a.FlattenOk
+  | .argMaxTyped _ _ a _ => a.FlattenOk
+  | .indexedMaxValue _ _ a => a.FlattenOk
   | .argMin _ a => a.FlattenOk
   | .sort _ a => a.FlattenOk
   | .dot a b _ => a.FlattenOk ∧ b.FlattenOk
@@ -609,6 +617,7 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .arange _ => True
   | .broadcast e _ => e.FlattenOkR
   | .full _ e => e.FlattenOkR
+  | .withPrecision _ _ e => e.FlattenOkR
   | .castFloat _ _ e => e.FlattenOkR
   | .castNatToInt e => e.FlattenOkR
   | .castIntToNat e => e.FlattenOkR
@@ -664,8 +673,11 @@ def Op.FlattenOkR : Op dtype shape → Prop
   | .reduceMaxInt _ _ a => a.FlattenOkR
   | .reduceSum _ _ a => a.FlattenOkR
   | .reduceSumTyped _ _ _ a => a.FlattenOkR
+  | .reduceMaxTyped _ _ _ a => a.FlattenOkR
   | .scan _ _ _ a => a.FlattenOkR
   | .argMax _ a => a.FlattenOkR
+  | .argMaxTyped _ _ a _ => a.FlattenOkR
+  | .indexedMaxValue _ _ a => a.FlattenOkR
   | .argMin _ a => a.FlattenOkR
   | .sort _ a => a.FlattenOkR
   | .dot a b _ => a.FlattenOkR ∧ b.FlattenOkR
@@ -875,6 +887,7 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .arange _ => True
   | .broadcast e _ => e.SafeAt bounds s
   | .full _ e => e.SafeAt bounds s
+  | .withPrecision _ _ e => e.SafeAt bounds s
   | .castFloat _ _ e => e.SafeAt bounds s
   | .castNatToInt e => e.SafeAt bounds s
   | .castIntToNat e => e.SafeAt bounds s
@@ -930,8 +943,11 @@ def Op.SafeAt (bounds : RegionBounds) (s : BlockState) : Op dtype shape → Prop
   | .reduceMaxInt _ _ a => a.SafeAt bounds s
   | .reduceSum _ _ a => a.SafeAt bounds s
   | .reduceSumTyped _ _ _ a => a.SafeAt bounds s
+  | .reduceMaxTyped _ _ _ a => a.SafeAt bounds s
   | .scan _ _ _ a => a.SafeAt bounds s
   | .argMax _ a => a.SafeAt bounds s
+  | .argMaxTyped _ _ a _ => a.SafeAt bounds s
+  | .indexedMaxValue _ _ a => a.SafeAt bounds s
   | .argMin _ a => a.SafeAt bounds s
   | .sort _ a => a.SafeAt bounds s
   | .dot a b _ => a.SafeAt bounds s ∧ b.SafeAt bounds s
@@ -1034,6 +1050,10 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov e s hms hok hu]
       cases evalOp e s <;> rfl
+  | _, _, .withPrecision _ _ a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simpa only [flattenOp, evalOp] using evalOp_flatten A hd hcov a s hms hok hu
   | _, _, .castFloat src dst a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
@@ -1489,6 +1509,13 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
+  | _, _, .argMaxTyped dtype ax a _, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data dtype.toTileDType_ne_ptr dtype.toTileDType_ne_blockPtr,
+        A.trTileFun_data (d := .nat) (by decide) (by decide),
+        Option.map_id, id_eq]
   | _, _, .argMin ax a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
@@ -1521,6 +1548,18 @@ theorem FlatAlloc.evalOp_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .reduceSumTyped dtype ax kd a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data dtype.toTileDType_ne_ptr dtype.toTileDType_ne_blockPtr,
+        Option.map_id, id_eq]
+  | _, _, .reduceMaxTyped dtype ax kd a, s, hms, hok, hu => by
+      simp only [Op.SafeAt] at hms
+      simp only [Op.FlattenOk] at hok
+      simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,
+        A.trTileFun_data dtype.toTileDType_ne_ptr dtype.toTileDType_ne_blockPtr,
+        Option.map_id, id_eq]
+  | _, _, .indexedMaxValue dtype ax a, s, hms, hok, hu => by
       simp only [Op.SafeAt] at hms
       simp only [Op.FlattenOk] at hok
       simp only [flattenOp, evalOp, evalOp_flatten A hd hcov a s hms hok hu,

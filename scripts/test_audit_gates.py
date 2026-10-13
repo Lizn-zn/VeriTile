@@ -42,13 +42,19 @@ class AuditGateTests(unittest.TestCase):
             ('bench/check_ports.sh', 'CHECK_PORTS_JOBS', [
                 'vector_addition/Correct.lean', 'vector_addition/FPEquiv.lean',
                 'vector_addition/Kernels.lean', 'vector_addition/Proofs/Real.lean',
-                'mean_reduction/MeanReduction.lean']),
+                'mean_reduction/Correct.lean', 'mean_reduction/FPEquiv.lean',
+                'mean_reduction/Kernels.lean', 'mean_reduction/Proofs/Candidate.lean',
+                'mean_reduction/Proofs/Source.lean']),
             ('bench/audit_trust.sh', 'AUDIT_TRUST_JOBS', [
                 'bench/tritonbench_g/vector_addition/Correct.lean',
                 'bench/tritonbench_g/vector_addition/FPEquiv.lean',
                 'bench/tritonbench_g/vector_addition/Kernels.lean',
                 'bench/tritonbench_g/vector_addition/Proofs/Real.lean',
-                'bench/tritonbench_g/mean_reduction/MeanReduction.lean'])]:
+                'bench/tritonbench_g/mean_reduction/Correct.lean',
+                'bench/tritonbench_g/mean_reduction/FPEquiv.lean',
+                'bench/tritonbench_g/mean_reduction/Kernels.lean',
+                'bench/tritonbench_g/mean_reduction/Proofs/Candidate.lean',
+                'bench/tritonbench_g/mean_reduction/Proofs/Source.lean'])]:
             first = f'  ok    {targets[0]}\n'
             complete = ''.join(f'  ok    {target}\n' for target in targets)
             without_helper = ''.join(f'  ok    {target}\n' for target in targets

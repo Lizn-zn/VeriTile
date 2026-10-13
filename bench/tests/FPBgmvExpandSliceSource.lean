@@ -1,4 +1,4 @@
-import bench.tritonbench_g.bgmv_expand_slice.Proofs.FP
+import bench.tritonbench_g.bgmv_expand_slice.Kernels
 
 /-! Source regressions for all input/weight/cast choices, with a partial K tile
 and two output-loop steps. Offsetted loads retain their storage dtypes. The
@@ -46,12 +46,12 @@ variable (input : TypedSource.InputStorage) (weight : TypedSource.WeightStorage)
 theorem input_load_keeps_storage :
     assignedLoad (yesBody (activeBody (source input weight cast swapped out_dtype even add))) "tiled_a" =
       some (inputDType input) := by
-  cases input <;> cases weight <;> cases cast <;> cases swapped <;> rfl
+  cases input <;> cases weight <;> cases cast <;> cases swapped <;> cases out_dtype <;> rfl
 
 theorem offsetted_weight_load_keeps_storage :
     assignedLoad (loopBody (source input weight cast swapped out_dtype even add)) "tiled_b" =
       some (weightDType weight) := by
-  cases input <;> cases weight <;> cases cast <;> cases swapped <;> rfl
+  cases input <;> cases weight <;> cases cast <;> cases swapped <;> cases out_dtype <;> rfl
 
 theorem old_output_load_keeps_storage :
     assignedLoad (yesBody (loopBody (source input weight cast swapped out_dtype even add))) "tiled_out" =
@@ -65,29 +65,57 @@ private def assignedDType? : ComputeStmt → Option TileDType
 theorem cast_rebinds_to_weight_dtype :
     (assignment (activeBody (source input weight cast swapped out_dtype even add)) "tiled_a").bind assignedDType? =
       if cast then some (weightDType weight) else none := by
-  cases input <;> cases weight <;> cases cast <;> cases swapped <;> rfl
+  cases input <;> cases weight <;> cases cast <;> cases swapped <;> cases out_dtype <;> rfl
 
 private def storedDType? : ComputeStmt → Option TileDType
+  | .store _ _ _ (.compute (.alg .fp32 _)) _ => some .fp32
   | .store dtype _ _ _ _ => some dtype
   | _ => none
 
 theorem store_keeps_output_dtype :
     ((loopBody (source input weight cast swapped out_dtype even add)).getLast?).bind storedDType? =
       some out_dtype.toTileDType := by
-  cases input <;> cases weight <;> cases cast <;> cases swapped <;> rfl
+  cases input <;> cases weight <;> cases cast <;> cases swapped <;> cases out_dtype <;> rfl
 
 theorem loop_keeps_dynamic_bounds :
     (Source.dynamicRange? (activeBody (source input weight cast swapped out_dtype even add)) "n").map
       (fun r => (r.start,r.stop,r.stride)) =
       some (.constNat 0, .ref .nat [] "split_n_length", .constNat 2) := by
-  cases input <;> cases weight <;> cases cast <;> cases swapped <;> rfl
+  cases input <;> cases weight <;> cases cast <;> cases swapped <;> cases out_dtype <;> rfl
 
 theorem complete_io_signature :
     (source input weight cast swapped out_dtype even add).inputs = ["X","W","Y","Index"] ∧
     (source input weight cast swapped out_dtype even add).outputs = ["Y"] := by
-  cases input <;> cases weight <;> cases cast <;> cases swapped <;> exact ⟨rfl,rfl⟩
+  cases input <;> cases weight <;> cases cast <;> cases swapped <;> cases out_dtype <;> exact ⟨rfl,rfl⟩
 
 end
+
+private def halfSum : Op .fp16 [2] :=
+  .reduceSumTyped .fp16 ⟨1, by decide⟩ Bool.false
+    (.mul .fp16 (.leadL (.consSame .nil)) (.ref .fp16 [4] "tiled_a")
+      (.ref .fp16 [2, 4] "tiled_b"))
+
+/-- Half output requires a half addition of the actual half reduction. -/
+theorem half_sum_and_addition_keep_dtype :
+    assignment (yesBody (loopBody
+      (source .fp16 .fp16 Bool.false Bool.false .fp16 Bool.false Bool.true))) "accumulator" =
+      some (.assign .fp16 [2] "accumulator" (.alg (.castFloat .fp16 .fp16
+        (.add .fp16 (.consSame .nil) halfSum (.ref .fp16 [2] "tiled_out"))))) := rfl
+
+/-- Promotion occurs after the typed reduction when output storage is fp32. -/
+theorem fp32_output_promotes_after_half_sum :
+    assignment (yesBody (loopBody
+      (source .fp16 .fp16 Bool.false Bool.false .fp32 Bool.false Bool.true))) "accumulator" =
+      some (.assign .real [2] "accumulator" (.compute (.alg .fp32 (.castFloat .real .real
+        (.add .real (.consSame .nil) (.castFloat .fp16 .real halfSum)
+          (.ref .real [2] "tiled_out")))))) := rfl
+
+/-- The candidate swaps exactly these operands without widening their arithmetic. -/
+theorem half_candidate_preserves_sum_dtype :
+    assignment (yesBody (loopBody
+      (source .fp16 .fp16 Bool.false Bool.true .fp16 Bool.false Bool.true))) "accumulator" =
+      some (.assign .fp16 [2] "accumulator" (.alg (.castFloat .fp16 .fp16
+        (.add .fp16 (.consSame .nil) (.ref .fp16 [2] "tiled_out") halfSum)))) := rfl
 
 #guard_msgs (drop info) in
 #auditModuleAxioms

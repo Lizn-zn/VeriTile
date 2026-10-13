@@ -85,6 +85,7 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
   | .arange n => .arange n
   | .broadcast e shape => .broadcast e.eraseDType shape
   | .full shape e => .full shape e.eraseDType
+  | .withPrecision _ _ e => e.eraseDType
   | .castFloat src dst e => by
       simpa [eraseDType_float src, eraseDType_float dst] using e.eraseDType
   | .castNatToInt e => .castNatToInt e.eraseDType
@@ -146,8 +147,19 @@ def Op.eraseDType : Op dtype shape → Op (VeriTile.Triton.eraseDType dtype) sha
       have ea : Op .real shape := by simpa only [eraseDType_float] using a.eraseDType
       rw [eraseDType_float dtype]
       exact .reduceSum axis keepDims ea
+  | .reduceMaxTyped dtype (shape := shape) axis keepDims a => by
+      have ea : Op .real shape := by simpa only [eraseDType_float] using a.eraseDType
+      rw [eraseDType_float dtype]
+      exact .reduceMax axis keepDims ea
   | .scan op axis dir a => .scan op axis dir a.eraseDType
   | .argMax axis a => .argMax axis a.eraseDType
+  | .indexedMaxValue dtype (shape := shape) axis a => by
+      have ea : Op .real shape := by simpa only [eraseDType_float] using a.eraseDType
+      rw [eraseDType_float dtype]
+      exact .reduceMax axis Bool.false ea
+  | .argMaxTyped dtype (shape := shape) axis a _ => by
+      have ea : Op .real shape := by simpa only [eraseDType_float] using a.eraseDType
+      exact .argMax axis ea
   | .argMin axis a => .argMin axis a.eraseDType
   | .sort axis a => .sort axis a.eraseDType
   | .dot (options := options) a b => .dot (options := options) a.eraseDType b.eraseDType

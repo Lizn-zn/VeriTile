@@ -140,6 +140,7 @@ def Op.SafeAtR (R : RoundingModel) (bounds : RegionBounds) (s : BlockState) : Op
   | .arange _ => True
   | .broadcast e _ => e.SafeAtR R bounds s
   | .full _ e => e.SafeAtR R bounds s
+  | .withPrecision _ _ e => e.SafeAtR R bounds s
   | .castFloat _ _ e => e.SafeAtR R bounds s
   | .castNatToInt e => e.SafeAtR R bounds s
   | .castIntToNat e => e.SafeAtR R bounds s
@@ -195,8 +196,11 @@ def Op.SafeAtR (R : RoundingModel) (bounds : RegionBounds) (s : BlockState) : Op
   | .reduceMaxInt _ _ a => a.SafeAtR R bounds s
   | .reduceSum _ _ a => a.SafeAtR R bounds s
   | .reduceSumTyped _ _ _ a => a.SafeAtR R bounds s
+  | .reduceMaxTyped _ _ _ a => a.SafeAtR R bounds s
   | .scan _ _ _ a => a.SafeAtR R bounds s
   | .argMax _ a => a.SafeAtR R bounds s
+  | .argMaxTyped _ _ a _ => a.SafeAtR R bounds s
+  | .indexedMaxValue _ _ a => a.SafeAtR R bounds s
   | .argMin _ a => a.SafeAtR R bounds s
   | .sort _ a => a.SafeAtR R bounds s
   | .dot a b _ => a.SafeAtR R bounds s ∧ b.SafeAtR R bounds s
@@ -303,6 +307,10 @@ theorem FlatAlloc.evalOpR_flatten (A : FlatAlloc) (hd : A.Disjoint)
       simp only [Op.FlattenOkR] at hok
       simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R e s hms hok hu]
       cases evalOpR R e s <;> rfl
+  | _, _, .withPrecision _ _ a, s, hms, hok, hu => by
+      simp only [Op.SafeAtR] at hms
+      simp only [Op.FlattenOkR] at hok
+      simpa only [flattenOp, evalOpR] using evalOpR_flatten A hd hcov R a s hms hok hu
   | _, _, .castFloat src dst a, s, hms, hok, hu => by
       simp only [Op.SafeAtR] at hms
       simp only [Op.FlattenOkR] at hok
@@ -758,6 +766,13 @@ theorem FlatAlloc.evalOpR_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         A.trTileFun_data (d := .nat) (by decide) (by decide),
         Option.map_id, id_eq]
+  | _, _, .argMaxTyped dtype ax a _, s, hms, hok, hu => by
+      simp only [Op.SafeAtR] at hms
+      simp only [Op.FlattenOkR] at hok
+      simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R a s hms hok hu,
+        A.trTileFun_data dtype.toTileDType_ne_ptr dtype.toTileDType_ne_blockPtr,
+        A.trTileFun_data (d := .nat) (by decide) (by decide),
+        Option.map_id, id_eq]
   | _, _, .argMin ax a, s, hms, hok, hu => by
       simp only [Op.SafeAtR] at hms
       simp only [Op.FlattenOkR] at hok
@@ -790,6 +805,18 @@ theorem FlatAlloc.evalOpR_flatten (A : FlatAlloc) (hd : A.Disjoint)
         A.trTileFun_data (d := .real) (by decide) (by decide),
         Option.map_id, id_eq]
   | _, _, .reduceSumTyped dtype ax kd a, s, hms, hok, hu => by
+      simp only [Op.SafeAtR] at hms
+      simp only [Op.FlattenOkR] at hok
+      simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R a s hms hok hu,
+        A.trTileFun_data dtype.toTileDType_ne_ptr dtype.toTileDType_ne_blockPtr,
+        Option.map_id, id_eq]
+  | _, _, .reduceMaxTyped dtype ax kd a, s, hms, hok, hu => by
+      simp only [Op.SafeAtR] at hms
+      simp only [Op.FlattenOkR] at hok
+      simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R a s hms hok hu,
+        A.trTileFun_data dtype.toTileDType_ne_ptr dtype.toTileDType_ne_blockPtr,
+        Option.map_id, id_eq]
+  | _, _, .indexedMaxValue dtype ax a, s, hms, hok, hu => by
       simp only [Op.SafeAtR] at hms
       simp only [Op.FlattenOkR] at hok
       simp only [flattenOp, evalOpR, evalOpR_flatten A hd hcov R a s hms hok hu,

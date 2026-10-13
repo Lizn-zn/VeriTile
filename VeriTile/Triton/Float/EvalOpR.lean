@@ -41,6 +41,7 @@ noncomputable def evalOpR (R : RoundingModel) :
   | .full shape e, s => do
       let v ← evalOpR R e s
       some ⟨fun _ => v.data PUnit.unit⟩
+  | .withPrecision _ _ a, s => evalOpR R a s
   | .castFloat src dst a, s => do
       let va ← evalOpR R a s
       some ⟨fun i => R.cast src dst (va.data i)⟩
@@ -142,8 +143,13 @@ noncomputable def evalOpR (R : RoundingModel) :
   | .reduceSum axis keepDims a, s => return Tile.reduceSum axis keepDims (← evalOpR R a s)
   | .reduceSumTyped dtype axis keepDims a, s =>
       return Tile.reduceSumTyped dtype axis keepDims (← evalOpR R a s)
+  | .reduceMaxTyped dtype axis keepDims a, s => do
+      Tile.reduceMaxTyped dtype axis keepDims (← evalOpR R a s)
   | .scan op axis dir a, s => return Tile.scan op axis dir (← evalOpR R a s)
   | .argMax axis a, s => return Tile.argMaxDrop axis (← evalOpR R a s)
+  | .argMaxTyped dtype axis a _, s => return Tile.argMaxTyped dtype axis (← evalOpR R a s)
+  | .indexedMaxValue dtype axis a, s => do
+      Tile.reduceMaxTyped dtype axis Bool.false (← evalOpR R a s)
   | .argMin axis a, s => return Tile.argMinDrop axis (← evalOpR R a s)
   | .sort axis a, s => return Tile.sortAxis axis (← evalOpR R a s)
   | .dot (batch := batch) a b _, s => do
@@ -307,6 +313,8 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
   | _, _, .arange _, _ => by simp only [evalOpR, evalOp]
   | _, _, .broadcast e _, s => by simp only [evalOpR, evalOp, evalOpR_triv e s]
   | _, _, .full _ e, s => by simp only [evalOpR, evalOp, evalOpR_triv e s]
+  | _, _, .withPrecision _ _ a, s => by
+      simpa only [evalOpR, evalOp] using evalOpR_triv a s
   | _, _, .castFloat src dst a, s => by
       simp only [evalOpR, evalOp, evalOpR_triv a s, RoundingModel.triv_cast]
   | _, _, .castNatToInt a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
@@ -382,8 +390,11 @@ theorem evalOpR_triv : ∀ {dtype : TileDType} {shape : TileShape} (op : Op dtyp
   | _, _, .reduceMaxInt _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .reduceSum _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .reduceSumTyped _ _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .reduceMaxTyped _ _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .scan _ _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .argMax _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .argMaxTyped _ _ a _, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
+  | _, _, .indexedMaxValue _ _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .argMin _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .sort _ a, s => by simp only [evalOpR, evalOp, evalOpR_triv a s]
   | _, _, .dot a b _, s => by
