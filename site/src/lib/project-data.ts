@@ -91,7 +91,7 @@ if (fingerprint.digest('hex') !== demoRecord.fingerprint || demoRecord.variants[
 }
 export const vectorAddDemo = demoRecord;
 export const leanToolchain = readFileSync(resolve(repositoryRoot, 'lean-toolchain'), 'utf8').trim().split(':').at(-1);
-export const quickStart = `git clone https://github.com/Lizn-zn/VeriTile.git
+export const quickStart = `git clone https://github.com/VeriInfra-Lab/VeriTile.git
 cd VeriTile
 lake build
 lake env lean bench/examples/VectorAdd.lean`;

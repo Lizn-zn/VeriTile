@@ -8,7 +8,7 @@ import subprocess
 
 ROOT = Path(__file__).resolve().parents[1]
 OUTPUT = ROOT / 'site/src/lib/coverage-ci.json'
-REPO = 'Lizn-zn/VeriTile'
+REPO = 'VeriInfra-Lab/VeriTile'
 
 
 def completed_record(run_id, run, jobs):

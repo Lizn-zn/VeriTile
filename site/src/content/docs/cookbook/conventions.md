@@ -98,7 +98,7 @@ makes proofs cheaper.
 
 Bench headlines use the `specification` keyword and prefer a `KernelIO`
 `⊨` / `⊨[R]` contract. Naming suffixes are not how the audit discovers
-headlines; follow the [main-theorem conventions](https://github.com/Lizn-zn/VeriTile/blob/main/bench/MAIN_THEOREM_CONVENTIONS.md).
+headlines; follow the [main-theorem conventions](https://github.com/VeriInfra-Lab/VeriTile/blob/main/bench/MAIN_THEOREM_CONVENTIONS.md).
 
 ## Antiquotes are paste-in-hostile — minimize them
 

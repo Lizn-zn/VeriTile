@@ -30,7 +30,7 @@ and library gates, then four dependent `bench/audit_trust.sh` corpus shards.
 The final completion check requires the global job and all four shards to
 succeed, including their official comparator checks. A global-only result
 does not claim that the standalone corpus passed. Local runs without options
-still execute every gate. See the [CI stage commands](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/README.md#shared-comparator-gate)
+still execute every gate. See the [CI stage commands](https://github.com/VeriInfra-Lab/VeriTile/blob/main/scripts/README.md#shared-comparator-gate)
 to reproduce the split locally.
 
 Each exits `0` only after every selected file reports a result and all checks
@@ -46,7 +46,7 @@ their axiom dependencies and replays the proofs in Lean's kernel. Routine
 audits use a frozen current-source snapshot, not an old Git specification;
 `scripts/prove.sh` additionally compares an agent's edits against the pre-agent
 task. Definition-only fixtures explicitly report zero original theorem targets.
-See [setup, scope, and recorded evidence](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/README.md#shared-comparator-gate).
+See [setup, scope, and recorded evidence](https://github.com/VeriInfra-Lab/VeriTile/blob/main/scripts/README.md#shared-comparator-gate).
 
 The bench audit appends `#auditModuleAxioms` and `#auditModuleSpecs`.
 `specification` registers its theorem in Lean's environment; the axiom gate
@@ -89,7 +89,7 @@ The commands:
 ## Add a self-audit to a file
 
 Put the checks at the end of the file (see the SwiGLU pilot,
-[`bench/examples/FusedSwigluEquiv.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FusedSwigluEquiv.lean),
+[`bench/examples/FusedSwigluEquiv.lean`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/bench/examples/FusedSwigluEquiv.lean),
 for the full pattern). They run at compile time, so the file stops compiling if
 any gate is violated:
 
@@ -101,11 +101,11 @@ any gate is violated:
 
 ## Where things live
 
-- Commands: [`VeriTile/Meta/StatementAudit.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Meta/StatementAudit.lean).
-- Library driver (generated): [`VeriTile/Meta/TrustReport.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Meta/TrustReport.lean)
+- Commands: [`VeriTile/Meta/StatementAudit.lean`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/VeriTile/Meta/StatementAudit.lean).
+- Library driver (generated): [`VeriTile/Meta/TrustReport.lean`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/VeriTile/Meta/TrustReport.lean)
   — regenerate from the manifest with `python3 scripts/gen_trust_report.py`.
-- Bench driver: [`bench/audit_trust.sh`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/audit_trust.sh).
-- Shared comparator driver: [`scripts/check_comparator.py`](https://github.com/Lizn-zn/VeriTile/blob/main/scripts/check_comparator.py).
+- Bench driver: [`bench/audit_trust.sh`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/bench/audit_trust.sh).
+- Shared comparator driver: [`scripts/check_comparator.py`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/scripts/check_comparator.py).
 
 `TrustReport` lives in the `VeriTileFull` lakefile lib (it audits `ApproxGeLU`,
 which pulls the heavy analysis chain), so a routine lite `lake build` stays fast.

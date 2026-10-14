@@ -9,7 +9,7 @@ type CorpusCheck = {
 const recordedCheck = checkedRun as CorpusCheck | null;
 if (recordedCheck !== null && (recordedCheck.schema !== 1 || recordedCheck.conclusion !== 'success'
     || !/^[0-9a-f]{40}$/.test(recordedCheck.commit)
-    || recordedCheck.url !== `https://github.com/Lizn-zn/VeriTile/actions/runs/${recordedCheck.run_id}`)) {
+    || recordedCheck.url !== `https://github.com/VeriInfra-Lab/VeriTile/actions/runs/${recordedCheck.run_id}`)) {
   throw new Error('Invalid recorded corpus-check evidence.');
 }
 export const corpusCheck = recordedCheck;
@@ -46,4 +46,4 @@ export const numericLabels: Record<string, string> = {
 };
 
 export const sourceLink = (path: string, line: number) =>
-  `https://github.com/Lizn-zn/VeriTile/blob/main/${path}#L${line}`;
+  `https://github.com/VeriInfra-Lab/VeriTile/blob/main/${path}#L${line}`;

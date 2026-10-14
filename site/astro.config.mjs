@@ -3,7 +3,7 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
-  site: 'https://lizn-zn.github.io',
+  site: 'https://veriinfra-lab.github.io',
   base: '/VeriTile',
   trailingSlash: 'always',
   devToolbar: { enabled: false },
@@ -33,7 +33,7 @@ export default defineConfig({
         {
           icon: 'github',
           label: 'GitHub',
-          href: 'https://github.com/Lizn-zn/VeriTile',
+          href: 'https://github.com/VeriInfra-Lab/VeriTile',
         },
       ],
       sidebar: [

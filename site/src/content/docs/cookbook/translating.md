@@ -4,7 +4,7 @@ description: When a .py → .lean transcription is faithful, what gaps are toler
 ---
 
 The gold standard is
-[`bench/tritonbench_g/add_example/AddExample.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/tritonbench_g/add_example/AddExample.lean):
+[`bench/tritonbench_g/add_example/AddExample.lean`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/bench/tritonbench_g/add_example/AddExample.lean):
 the `def kernel ... : ComputeKernel := triton { ... }` body is the `.py`
 kernel function body **line-for-line**, no extra statements, no merges, no
 silent fixups.

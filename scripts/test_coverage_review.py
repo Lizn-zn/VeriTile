@@ -136,7 +136,7 @@ class CoverageReviewTests(unittest.TestCase):
     def test_only_completed_successful_corpus_runs_are_evidence(self):
         run = {'status': 'completed', 'conclusion': 'success',
                'path': '.github/workflows/bench-audit.yml', 'head_sha': 'a' * 40,
-               'html_url': 'https://github.com/Lizn-zn/VeriTile/actions/runs/123'}
+               'html_url': 'https://github.com/VeriInfra-Lab/VeriTile/actions/runs/123'}
         job = {'status': 'completed', 'conclusion': 'success',
                'completed_at': '2026-09-24T06:13:56Z'}
         self.assertEqual(completed_record(123, run, [job])['commit'], 'a' * 40)

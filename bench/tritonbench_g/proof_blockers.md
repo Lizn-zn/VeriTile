@@ -3,7 +3,7 @@
 The current statement-scope inventory is `coverage_review.json`, checked against
 both Lean and Python source fingerprints by `bench/coverage_review.py` and
 rendered into `proof_gap_manifest.tsv` by `bench/check_proof_gap_manifest.py`.
-The [browsable coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)
+The [browsable coverage table](https://veriinfra-lab.github.io/VeriTile/proofs/coverage/)
 shows exact theorem statements, IO definitions, Python functions, numeric
 models, and limitations for all 345 headlines across 173 ports.
 
@@ -30,7 +30,7 @@ Existing issue links identify the historical blocker family, not an assertion
 that the linked issue is currently open or that closing it completed a proof.
 
 The older completion narrative is preserved in
-[the pre-review revision](https://github.com/Lizn-zn/VeriTile/blob/c29712db635d72fec66c6c5f6ee1fb22b3605e2e/bench/tritonbench_g/proof_blockers.md).
+[the pre-review revision](https://github.com/VeriInfra-Lab/VeriTile/blob/c29712db635d72fec66c6c5f6ee1fb22b3605e2e/bench/tritonbench_g/proof_blockers.md).
 Its broad “discharged” and “full-value” labels must not replace the current
 per-statement inventory. The sections below track additional named-surface,
 frame, and translation limitations. The mechanical translation scan remains

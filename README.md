@@ -1,6 +1,6 @@
 # VeriTile
 
-📖 **Docs site:** [lizn-zn.github.io/VeriTile/](https://lizn-zn.github.io/VeriTile/) (bench cookbook, status, architecture). Run locally: `./site/scripts/dev.sh`.
+📖 **Docs site:** [veriinfra-lab.github.io/VeriTile/](https://veriinfra-lab.github.io/VeriTile/) (bench cookbook, status, architecture). Run locally: `./site/scripts/dev.sh`.
 
 VeriTile embeds a typed Triton-style kernel DSL in Lean 4 and proves
 correctness or refinement of those kernels against mathematical
@@ -37,7 +37,7 @@ externally checked. See [Triton subset and gaps](./documents/TritonSubset.md).
   [`bench/examples/FusedSwigluEquiv.lean`](./bench/examples/FusedSwigluEquiv.lean).
 - **Examples**: 173 ported TritonBench-G kernels with proofs (source of truth:
   [`bench/tritonbench_g/completion_audit.md`](./bench/tritonbench_g/completion_audit.md);
-  see the [per-theorem coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)
+  see the [per-theorem coverage table](https://veriinfra-lab.github.io/VeriTile/proofs/coverage/)
   for configured models, slices, and remaining gaps) plus FlashAttention-1
   forward, online softmax, Welford, LayerNorm, log-sum-exp.
 - **CI gates**: `.github/workflows/bench-audit.yml` runs the full library build,
@@ -62,7 +62,7 @@ Install Git and [Lean's toolchain manager (`elan`)](https://lean-lang.org/instal
 then run:
 
 ```bash
-git clone https://github.com/Lizn-zn/VeriTile.git
+git clone https://github.com/VeriInfra-Lab/VeriTile.git
 cd VeriTile
 lake exe cache get
 lake build
@@ -224,7 +224,7 @@ verso/                     Slide deck / overview
 Long-running project. Goal: bring real Triton kernels (forward, backward,
 concurrency, production layouts / autograd) into Lean's proof scope with
 minimal modification. Live roadmap:
-[#1](https://github.com/Lizn-zn/VeriTile/issues/1). Architecture and
+[#1](https://github.com/VeriInfra-Lab/VeriTile/issues/1). Architecture and
 decision log: [PLAN.md](./PLAN.md).
 
 ## Team

@@ -460,7 +460,7 @@ To make the close-rate metric reproducible:
 
 ### Open-source cadence
 
-- Main repo: `github.com/Lizn-zn/VeriTile` (already public)
+- Main repo: `github.com/VeriInfra-Lab/VeriTile` (already public)
 - Main branch always builds
 - Tag on Tier closure. **No release tag has been cut to date** (the
   `v0.1-tier1` / `v0.2-tier2` / `v0.3-tier3a` names once planned here were

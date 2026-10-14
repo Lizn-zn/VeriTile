@@ -10,7 +10,7 @@ public compute-facing APIs. See
   stated on a `KernelIO` `⊨` / `⊨[R]` face, not on the surfaces below; that
   triple bundles the addressing, the output values and the frame into one line.
   See [`CorrectnessSurfaces.md`](/VeriTile/proofs/correctness-surfaces/) and
-  [`../bench/MAIN_THEOREM_CONVENTIONS.md`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/MAIN_THEOREM_CONVENTIONS.md) §4.
+  [`../bench/MAIN_THEOREM_CONVENTIONS.md`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/bench/MAIN_THEOREM_CONVENTIONS.md) §4.
 - Single-kernel correctness against a mathematical or algorithmic spec uses
   `ComputeCorrect.Realizes_without_Rounding` (*a kernel realizes a spec*), `ComputeCorrect.Post`,
   or `ComputeCorrect.General`.

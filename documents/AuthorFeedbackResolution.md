@@ -25,8 +25,8 @@ corrections to historical proof claims.
 | Suggestion | Resolution |
 |---|---|
 | Put the trust boundary near the main claim | Homepage lead says “Lean-checked contracts for a typed Triton-style model” and links semantic scope. |
-| Explain the real DSL workflow | Homepage acknowledges Lean wrapping/translation choices. The complete [VectorAdd tutorial](https://lizn-zn.github.io/VeriTile/cookbook/vector-add-walkthrough/) extracts code from the executable showcase and reproduces an accepted proof and rejected mutation. |
-| Browse coverage by theorem | The [coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/) provides search, scope/numeric filters, exact theorem statements and IO definitions, Python/Lean links, limits, and an exact-commit completed audit record. It works without JavaScript. |
+| Explain the real DSL workflow | Homepage acknowledges Lean wrapping/translation choices. The complete [VectorAdd tutorial](https://veriinfra-lab.github.io/VeriTile/cookbook/vector-add-walkthrough/) extracts code from the executable showcase and reproduces an accepted proof and rejected mutation. |
+| Browse coverage by theorem | The [coverage table](https://veriinfra-lab.github.io/VeriTile/proofs/coverage/) provides search, scope/numeric filters, exact theorem statements and IO definitions, Python/Lean links, limits, and an exact-commit completed audit record. It works without JavaScript. |
 | Preserve recorded-demo labels/freshness | The fixed addition/subtraction demo remains explicitly recorded; source/library/toolchain fingerprint drift fails the build. |
 | Correct build claims and resource guidance | The README distinguishes the default library, full library, and standalone checks, with a smoke command and first-build estimates. |
 | Linux comparator integration and library smoke tests | Comparator integration runs on Linux with the real tools. Artifact CI checks representative vector-addition, reduction, and quantization ports after library changes. All proof-compilation audit entry points require the official comparator. |

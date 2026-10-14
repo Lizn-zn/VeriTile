@@ -7,7 +7,7 @@ from urllib.parse import unquote, urljoin, urlsplit
 ROOT = Path(__file__).resolve().parents[2]
 DIST = ROOT / 'site/dist'
 BASE = '/VeriTile/'
-ORIGIN = 'https://lizn-zn.github.io'
+ORIGIN = 'https://veriinfra-lab.github.io'
 
 class Page(HTMLParser):
     def __init__(self, path):
@@ -32,7 +32,7 @@ def main():
         route = BASE + (relative[:-len('index.html')] if relative.endswith('index.html') else relative)
         for href in page.links:
             url = urlsplit(urljoin(ORIGIN + route, href))
-            if url.netloc == 'github.com' and url.path.startswith('/Lizn-zn/VeriTile/'):
+            if url.netloc == 'github.com' and url.path.startswith('/VeriInfra-Lab/VeriTile/'):
                 parts = url.path.split('/')
                 if len(parts) >= 6 and parts[3] in ('blob', 'tree') and parts[4] == 'main':
                     target = ROOT / unquote('/'.join(parts[5:]))
@@ -40,7 +40,7 @@ def main():
                         errors.add(f'{relative}: missing repository file {href}')
                     checked += 1
                 continue
-            if url.netloc != 'lizn-zn.github.io' or url.scheme not in ('http', 'https'):
+            if url.netloc != 'veriinfra-lab.github.io' or url.scheme not in ('http', 'https'):
                 continue
             if not url.path.startswith(BASE):
                 errors.add(f'{relative}: missing base prefix {href}')

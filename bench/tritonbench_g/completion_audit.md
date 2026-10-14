@@ -38,7 +38,7 @@ issue is still open or that closing it completed the proof.
 
 See [`proof_blockers.md`](./proof_blockers.md) for the remaining scope and frame
 limitations, and the
-[browsable coverage table](https://lizn-zn.github.io/VeriTile/proofs/coverage/)
+[browsable coverage table](https://veriinfra-lab.github.io/VeriTile/proofs/coverage/)
 for the individual theorem statements and source evidence.
 
 ## Audit Gates and CI Evidence
@@ -72,7 +72,7 @@ not establish that later changes passed newly added gates. Only a completed,
 successful full run can be recorded with
 [`scripts/record_coverage_ci.py`](../../scripts/record_coverage_ci.py).
 Queued, running, cancelled, or skipped runs are not successful audit evidence.
-The [Bench audit workflow](https://github.com/Lizn-zn/VeriTile/actions/workflows/bench-audit.yml)
+The [Bench audit workflow](https://github.com/VeriInfra-Lab/VeriTile/actions/workflows/bench-audit.yml)
 provides the current run status and logs.
 
 ## Remaining Blockers

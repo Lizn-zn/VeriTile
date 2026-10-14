@@ -9,7 +9,7 @@ from urllib.parse import quote, urlsplit, urlunsplit
 ROOT = Path(__file__).resolve().parents[2]
 DEST = ROOT / 'site/src/content/docs'
 BASE = '/VeriTile/'
-GITHUB = 'https://github.com/Lizn-zn/VeriTile'
+GITHUB = 'https://github.com/VeriInfra-Lab/VeriTile'
 DOCS = [
     ('CodeOrganization', 'architecture/code-organization'),
     ('TritonSubset', 'architecture/triton-subset'),

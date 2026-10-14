@@ -3,7 +3,7 @@
 Public project homepage and documentation, built with Astro +
 [Starlight](https://starlight.astro.build/).
 Published in English, deployed to
-[lizn-zn.github.io/VeriTile/](https://lizn-zn.github.io/VeriTile/) via the
+[veriinfra-lab.github.io/VeriTile/](https://veriinfra-lab.github.io/VeriTile/) via the
 `Website` GitHub Actions workflow.
 
 ## Quick start
@@ -167,12 +167,12 @@ Internal links use absolute paths **with the `/VeriTile/` base prefix**:
 
 The base prefix is currently hard-coded so the same Markdown serves dev
 (`http://localhost:4321/VeriTile/...`) and prod
-(`https://lizn-zn.github.io/VeriTile/...`).
+(`https://veriinfra-lab.github.io/VeriTile/...`).
 
 Bench / scripts links should point to GitHub:
 
 ```markdown
-[`bench/check_ports.sh`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/check_ports.sh)
+[`bench/check_ports.sh`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/bench/check_ports.sh)
 ```
 
 ## Re-syncing from `documents/`

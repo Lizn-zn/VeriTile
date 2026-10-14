@@ -4,8 +4,8 @@ title: "Correctness Surfaces"
 
 This document explains which public theorem surface to use when proving
 properties of `ComputeKernel`s. Exact surfaces live in
-[`VeriTile.Triton.Correctness`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/Correctness.lean); rounding
-surfaces live in [`Float.Refine`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/Float/Refine.lean).
+[`VeriTile.Triton.Correctness`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/VeriTile/Triton/Correctness.lean); rounding
+surfaces live in [`Float.Refine`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/VeriTile/Triton/Float/Refine.lean).
 
 ## Rounding models and exact surfaces
 
@@ -33,9 +33,9 @@ bridge lemmas are described below.
 The surfaces below (`Realizes`, `Refines`, …) are the *library* vocabulary. The
 surface that the bench corpus actually states its headlines on is the **KernelIO
 `⊨` triple**, defined in
-[`VeriTile/Triton/Memory/KernelSpec.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/Memory/KernelSpec.lean). The signature variants cover different input/output arities, masks,
+[`VeriTile/Triton/Memory/KernelSpec.lean`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/VeriTile/Triton/Memory/KernelSpec.lean). The signature variants cover different input/output arities, masks,
 indices, and streaming windows. Consult the
-[proof-gap manifest](https://github.com/Lizn-zn/VeriTile/blob/main/bench/tritonbench_g/proof_gap_manifest.tsv) for
+[proof-gap manifest](https://github.com/VeriInfra-Lab/VeriTile/blob/main/bench/tritonbench_g/proof_gap_manifest.tsv) for
 per-port coverage.
 
 ### What a `KernelIO` is
@@ -304,7 +304,7 @@ genuinely need per-side values.
 The unqualified surfaces are the rounding surfaces: each is parametric over a
 `R : RoundingModel` (`round : FloatDType → ℝ → ℝ`, with idempotence a defining
 field) and executes under the R-threaded semantics `execR`. They live in
-[`VeriTile.Triton.Float.Refine`](https://github.com/Lizn-zn/VeriTile/blob/main/VeriTile/Triton/Float/Refine.lean):
+[`VeriTile.Triton.Float.Refine`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/VeriTile/Triton/Float/Refine.lean):
 
 - `ComputeRefine.Realizes kernel s write expected` — single kernel vs an
   `R`-annotated spec `expected : RoundingModel → ι → α`. The spec's shape
@@ -324,7 +324,7 @@ ordinary `ComputeCorrect.Realizes_without_Rounding` for `expected .triv`.
 Degeneration lemmas `refines_triv_iff` / `refinesAt_triv_iff` recover
 `Refines_without_Rounding` / `RefinesAt_without_Rounding` the same way. The
 gold-standard walkthrough for the ∀R compositional pattern is
-[`bench/examples/FusedSwigluEquiv.lean`](https://github.com/Lizn-zn/VeriTile/blob/main/bench/examples/FusedSwigluEquiv.lean); the
+[`bench/examples/FusedSwigluEquiv.lean`](https://github.com/VeriInfra-Lab/VeriTile/blob/main/bench/examples/FusedSwigluEquiv.lean); the
 boundary-rounding showcases (LogSumExp, softmax, Welford, LayerNorm, FusedSiLU)
 land on `Refines R` for a fixed `R`.
 
